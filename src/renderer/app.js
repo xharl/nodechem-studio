@@ -171,6 +171,7 @@ const state = {
   paletteOpen: false,
   drawer: null,
   connecting: null,
+  keyboardConnect: null,
   drag: null,
   pan: null,
   toastTimer: null,
@@ -301,23 +302,23 @@ function portHtml(node) {
   let html = '';
   if (node.type === 'condition') {
     html += '<span class="port left" aria-hidden="true"></span>';
-    html += `<span class="port true" data-from="${node.id}" data-port="true" role="button" aria-label="Connect TRUE branch"></span>`;
-    html += `<span class="port false" data-from="${node.id}" data-port="false" role="button" aria-label="Connect FALSE branch"></span>`;
+    html += `<span class="port true" data-from="${node.id}" data-port="true" tabindex="0" role="button" aria-label="Connect TRUE branch"></span>`;
+    html += `<span class="port false" data-from="${node.id}" data-port="false" tabindex="0" role="button" aria-label="Connect FALSE branch"></span>`;
     html += '<span class="branch-tag true">T</span><span class="branch-tag false">F</span>';
     return html;
   }
   if (node.type === 'loop') {
-    return `<span class="port left" aria-hidden="true"></span><span class="port bottom" data-from="${node.id}" data-port="bottom" role="button" aria-label="Connect loop back"></span><span class="loop-tag">↻</span>`;
+    return `<span class="port left" aria-hidden="true"></span><span class="port bottom" data-from="${node.id}" data-port="bottom" tabindex="0" role="button" aria-label="Connect loop back"></span><span class="loop-tag">↻</span>`;
   }
   if (node.type === 'output') return '<span class="port left" aria-hidden="true"></span>';
   if (node.type === 'merge') {
-    return `<span class="port left" aria-hidden="true"></span><span class="port right" data-from="${node.id}" data-port="right" role="button" aria-label="Connect output"></span>`;
+    return `<span class="port left" aria-hidden="true"></span><span class="port right" data-from="${node.id}" data-port="right" tabindex="0" role="button" aria-label="Connect output"></span>`;
   }
 
   html += '<span class="port left" aria-hidden="true"></span>';
-  html += `<span class="port right" data-from="${node.id}" data-port="right" role="button" aria-label="Connect output"></span>`;
+  html += `<span class="port right" data-from="${node.id}" data-port="right" tabindex="0" role="button" aria-label="Connect output"></span>`;
   if (outs.some((edge) => edge.fromPort === 'bottom')) {
-    html += `<span class="port bottom" data-from="${node.id}" data-port="bottom" role="button" aria-label="Connect output below"></span>`;
+    html += `<span class="port bottom" data-from="${node.id}" data-port="bottom" tabindex="0" role="button" aria-label="Connect output below"></span>`;
   }
   if (ins.some((edge) => edge.toPort === 'top')) html += '<span class="port top" aria-hidden="true"></span>';
   if (ins.some((edge) => edge.toPort === 'bottomIn')) html += '<span class="port bottom in" aria-hidden="true"></span>';
@@ -334,7 +335,7 @@ function renderNodeCard(node) {
     : '';
   return `
     <article class="node node-${node.type} state-${node.state}${selected ? ' is-selected' : ''}"
-      data-node-id="${node.id}" tabindex="0" role="button" aria-label="${esc(node.title)}, ${showStatus ? status.label : 'note'}"
+      data-node-id="${node.id}" tabindex="0" role="group" aria-label="${esc(node.title)}, ${showStatus ? status.label : 'note'}"
       style="left:${node.x}px;top:${node.y}px">
       ${checkpointBadge}
       <div class="node-head">
@@ -618,7 +619,7 @@ function switchRow(label, hint, key, checked, options = {}) {
   const dataAttribute = options.attr || (options.gate ? `data-node-gate="${key}"` : `data-node-field="${key}"`);
   return `<div class="switch-row">
     <div>${esc(label)}${hint ? `<span class="hint">${esc(hint)}</span>` : ''}</div>
-    <label class="switch"><input type="checkbox" ${dataAttribute} ${checked ? 'checked' : ''} ${options.disabled ? 'disabled' : ''}><span></span></label>
+    <label class="switch"><input type="checkbox" ${dataAttribute} aria-label="${esc(label)}" ${checked ? 'checked' : ''} ${options.disabled ? 'disabled' : ''}><span></span></label>
   </div>`;
 }
 
@@ -1307,8 +1308,8 @@ function wouldCreateCycle(fromId, toId) {
 function addConnection(fromId, toId, port) {
   const from = nodeById(fromId);
   const to = nodeById(toId);
-  if (!from || !to || from.id === to.id) return;
-  if (to.type === 'note') { toast('Notes cannot receive connections.'); return; }
+  if (!from || !to || from.id === to.id) return false;
+  if (to.type === 'note') { toast('Notes cannot receive connections.'); return false; }
   let type = 'dependency';
   let branch = null;
   if (port === 'true' || port === 'false') { type = 'branch'; branch = port; }
@@ -1316,12 +1317,12 @@ function addConnection(fromId, toId, port) {
 
   if (type !== 'loop' && wouldCreateCycle(fromId, toId)) {
     toast('That connection would create an ordinary cycle. Use a Loop block for retry paths.');
-    return;
+    return false;
   }
   const duplicate = state.project.edges.some((edge) => (
     edge.from === fromId && edge.to === toId && edge.type === type && edge.branch === branch
   ));
-  if (duplicate) { toast('That connection already exists.'); return; }
+  if (duplicate) { toast('That connection already exists.'); return false; }
 
   if (type === 'branch') {
     state.project.edges = state.project.edges.filter((edge) => !(edge.from === fromId && edge.type === 'branch' && edge.branch === branch));
@@ -1339,6 +1340,7 @@ function addConnection(fromId, toId, port) {
   renderGraph();
   renderInspector();
   toast(type === 'loop' ? 'Loop edge created.' : type === 'branch' ? `${branch.toUpperCase()} branch connected.` : 'Dependency connected.');
+  return true;
 }
 
 /* ── Canvas interaction ───────────────────────────────────── */
@@ -1392,6 +1394,35 @@ function finishConnection(event) {
   renderPreview();
   if (!target) return;
   addConnection(from, target.dataset.nodeId, port);
+}
+
+function beginKeyboardConnect(portEl) {
+  const fromId = portEl.dataset.from;
+  state.keyboardConnect = { from: fromId, port: portEl.dataset.port };
+  document.querySelector(`.node[data-node-id="${fromId}"]`)?.classList.add('is-keyboard-source');
+  portEl.setAttribute('aria-pressed', 'true');
+  const node = nodeById(fromId);
+  setStatusMessage(`Connecting from ${node?.title || fromId} — focus a target block and press Enter; Esc cancels.`);
+}
+
+function cancelKeyboardConnect() {
+  state.keyboardConnect = null;
+  $$('.node.is-keyboard-source').forEach((el) => el.classList.remove('is-keyboard-source'));
+  $$('.port[aria-pressed="true"]').forEach((el) => el.removeAttribute('aria-pressed'));
+  setStatusMessage('Connection cancelled.');
+}
+
+function completeKeyboardConnect(targetId) {
+  const pending = state.keyboardConnect;
+  if (!pending) return false;
+  cancelKeyboardConnect();
+  if (!targetId || targetId === pending.from) return false;
+  const connected = addConnection(pending.from, targetId, pending.port);
+  const target = nodeById(targetId);
+  setStatusMessage(connected
+    ? `Connected ${nodeById(pending.from)?.title || pending.from} → ${target?.title || targetId}.`
+    : 'Connection not created; see the notice.');
+  return connected;
 }
 
 function startNodeDrag(nodeEl, event) {
@@ -1471,6 +1502,7 @@ function openMoleculeDrawer(tab = 'structure') {
   state.drawer = {
     type: 'molecule',
     tab,
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
     draft: {
       smiles: state.project.molecule.smiles,
       charge: state.project.molecule.charge,
@@ -1490,14 +1522,21 @@ function openMoleculeDrawer(tab = 'structure') {
   const backdrop = $('#modal-backdrop');
   if (backdrop) backdrop.hidden = false;
   renderDrawer();
+  requestAnimationFrame(() => {
+    const modal = $('#modal');
+    const first = modal?.querySelector('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    first?.focus();
+  });
 }
 
 function closeDrawer() {
+  const returnFocus = state.drawer?.returnFocus;
   const backdrop = $('#modal-backdrop');
   if (backdrop) backdrop.hidden = true;
   const modal = $('#modal');
   if (modal) modal.innerHTML = '';
   state.drawer = null;
+  returnFocus?.focus?.();
 }
 
 function renderDrawer() {
@@ -2366,6 +2405,9 @@ function onDocumentClick(event) {
   if (drawerTab && state.drawer) {
     state.drawer.tab = drawerTab.dataset.drawerTab;
     renderDrawer();
+    requestAnimationFrame(() => {
+      $('#modal')?.querySelector('button, input, select, textarea')?.focus();
+    });
   }
 
   if (event.target.closest('[data-modal-close]')) closeDrawer();
@@ -2518,6 +2560,21 @@ function wireEvents() {
   document.addEventListener('input', onDocumentInput);
 
   const modal = $('#modal');
+  modal?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    const focusables = [...modal.querySelectorAll('button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !el.disabled && el.getClientRects().length > 0);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
   modal?.addEventListener('dragover', (event) => {
     const zone = event.target.closest('.drop-zone');
     if (!zone) return;
@@ -2547,6 +2604,7 @@ function wireEvents() {
       if (!$('#top-overflow')?.hidden) { closeOverflow(); return; }
       if (state.paletteOpen) { togglePalette(false); return; }
       if (!$('#run-console')?.hidden) { closeRunConsole(); return; }
+      if (state.keyboardConnect) { cancelKeyboardConnect(); return; }
       if (state.connecting) { state.connecting = null; clearDropHighlight(); renderPreview(); }
     }
   });
@@ -2565,10 +2623,31 @@ function wireEvents() {
   });
 
   nodesEl().addEventListener('keydown', (event) => {
+    const port = event.target.closest('.port[data-port]');
+    if (port && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (state.keyboardConnect) {
+        if (state.keyboardConnect.from === port.dataset.from) cancelKeyboardConnect();
+        else completeKeyboardConnect(port.dataset.from);
+      } else {
+        beginKeyboardConnect(port);
+      }
+      return;
+    }
+    if (event.key === 'Escape' && state.keyboardConnect) {
+      event.preventDefault();
+      cancelKeyboardConnect();
+      return;
+    }
     const node = event.target.closest('.node');
     if (!node) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
+      if (state.keyboardConnect) {
+        completeKeyboardConnect(node.dataset.nodeId);
+        return;
+      }
       selectNode(node.dataset.nodeId);
     }
   });

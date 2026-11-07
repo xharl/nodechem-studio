@@ -14,7 +14,7 @@
   --line-2: rgba(148, 163, 184, .22);
   --text: #e9edf4;
   --muted: #98a3b3;
-  --faint: #667184;
+  --faint: #808da3;
   --accent: #7c83ff;
   --accent-soft: rgba(124, 131, 255, .12);
   --violet: #c4b5fd;
@@ -345,6 +345,8 @@ kbd {
   transition: border-color .12s ease, box-shadow .12s ease;
 }
 .node:hover { border-color: #43526a; }
+.node.is-keyboard-source { outline: 2px solid var(--accent); outline-offset: 3px; }
+.port[aria-pressed="true"] { border-color: #a5b4fc; background: #7c83ff; opacity: 1; }
 .node.state-passed { --state: var(--green); --state-soft: rgba(52, 211, 153, .1); }
 .node.state-ready { --state: var(--blue); --state-soft: rgba(96, 165, 250, .1); }
 .node.state-blocked { --state: #64748b; --state-soft: rgba(100, 116, 139, .09); }
