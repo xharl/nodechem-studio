@@ -1741,6 +1741,12 @@ function setRunState(status, label) {
   el.className = `run-state is-${status}`;
 }
 
+function setStatusMessage(text) {
+  state.statusMessage = text;
+  const el = $('#status-message');
+  if (el) el.textContent = text;
+}
+
 function appendRunOutput(text) {
   if (!text) return;
   state.run.output = `${state.run.output}${text}`.slice(-60000);
@@ -1888,9 +1894,7 @@ function handleRunEvent(event) {
   if (event.type === 'started') {
     state.run.dir = event.runDir;
     $('#run-path').textContent = event.runDir;
-    state.statusMessage = `Running ${event.record?.title || 'local job'} · ${event.record?.dryRun ? 'dry run' : 'Gaussian'}`;
-    const statusEl = $('#status-message');
-    if (statusEl) statusEl.textContent = state.statusMessage;
+    setStatusMessage(`Running ${event.record?.title || 'local job'} · ${event.record?.dryRun ? 'dry run' : 'Gaussian'}`);
   } else if (event.type === 'output') {
     appendRunOutput(event.text);
   } else if (event.type === 'done') {
@@ -1899,9 +1903,7 @@ function handleRunEvent(event) {
     renderRunGates(record.gates?.gates || []);
     $('#cancel-run')?.setAttribute('disabled', '');
     const verdict = record.gates?.overall || 'unknown';
-    state.statusMessage = `Run ${record.status} · gates ${verdict} · ${record.title || 'local job'}`;
-    const statusEl = $('#status-message');
-    if (statusEl) statusEl.textContent = state.statusMessage;
+    setStatusMessage(`Run ${record.status} · gates ${verdict} · ${record.title || 'local job'}`);
     appendRunOutput(`\nRun ${record.status} · gates: ${verdict}${record.error ? `\n${record.error}` : ''}\n`);
     toast(`Run ${record.status}${verdict !== 'unknown' ? ` · ${verdict}` : ''}.`);
   }
@@ -1984,7 +1986,9 @@ function renderQueue() {
     listEl.innerHTML = queue.tasks.length
       ? queue.tasks.map((task) => {
         const branch = task.conditionResult === true ? '→ true' : task.conditionResult === false ? '→ false' : '';
-        const retry = task.loopAttempts ? `retry ${task.loopAttempts}/${task.loop?.maxAttempts ?? '?'}` : '';
+        const retry = task.loopAttempts
+          ? `retry ${Math.min(task.loopAttempts, task.loop?.maxAttempts ?? task.loopAttempts)}/${task.loop?.maxAttempts ?? '?'}`
+          : '';
         const meta = [task.status, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
           .filter(Boolean).join(' · ');
         return `<li class="queue-item is-${esc(task.status)}" title="${esc(task.error || task.reason || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
@@ -2075,9 +2079,14 @@ function handleQueueEvent(event) {
   }
   if (!event.queue) return;
   applyQueue(event.queue);
+  if (event.type === 'queue-started') {
+    setStatusMessage(`Workflow running · ${event.queue.tasks.length} blocks · ${event.queue.options?.dryRun ? 'dry run' : 'Gaussian'}`);
+  }
   if (event.type === 'queue-done') {
-    appendRunOutput(`\nWorkflow ${event.queue.status}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
-    toast(`Workflow ${event.queue.status}.`);
+    const verdict = event.queue.status;
+    appendRunOutput(`\nWorkflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
+    setStatusMessage(`Workflow ${verdict}${event.queue.reason ? ` · ${event.queue.reason}` : ''}`);
+    toast(`Workflow ${verdict}.`);
     refreshHistory();
   }
 }

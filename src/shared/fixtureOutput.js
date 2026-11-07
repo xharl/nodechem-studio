@@ -9,9 +9,10 @@ export function makeFixtureOutput({ imaginary = 0 } = {}) {
     : [610.0, 1580.0, 3650.0, 3760.0];
   const modeLine = modes.map((value) => value.toFixed(4).padStart(12)).join('');
   return [
-    ' Entering Gaussian System, Link 0=g16',
     ' FIXTURE OUTPUT — synthetic, not a Gaussian calculation',
     ' This file exists only to exercise the runner and parser.',
+    '',
+    ' Entering Gaussian System, Link 0=g16',
     '',
     ' #P B3LYP/6-31G(d) Opt Freq',
     '',

@@ -307,6 +307,7 @@ describe('QueueManager — condition and loop runtime', () => {
     expect(finished.status).toBe('failed');
     expect(byId.retry.status).toBe('failed');
     expect(byId.retry.reason).toContain('loop exhausted after 2 attempt(s)');
+    expect(byId.retry.loopAttempts).toBe(2);
     expect(byId.a.attempts).toBe(3);
   });
 

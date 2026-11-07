@@ -527,11 +527,11 @@ export class QueueManager {
     if (!target) {
       this.setTaskOutcome(task, 'blocked', 'loop has no retry target');
     } else {
-      task.loopAttempts += 1;
       task.conditionResult = null;
-      if (task.loopAttempts > maxAttempts) {
+      if (task.loopAttempts >= maxAttempts) {
         this.setTaskOutcome(task, 'failed', `loop exhausted after ${maxAttempts} attempt(s)`);
       } else {
+        task.loopAttempts += 1;
         const reset = this.resetSubtree(queue, target, task.nodeId);
         task.status = 'pending';
         task.finishedAt = null;

@@ -3,6 +3,12 @@ import { parseGaussianOutput, evaluateGates } from '../src/shared/gaussianOutput
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 
 describe('Gaussian output parser', () => {
+  it('labels a fixture as synthetic before any Gaussian-looking line', () => {
+    const firstLine = makeFixtureOutput().split('\n')[0];
+    expect(firstLine).toContain('FIXTURE OUTPUT');
+    expect(firstLine).not.toContain('Entering Gaussian');
+  });
+
   it('recognises a normal termination, SCF record and frequencies', () => {
     const parsed = parseGaussianOutput(makeFixtureOutput({ imaginary: 0 }));
     expect(parsed.status).toBe('completed');
