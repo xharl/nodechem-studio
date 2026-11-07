@@ -19,8 +19,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/runner/gaussianRunner.js && node --check electron/runner/runManager.js && node --check electron/runner/queue.js && node --check electron/runner/checkpoint.js && node --check electron/runner/outputDiscovery.js && node --check src/shared/gaussianOutput.js && node --check src/shared/gaussianInput.js && node --check src/shared/fixtureOutput.js && node --check src/shared/projectSchema.js && node --check src/shared/workflowGraph.js && node --check src/shared/controlFlow.js && node --check src/shared/structureImport.js && node --check src/shared/elements.js",
-    "dist": "npm run build && electron-builder --win",
-    "dist:dir": "npm run build && electron-builder --win --dir",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "dist:dir": "npm run build && electron-builder --win --dir --publish never",
     "bundle": "bash scripts/package-bundle.sh"
   },
   "devDependencies": {
@@ -34,7 +34,7 @@
   "build": {
     "appId": "com.xharl.gaussiannodestudio",
     "productName": "Gaussian Node Studio",
-    "copyright": "Copyright © 2026 Xavier",
+    "copyright": "Copyright \u00a9 2026 Xavier",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -50,7 +50,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "${productName}-${version}-${arch}.${ext}"
