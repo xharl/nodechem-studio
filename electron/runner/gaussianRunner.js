@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
+import { discoverOutput, outputCandidates } from './outputDiscovery.js';
 
 const MAX_TAIL_BYTES = 256 * 1024;
 const MAX_FINAL_BYTES = 32 * 1024 * 1024;
@@ -52,9 +53,10 @@ export class GaussianRunner {
     };
 
     const outputPath = path.join(cwd, outputName);
+    const candidates = outputCandidates({ inputName, outputName })
+      .map((name) => ({ name, file: path.join(cwd, name), offset: 0 }));
     let stdout = '';
     let stderr = '';
-    let offset = 0;
     let polling = null;
     let timeout = null;
 
@@ -79,14 +81,16 @@ export class GaussianRunner {
     });
 
     const poll = async () => {
-      try {
-        const chunk = await readRange(outputPath, offset, MAX_TAIL_BYTES);
-        if (chunk.text) {
-          offset = chunk.nextOffset;
-          onOutput({ stream: 'output', text: chunk.text });
+      for (const candidate of candidates) {
+        try {
+          const chunk = await readRange(candidate.file, candidate.offset, MAX_TAIL_BYTES);
+          if (chunk.text) {
+            candidate.offset = chunk.nextOffset;
+            onOutput({ stream: 'output', file: candidate.name, text: chunk.text });
+          }
+        } catch (error) {
+          if (error.code !== 'ENOENT') onOutput({ stream: 'stderr', text: `${candidate.name}: ${error.message}\n` });
         }
-      } catch (error) {
-        if (error.code !== 'ENOENT') onOutput({ stream: 'stderr', text: `output tail: ${error.message}\n` });
       }
     };
     polling = setInterval(poll, 300);
@@ -105,16 +109,22 @@ export class GaussianRunner {
     });
 
     await poll();
+    const discovered = await discoverOutput({ cwd, inputName, outputName, settleMs: 200 });
     let outputText = '';
-    try {
-      const stat = await fsp.stat(outputPath);
-      if (stat.size > MAX_FINAL_BYTES) {
-        outputText = (await readRange(outputPath, Math.max(0, stat.size - MAX_FINAL_BYTES), MAX_FINAL_BYTES)).text;
+    let outputFile = null;
+    let outputSource = 'stdout';
+    let truncated = false;
+    if (discovered) {
+      outputFile = discovered.name;
+      outputSource = 'file';
+      const stat = await fsp.stat(discovered.file).catch(() => null);
+      if (stat && stat.size > MAX_FINAL_BYTES) {
+        truncated = true;
+        outputText = (await readRange(discovered.file, stat.size - MAX_FINAL_BYTES, MAX_FINAL_BYTES)).text;
       } else {
-        outputText = await fsp.readFile(outputPath, 'utf8');
+        outputText = await fsp.readFile(discovered.file, 'utf8');
       }
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+    } else {
       outputText = `${stdout}\n${stderr}`.trim();
     }
 
@@ -122,7 +132,10 @@ export class GaussianRunner {
       exitCode: exit.code,
       signal: exit.signal,
       cancelled: this.cancelled,
-      outputPath,
+      outputPath: discovered?.file || outputPath,
+      outputName: outputFile,
+      outputSource,
+      truncated,
       outputText,
       stdout,
       stderr,

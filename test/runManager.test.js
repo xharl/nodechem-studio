@@ -3,15 +3,22 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { RunManager } from '../electron/runner/runManager.js';
+import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 
 const roots = [];
 
-async function makeManager() {
+async function makeManager(options = {}) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'gaussian-studio-run-'));
   roots.push(root);
   const events = [];
-  const manager = new RunManager({ runsRoot: root, emit: (event) => events.push(event) });
+  const manager = new RunManager({ runsRoot: root, emit: (event) => events.push(event), ...options });
   return { manager, events, root };
+}
+
+async function fakeExecutable(root) {
+  const file = path.join(root, 'g16.exe');
+  await fsp.writeFile(file, '', 'utf8');
+  return file;
 }
 
 function waitForDone(events) {
@@ -66,5 +73,83 @@ describe('RunManager dry-run path', () => {
     const list = await manager.list();
     expect(list).toHaveLength(1);
     expect(list[0].status).toBe('completed');
+  });
+});
+
+describe('RunManager real-run record', () => {
+  async function runWith(result, { inputName = 'job.gjf', outputName = 'job.out', gates = {} } = {}) {
+    const { manager, events, root } = await makeManager({
+      createRunner: () => ({ cancel() {}, async run() { return result; } }),
+    });
+    const executable = await fakeExecutable(root);
+    const response = await manager.start({
+      title: 'real run record',
+      inputText: '%Chk=job.chk\n#p B3LYP/6-31G(d) SP\n\nJob\n\n0 1\nO 0 0 0\n',
+      inputName,
+      outputName,
+      executable,
+      dryRun: false,
+      gates,
+    });
+    const done = await waitForDone(events);
+    return { done, response, root };
+  }
+
+  it('records the output file Gaussian actually wrote', async () => {
+    const { done } = await runWith({
+      exitCode: 0,
+      signal: null,
+      cancelled: false,
+      outputPath: '/tmp/job.log',
+      outputName: 'job.log',
+      outputSource: 'file',
+      truncated: false,
+      outputText: makeFixtureOutput(),
+      stdout: '',
+      stderr: '',
+    });
+    expect(done.record.status).toBe('completed');
+    expect(done.record.outputFile).toBe('job.log');
+    expect(done.record.outputSource).toBe('file');
+    expect(done.record.outputName).toBe('job.out');
+    const runJson = JSON.parse(await fsp.readFile(path.join(done.runDir, 'run.json'), 'utf8'));
+    expect(runJson.outputFile).toBe('job.log');
+  });
+
+  it('never treats exit code 0 with an error termination as success', async () => {
+    const { done } = await runWith({
+      exitCode: 0,
+      signal: null,
+      cancelled: false,
+      outputPath: '/tmp/job.out',
+      outputName: 'job.out',
+      outputSource: 'file',
+      truncated: false,
+      outputText: ' Error termination via Lnk1e in C:\\\\G16W\\\\l502.exe\n',
+      stdout: '',
+      stderr: '',
+    });
+    expect(done.record.exitCode).toBe(0);
+    expect(done.record.parsed.status).toBe('error');
+    expect(done.record.status).toBe('failed');
+    expect(done.record.gates.overall).toBe('fail');
+  });
+
+  it('passes the final-energy gate when a correlated energy is present', async () => {
+    const output = `${makeFixtureOutput()}\n CCSD(T)= -76.4000000000D+00\n`;
+    const { done } = await runWith({
+      exitCode: 0,
+      signal: null,
+      cancelled: false,
+      outputPath: '/tmp/job.out',
+      outputName: 'job.out',
+      outputSource: 'file',
+      truncated: false,
+      outputText: output,
+      stdout: '',
+      stderr: '',
+    }, { gates: { requireFinalEnergy: true } });
+    expect(done.record.gates.overall).toBe('pass');
+    expect(done.record.parsed.finalEnergy.source).toBe('post-hf');
   });
 });

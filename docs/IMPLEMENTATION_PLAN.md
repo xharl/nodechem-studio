@@ -98,6 +98,8 @@ Success at v1:
 | Durable queue | persisted queue, stable topological order, one task at a time, crash reconciliation, pause/resume/cancel-all | `test/queue.test.js`, `test/workflowGraph.test.js` |
 | Checkpoint staging | copies only along checkpoint edges; missing/empty `.chk` fails with a recorded reason; labelled fixture in dry runs | `test/checkpoint.test.js`, `test/queue.test.js` |
 | Control flow | safe condition expressions, one-branch release, loop retry/exhaustion, review never auto-passes | `test/controlFlow.test.js`, `test/queue.test.js` |
+| Output discovery | finds `<input>.out` or `<input>.log`, records `outputFile`/`outputSource`, prefers a terminated file | `test/outputDiscovery.test.js`, `test/runManager.test.js` |
+| Final energy gate | post-HF (`CCSD(T)`, `E(CORR)`, MP2…) or SCF fallback, evaluated as a gate | `test/gaussianOutput.test.js` |
 | Dry run | labelled synthetic output, full parser/gate path | run console PASS evidence |
 | Persistence | native Open/Save, schema v1 validation, v0.1 migration, canonical save | `test/projectSchema.test.js` |
 | Packaging | none | `npm run build` only produces `dist/` |
@@ -111,10 +113,11 @@ Success at v1:
 - Condition and loop nodes are executed by the queue; merge waits for all inputs (the `any`
   policy is recorded but readiness is still all-inputs); output nodes stop with a recorded
   reason until bundling exists.
-- The **Post-HF final energy** gate is visible in the inspector but not evaluated in v0.1; the
-  parser currently exposes the SCF/free-energy records only. It is marked for GN-007.
-- Project loading validates `schemaVersion: 1` and rejects malformed files before render; the
-  queue does not exist yet, so node states are still cosmetic (GN-003).
+- Output discovery and final-energy parsing are implemented (GN-007); heavy logs are capped at
+  32 MiB with a recorded `truncated` flag.
+- Project loading validates `schemaVersion: 1` and rejects malformed files before render; queue
+  state is persisted, but the canvas still shows its own node states rather than live queue
+  status.
 - No Windows smoke test yet: this development container lacks GTK and a display, so the
   Electron binary cannot launch here. The renderer was verified in Chromium and the main-process
   runner was verified through Vitest.
@@ -206,7 +209,7 @@ and PR title. A task is not done until its acceptance evidence is in the PR.
 | **GN-004** | Checkpoint staging between tasks — **implemented** (`electron/runner/checkpoint.js`) | `runManager.js`, `gaussianInput.js`, tests | Only checkpoint edges copy `.chk`; missing/corrupt checkpoint fails with a recorded reason |
 | **GN-005** | Condition and loop runtime — **implemented** (`src/shared/controlFlow.js`) | `src/shared/controlFlow.js`, scheduler, UI state, tests | Failing gate takes the false branch; retry exhausts; review blocks |
 | **GN-006** | Structure import | `src/shared/structureImport.js`, molecule drawer, tests | `.xyz`, `.mol`, `.sdf` import; bad data rejected |
-| **GN-007** | Output file discovery and parser hardening | `gaussianRunner.js`, `gaussianOutput.js`, tests | Handles `<input>.out` and `<input>.log`; reports which file was parsed; error termination never passes |
+| **GN-007** | Output file discovery and parser hardening — **implemented** (`electron/runner/outputDiscovery.js`, final energy) | `gaussianRunner.js`, `gaussianOutput.js`, tests | Handles `<input>.out` and `<input>.log`; reports which file was parsed; error termination never passes |
 | **GN-008** | Windows packaging | `electron-builder` config, `scripts/`, docs | Installer on clean VM; no Node required; dry run works |
 
 Priority: **GN-001 → GN-002 → GN-003 → GN-004 → GN-005**. GN-006/GN-007 can run in parallel

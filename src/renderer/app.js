@@ -1632,6 +1632,7 @@ function gatesForNode(node) {
     requireOptimization: job.startsWith('Opt'),
     requireFrequency: frequency,
     requireThermochemistry: Boolean(settings.gates.thermo),
+    requireFinalEnergy: Boolean(settings.gates.finalEnergy),
   };
 }
 

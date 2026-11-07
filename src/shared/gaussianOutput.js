@@ -63,6 +63,15 @@ export function parseGaussianOutput(text) {
   ));
   if (freeEnergyMatch) freeEnergy = toNumber(freeEnergyMatch[1]);
 
+  // Correlated (post-HF) energy when present; otherwise the SCF energy is the best record.
+  const correlatedMatch = joined.match(new RegExp(
+    String.raw`(?:CCSD\(T\)|CCSD|QCISD\(T\)|QCISD|MP4|MP3|MP2)\s*(?:energy)?\s*=\s*(${NUMBER})`,
+    'i',
+  )) || joined.match(new RegExp(String.raw`E\(CORR\)\s*=\s*(${NUMBER})`, 'i'));
+  const correlatedEnergy = correlatedMatch ? toNumber(correlatedMatch[1]) : null;
+  const finalEnergyHartree = correlatedEnergy !== null ? correlatedEnergy : scf.energyHartree;
+  const finalEnergySource = correlatedEnergy !== null ? 'post-hf' : scf.energyHartree !== null ? 'scf' : null;
+
   return {
     status,
     termination: normalTermination
@@ -77,6 +86,7 @@ export function parseGaussianOutput(text) {
       minImaginary,
     },
     thermochemistry: { freeEnergyHartree: freeEnergy },
+    finalEnergy: { hartree: finalEnergyHartree, source: finalEnergySource },
     lineCount: lines.length,
   };
 }
@@ -92,6 +102,7 @@ export function evaluateGates(parsed, {
   requireOptimization = false,
   requireFrequency = false,
   requireThermochemistry = false,
+  requireFinalEnergy = false,
 } = {}) {
   const gates = [];
   const add = (name, required, result, detail) => {
@@ -144,6 +155,13 @@ export function evaluateGates(parsed, {
     add('Thermochemistry record', true,
       parsed.thermochemistry.freeEnergyHartree !== null ? 'pass' : 'unknown',
       parsed.thermochemistry.freeEnergyHartree !== null ? 'free energy parsed' : null);
+  }
+
+  if (requireFinalEnergy) {
+    const finalEnergy = parsed.finalEnergy || { hartree: null, source: null };
+    add('Final energy record', true,
+      finalEnergy.hartree !== null ? 'pass' : 'unknown',
+      finalEnergy.hartree !== null ? `${finalEnergy.hartree} Eh (${finalEnergy.source})` : null);
   }
 
   const required = gates.filter((gate) => gate.required);

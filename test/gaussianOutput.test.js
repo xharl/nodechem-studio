@@ -65,4 +65,39 @@ describe('run gates', () => {
     expect(result.overall).toBe('unknown');
     expect(result.gates.find((gate) => gate.name === 'Normal termination').result).toBe('unknown');
   });
+
+  it('parses a correlated post-HF energy as the final energy', () => {
+    const parsed = parseGaussianOutput([
+      ' SCF Done:  E(RHF) =  -76.000000000     A.U. after    8 cycles',
+      ' CCSD(T)= -76.1234567890D+00',
+      ' Normal termination of Gaussian 16 at Fri Nov  7 12:00:00 2026.',
+    ].join('\n'));
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-76.123456789, 6);
+    expect(parsed.finalEnergy.source).toBe('post-hf');
+  });
+
+  it('falls back to E(CORR) and then the SCF energy', () => {
+    const corr = parseGaussianOutput([
+      ' SCF Done:  E(RB3LYP) =  -76.100000000     A.U. after    8 cycles',
+      ' E(CORR)= -76.2000000000D+00',
+      ' Normal termination of Gaussian 16',
+    ].join('\n'));
+    expect(corr.finalEnergy).toEqual({ hartree: -76.2, source: 'post-hf' });
+
+    const scf = parseGaussianOutput([
+      ' SCF Done:  E(RB3LYP) =  -76.000000000     A.U. after    8 cycles',
+      ' Normal termination of Gaussian 16',
+    ].join('\n'));
+    expect(scf.finalEnergy).toEqual({ hartree: -76, source: 'scf' });
+  });
+
+  it('evaluates the final-energy gate as pass or unknown, never fail-on-missing-silence', () => {
+    const withEnergy = parseGaussianOutput(makeFixtureOutput());
+    expect(evaluateGates(withEnergy, { requireFinalEnergy: true }).overall).toBe('pass');
+
+    const withoutEnergy = parseGaussianOutput(' Normal termination of Gaussian 16\n');
+    const result = evaluateGates(withoutEnergy, { requireFinalEnergy: true });
+    expect(result.overall).toBe('unknown');
+    expect(result.gates.find((gate) => gate.name === 'Final energy record').result).toBe('unknown');
+  });
 });

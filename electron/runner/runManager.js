@@ -90,6 +90,9 @@ export class RunManager {
       title: String(payload.title || 'Gaussian task'),
       inputName: payload.inputName,
       outputName: payload.outputName,
+      outputFile: null,
+      outputSource: null,
+      truncated: false,
       executable: dryRun ? null : payload.executable,
       scratchDir,
       checkpointHandoff,
@@ -112,7 +115,7 @@ export class RunManager {
       throw error;
     }
 
-    const context = { runId, runDir, payload, scratchDir, cancelled: false, timer: null, runner: null };
+    const context = { runId, runDir, payload, scratchDir, cancelled: false, timer: null, runner: null, outputMeta: null };
     this.active.set(runId, context);
     this.emit({ type: 'started', runId, runDir, record });
     this.execute(context).catch(async (error) => {
@@ -144,6 +147,7 @@ export class RunManager {
       outputText = makeFixtureOutput({ imaginary: Number(expected) > 0 ? 1 : 0 });
       await fsp.writeFile(path.join(runDir, payload.outputName), outputText, 'utf8');
       this.emit({ type: 'output', runId, text: outputText });
+      context.outputMeta = { outputFile: payload.outputName, outputSource: 'fixture', truncated: false };
       exitCode = 0;
     } else {
       const runner = this.createRunner();
@@ -159,6 +163,11 @@ export class RunManager {
       });
       outputText = result.outputText;
       exitCode = result.exitCode;
+      context.outputMeta = {
+        outputFile: result.outputName || null,
+        outputSource: result.outputSource || 'stdout',
+        truncated: Boolean(result.truncated),
+      };
       if (result.cancelled || context.cancelled) {
         await this.finish(context, {
           status: 'cancelled',
@@ -181,6 +190,7 @@ export class RunManager {
       requireOptimization: Boolean(payload.gates?.requireOptimization),
       requireFrequency: Boolean(payload.gates?.requireFrequency),
       requireThermochemistry: Boolean(payload.gates?.requireThermochemistry),
+      requireFinalEnergy: Boolean(payload.gates?.requireFinalEnergy),
     });
 
     const status = parsed.status === 'error' || gates.overall === 'fail' ? 'failed'
@@ -194,6 +204,7 @@ export class RunManager {
     const record = JSON.parse(await fsp.readFile(runPath, 'utf8'));
     const finished = {
       ...record,
+      ...(context.outputMeta || {}),
       status,
       exitCode,
       parsed,

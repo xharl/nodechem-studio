@@ -27,8 +27,10 @@ What works today:
   copies the upstream `.chk` into the downstream run folder before the process starts. A missing
   or empty checkpoint fails that task with a recorded reason instead of running without it.
 - Local runner writes an immutable run folder (`run.json`, input, output, scratch).
-- Output parser detects termination, SCF, optimization, frequencies/imaginary modes, and
-  thermochemistry; gates are evaluated from the output, never from the exit code.
+- Output parser detects termination, SCF, optimization, frequencies/imaginary modes,
+  thermochemistry and the final correlated energy; gates are evaluated from the output, never
+  from the exit code. The runner discovers whether Gaussian wrote `<input>.out` or `.log` and
+  records which file it parsed.
 - **Dry run** writes a labelled synthetic log, so the full UI and gate path can be tested
   without a Gaussian licence.
 - Native project Open/Save through Electron dialogs. Files carry `schemaVersion: 1`,
@@ -41,9 +43,7 @@ What is deliberately not in v0.1:
 - Merge `any` policy is recorded but readiness still waits for every input.
 - Output bundling; output nodes stop the queue with a recorded reason.
 - Native `.mol`/`.sdf`/`.xyz` parsing; the runner currently uses a small demo water geometry.
-- The Post-HF final-energy gate is visible but not evaluated; the parser exposes SCF and
-  free-energy records only.
-- A packaged installer. Run from source for now.
+- Installer and code signing.
 - Any remote execution, job submission, telemetry, or network call.
 
 ## Requirements
@@ -124,6 +124,7 @@ electron/
     runManager.js         run folders, records, dry-run fixture, gates
     queue.js              durable workflow queue + scheduler
     checkpoint.js         checkpoint staging into the downstream run folder
+    outputDiscovery.js    finds the .out/.log Gaussian actually wrote
 src/
   renderer/
     app.js                node graph, inspector, palette, run console

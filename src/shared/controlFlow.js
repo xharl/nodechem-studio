@@ -46,6 +46,7 @@ export function conditionFields(parsed, gates = null) {
     freeEnergy: Number.isFinite(parsed?.thermochemistry?.freeEnergyHartree)
       ? parsed.thermochemistry.freeEnergyHartree
       : null,
+    finalEnergy: Number.isFinite(parsed?.finalEnergy?.hartree) ? parsed.finalEnergy.hartree : null,
     gatePass: gates?.overall === 'pass',
     gateFail: gates?.overall === 'fail',
   };
