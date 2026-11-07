@@ -1635,11 +1635,15 @@ function gatesForNode(node) {
   };
 }
 
+function checkpointNameFor(node) {
+  return node?.settings?.checkpoint || `${safeBase(node?.id || 'task')}.chk`;
+}
+
 function oldCheckpointFor(node) {
   const edge = state.project.edges.find((item) => item.to === node.id && item.type === 'checkpoint');
   if (!edge) return '';
   const source = nodeById(edge.from);
-  return source?.settings?.checkpoint || '';
+  return source ? checkpointNameFor(source) : '';
 }
 
 function buildInputForNode(node) {
@@ -1864,8 +1868,8 @@ function checkpointSourceFor(node) {
   const edge = state.project.edges.find((item) => item.to === node.id && item.type === 'checkpoint');
   if (!edge) return null;
   const source = nodeById(edge.from);
-  if (!source?.settings?.checkpoint) return null;
-  return { nodeId: source.id, checkpoint: source.settings.checkpoint };
+  if (!source) return null;
+  return { nodeId: source.id, checkpoint: checkpointNameFor(source) };
 }
 
 function buildWorkflowTasks() {
@@ -1883,6 +1887,7 @@ function buildWorkflowTasks() {
       outputName: outputNameFor(inputName),
       inputText: buildInputForNode(node),
       gates: gatesForNode(node),
+      checkpointName: checkpointNameFor(node),
       checkpointFrom: checkpointSourceFor(node),
     };
   });

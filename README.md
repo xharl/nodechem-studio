@@ -21,8 +21,9 @@ What works today:
   durable queue that survives an app restart.
 - Condition, loop, merge and output nodes are queued but stop with a recorded reason — their
   runtime semantics land in GN-005, not silently skipped.
-- Checkpoint hand-offs add `%OldChk` **and** `Geom=Check Guess=Read` to the route, so the
-  downstream job actually consumes the upstream geometry rather than just copying the file.
+- Checkpoint hand-offs add `%OldChk` **and** `Geom=Check Guess=Read` to the route, and the queue
+  copies the upstream `.chk` into the downstream run folder before the process starts. A missing
+  or empty checkpoint fails that task with a recorded reason instead of running without it.
 - Local runner writes an immutable run folder (`run.json`, input, output, scratch).
 - Output parser detects termination, SCF, optimization, frequencies/imaginary modes, and
   thermochemistry; gates are evaluated from the output, never from the exit code.
@@ -118,6 +119,7 @@ electron/
     gaussianRunner.js     spawn + tail one Gaussian process
     runManager.js         run folders, records, dry-run fixture, gates
     queue.js              durable workflow queue + scheduler
+    checkpoint.js         checkpoint staging into the downstream run folder
 src/
   renderer/
     app.js                node graph, inspector, palette, run console

@@ -10,6 +10,7 @@ import {
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
+const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
 const MAX_INPUT_BYTES = 2 * 1024 * 1024;
 const MAX_TASKS = 500;
 
@@ -48,6 +49,13 @@ function taskRecord(raw, index) {
   const checkpointFrom = raw?.checkpointFrom && SAFE_ID.test(String(raw.checkpointFrom.nodeId))
     ? { nodeId: String(raw.checkpointFrom.nodeId), checkpoint: String(raw.checkpointFrom.checkpoint || '') }
     : null;
+  if (checkpointFrom && !SAFE_CHECKPOINT.test(checkpointFrom.checkpoint)) {
+    throw new Error(`Task "${nodeId}" hands off a checkpoint with an unsafe name.`);
+  }
+  const checkpointName = String(raw?.checkpointName || '');
+  if (checkpointName && !SAFE_CHECKPOINT.test(checkpointName)) {
+    throw new Error(`Task "${nodeId}" has an unsafe checkpoint name.`);
+  }
   return {
     nodeId,
     title: oneLine(raw?.title, 120) || nodeId,
@@ -60,6 +68,7 @@ function taskRecord(raw, index) {
     inputName,
     outputName,
     gates: raw?.gates && typeof raw.gates === 'object' ? raw.gates : {},
+    checkpointName,
     checkpointFrom,
     gateVerdict: null,
     error: null,
@@ -319,6 +328,34 @@ export class QueueManager {
   }
 
   async runTask(queue, task) {
+    let checkpointHandoff = null;
+    if (task.checkpointFrom) {
+      const upstream = queue.tasks.find((entry) => entry.nodeId === task.checkpointFrom.nodeId);
+      const upstreamCheckpoint = upstream ? (upstream.checkpointName || `${upstream.nodeId}.chk`) : '';
+      const problem = !upstream
+        ? `Checkpoint source "${task.checkpointFrom.nodeId}" is not part of this workflow.`
+        : upstream.status !== 'completed'
+          ? `Checkpoint source "${upstream.title}" did not complete (${upstream.status}).`
+          : !upstream.runDir
+            ? `Checkpoint source "${upstream.title}" has no run folder.`
+            : upstreamCheckpoint !== task.checkpointFrom.checkpoint
+              ? `Checkpoint mismatch: "${upstream.title}" writes ${upstreamCheckpoint} but this task reads ${task.checkpointFrom.checkpoint}.`
+              : null;
+      if (problem) {
+        task.status = 'failed';
+        task.error = problem;
+        task.finishedAt = new Date().toISOString();
+        await this.persist(queue);
+        this.publish(queue);
+        return;
+      }
+      checkpointHandoff = {
+        sourceRunDir: upstream.runDir,
+        checkpoint: task.checkpointFrom.checkpoint,
+        sourceRunId: upstream.runId,
+      };
+    }
+
     task.status = 'running';
     task.attempts += 1;
     task.startedAt = new Date().toISOString();
@@ -342,7 +379,7 @@ export class QueueManager {
         scratchDir: queue.options.scratchDir,
         dryRun: queue.options.dryRun,
         gates: task.gates,
-        checkpointFrom: task.checkpointFrom,
+        checkpointHandoff,
       });
       task.runId = response.runId;
       task.runDir = response.runDir;
@@ -365,6 +402,10 @@ export class QueueManager {
     } catch (error) {
       task.status = 'failed';
       task.error = error instanceof Error ? error.message : String(error);
+      if (error?.runId && error?.runDir) {
+        task.runId = error.runId;
+        task.runDir = error.runDir;
+      }
     } finally {
       task.finishedAt = new Date().toISOString();
       queue.currentTaskId = null;

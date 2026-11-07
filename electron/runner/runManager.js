@@ -2,6 +2,7 @@ import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
 import { GaussianRunner } from './gaussianRunner.js';
+import { stageCheckpoint } from './checkpoint.js';
 import { parseGaussianOutput, evaluateGates } from '../../src/shared/gaussianOutput.js';
 import { makeFixtureOutput } from '../../src/shared/fixtureOutput.js';
 
@@ -66,27 +67,50 @@ export class RunManager {
     await fsp.mkdir(scratchDir, { recursive: true });
     await fsp.writeFile(path.join(runDir, payload.inputName), inputText, 'utf8');
 
+    let checkpointHandoff = null;
+    let stageError = null;
+    if (payload.checkpointHandoff) {
+      try {
+        checkpointHandoff = await stageCheckpoint({
+          sourceRunDir: payload.checkpointHandoff.sourceRunDir,
+          checkpoint: payload.checkpointHandoff.checkpoint,
+          sourceRunId: payload.checkpointHandoff.sourceRunId || null,
+          targetDir: runDir,
+          dryRun,
+        });
+      } catch (error) {
+        stageError = error instanceof Error ? error.message : String(error);
+      }
+    }
+
     const record = {
       id: runId,
-      status: 'running',
+      status: stageError ? 'failed' : 'running',
       dryRun,
       title: String(payload.title || 'Gaussian task'),
       inputName: payload.inputName,
       outputName: payload.outputName,
       executable: dryRun ? null : payload.executable,
       scratchDir,
+      checkpointHandoff,
       startedAt: new Date().toISOString(),
-      finishedAt: null,
+      finishedAt: stageError ? new Date().toISOString() : null,
       exitCode: null,
       parsed: null,
       gates: null,
-      error: null,
+      error: stageError,
     };
     await writeJson(path.join(runDir, 'run.json'), record);
     await writeJson(path.join(runDir, 'request.json'), {
       ...record,
       inputText: undefined,
     });
+    if (stageError) {
+      const error = new Error(stageError);
+      error.runId = runId;
+      error.runDir = runDir;
+      throw error;
+    }
 
     const context = { runId, runDir, payload, scratchDir, cancelled: false, timer: null, runner: null };
     this.active.set(runId, context);

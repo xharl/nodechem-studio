@@ -96,6 +96,7 @@ Success at v1:
 | Gate evaluator | SCF, optimization, frequency, imaginary count/magnitude, thermochemistry | same suite |
 | Local runner | spawn `g16.exe`, tail output, cancel tree, run folder, dry run | `test/runManager.test.js` |
 | Durable queue | persisted queue, stable topological order, one task at a time, crash reconciliation, pause/resume/cancel-all | `test/queue.test.js`, `test/workflowGraph.test.js` |
+| Checkpoint staging | copies only along checkpoint edges; missing/empty `.chk` fails with a recorded reason; labelled fixture in dry runs | `test/checkpoint.test.js`, `test/queue.test.js` |
 | Dry run | labelled synthetic output, full parser/gate path | run console PASS evidence |
 | Persistence | native Open/Save, schema v1 validation, v0.1 migration, canonical save | `test/projectSchema.test.js` |
 | Packaging | none | `npm run build` only produces `dist/` |
@@ -105,7 +106,7 @@ Success at v1:
 - The graph is seeded with a Diels–Alder demo. The runner uses demo water coordinates.
 - The queue runs calculation blocks in dependency order and survives a restart. Control-flow
   nodes (condition/loop/merge/output) stop the branch they gate with a recorded reason until
-  GN-005; checkpoint files are not yet copied into downstream run folders (GN-004).
+  GN-005. Checkpoint files are copied along explicit checkpoint edges (GN-004).
 - Condition and loop nodes are drawable but not executed.
 - The **Post-HF final energy** gate is visible in the inspector but not evaluated in v0.1; the
   parser currently exposes the SCF/free-energy records only. It is marked for GN-007.
@@ -199,7 +200,7 @@ and PR title. A task is not done until its acceptance evidence is in the PR.
 | **GN-001** | Windows smoke test of the v0.1 runner | none (report) | `npm test` green; dry run PASS; real small job produces `run.json` with parsed termination; screenshot of run console |
 | **GN-002** | Versioned project schema + validation — **implemented** (`src/shared/projectSchema.js`, 44 tests) | `src/shared/projectSchema.js`, `test/projectSchema.test.js`, `electron/main.js` | Invalid project rejected before render; valid project round-trips; tests |
 | **GN-003** | Durable queue + topological scheduler — **implemented** (`electron/runner/queue.js`, `src/shared/workflowGraph.js`) | `electron/runner/queue.js`, `runManager.js`, tests | 4-node chain; kill/restart marks interrupted and resumes ready work |
-| **GN-004** | Checkpoint staging between tasks | `runManager.js`, `gaussianInput.js`, tests | Only checkpoint edges copy `.chk`; missing/corrupt checkpoint fails with a recorded reason |
+| **GN-004** | Checkpoint staging between tasks — **implemented** (`electron/runner/checkpoint.js`) | `runManager.js`, `gaussianInput.js`, tests | Only checkpoint edges copy `.chk`; missing/corrupt checkpoint fails with a recorded reason |
 | **GN-005** | Condition and loop runtime | `src/shared/controlFlow.js`, scheduler, UI state, tests | Failing gate takes the false branch; retry exhausts; review blocks |
 | **GN-006** | Structure import | `src/shared/structureImport.js`, molecule drawer, tests | `.xyz`, `.mol`, `.sdf` import; bad data rejected |
 | **GN-007** | Output file discovery and parser hardening | `gaussianRunner.js`, `gaussianOutput.js`, tests | Handles `<input>.out` and `<input>.log`; reports which file was parsed; error termination never passes |

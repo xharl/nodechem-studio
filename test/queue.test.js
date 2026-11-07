@@ -50,6 +50,9 @@ function fakeRunner(behaviour = () => ({})) {
         }
         if (state.cancelled) return cancelledResult(outputPath);
         if (plan.throw) throw new Error(plan.throw);
+        if (plan.checkpoint) {
+          await fsp.writeFile(path.join(cwd, plan.checkpoint), plan.checkpointBytes ?? 'checkpoint-bytes', 'utf8');
+        }
         const text = plan.output ?? makeFixtureOutput();
         await fsp.writeFile(outputPath, text, 'utf8');
         onOutput({ stream: 'output', text });
@@ -220,6 +223,139 @@ describe('QueueManager — DAG execution', () => {
     expect(byId.cond.reason).toContain('GN-005');
     expect(byId.b.status).toBe('blocked');
     expect(finished.status).toBe('needs-review');
+  });
+});
+
+describe('QueueManager — checkpoint staging', () => {
+  const checkpointChain = () => ({
+    tasks: [
+      task('a', { kind: 'Opt', checkpointName: 'a.chk' }),
+      task('b', { checkpointName: 'b.chk', checkpointFrom: { nodeId: 'a', checkpoint: 'a.chk' } }),
+      task('c'),
+    ],
+    edges: [
+      { from: 'a', to: 'b', type: 'checkpoint' },
+      { from: 'b', to: 'c', type: 'dependency' },
+    ],
+  });
+
+  it('copies the upstream checkpoint into the downstream run folder', async () => {
+    const { exe, queueManager } = await makeStack({
+      behaviour: (outputName) => (outputName === 'a.out'
+        ? { checkpoint: 'a.chk', checkpointBytes: 'real-checkpoint-bytes' }
+        : {}),
+    });
+    const { tasks, edges } = checkpointChain();
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'checkpoint chain' });
+
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+    expect(byId.b.status).toBe('completed');
+    expect(await fsp.readFile(path.join(byId.b.runDir, 'a.chk'), 'utf8')).toBe('real-checkpoint-bytes');
+    const record = JSON.parse(await fsp.readFile(path.join(byId.b.runDir, 'run.json'), 'utf8'));
+    expect(record.checkpointHandoff).toMatchObject({
+      kind: 'copy',
+      file: 'a.chk',
+      sourceRunId: byId.a.runId,
+      bytes: Buffer.byteLength('real-checkpoint-bytes'),
+    });
+  });
+
+  it('fails the downstream task when the upstream checkpoint never appears', async () => {
+    const { exe, queueManager } = await makeStack();
+    const { tasks, edges } = checkpointChain();
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'missing checkpoint settlement' });
+
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+    expect(byId.a.status).toBe('completed');
+    expect(byId.b.status).toBe('failed');
+    expect(byId.b.error).toMatch(/does not exist/);
+    expect(byId.c.status).toBe('blocked');
+    const record = JSON.parse(await fsp.readFile(path.join(byId.b.runDir, 'run.json'), 'utf8'));
+    expect(record.status).toBe('failed');
+    expect(record.error).toMatch(/does not exist/);
+    expect(finished.status).toBe('failed');
+  });
+
+  it('fails on an empty (corrupt) checkpoint', async () => {
+    const { exe, queueManager } = await makeStack({
+      behaviour: (outputName) => (outputName === 'a.out' ? { checkpoint: 'a.chk', checkpointBytes: '' } : {}),
+    });
+    const { tasks, edges } = checkpointChain();
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'corrupt checkpoint settlement' });
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+    expect(byId.b.status).toBe('failed');
+    expect(byId.b.error).toMatch(/empty \(corrupt checkpoint\)/);
+  });
+
+  it('refuses a name mismatch between writer and reader', async () => {
+    const { exe, queueManager } = await makeStack({
+      behaviour: (outputName) => (outputName === 'a.out' ? { checkpoint: 'a.chk' } : {}),
+    });
+    const tasks = [
+      task('a', { kind: 'Opt', checkpointName: 'a.chk' }),
+      task('b', { checkpointName: 'b.chk', checkpointFrom: { nodeId: 'a', checkpoint: 'other.chk' } }),
+    ];
+    const started = await queueManager.start({ tasks, edges: [{ from: 'a', to: 'b', type: 'checkpoint' }], options: queueOptions(exe) });
+    const finished = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'mismatch settlement' });
+    const b = finished.tasks.find((item) => item.nodeId === 'b');
+    expect(b.status).toBe('failed');
+    expect(b.error).toMatch(/Checkpoint mismatch: "a" writes a\.chk but this task reads other\.chk/);
+  });
+
+  it('stages a labelled fixture checkpoint in a dry run', async () => {
+    const { queueManager } = await makeStack();
+    const tasks = [
+      task('a', { kind: 'Opt', checkpointName: 'a.chk' }),
+      task('b', { checkpointName: 'b.chk', checkpointFrom: { nodeId: 'a', checkpoint: 'a.chk' } }),
+    ];
+    const started = await queueManager.start({
+      tasks,
+      edges: [{ from: 'a', to: 'b', type: 'checkpoint' }],
+      options: { dryRun: true, executable: '', scratchDir: '' },
+    });
+    const finished = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'dry-run checkpoint chain', timeout: 8000 });
+
+    const b = finished.tasks.find((item) => item.nodeId === 'b');
+    expect(finished.status).toBe('completed');
+    const staged = await fsp.readFile(path.join(b.runDir, 'a.chk'), 'utf8');
+    expect(staged.startsWith('FIXTURE CHECKPOINT')).toBe(true);
+    const record = JSON.parse(await fsp.readFile(path.join(b.runDir, 'run.json'), 'utf8'));
+    expect(record.checkpointHandoff.kind).toBe('fixture');
+  });
+
+  it('does not stage a checkpoint for a plain dependency edge', async () => {
+    const { exe, queueManager } = await makeStack({
+      behaviour: (outputName) => (outputName === 'a.out' ? { checkpoint: 'a.chk' } : {}),
+    });
+    const tasks = [task('a', { checkpointName: 'a.chk' }), task('b')];
+    const started = await queueManager.start({ tasks, edges: [{ from: 'a', to: 'b', type: 'dependency' }], options: queueOptions(exe) });
+    const finished = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'plain dependency settlement' });
+    const b = finished.tasks.find((item) => item.nodeId === 'b');
+    expect(b.status).toBe('completed');
+    const record = JSON.parse(await fsp.readFile(path.join(b.runDir, 'run.json'), 'utf8'));
+    expect(record.checkpointHandoff).toBeNull();
+    await expect(fsp.access(path.join(b.runDir, 'a.chk'))).rejects.toThrow();
   });
 });
 
