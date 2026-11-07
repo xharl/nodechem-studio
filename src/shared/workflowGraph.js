@@ -124,7 +124,7 @@ export function blockedPendingTasks(tasks, edges) {
     if (task.status !== 'pending') continue;
     for (const id of prerequisites.get(task.nodeId)) {
       const source = byId.get(id);
-      if (source.status === 'blocked' || FAILED_STATUSES.includes(source.status)) {
+      if (source.status === 'blocked' || source.status === 'needs-review' || FAILED_STATUSES.includes(source.status)) {
         blocked.push({ nodeId: task.nodeId, reason: `blocked by ${source.title || source.nodeId} (${source.status})` });
         break;
       }

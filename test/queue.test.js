@@ -25,6 +25,7 @@ function task(nodeId, overrides = {}) {
 
 /** Fake Gaussian: no process, deterministic output, configurable per input name. */
 function fakeRunner(behaviour = () => ({})) {
+  const attempts = new Map();
   return () => {
     const state = { cancelled: false };
     const cancelledResult = (outputPath) => ({
@@ -38,8 +39,10 @@ function fakeRunner(behaviour = () => ({})) {
     });
     return {
       cancel() { state.cancelled = true; },
-      async run({ outputName, cwd, onOutput }) {
-        const plan = behaviour(outputName) || {};
+      async run({ outputName, inputName, cwd, onOutput }) {
+        const attempt = (attempts.get(outputName) || 0) + 1;
+        attempts.set(outputName, attempt);
+        const plan = behaviour(outputName, { attempt, inputName, cwd }) || {};
         const outputPath = path.join(cwd, outputName);
         if (plan.hang) return new Promise(() => {});
         if (plan.delay) {
@@ -202,26 +205,179 @@ describe('QueueManager — DAG execution', () => {
       .rejects.toThrow(/dependency cycle/);
   });
 
-  it('marks control-flow nodes blocked instead of guessing', async () => {
+  it('skips note nodes and lets their dependents run', async () => {
+    const { exe, queueManager } = await makeStack();
+    const tasks = [
+      { nodeId: 'note', type: 'note', title: 'note', kind: 'Note', executable: false },
+      task('a'),
+    ];
+    const edges = [{ from: 'note', to: 'a', type: 'dependency' }];
+    const started = await queueManager.start({ projectName: 'note', tasks, edges, options: queueOptions(exe) });
+    const finished = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'note settlement' });
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+    expect(byId.note.status).toBe('skipped');
+    expect(byId.note.reason).toContain('notes are not executed');
+    expect(byId.a.status).toBe('completed');
+    expect(finished.status).toBe('completed');
+  });
+});
+
+describe('QueueManager — condition and loop runtime', () => {
+  const settle = (finished) => ['completed', 'failed', 'needs-review'].includes(finished.status);
+  const waitQueue = async (queueManager, id) => waitFor(async () => {
+    const queue = await queueManager.get(id);
+    return settle(queue) ? queue : null;
+  }, { label: 'control-flow settlement' });
+
+  it('evaluates a condition and releases exactly one branch', async () => {
     const { exe, queueManager } = await makeStack();
     const tasks = [
       task('a'),
-      { nodeId: 'cond', title: 'condition', kind: 'If', executable: false },
+      { nodeId: 'cond', type: 'condition', title: 'cond', kind: 'If', executable: false, condition: { expression: 'imaginaryCount == 0', unknown: 'block-both' } },
       task('b'),
+      task('c'),
     ];
     const edges = [
       { from: 'a', to: 'cond', type: 'dependency' },
       { from: 'cond', to: 'b', type: 'branch', branch: 'true' },
+      { from: 'cond', to: 'c', type: 'branch', branch: 'false' },
     ];
-    const started = await queueManager.start({ projectName: 'control', tasks, edges, options: queueOptions(exe) });
-    const finished = await waitFor(async () => {
-      const queue = await queueManager.get(started.id);
-      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
-    }, { label: 'control-flow settlement' });
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitQueue(queueManager, started.id);
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+    expect(byId.cond.conditionResult).toBe(true);
+    expect(byId.b.status).toBe('completed');
+    expect(byId.c.status).toBe('skipped');
+    expect(byId.c.reason).toContain('branch false not taken');
+    expect(finished.status).toBe('completed');
+  });
+
+  it('routes a false condition through a retry loop until it passes', async () => {
+    const { exe, queueManager } = await makeStack({
+      behaviour: (outputName, { attempt }) => (outputName === 'a.out'
+        ? { output: makeFixtureOutput({ imaginary: attempt >= 2 ? 1 : 0 }) }
+        : {}),
+    });
+    const tasks = [
+      task('a'),
+      { nodeId: 'cond', type: 'condition', title: 'cond', kind: 'If', executable: false, condition: { expression: 'imaginaryCount == 1', unknown: 'block-both' } },
+      task('b'),
+      { nodeId: 'retry', type: 'loop', title: 'retry', kind: 'Loop', executable: false, loop: { maxAttempts: 2, mode: 'retry', target: 'a' } },
+    ];
+    const edges = [
+      { from: 'a', to: 'cond', type: 'dependency' },
+      { from: 'cond', to: 'b', type: 'branch', branch: 'true' },
+      { from: 'cond', to: 'retry', type: 'branch', branch: 'false' },
+      { from: 'retry', to: 'a', type: 'loop' },
+    ];
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitQueue(queueManager, started.id);
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+
+    expect(finished.status).toBe('completed');
+    expect(byId.a.attempts).toBe(2);
+    expect(byId.a.history).toHaveLength(1);
+    expect(byId.retry.loopAttempts).toBe(1);
+    expect(byId.retry.status).toBe('skipped');
+    expect(byId.cond.conditionResult).toBe(true);
+    expect(byId.b.status).toBe('completed');
+  });
+
+  it('stops an exhausted loop with a recorded reason', async () => {
+    const { exe, queueManager } = await makeStack({
+      behaviour: (outputName) => (outputName === 'a.out' ? { output: makeFixtureOutput({ imaginary: 0 }) } : {}),
+    });
+    const tasks = [
+      task('a'),
+      { nodeId: 'cond', type: 'condition', title: 'cond', kind: 'If', executable: false, condition: { expression: 'imaginaryCount == 1', unknown: 'block-both' } },
+      { nodeId: 'retry', type: 'loop', title: 'retry', kind: 'Loop', executable: false, loop: { maxAttempts: 2, mode: 'retry', target: 'a' } },
+    ];
+    const edges = [
+      { from: 'a', to: 'cond', type: 'dependency' },
+      { from: 'cond', to: 'retry', type: 'branch', branch: 'false' },
+      { from: 'retry', to: 'a', type: 'loop' },
+    ];
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitQueue(queueManager, started.id);
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+
+    expect(finished.status).toBe('failed');
+    expect(byId.retry.status).toBe('failed');
+    expect(byId.retry.reason).toContain('loop exhausted after 2 attempt(s)');
+    expect(byId.a.attempts).toBe(3);
+  });
+
+  it('blocks both branches when the condition is unknown', async () => {
+    const { exe, queueManager } = await makeStack();
+    const tasks = [
+      task('a'),
+      { nodeId: 'cond', type: 'condition', title: 'cond', kind: 'If', executable: false, condition: { expression: 'magnetization > 0', unknown: 'block-both' } },
+      task('b'),
+      task('c'),
+    ];
+    const edges = [
+      { from: 'a', to: 'cond', type: 'dependency' },
+      { from: 'cond', to: 'b', type: 'branch', branch: 'true' },
+      { from: 'cond', to: 'c', type: 'branch', branch: 'false' },
+    ];
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitQueue(queueManager, started.id);
     const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
     expect(byId.cond.status).toBe('blocked');
-    expect(byId.cond.reason).toContain('GN-005');
+    expect(byId.cond.reason).toContain('magnetization');
     expect(byId.b.status).toBe('blocked');
+    expect(byId.c.status).toBe('blocked');
+    expect(finished.status).toBe('needs-review');
+  });
+
+  it('never auto-passes a review gate and blocks its dependents', async () => {
+    const noFrequency = [
+      ' SCF Done:  E(RB3LYP) =  -76.000000000     A.U. after    8 cycles',
+      ' Normal termination of Gaussian 16 at Fri Nov  7 12:00:00 2026.',
+      '',
+    ].join('\n');
+    const { exe, queueManager } = await makeStack({
+      behaviour: (outputName) => (outputName === 'a.out' ? { output: noFrequency } : {}),
+    });
+    const tasks = [task('a', { gates: { requireFrequency: true } }), task('b')];
+    const edges = [{ from: 'a', to: 'b', type: 'dependency' }];
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitQueue(queueManager, started.id);
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+    expect(byId.a.status).toBe('needs-review');
+    expect(byId.b.status).toBe('blocked');
+    expect(finished.status).toBe('needs-review');
+
+    await queueManager.resume(started.id);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const afterResume = await queueManager.get(started.id);
+    const afterById = Object.fromEntries(afterResume.tasks.map((item) => [item.nodeId, item]));
+    expect(afterById.a.status).toBe('needs-review');
+    expect(afterById.b.status).toBe('blocked');
+    expect(afterResume.status).toBe('needs-review');
+  });
+
+  it('completes a merge node and blocks at an output node', async () => {
+    const { exe, queueManager } = await makeStack();
+    const tasks = [
+      task('a'),
+      { nodeId: 'join', type: 'merge', title: 'join', kind: 'Merge', executable: false, merge: { policy: 'all' } },
+      { nodeId: 'out', type: 'output', title: 'out', kind: 'Output', executable: false },
+    ];
+    const edges = [
+      { from: 'a', to: 'join', type: 'dependency' },
+      { from: 'join', to: 'out', type: 'dependency' },
+    ];
+    const started = await queueManager.start({ tasks, edges, options: queueOptions(exe) });
+    const finished = await waitQueue(queueManager, started.id);
+    const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
+    expect(byId.join.status).toBe('completed');
+    expect(byId.join.reason).toContain('policy all');
+    expect(byId.out.status).toBe('blocked');
+    expect(byId.out.reason).toContain('GN-008');
     expect(finished.status).toBe('needs-review');
   });
 });

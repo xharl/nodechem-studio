@@ -1875,11 +1875,25 @@ function checkpointSourceFor(node) {
 function buildWorkflowTasks() {
   const tasks = state.project.nodes.map((node) => {
     if (node.type !== 'calc') {
-      return { nodeId: node.id, title: node.title, kind: node.kind || node.type, executable: false };
+      return {
+        nodeId: node.id,
+        type: node.type,
+        title: node.title,
+        kind: node.kind || node.type,
+        executable: false,
+        condition: node.type === 'condition'
+          ? { expression: node.condition?.expression || '', unknown: node.condition?.unknown || 'block-both' }
+          : null,
+        loop: node.type === 'loop'
+          ? { maxAttempts: node.loop?.maxAttempts || 3, mode: node.loop?.mode || 'retry', target: node.loop?.target || '' }
+          : null,
+        merge: node.type === 'merge' ? { policy: node.merge?.policy || 'all' } : null,
+      };
     }
     const inputName = `${safeBase(node.id)}.gjf`;
     return {
       nodeId: node.id,
+      type: 'calc',
       title: node.title,
       kind: node.kind || 'Calc',
       executable: true,
@@ -1917,7 +1931,9 @@ function renderQueue() {
   if (listEl) {
     listEl.innerHTML = queue.tasks.length
       ? queue.tasks.map((task) => {
-        const meta = [task.status, task.attempts > 1 ? `×${task.attempts}` : '', task.gateVerdict ? `gates ${task.gateVerdict}` : '']
+        const branch = task.conditionResult === true ? '→ true' : task.conditionResult === false ? '→ false' : '';
+        const retry = task.loopAttempts ? `retry ${task.loopAttempts}/${task.loop?.maxAttempts ?? '?'}` : '';
+        const meta = [task.status, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
           .filter(Boolean).join(' · ');
         return `<li class="queue-item is-${esc(task.status)}" title="${esc(task.error || task.reason || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
       }).join('')

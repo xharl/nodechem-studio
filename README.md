@@ -19,8 +19,10 @@ What works today:
 - **One selected calculation** can be built into a Gaussian `.gjf` and run locally, or the whole
   workflow can be queued: calculation blocks run in dependency order, one at a time, with a
   durable queue that survives an app restart.
-- Condition, loop, merge and output nodes are queued but stop with a recorded reason — their
-  runtime semantics land in GN-005, not silently skipped.
+- Condition nodes evaluate a small, safe expression over the upstream parsed result
+  (`imaginaryCount == 1 and abs(nu) >= 50`) and release exactly one branch; loops retry their
+  target up to `maxAttempts` with a recorded exit reason; a gate that cannot be judged stops the
+  branch for human review — it never auto-passes.
 - Checkpoint hand-offs add `%OldChk` **and** `Geom=Check Guess=Read` to the route, and the queue
   copies the upstream `.chk` into the downstream run folder before the process starts. A missing
   or empty checkpoint fails that task with a recorded reason instead of running without it.
@@ -34,8 +36,10 @@ What works today:
 
 What is deliberately not in v0.1:
 
-- Automatic DAG execution (only the selected calculation runs).
-- Condition and loop runtime evaluation. They are drawable and inspectable, not executed.
+- Automatic DAG execution is limited to the queue: one Gaussian process at a time, no
+  concurrent local jobs.
+- Merge `any` policy is recorded but readiness still waits for every input.
+- Output bundling; output nodes stop the queue with a recorded reason.
 - Native `.mol`/`.sdf`/`.xyz` parsing; the runner currently uses a small demo water geometry.
 - The Post-HF final-energy gate is visible but not evaluated; the parser exposes SCF and
   free-energy records only.
@@ -129,6 +133,7 @@ src/
     gaussianOutput.js     parser + gate evaluator
     projectSchema.js      schema v1, validation, migration, canonical save
     workflowGraph.js      stable topological order + readiness rules
+    controlFlow.js        safe condition expression + loop semantics
     fixtureOutput.js      labelled synthetic output for dry runs
 test/                     Vitest suites
 docs/

@@ -6,6 +6,7 @@ import {
   nextReadyTask,
   topologicalOrder,
 } from '../../src/shared/workflowGraph.js';
+import { conditionFields, evaluateCondition } from '../../src/shared/controlFlow.js';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
@@ -17,6 +18,8 @@ const MAX_TASKS = 500;
 const TASK_STATUSES = new Set([
   'pending', 'running', 'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
 ]);
+
+const TASK_TYPES = new Set(['calc', 'condition', 'loop', 'merge', 'output', 'note']);
 
 function queueIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -56,8 +59,29 @@ function taskRecord(raw, index) {
   if (checkpointName && !SAFE_CHECKPOINT.test(checkpointName)) {
     throw new Error(`Task "${nodeId}" has an unsafe checkpoint name.`);
   }
+  const type = TASK_TYPES.has(raw?.type) ? raw.type : (executable ? 'calc' : 'note');
+  const condition = type === 'condition'
+    ? {
+      expression: oneLine(raw?.condition?.expression, 4000),
+      unknown: ['block-both', 'treat-false', 'treat-true'].includes(raw?.condition?.unknown)
+        ? raw.condition.unknown : 'block-both',
+    }
+    : null;
+  const loopTarget = String(raw?.loop?.target || '');
+  const loop = type === 'loop'
+    ? {
+      maxAttempts: Number.isInteger(Number(raw?.loop?.maxAttempts))
+        ? Math.min(99, Math.max(1, Number(raw.loop.maxAttempts))) : 3,
+      mode: oneLine(raw?.loop?.mode, 32) || 'retry',
+      target: SAFE_ID.test(loopTarget) ? loopTarget : '',
+    }
+    : null;
+  const merge = type === 'merge'
+    ? { policy: ['all', 'any'].includes(raw?.merge?.policy) ? raw.merge.policy : 'all' }
+    : null;
   return {
     nodeId,
+    type,
     title: oneLine(raw?.title, 120) || nodeId,
     kind: oneLine(raw?.kind, 32) || 'Calc',
     executable,
@@ -70,6 +94,13 @@ function taskRecord(raw, index) {
     gates: raw?.gates && typeof raw.gates === 'object' ? raw.gates : {},
     checkpointName,
     checkpointFrom,
+    condition,
+    loop,
+    merge,
+    loopAttempts: 0,
+    conditionResult: null,
+    summary: null,
+    history: [],
     gateVerdict: null,
     error: null,
     reason: null,
@@ -298,13 +329,7 @@ export class QueueManager {
         if (!task) break;
 
         if (!task.executable) {
-          task.status = 'blocked';
-          task.reason = task.kind === 'Note'
-            ? 'notes are not executed'
-            : 'control-flow execution is not implemented in this build (GN-005)';
-          task.finishedAt = new Date().toISOString();
-          await this.persist(queue);
-          this.publish(queue);
+          await this.runControl(queue, task);
           continue;
         }
 
@@ -392,6 +417,7 @@ export class QueueManager {
 
       const record = await this.waitForRun(response.runId);
       task.gateVerdict = record.gates?.overall || null;
+      task.summary = conditionFields(record.parsed, record.gates);
       task.status = record.status === 'completed' ? 'completed'
         : record.status === 'needs-review' ? 'needs-review'
           : record.status === 'cancelled' ? 'cancelled' : 'failed';
@@ -412,6 +438,169 @@ export class QueueManager {
       await this.persist(queue);
       this.publish(queue);
     }
+  }
+
+  /* ── Control-flow nodes ───────────────────────────────── */
+
+  incomingSources(queue, nodeId, edgeType = null) {
+    return queue.edges
+      .filter((edge) => edge.to === nodeId && edge.type !== 'loop' && (!edgeType || edge.type === edgeType))
+      .map((edge) => queue.tasks.find((task) => task.nodeId === edge.from))
+      .filter(Boolean);
+  }
+
+  upstreamSummary(queue, task) {
+    const sources = this.incomingSources(queue, task.nodeId).filter((source) => source.summary);
+    if (sources.length === 0) return null;
+    sources.sort((a, b) => String(a.finishedAt || '').localeCompare(String(b.finishedAt || '')));
+    return sources[sources.length - 1].summary;
+  }
+
+  setTaskOutcome(task, status, reason) {
+    task.status = status;
+    task.reason = reason;
+    task.finishedAt = status === 'pending' ? null : new Date().toISOString();
+  }
+
+  announce(queue, task) {
+    this.emit({
+      type: 'queue-output',
+      queueId: queue.id,
+      nodeId: task.nodeId,
+      text: `${task.status}${task.reason ? ` — ${task.reason}` : ''}`,
+    });
+  }
+
+  async runControl(queue, task) {
+    if (task.type === 'condition') {
+      await this.runCondition(queue, task);
+      return;
+    }
+    if (task.type === 'loop') {
+      await this.runLoop(queue, task);
+      return;
+    }
+    if (task.type === 'note') {
+      this.setTaskOutcome(task, 'skipped', 'notes are not executed');
+    } else if (task.type === 'merge') {
+      const inputs = this.incomingSources(queue, task.nodeId).length;
+      const policy = task.merge?.policy || 'all';
+      this.setTaskOutcome(task, 'completed', `merged ${inputs} input(s), policy ${policy} (readiness waits for all)`);
+    } else {
+      this.setTaskOutcome(task, 'blocked', 'output bundling is not implemented yet (GN-008)');
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  async runCondition(queue, task) {
+    const summary = this.upstreamSummary(queue, task);
+    if (!summary) {
+      this.setTaskOutcome(task, 'blocked', 'no upstream parsed result to evaluate');
+    } else {
+      const result = evaluateCondition(task.condition?.expression, summary, {
+        unknownPolicy: task.condition?.unknown || 'block-both',
+      });
+      task.conditionResult = result.value;
+      task.reason = result.reason;
+      if (result.value === null) {
+        this.setTaskOutcome(task, 'blocked', result.reason);
+      } else {
+        this.setTaskOutcome(task, 'completed', `${result.value ? 'true' : 'false'} — ${result.reason}`);
+        const taken = result.value ? 'true' : 'false';
+        for (const edge of queue.edges.filter((item) => item.from === task.nodeId && item.type === 'branch')) {
+          if (edge.branch !== taken) {
+            this.skipSubtree(queue, edge.to, `branch ${edge.branch} not taken (${task.title})`);
+          }
+        }
+      }
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  async runLoop(queue, task) {
+    const target = task.loop?.target;
+    const maxAttempts = task.loop?.maxAttempts || 3;
+    if (!target) {
+      this.setTaskOutcome(task, 'blocked', 'loop has no retry target');
+    } else {
+      task.loopAttempts += 1;
+      task.conditionResult = null;
+      if (task.loopAttempts > maxAttempts) {
+        this.setTaskOutcome(task, 'failed', `loop exhausted after ${maxAttempts} attempt(s)`);
+      } else {
+        const reset = this.resetSubtree(queue, target, task.nodeId);
+        task.status = 'pending';
+        task.finishedAt = null;
+        task.runId = null;
+        task.runDir = null;
+        task.reason = `retry ${task.loopAttempts}/${maxAttempts}: reset ${reset.length} task(s) from ${target}`;
+      }
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /** Mark a non-taken branch and everything downstream of it as skipped. */
+  skipSubtree(queue, rootId, reason) {
+    const seen = new Set();
+    const stack = [rootId];
+    const skipped = [];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const task = queue.tasks.find((entry) => entry.nodeId === id);
+      if (!task) continue;
+      if (['pending', 'blocked', 'interrupted'].includes(task.status)) {
+        task.status = 'skipped';
+        task.reason = reason;
+        task.finishedAt = new Date().toISOString();
+        skipped.push(id);
+      }
+      for (const edge of queue.edges) {
+        if (edge.from === id && edge.type !== 'loop') stack.push(edge.to);
+      }
+    }
+    return skipped;
+  }
+
+  /** Re-open a task and everything downstream so a loop retry recomputes it. */
+  resetSubtree(queue, rootId, exceptId) {
+    const seen = new Set();
+    const stack = [rootId];
+    const reset = [];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (seen.has(id) || id === exceptId) continue;
+      seen.add(id);
+      const task = queue.tasks.find((entry) => entry.nodeId === id);
+      if (!task) continue;
+      for (const edge of queue.edges) {
+        if (edge.from === id && edge.type !== 'loop') stack.push(edge.to);
+      }
+      if (!['completed', 'failed', 'needs-review', 'blocked', 'skipped', 'interrupted'].includes(task.status)) continue;
+      task.history = [
+        ...(task.history || []),
+        { runId: task.runId, status: task.status, gateVerdict: task.gateVerdict, finishedAt: task.finishedAt },
+      ].slice(-20);
+      task.status = 'pending';
+      task.runId = null;
+      task.runDir = null;
+      task.gateVerdict = null;
+      task.summary = null;
+      task.conditionResult = null;
+      task.error = null;
+      task.reason = null;
+      task.startedAt = null;
+      task.finishedAt = null;
+      reset.push(id);
+    }
+    return reset;
   }
 
   stall(queue, error) {
