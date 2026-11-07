@@ -155,7 +155,29 @@ docs/
 | `npm test` | Vitest unit and runner dry-run tests |
 | `npm run check` | `node --check` on the Electron and shared modules |
 | `npm run build` | Vite production renderer build |
+| `npm run dist` | Vite build + NSIS installer (run on Windows) |
+| `npm run dist:dir` | Unpacked Windows app directory, for a quick smoke test |
 | `npm run bundle` | Build a hand-off tarball/zip with a checksum manifest |
+
+## Windows installer
+
+On a Windows machine with Node 22:
+
+```powershell
+npm ci
+npm test
+npm run dist
+```
+
+`release\Gaussian Node Studio-0.1.0-x64.exe` is a per-user NSIS installer; the target machine
+does not need Node. The build is unsigned, so SmartScreen warns on first launch.
+
+GitHub Actions builds the same installer on `windows-latest` (**Windows package** workflow,
+manual dispatch or a `v*` tag) and uploads it as an artifact. No Gaussian binaries or licence
+files are included; the app still drives the installation the user is licensed to run.
+
+The installer has not yet been installed on a clean Windows VM — that is the GN-001/GN-008
+acceptance step.
 
 ## Safety and licensing
 

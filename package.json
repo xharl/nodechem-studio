@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Node-first desktop workbench for Gaussian 16 workflows",
   "license": "UNLICENSED",
+  "author": "xharl",
   "engines": {
     "node": ">=22"
   },
@@ -18,13 +19,49 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/runner/gaussianRunner.js && node --check electron/runner/runManager.js && node --check electron/runner/queue.js && node --check electron/runner/checkpoint.js && node --check electron/runner/outputDiscovery.js && node --check src/shared/gaussianOutput.js && node --check src/shared/gaussianInput.js && node --check src/shared/fixtureOutput.js && node --check src/shared/projectSchema.js && node --check src/shared/workflowGraph.js && node --check src/shared/controlFlow.js && node --check src/shared/structureImport.js && node --check src/shared/elements.js",
+    "dist": "npm run build && electron-builder --win",
+    "dist:dir": "npm run build && electron-builder --win --dir",
     "bundle": "bash scripts/package-bundle.sh"
   },
   "devDependencies": {
     "concurrently": "^10.0.7",
     "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
     "vite": "^8.3.6",
     "vitest": "^5.1.0",
     "wait-on": "^9.5.1"
+  },
+  "build": {
+    "appId": "com.xharl.gaussiannodestudio",
+    "productName": "Gaussian Node Studio",
+    "copyright": "Copyright © 2026 Xavier",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "src/shared/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Gaussian Node Studio"
+    }
   }
 }

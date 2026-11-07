@@ -118,11 +118,12 @@ licence or machine is not ready, complete the dry run, report the blocker, and k
 
 ## 6. What to work on next
 
-The task queue is in `docs/IMPLEMENTATION_PLAN.md`. **GN-002 through GN-007 are implemented on
-`main`** (schema, durable queue, checkpoint staging, condition/loop runtime, structure import,
-output discovery + final energy). The remaining task is **GN-008 — Windows packaging**. GN-001
-(the Windows smoke test) is still the gate for calling the runner proven; everything above has
-only been exercised against a fake runner and fixture outputs.
+The task queue is in `docs/IMPLEMENTATION_PLAN.md`. **GN-002 through GN-008 are implemented on
+`main`**; what remains is **GN-001 — the Windows smoke test on a licensed machine**. A packaged
+installer is built by the **Windows package** GitHub Actions workflow (manual dispatch or `v*`
+tag); downloading that artifact is the fastest way to run the app without a source checkout.
+Everything in the queue, control-flow, checkpoint and import paths has only been exercised
+against a fake runner and fixture outputs so far.
 
 Rules:
 

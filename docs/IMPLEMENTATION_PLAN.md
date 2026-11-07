@@ -103,7 +103,7 @@ Success at v1:
 | Structure import | `.xyz`, `.mol`/`.sdf`, `.gjf`/`.com` with element/coordinate/parity validation; project-level geometry feeds every `.gjf` | `test/structureImport.test.js`, `test/projectSchema.test.js`, `test/gaussianInput.test.js` |
 | Dry run | labelled synthetic output, full parser/gate path | run console PASS evidence |
 | Persistence | native Open/Save, schema v1 validation, v0.1 migration, canonical save | `test/projectSchema.test.js` |
-| Packaging | none | `npm run build` only produces `dist/` |
+| Packaging | electron-builder NSIS config; `npm run dist` produces `release/Gaussian Node Studio-0.1.0-x64.exe`; CI workflow builds it on windows-latest | `.github/workflows/windows-package.yml`, `package.json` |
 
 ### Verified gaps
 
@@ -212,10 +212,11 @@ and PR title. A task is not done until its acceptance evidence is in the PR.
 | **GN-005** | Condition and loop runtime — **implemented** (`src/shared/controlFlow.js`) | `src/shared/controlFlow.js`, scheduler, UI state, tests | Failing gate takes the false branch; retry exhausts; review blocks |
 | **GN-006** | Structure import — **implemented** (`src/shared/structureImport.js`, molecule drawer) | `src/shared/structureImport.js`, molecule drawer, tests | `.xyz`, `.mol`, `.sdf` import; bad data rejected |
 | **GN-007** | Output file discovery and parser hardening — **implemented** (`electron/runner/outputDiscovery.js`, final energy) | `gaussianRunner.js`, `gaussianOutput.js`, tests | Handles `<input>.out` and `<input>.log`; reports which file was parsed; error termination never passes |
-| **GN-008** | Windows packaging | `electron-builder` config, `scripts/`, docs | Installer on clean VM; no Node required; dry run works |
+| **GN-008** | Windows packaging — **implemented** (electron-builder NSIS + `windows-package` CI workflow) | `electron-builder` config, `scripts/`, docs | Installer on clean VM; no Node required; dry run works |
 
-Priority: **GN-001 → GN-002 → GN-003 → GN-004 → GN-005**. GN-006/GN-007 can run in parallel
-once GN-001 is signed off. GN-008 waits until the queue and file discovery are stable.
+Priority: **GN-001 remains the only unverified gate** (real Windows + licensed Gaussian). GN-002
+through GN-008 are implemented and CI-tested on Linux; the Windows installer is built by the
+`Windows package` workflow but has not been installed on a clean VM.
 
 ## 7. Risks and open questions
 
