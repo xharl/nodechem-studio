@@ -2176,6 +2176,22 @@ function exportSelectedInput() {
 
 /* ── Event wiring ─────────────────────────────────────────── */
 
+function closeOverflow() {
+  const menu = $('#top-overflow');
+  const button = $('.overflow-btn');
+  if (menu) menu.hidden = true;
+  button?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleOverflow() {
+  const menu = $('#top-overflow');
+  const button = $('.overflow-btn');
+  if (!menu || !button) return;
+  menu.hidden = !menu.hidden;
+  button.setAttribute('aria-expanded', String(!menu.hidden));
+  if (!menu.hidden) menu.querySelector('button')?.focus();
+}
+
 function syncModeButtons() {
   $$('[data-inspector-mode]').forEach((button) => {
     button.classList.toggle('is-active', button.dataset.inspectorMode === state.inspectorMode);
@@ -2189,6 +2205,7 @@ function syncModeButtons() {
 
 function handleAction(action, element) {
   switch (action) {
+    case 'toggle-overflow': toggleOverflow(); break;
     case 'toggle-palette': togglePalette(); break;
     case 'validate': validateGraph(); break;
     case 'zoom-in': setZoom(state.zoom + 0.05); break;
@@ -2248,8 +2265,15 @@ function handleAction(action, element) {
 }
 
 function onDocumentClick(event) {
+  const overflow = $('#top-overflow');
+  if (overflow && !overflow.hidden && !event.target.closest('.top-overflow-wrap')) {
+    closeOverflow();
+  }
+
   const actionEl = event.target.closest('[data-action]');
   if (actionEl) handleAction(actionEl.dataset.action, actionEl);
+
+  if (event.target.closest('#top-overflow')) closeOverflow();
 
   const nodeButton = event.target.closest('[data-select-node]');
   if (nodeButton) selectNode(nodeButton.dataset.selectNode);
@@ -2423,7 +2447,9 @@ function wireEvents() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       if (state.drawer) { closeDrawer(); return; }
+      if (!$('#top-overflow')?.hidden) { closeOverflow(); return; }
       if (state.paletteOpen) { togglePalette(false); return; }
+      if (!$('#run-console')?.hidden) { closeRunConsole(); return; }
       if (state.connecting) { state.connecting = null; clearDropHighlight(); renderPreview(); }
     }
   });

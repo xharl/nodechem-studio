@@ -26,7 +26,7 @@
         <span id="project-name-text">Diels–Alder TS verification</span>
         <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       </button>
-      <span class="save-pill"><i class="dot"></i> saved locally</span>
+      <span class="save-pill is-dirty" id="save-pill"><i class="dot"></i> unsaved changes</span>
     </div>
 
     <div class="top-actions">
@@ -48,6 +48,16 @@
         Export
         <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       </button>
+      <div class="top-overflow-wrap">
+        <button class="icon-btn overflow-btn" data-action="toggle-overflow" aria-haspopup="true" aria-expanded="false" aria-controls="top-overflow" title="More actions" aria-label="More actions">⋯</button>
+        <div class="top-overflow" id="top-overflow" hidden>
+          <button class="overflow-item" data-action="open-project">Open project…</button>
+          <button class="overflow-item" data-action="save-project">Save project</button>
+          <button class="overflow-item" data-open-modal="molecule">Molecule &amp; defaults</button>
+          <button class="overflow-item" data-action="import-log">Import log</button>
+          <button class="overflow-item" data-action="export">Export selected .gjf</button>
+        </div>
+      </div>
       <button class="btn primary" data-action="open-run-console" title="Run the selected calculation">
         Run
       </button>
@@ -189,16 +199,6 @@
         <button class="btn small danger" id="cancel-run" data-action="cancel-run" disabled>Stop</button>
       </div>
       <p class="run-hint" id="run-hint">Dry run writes a synthetic log and evaluates the parser. Uncheck to launch the licensed Gaussian installation.</p>
-      <div class="run-queue">
-        <div class="run-queue-head"><span>Workflow queue</span><span class="run-state" id="queue-state">idle</span></div>
-        <div class="run-actions">
-          <button class="btn primary small" data-action="run-workflow">Run workflow</button>
-          <button class="btn small" id="pause-workflow" data-action="pause-workflow" disabled>Pause</button>
-          <button class="btn small" id="resume-workflow" data-action="resume-workflow" disabled>Resume</button>
-          <button class="btn small danger" id="cancel-workflow" data-action="cancel-workflow" disabled>Cancel all</button>
-        </div>
-        <ol class="queue-list" id="queue-list"><li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li></ol>
-      </div>
     </div>
     <div class="run-output-wrap">
       <div class="run-output-head"><span>Output</span><span id="run-path"></span></div>
@@ -209,6 +209,19 @@
         <ul class="queue-list" id="run-history"><li class="queue-empty">No runs recorded yet.</li></ul>
       </div>
     </div>
+    <section class="run-queue-panel" aria-label="Workflow queue">
+      <div class="run-queue-head">
+        <span>Workflow queue</span>
+        <span class="run-state" id="queue-state">idle</span>
+        <div class="run-queue-actions">
+          <button class="btn primary small" data-action="run-workflow">Run workflow</button>
+          <button class="btn small" id="pause-workflow" data-action="pause-workflow" disabled>Pause</button>
+          <button class="btn small" id="resume-workflow" data-action="resume-workflow" disabled>Resume</button>
+          <button class="btn small danger" id="cancel-workflow" data-action="cancel-workflow" disabled>Cancel all</button>
+        </div>
+      </div>
+      <ol class="queue-list" id="queue-list"><li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li></ol>
+    </section>
   </div>
 </aside>
 
