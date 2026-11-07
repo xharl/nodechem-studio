@@ -119,15 +119,16 @@ licence or machine is not ready, complete the dry run, report the blocker, and k
 ## 6. What to work on next
 
 The task queue is in `docs/IMPLEMENTATION_PLAN.md`. **GN-002 through GN-008 are implemented on
-`main`**; what remains is **GN-001 — the Windows smoke test on a licensed machine**. A packaged
-installer is built by the **Windows package** GitHub Actions workflow (manual dispatch or `v*`
-tag); downloading that artifact is the fastest way to run the app without a source checkout.
-Everything in the queue, control-flow, checkpoint and import paths has only been exercised
-against a fake runner and fixture outputs so far.
+`main`**, and the issue #8 UI/state/accessibility audit is closed. What remains is **GN-001 — the
+Windows smoke test on a licensed machine**. The **Windows package** GitHub Actions workflow
+(manual dispatch or `v*` tag) builds and uploads an unsigned NSIS installer; it has succeeded on
+`main` (latest artifact ~114 MB). Everything in the queue, control-flow, checkpoint and import
+paths has only been exercised against a fake runner and fixture outputs so far, so the first real
+run is also the first test of those paths.
 
 Rules:
 
-- One task per branch: `gn/gn-002-project-schema`.
+- One task per branch: `gn/<task>` for roadmap work, `fix/<topic>` for defects.
 - One PR per task; include tests and evidence.
 - Do not add remote execution, telemetry, or a second UI paradigm.
 - Do not change the parser to make a failing gate pass.
