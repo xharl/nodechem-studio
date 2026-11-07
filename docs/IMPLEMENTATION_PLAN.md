@@ -107,25 +107,22 @@ Success at v1:
 
 ### Verified gaps
 
-- The graph is seeded with a Diels–Alder demo; the molecule defaults to demo water until a
-  structure is imported in the molecule drawer (GN-006).
+- The graph is seeded with a Diels–Alder demo; the runner uses demo water until a structure is
+  imported in the molecule drawer. Structure import is implemented (GN-006).
 - The queue runs calculation blocks in dependency order and survives a restart. Conditions
-  release one branch, loops retry up to `maxAttempts`, review gates stop dependents (GN-005);
-  output bundles are still unimplemented (GN-008).
-- Condition and loop nodes are executed by the queue; merge waits for all inputs (the `any`
-  policy is recorded but readiness is still all-inputs); output nodes stop with a recorded
-  reason until bundling exists.
+  release one branch, loops retry up to `maxAttempts`, review gates stop dependents; output
+  bundles are still unimplemented (GN-008).
+- Merge waits for all inputs (the `any` policy is recorded but readiness is still all-inputs);
+  output nodes stop with a recorded reason until bundling exists.
 - Output discovery and final-energy parsing are implemented (GN-007); heavy logs are capped at
   32 MiB with a recorded `truncated` flag.
 - Project loading validates `schemaVersion: 1` and rejects malformed files before render; queue
   state is persisted, but the canvas still shows its own node states rather than live queue
   status.
-- No Windows smoke test yet: this development container lacks GTK and a display, so the
-  Electron binary cannot launch here. The renderer was verified in Chromium and the main-process
-  runner was verified through Vitest.
-- No installer, auto-update, crash reporting, or code signing.
-- The output file is assumed to follow `<input>.out`; the runner should also accept `<input>.log`
-  and report which file it parsed.
+- No Windows/Gaussian smoke test yet. The UI and dry-run path are exercised on Linux; the
+  main-process runner is covered by Vitest, but real Gaussian execution is untested.
+- The NSIS installer exists and CI builds it; it is unsigned and has not been installed on a
+  clean Windows VM. No auto-update or crash reporting.
 
 ## 5. Delivery phases
 

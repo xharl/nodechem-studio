@@ -16,9 +16,11 @@ A new Electron app that makes a Gaussian 16 workflow a node graph. The graph is 
 the inspector exposes the full job parameter set without leaving the canvas. The app runs
 locally on Will's licensed Windows PC. There is no remote execution and no cloud dependency.
 
-**Not in v0.1:** automatic DAG execution, condition/loop runtime, native structure import,
-installer. One selected calculation runs at a time. The runner uses a demo water geometry and
-labels it as such.
+**Implemented in v0.1:** durable workflow queue, condition/loop runtime, checkpoint staging,
+native structure import, output discovery, and a Windows NSIS installer. **Still pending:** the
+GN-001 Windows smoke test and one small licensed Gaussian run; output bundling; merge `any`
+readiness; code signing. Until a structure is imported, the runner uses a labelled demo water
+geometry.
 
 ## 2. Safety before anything else
 
