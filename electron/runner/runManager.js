@@ -20,10 +20,29 @@ async function writeJson(filePath, value) {
 }
 
 export class RunManager {
-  constructor({ runsRoot, emit }) {
+  constructor({ runsRoot, emit, createRunner }) {
     this.runsRoot = runsRoot;
-    this.emit = emit;
+    this.emitExternal = emit;
+    this.createRunner = createRunner || (() => new GaussianRunner());
     this.active = new Map();
+    this.listeners = new Set();
+  }
+
+  /** Internal subscribers (the queue) receive the same events as the renderer. */
+  onEvent(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emit(event) {
+    this.emitExternal?.(event);
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // A subscriber bug must not break the run.
+      }
+    }
   }
 
   async start(payload = {}) {
@@ -103,7 +122,7 @@ export class RunManager {
       this.emit({ type: 'output', runId, text: outputText });
       exitCode = 0;
     } else {
-      const runner = new GaussianRunner();
+      const runner = this.createRunner();
       context.runner = runner;
       const result = await runner.run({
         executable: payload.executable,

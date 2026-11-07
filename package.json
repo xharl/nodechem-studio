@@ -17,7 +17,7 @@
     "start": "electron .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/runner/gaussianRunner.js && node --check electron/runner/runManager.js && node --check src/shared/gaussianOutput.js && node --check src/shared/gaussianInput.js && node --check src/shared/fixtureOutput.js && node --check src/shared/projectSchema.js",
+    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/runner/gaussianRunner.js && node --check electron/runner/runManager.js && node --check electron/runner/queue.js && node --check src/shared/gaussianOutput.js && node --check src/shared/gaussianInput.js && node --check src/shared/fixtureOutput.js && node --check src/shared/projectSchema.js && node --check src/shared/workflowGraph.js",
     "bundle": "bash scripts/package-bundle.sh"
   },
   "devDependencies": {

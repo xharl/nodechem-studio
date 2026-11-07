@@ -179,6 +179,12 @@ const state = {
     output: '',
     gates: [],
   },
+  queue: {
+    id: null,
+    status: 'idle',
+    tasks: [],
+    reason: null,
+  },
 };
 
 let nodeSequence = 0;
@@ -1852,6 +1858,186 @@ async function cancelRun() {
   appendRunOutput('\nCancellation requested…\n');
 }
 
+/* ── Workflow queue ───────────────────────────────────────── */
+
+function checkpointSourceFor(node) {
+  const edge = state.project.edges.find((item) => item.to === node.id && item.type === 'checkpoint');
+  if (!edge) return null;
+  const source = nodeById(edge.from);
+  if (!source?.settings?.checkpoint) return null;
+  return { nodeId: source.id, checkpoint: source.settings.checkpoint };
+}
+
+function buildWorkflowTasks() {
+  const tasks = state.project.nodes.map((node) => {
+    if (node.type !== 'calc') {
+      return { nodeId: node.id, title: node.title, kind: node.kind || node.type, executable: false };
+    }
+    const inputName = `${safeBase(node.id)}.gjf`;
+    return {
+      nodeId: node.id,
+      title: node.title,
+      kind: node.kind || 'Calc',
+      executable: true,
+      inputName,
+      outputName: outputNameFor(inputName),
+      inputText: buildInputForNode(node),
+      gates: gatesForNode(node),
+      checkpointFrom: checkpointSourceFor(node),
+    };
+  });
+  if (!tasks.some((task) => task.executable)) throw new Error('The workflow has no calculation blocks to run.');
+  return tasks;
+}
+
+function applyQueue(queue) {
+  if (!queue) return;
+  state.queue = {
+    id: queue.id || null,
+    status: queue.status || 'idle',
+    tasks: Array.isArray(queue.tasks) ? queue.tasks : [],
+    reason: queue.reason || null,
+  };
+  renderQueue();
+}
+
+function renderQueue() {
+  const queue = state.queue;
+  const stateEl = $('#queue-state');
+  if (stateEl) {
+    stateEl.textContent = queue.status === 'idle' ? 'idle' : queue.status;
+    stateEl.className = `run-state is-${queue.status}`;
+  }
+  const listEl = $('#queue-list');
+  if (listEl) {
+    listEl.innerHTML = queue.tasks.length
+      ? queue.tasks.map((task) => {
+        const meta = [task.status, task.attempts > 1 ? `×${task.attempts}` : '', task.gateVerdict ? `gates ${task.gateVerdict}` : '']
+          .filter(Boolean).join(' · ');
+        return `<li class="queue-item is-${esc(task.status)}" title="${esc(task.error || task.reason || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
+      }).join('')
+      : '<li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li>';
+  }
+  const running = queue.status === 'running';
+  const canResume = queue.status === 'paused' || queue.status === 'needs-review';
+  const active = running || canResume;
+  $('#pause-workflow')?.toggleAttribute('disabled', !running);
+  $('#resume-workflow')?.toggleAttribute('disabled', !canResume);
+  $('#cancel-workflow')?.toggleAttribute('disabled', !active);
+}
+
+async function startWorkflow() {
+  if (!desktop) { toast('Open the desktop app to queue a workflow.'); return; }
+  openRunConsole();
+  saveRunConfig();
+  const dryRun = $('#run-dry').checked;
+
+  let tasks;
+  try {
+    tasks = buildWorkflowTasks();
+  } catch (error) {
+    appendRunOutput(`Input builder error: ${error.message}\n`);
+    toast(`Cannot queue workflow: ${error.message}`);
+    return;
+  }
+
+  const preflight = await preflightRun({ quiet: true });
+  if (!preflight || (!preflight.ok && !dryRun)) {
+    toast('Preflight is not ready. Fix the run configuration or use dry run.');
+    return;
+  }
+
+  state.run.output = '';
+  appendRunOutput(`Queued workflow · ${tasks.filter((task) => task.executable).length} calculation block(s)\n`);
+  $('#run-gates').innerHTML = '';
+  $('#run-title').textContent = state.project.name || 'Workflow';
+
+  try {
+    const queue = await desktop.startQueue({
+      projectName: state.project.name,
+      tasks,
+      edges: state.project.edges,
+      options: {
+        dryRun,
+        executable: $('#run-exe').value.trim(),
+        scratchDir: $('#run-scratch').value.trim(),
+      },
+    });
+    applyQueue(queue);
+    toast(`Workflow queued · ${tasks.filter((task) => task.executable).length} block(s).`);
+  } catch (error) {
+    appendRunOutput(`Queue error: ${error.message}\n`);
+    toast(`Could not queue workflow: ${error.message}`);
+  }
+}
+
+async function pauseWorkflow() {
+  if (!state.queue.id || !desktop) return;
+  const result = await desktop.pauseQueue(state.queue.id);
+  if (!result?.paused) toast('Nothing to pause.');
+}
+
+async function resumeWorkflow() {
+  if (!state.queue.id || !desktop) return;
+  try {
+    const result = await desktop.resumeQueue(state.queue.id);
+    if (!result?.resumed) toast('This workflow cannot resume.');
+  } catch (error) {
+    toast(`Could not resume: ${error.message}`);
+  }
+}
+
+async function cancelWorkflow() {
+  if (!state.queue.id || !desktop) return;
+  await desktop.cancelQueue(state.queue.id);
+  appendRunOutput('\nWorkflow cancellation requested…\n');
+}
+
+function handleQueueEvent(event) {
+  if (!event) return;
+  if (event.type === 'queue-output') {
+    const task = state.queue.tasks.find((item) => item.nodeId === event.nodeId);
+    appendRunOutput(`\n[${task?.title || event.nodeId}]\n${event.text}`);
+    return;
+  }
+  if (!event.queue) return;
+  applyQueue(event.queue);
+  if (event.type === 'queue-done') {
+    appendRunOutput(`\nWorkflow ${event.queue.status}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
+    toast(`Workflow ${event.queue.status}.`);
+    refreshHistory();
+  }
+}
+
+async function refreshHistory() {
+  if (!desktop?.listRuns) return;
+  try {
+    const runs = (await desktop.listRuns()).slice(0, 6);
+    const el = $('#run-history');
+    if (!el) return;
+    el.innerHTML = runs.length
+      ? runs.map((run) => {
+        const meta = [run.status, run.gates?.overall ? `gates ${run.gates.overall}` : '', run.dryRun ? 'dry' : 'Gaussian']
+          .filter(Boolean).join(' · ');
+        return `<li class="queue-item is-${esc(run.status)}" title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
+      }).join('')
+      : '<li class="queue-empty">No runs recorded yet.</li>';
+  } catch {
+    // History is optional; a failure must not break the console.
+  }
+}
+
+async function restoreQueue() {
+  if (!desktop?.listQueues) return;
+  try {
+    const queues = await desktop.listQueues();
+    const active = queues.find((queue) => ['running', 'paused'].includes(queue.status)) || queues[0];
+    if (active) applyQueue(active);
+  } catch {
+    // No queue history yet.
+  }
+}
+
 async function openProject() {
   if (!desktop) { toast('Open the Electron app to use native project files.'); return; }
   try {
@@ -1969,6 +2155,11 @@ function handleAction(action, element) {
     case 'pick-gaussian': pickGaussian(); break;
     case 'preflight': preflightRun(); break;
     case 'run-selected': startSelectedRun(); break;
+    case 'run-workflow': startWorkflow(); break;
+    case 'pause-workflow': pauseWorkflow(); break;
+    case 'resume-workflow': resumeWorkflow(); break;
+    case 'cancel-workflow': cancelWorkflow(); break;
+    case 'refresh-history': refreshHistory(); break;
     case 'cancel-run': cancelRun(); break;
     case 'open-project': openProject(); break;
     case 'save-project': saveProject(); break;
@@ -2229,9 +2420,13 @@ function init() {
   if (window.innerWidth <= 820) state.inspectorHidden = true;
   readRunConfig();
   if (desktop?.onRunEvent) desktop.onRunEvent(handleRunEvent);
+  if (desktop?.onQueueEvent) desktop.onQueueEvent(handleQueueEvent);
   renderPalette();
   renderGraph();
   renderInspector();
+  renderQueue();
+  restoreQueue();
+  refreshHistory();
   setZoom(state.zoom);
   syncModeButtons();
   wireEvents();

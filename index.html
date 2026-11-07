@@ -189,11 +189,25 @@
         <button class="btn small danger" id="cancel-run" data-action="cancel-run" disabled>Stop</button>
       </div>
       <p class="run-hint" id="run-hint">Dry run writes a synthetic log and evaluates the parser. Uncheck to launch the licensed Gaussian installation.</p>
+      <div class="run-queue">
+        <div class="run-queue-head"><span>Workflow queue</span><span class="run-state" id="queue-state">idle</span></div>
+        <div class="run-actions">
+          <button class="btn primary small" data-action="run-workflow">Run workflow</button>
+          <button class="btn small" id="pause-workflow" data-action="pause-workflow" disabled>Pause</button>
+          <button class="btn small" id="resume-workflow" data-action="resume-workflow" disabled>Resume</button>
+          <button class="btn small danger" id="cancel-workflow" data-action="cancel-workflow" disabled>Cancel all</button>
+        </div>
+        <ol class="queue-list" id="queue-list"><li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li></ol>
+      </div>
     </div>
     <div class="run-output-wrap">
       <div class="run-output-head"><span>Output</span><span id="run-path"></span></div>
       <pre class="run-output" id="run-output">Select a calculation block, then run.</pre>
       <div class="run-gates" id="run-gates"></div>
+      <div class="run-history">
+        <div class="run-output-head"><span>Recent runs</span><button class="btn small" data-action="refresh-history">Refresh</button></div>
+        <ul class="queue-list" id="run-history"><li class="queue-empty">No runs recorded yet.</li></ul>
+      </div>
     </div>
   </div>
 </aside>

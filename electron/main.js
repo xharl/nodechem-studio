@@ -5,6 +5,7 @@ import os from 'node:os';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { RunManager } from './runner/runManager.js';
+import { QueueManager } from './runner/queue.js';
 import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -14,10 +15,17 @@ const DEV_URL = 'http://127.0.0.1:5173';
 
 let mainWindow = null;
 let runManager = null;
+let queueManager = null;
 
 function emitRunEvent(event) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('gaussian:event', event);
+  }
+}
+
+function emitQueueEvent(event) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('queue:event', event);
   }
 }
 
@@ -190,6 +198,12 @@ app.whenReady().then(async () => {
     runsRoot: path.join(app.getPath('userData'), 'runs'),
     emit: emitRunEvent,
   });
+  queueManager = new QueueManager({
+    queuesRoot: path.join(app.getPath('userData'), 'queues'),
+    runManager,
+    emit: emitQueueEvent,
+  });
+  await queueManager.init();
 
   ipcMain.handle('app:info', () => ({
     version: app.getVersion(),
@@ -207,6 +221,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('gaussian:run', (_event, payload) => runManager.start(payload));
   ipcMain.handle('gaussian:cancel', (_event, runId) => runManager.cancel(runId));
   ipcMain.handle('runs:list', () => runManager.list());
+  ipcMain.handle('queue:start', (_event, payload) => queueManager.start(payload));
+  ipcMain.handle('queue:pause', (_event, queueId) => queueManager.pause(queueId));
+  ipcMain.handle('queue:resume', (_event, queueId) => queueManager.resume(queueId));
+  ipcMain.handle('queue:cancel', (_event, queueId) => queueManager.cancel(queueId));
+  ipcMain.handle('queue:list', () => queueManager.list());
+  ipcMain.handle('queue:get', (_event, queueId) => queueManager.get(queueId));
 
   createWindow();
 

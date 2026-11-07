@@ -16,7 +16,11 @@ What works today:
 - Add/select/drag nodes, connect ports, rewire, zoom, pan, validate.
 - Per-node inspector covering the route, SCF, optimization, frequency gates, population, IRC,
   scan, fragments, resources, and checkpoint fields.
-- **One selected calculation** can be built into a Gaussian `.gjf` and run locally.
+- **One selected calculation** can be built into a Gaussian `.gjf` and run locally, or the whole
+  workflow can be queued: calculation blocks run in dependency order, one at a time, with a
+  durable queue that survives an app restart.
+- Condition, loop, merge and output nodes are queued but stop with a recorded reason — their
+  runtime semantics land in GN-005, not silently skipped.
 - Checkpoint hand-offs add `%OldChk` **and** `Geom=Check Guess=Read` to the route, so the
   downstream job actually consumes the upstream geometry rather than just copying the file.
 - Local runner writes an immutable run folder (`run.json`, input, output, scratch).
@@ -113,6 +117,7 @@ electron/
   runner/
     gaussianRunner.js     spawn + tail one Gaussian process
     runManager.js         run folders, records, dry-run fixture, gates
+    queue.js              durable workflow queue + scheduler
 src/
   renderer/
     app.js                node graph, inspector, palette, run console
@@ -121,6 +126,7 @@ src/
     gaussianInput.js      deterministic .gjf builder
     gaussianOutput.js     parser + gate evaluator
     projectSchema.js      schema v1, validation, migration, canonical save
+    workflowGraph.js      stable topological order + readiness rules
     fixtureOutput.js      labelled synthetic output for dry runs
 test/                     Vitest suites
 docs/
