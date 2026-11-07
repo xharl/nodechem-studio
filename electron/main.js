@@ -16,6 +16,7 @@ const DEV_URL = 'http://127.0.0.1:5173';
 let mainWindow = null;
 let runManager = null;
 let queueManager = null;
+let windowDirty = false;
 
 function emitRunEvent(event) {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -59,6 +60,20 @@ function createWindow() {
   }
 
   mainWindow.on('closed', () => { mainWindow = null; });
+
+  mainWindow.on('close', (event) => {
+    if (!windowDirty) return;
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      buttons: ['Cancel', 'Close without saving'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Unsaved changes',
+      message: 'This project has unsaved changes.',
+      detail: 'Close the window and lose them?',
+    });
+    if (choice === 0) event.preventDefault();
+  });
 }
 
 function projectFailure(error) {
@@ -178,19 +193,56 @@ async function openProject() {
   };
 }
 
-async function saveProject(project) {
+function suggestedProjectName(project) {
+  const base = String(project?.name || 'untitled')
+    .replace(/[^A-Za-z0-9._ -]+/g, '')
+    .trim()
+    .slice(0, 60)
+    .replace(/\s+/g, '-')
+    .toLowerCase();
+  return `${base || 'untitled'}.ghproject.json`;
+}
+
+async function saveProject(project, filePath) {
   const serialized = stringifyProject(project);
   if (!serialized.ok) {
     return { canceled: false, error: projectFailure(serialized) };
   }
+  let target = typeof filePath === 'string' && filePath.trim() ? filePath.trim() : null;
+  if (target && !/\.json$/i.test(target)) {
+    return { canceled: false, error: { message: 'A project file must end in .json.' } };
+  }
+  if (!target) {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save Gaussian Studio project',
+      defaultPath: path.join(app.getPath('documents'), suggestedProjectName(project)),
+      filters: [{ name: 'Gaussian Studio project', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    target = result.filePath;
+  }
+  await fsp.writeFile(target, serialized.text, 'utf8');
+  return { canceled: false, path: target, project: serialized.project };
+}
+
+async function exportGaussianInput({ filename, text } = {}) {
+  const name = String(filename || '');
+  if (!/^[A-Za-z0-9._-]+\.(gjf|com)$/i.test(name)) {
+    return { canceled: false, error: { message: 'Input file name must be a safe .gjf or .com basename.' } };
+  }
+  const content = String(text || '');
+  if (!content.trim()) return { canceled: false, error: { message: 'There is no Gaussian input to export.' } };
+  if (Buffer.byteLength(content, 'utf8') > 2 * 1024 * 1024) {
+    return { canceled: false, error: { message: 'Gaussian input is larger than 2 MiB.' } };
+  }
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: 'Save Gaussian Studio project',
-    defaultPath: path.join(app.getPath('documents'), 'untitled.ghproject.json'),
-    filters: [{ name: 'Gaussian Studio project', extensions: ['json'] }],
+    title: 'Export Gaussian input',
+    defaultPath: path.join(app.getPath('downloads'), name),
+    filters: [{ name: 'Gaussian input', extensions: ['gjf'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
-  await fsp.writeFile(result.filePath, serialized.text, 'utf8');
-  return { canceled: false, path: result.filePath, project: serialized.project };
+  await fsp.writeFile(result.filePath, content, 'utf8');
+  return { canceled: false, path: result.filePath };
 }
 
 app.whenReady().then(async () => {
@@ -215,7 +267,9 @@ app.whenReady().then(async () => {
     userData: app.getPath('userData'),
   }));
   ipcMain.handle('project:open', openProject);
-  ipcMain.handle('project:save', (_event, project) => saveProject(project));
+  ipcMain.handle('project:save', (_event, project, filePath) => saveProject(project, filePath));
+  ipcMain.handle('input:export', (_event, payload) => exportGaussianInput(payload));
+  ipcMain.on('window:dirty', (_event, dirty) => { windowDirty = Boolean(dirty); });
   ipcMain.handle('gaussian:pick-executable', chooseExecutable);
   ipcMain.handle('gaussian:preflight', (_event, config) => preflight(config));
   ipcMain.handle('gaussian:run', (_event, payload) => runManager.start(payload));

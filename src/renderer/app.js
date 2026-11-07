@@ -175,6 +175,9 @@ const state = {
   pan: null,
   toastTimer: null,
   statusMessage: 'Preview project · choose a calculation block to run the local Gaussian slice',
+  projectPath: null,
+  savedSnapshot: null,
+  dirty: null,
   run: {
     id: null,
     status: 'idle',
@@ -497,6 +500,29 @@ function renderGraph() {
   container.innerHTML = state.project.nodes.map(renderNodeCard).join('');
   renderEdges();
   updateCounts();
+  refreshDirty();
+}
+
+function updateSavePill(dirty) {
+  const pill = $('#save-pill');
+  if (!pill) return;
+  pill.classList.toggle('is-dirty', dirty);
+  pill.innerHTML = `<i class="dot"></i> ${dirty ? 'unsaved changes' : 'saved locally'}`;
+}
+
+function refreshDirty() {
+  const dirty = state.savedSnapshot === null || JSON.stringify(state.project) !== state.savedSnapshot;
+  updateSavePill(dirty);
+  if (dirty !== state.dirty) {
+    state.dirty = dirty;
+    desktop?.setDirty?.(dirty);
+  }
+}
+
+function markProjectSaved(filePath) {
+  state.projectPath = filePath;
+  state.savedSnapshot = JSON.stringify(state.project);
+  refreshDirty();
 }
 
 function updateCounts() {
@@ -995,6 +1021,7 @@ function renderEdgeInspector(edge) {
 function renderInspector() {
   const el = inspectorEl();
   if (!el) return;
+  refreshDirty();
   el.classList.toggle('is-wide', state.inspectorWide);
   el.classList.toggle('is-hidden', state.inspectorHidden);
   const reopen = $('#inspector-reopen');
@@ -1045,7 +1072,19 @@ const BLOCKS = [
 function renderPalette() {
   const list = $('#palette-list');
   if (!list) return;
-  list.innerHTML = BLOCKS.map((groupDef) => `
+  const query = String($('#palette-search')?.value || '').trim().toLowerCase();
+  const groups = BLOCKS
+    .map((groupDef) => ({
+      group: groupDef.group,
+      items: groupDef.items.filter((item) => !query
+        || `${item.title} ${item.note} ${item.type}`.toLowerCase().includes(query)),
+    }))
+    .filter((groupDef) => groupDef.items.length > 0);
+  if (groups.length === 0) {
+    list.innerHTML = '<div class="palette-empty">No blocks match that search.</div>';
+    return;
+  }
+  list.innerHTML = groups.map((groupDef) => `
     <div class="palette-group-label">${esc(groupDef.group)}</div>
     ${groupDef.items.map((item) => `<button type="button" class="palette-item" data-block="${item.type}">
       <span class="palette-icon">${esc(item.icon)}</span>
@@ -1058,9 +1097,14 @@ function togglePalette(force) {
   state.paletteOpen = typeof force === 'boolean' ? force : !state.paletteOpen;
   const palette = $('#palette');
   const button = $('[data-action="toggle-palette"]');
+  const search = $('#palette-search');
   if (palette) palette.hidden = !state.paletteOpen;
   if (button) button.setAttribute('aria-expanded', String(state.paletteOpen));
-  if (state.paletteOpen) renderPalette();
+  if (state.paletteOpen) {
+    if (search) search.value = '';
+    renderPalette();
+    search?.focus();
+  }
 }
 
 function freePosition() {
@@ -1479,6 +1523,7 @@ function renderDrawer() {
         <div class="drop-zone" style="margin-top:10px">
           <strong>${atomCount ? `${atomCount} atoms` : 'Demo water geometry'}</strong>
           <span>${sourceLabel}</span>
+          <span class="drop-hint">Drop a .xyz / .mol / .sdf / .gjf / .com file here.</span>
           <div class="run-actions" style="margin:8px 0 0">
             <button type="button" class="btn small" data-action="import-structure">Import structure file</button>
             ${atomCount ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
@@ -2131,6 +2176,7 @@ async function openProject() {
     }
     state.project = result.project;
     state.selected = { type: 'project', id: null };
+    markProjectSaved(result.path);
     const name = $('#project-name-text');
     if (name) name.textContent = state.project.name || 'Untitled project';
     const warnings = Array.isArray(result.warnings) ? result.warnings.length : 0;
@@ -2149,38 +2195,52 @@ async function openProject() {
 async function saveProject() {
   if (!desktop) { toast('Open the Electron app to save a native project file.'); return; }
   try {
-    const result = await desktop.saveProject(state.project);
+    const result = await desktop.saveProject(state.project, state.projectPath);
     if (result.canceled) return;
     if (result.error) {
       toast(`Could not save project: ${result.error.message}`);
       return;
     }
     if (result.project) state.project = result.project;
+    markProjectSaved(result.path);
     toast(`Saved ${result.path}`);
   } catch (error) {
     toast(`Could not save project: ${error.message}`);
   }
 }
 
-function exportSelectedInput() {
+async function exportSelectedInput() {
   const node = selectedCalcNode();
   if (!node) { toast('Select a calculation block to export its input.'); return; }
+  let text;
   try {
-    const text = buildInputForNode(node);
-    const filename = `${safeBase(node.id)}.gjf`;
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    toast(`Exported ${filename}.`);
+    text = buildInputForNode(node);
   } catch (error) {
     toast(`Cannot export input: ${error.message}`);
+    return;
   }
+  const filename = `${safeBase(node.id)}.gjf`;
+  if (desktop?.exportInput) {
+    try {
+      const result = await desktop.exportInput({ filename, text });
+      if (result?.canceled) return;
+      if (result?.error) { toast(`Could not export: ${result.error.message}`); return; }
+      toast(`Exported ${result.path}`);
+    } catch (error) {
+      toast(`Could not export: ${error.message}`);
+    }
+    return;
+  }
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  toast(`Exported ${filename}.`);
 }
 
 /* ── Event wiring ─────────────────────────────────────────── */
@@ -2440,6 +2500,10 @@ function onDocumentChange(event) {
 
 function onDocumentInput(event) {
   const target = event.target;
+  if (target.id === 'palette-search') {
+    renderPalette();
+    return;
+  }
   if (target.dataset.drawerField && state.drawer) {
     state.drawer.draft[target.dataset.drawerField] = target.value;
   }
@@ -2453,7 +2517,31 @@ function wireEvents() {
   document.addEventListener('change', onDocumentChange);
   document.addEventListener('input', onDocumentInput);
 
+  const modal = $('#modal');
+  modal?.addEventListener('dragover', (event) => {
+    const zone = event.target.closest('.drop-zone');
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.add('is-drop');
+  });
+  modal?.addEventListener('dragleave', (event) => {
+    event.target.closest('.drop-zone')?.classList.remove('is-drop');
+  });
+  modal?.addEventListener('drop', (event) => {
+    const zone = event.target.closest('.drop-zone');
+    if (!zone) return;
+    event.preventDefault();
+    zone.classList.remove('is-drop');
+    const file = event.dataTransfer?.files?.[0];
+    if (file) importStructureFile(file);
+  });
+
   document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      togglePalette(true);
+      return;
+    }
     if (event.key === 'Escape') {
       if (state.drawer) { closeDrawer(); return; }
       if (!$('#top-overflow')?.hidden) { closeOverflow(); return; }
@@ -2537,6 +2625,13 @@ function init() {
   readRunConfig();
   if (desktop?.onRunEvent) desktop.onRunEvent(handleRunEvent);
   if (desktop?.onQueueEvent) desktop.onQueueEvent(handleQueueEvent);
+  const kbdHint = $('#kbd-hint');
+  if (kbdHint) {
+    const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || '');
+    kbdHint.innerHTML = isMac
+      ? '<kbd>⌘</kbd><kbd>K</kbd> search blocks'
+      : '<kbd>Ctrl</kbd><kbd>K</kbd> search blocks';
+  }
   renderPalette();
   renderGraph();
   renderInspector();

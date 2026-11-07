@@ -146,7 +146,7 @@
         <div class="status-message" id="status-message">Structure valid · acyclic · no Gaussian job has been run</div>
         <div class="status-right">
           <span class="mock-tag">v0.1 · local runner</span>
-          <span class="kbd-hint"><kbd>⌘</kbd><kbd>K</kbd> search blocks</span>
+          <span class="kbd-hint" id="kbd-hint"><kbd>⌘</kbd><kbd>K</kbd> search blocks</span>
         </div>
       </div>
 
@@ -155,8 +155,9 @@
           <span class="eyebrow">Add a calculation block</span>
           <span class="palette-note">snapshots the active defaults</span>
         </div>
+        <input class="palette-search" id="palette-search" type="search" placeholder="Search blocks…" aria-label="Search blocks" autocomplete="off">
         <div id="palette-list"></div>
-        <div class="palette-foot">Blocks are illustrative; no Gaussian input is generated.</div>
+        <div class="palette-foot">New blocks snapshot the current defaults; the runner builds real Gaussian input.</div>
       </div>
     </section>
 

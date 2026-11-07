@@ -80,7 +80,7 @@ labels it as such.
 5. Click **Run selected block**.
 6. Confirm:
    - run state becomes `completed`;
-   - gates show `SCF · pass`, `Freq · pass`, `N imag · pass` (0 expected);
+   - gates show `SCF record · pass`, `Frequency record · pass`, `Imaginary mode count · pass` (0 expected);
    - output begins with `FIXTURE OUTPUT` and says it is not a Gaussian calculation;
    - a run folder exists under Electron's `userData/runs/`.
 7. Repeat with **TS frequency** (`ts-freq`, 1 imaginary mode expected). It should also pass.
@@ -175,13 +175,18 @@ use the shared folder / bundle path. Do not broadcast to other peers.
 
 ## 9. Known limitations to report honestly
 
-- Renderer verified in Chromium at 1440×900 and 390×844; Electron could not launch in the Linux
-  build container (no GTK/display). Windows launch is unverified until you run it.
-- The runner assumes `<input>.out`; if Gaussian writes `.log`, report it (GN-007).
+- Renderer verified in Chromium at 1440×900, 1366×768, 1100×700 and 390×844; Electron could
+  not launch in the Linux build container (no GTK/display). Windows launch is unverified until
+  GN-001 runs.
+- Output discovery handles `<input>.out` and `<input>.log` and records which file was parsed
+  (GN-007).
 - Project files are schema v1 and validated before render; v0.1 files migrate on open (GN-002).
-- No condition/loop execution; the canvas draws them, the runner ignores them.
-- Demo water geometry is not the seeded Diels–Alder molecule.
-- No installer; source checkout + npm is the current distribution.
+- Conditions and loops execute in the queue; `merge any` still waits for all inputs, and output
+  bundles stop with a recorded reason (GN-005).
+- Structure import supports .xyz/.mol/.sdf/.gjf/.com; the canvas demo graph is Diels–Alder but
+  the project geometry is demo water until a structure is imported (GN-006).
+- Packaging: electron-builder NSIS config plus a Windows CI workflow; no clean-VM install yet
+  (GN-008).
 
 ## 10. Bundle manifest
 

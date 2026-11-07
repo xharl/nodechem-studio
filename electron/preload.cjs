@@ -3,7 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('desktop', {
   getInfo: () => ipcRenderer.invoke('app:info'),
   openProject: () => ipcRenderer.invoke('project:open'),
-  saveProject: (project) => ipcRenderer.invoke('project:save', project),
+  saveProject: (project, filePath) => ipcRenderer.invoke('project:save', project, filePath),
+  exportInput: (payload) => ipcRenderer.invoke('input:export', payload),
+  setDirty: (dirty) => ipcRenderer.send('window:dirty', Boolean(dirty)),
   pickExecutable: () => ipcRenderer.invoke('gaussian:pick-executable'),
   preflight: (config) => ipcRenderer.invoke('gaussian:preflight', config),
   runTask: (payload) => ipcRenderer.invoke('gaussian:run', payload),

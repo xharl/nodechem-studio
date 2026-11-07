@@ -899,6 +899,13 @@ kbd {
 }
 .palette-head { display: flex; justify-content: space-between; gap: 8px; padding: 2px 3px 8px; }
 .palette-note { color: var(--faint); font-size: 8.5px; }
+.palette-search {
+  width: 100%; margin-bottom: 8px; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 11px;
+}
+.palette-search::placeholder { color: var(--muted); }
+.palette-empty { padding: 14px 8px; color: var(--muted); font-size: 10px; text-align: center; }
 .palette-group-label {
   padding: 8px 4px 4px;
   color: var(--faint);
@@ -1030,6 +1037,8 @@ kbd {
   line-height: 1.55;
 }
 .drop-zone strong { color: #b7c3d4; font-size: 10.5px; font-weight: 550; }
+.drop-zone.is-drop { border-color: rgba(124, 131, 255, .7); background: rgba(124, 131, 255, .09); }
+.drop-zone .drop-hint { color: var(--muted); font-size: 9px; }
 .fragment-row { display: grid; grid-template-columns: 62px 1fr; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid rgba(148, 163, 184, .07); }
 .fragment-row:first-child { border-top: 0; }
 .fragment-row .frag-label { color: var(--faint); font: 9px var(--mono); }
