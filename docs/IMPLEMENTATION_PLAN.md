@@ -96,7 +96,7 @@ Success at v1:
 | Gate evaluator | SCF, optimization, frequency, imaginary count/magnitude, thermochemistry | same suite |
 | Local runner | spawn `g16.exe`, tail output, cancel tree, run folder, dry run | `test/runManager.test.js` |
 | Dry run | labelled synthetic output, full parser/gate path | run console PASS evidence |
-| Persistence | native Open/Save of project JSON | Electron dialogs; project file shape is still loose |
+| Persistence | native Open/Save, schema v1 validation, v0.1 migration, canonical save | `test/projectSchema.test.js` |
 | Packaging | none | `npm run build` only produces `dist/` |
 
 ### Verified gaps
@@ -107,7 +107,8 @@ Success at v1:
 - Condition and loop nodes are drawable but not executed.
 - The **Post-HF final energy** gate is visible in the inspector but not evaluated in v0.1; the
   parser currently exposes the SCF/free-energy records only. It is marked for GN-007.
-- Project loading does not validate the schema before rendering.
+- Project loading validates `schemaVersion: 1` and rejects malformed files before render; the
+  queue does not exist yet, so node states are still cosmetic (GN-003).
 - No Windows smoke test yet: this development container lacks GTK and a display, so the
   Electron binary cannot launch here. The renderer was verified in Chromium and the main-process
   runner was verified through Vitest.
@@ -133,7 +134,7 @@ Success at v1:
   folder with a parsed normal termination and gates.
 - **GN-001 is the gate for calling v0.1 done.**
 
-### Phase 2 — Project model and safe persistence
+### Phase 2 — Project model and safe persistence (done)
 
 - Define a versioned project schema (`schemaVersion: 1`) with explicit validation for nodes,
   edges, settings, molecule, graph coordinates, and run gates.
@@ -194,7 +195,7 @@ and PR title. A task is not done until its acceptance evidence is in the PR.
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
 | **GN-001** | Windows smoke test of the v0.1 runner | none (report) | `npm test` green; dry run PASS; real small job produces `run.json` with parsed termination; screenshot of run console |
-| **GN-002** | Versioned project schema + validation | `src/shared/projectSchema.js`, `test/projectSchema.test.js`, `electron/main.js` | Invalid project rejected before render; valid project round-trips; tests |
+| **GN-002** | Versioned project schema + validation — **implemented** (`src/shared/projectSchema.js`, 44 tests) | `src/shared/projectSchema.js`, `test/projectSchema.test.js`, `electron/main.js` | Invalid project rejected before render; valid project round-trips; tests |
 | **GN-003** | Durable queue + topological scheduler | `electron/runner/queue.js`, `runManager.js`, tests | 4-node chain; kill/restart marks interrupted and resumes ready work |
 | **GN-004** | Checkpoint staging between tasks | `runManager.js`, `gaussianInput.js`, tests | Only checkpoint edges copy `.chk`; missing/corrupt checkpoint fails with a recorded reason |
 | **GN-005** | Condition and loop runtime | `src/shared/controlFlow.js`, scheduler, UI state, tests | Failing gate takes the false branch; retry exhausts; review blocks |

@@ -24,7 +24,8 @@ What works today:
   thermochemistry; gates are evaluated from the output, never from the exit code.
 - **Dry run** writes a labelled synthetic log, so the full UI and gate path can be tested
   without a Gaussian licence.
-- Native project Open/Save through Electron dialogs; project files are JSON.
+- Native project Open/Save through Electron dialogs. Files carry `schemaVersion: 1`,
+  are validated before anything renders, and unversioned v0.1 files migrate on open.
 
 What is deliberately not in v0.1:
 
@@ -85,6 +86,24 @@ For a real run:
 6. Inspect the generated input and output in the run folder. The app never treats exit code 0
    as proof of success; it reads the Gaussian termination record and gates.
 
+## Project files
+
+A project is a single JSON document. The on-disk format is `schemaVersion: 1`.
+
+- Validation happens in the main process before the renderer receives anything: a malformed
+  project is refused with the failing paths instead of half-rendering.
+- Files written by v0.1 (no `schemaVersion`) are migrated on open: missing defaults are filled,
+  structural problems still fail. The status bar and the dialog report the migration.
+- A file from a newer app version is rejected with an explicit message. Never downgrade by
+  editing `schemaVersion` by hand.
+- Saves are canonical: fixed key order, normalized numbers, trailing newline. Opening and saving
+  an unchanged project is byte-stable.
+- Limits: 8 MB per file, 2000 nodes, 4000 connections, 64 fragments. Unknown fields are dropped
+  on save with a warning.
+
+The schema lives in `src/shared/projectSchema.js`; tests for every node kind, migration, and
+rejection case are in `test/projectSchema.test.js`.
+
 ## Project layout
 
 ```
@@ -101,6 +120,7 @@ src/
   shared/
     gaussianInput.js      deterministic .gjf builder
     gaussianOutput.js     parser + gate evaluator
+    projectSchema.js      schema v1, validation, migration, canonical save
     fixtureOutput.js      labelled synthetic output for dry runs
 test/                     Vitest suites
 docs/

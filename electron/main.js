@@ -5,6 +5,7 @@ import os from 'node:os';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { RunManager } from './runner/runManager.js';
+import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -52,21 +53,13 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-function safeJson(value) {
-  return JSON.stringify(value, null, 2);
-}
-
-function assertProjectShape(project) {
-  if (!project || typeof project !== 'object' || Array.isArray(project)) {
-    throw new Error('Project file must contain a JSON object.');
-  }
-  if (!Array.isArray(project.nodes) || !Array.isArray(project.edges)) {
-    throw new Error('Project file must contain nodes and edges arrays.');
-  }
-  if (project.nodes.length > 2000 || project.edges.length > 4000) {
-    throw new Error('Project is too large for this version.');
-  }
-  return project;
+function projectFailure(error) {
+  return {
+    code: 'invalid-project',
+    message: summarizeErrors(error.errors),
+    errors: error.errors,
+    warnings: error.warnings,
+  };
 }
 
 async function chooseExecutable() {
@@ -164,20 +157,32 @@ async function openProject() {
   if (result.canceled) return { canceled: true };
   const filePath = result.filePaths[0];
   const text = await fsp.readFile(filePath, 'utf8');
-  const project = assertProjectShape(JSON.parse(text));
-  return { canceled: false, path: filePath, project };
+  const parsed = parseProjectText(text);
+  if (!parsed.ok) {
+    return { canceled: false, path: filePath, error: projectFailure(parsed) };
+  }
+  return {
+    canceled: false,
+    path: filePath,
+    project: parsed.project,
+    migrated: parsed.migrated,
+    warnings: parsed.warnings,
+  };
 }
 
 async function saveProject(project) {
-  assertProjectShape(project);
+  const serialized = stringifyProject(project);
+  if (!serialized.ok) {
+    return { canceled: false, error: projectFailure(serialized) };
+  }
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Save Gaussian Studio project',
     defaultPath: path.join(app.getPath('documents'), 'untitled.ghproject.json'),
     filters: [{ name: 'Gaussian Studio project', extensions: ['json'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
-  await fsp.writeFile(result.filePath, `${safeJson(project)}\n`, 'utf8');
-  return { canceled: false, path: result.filePath };
+  await fsp.writeFile(result.filePath, serialized.text, 'utf8');
+  return { canceled: false, path: result.filePath, project: serialized.project };
 }
 
 app.whenReady().then(async () => {

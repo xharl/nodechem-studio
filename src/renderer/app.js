@@ -10,6 +10,7 @@ import {
   DEMO_WATER,
   outputNameFor,
 } from '../shared/gaussianInput.js';
+import { defaultGates, defaultSettings } from '../shared/projectSchema.js';
 
 const desktop = window.desktop || null;
 
@@ -56,48 +57,6 @@ const VERBOSITY = [['', 'Default'], ['Normal', 'Normal'], ['Verbose', 'Verbose']
 const SOLVATION_MODELS = [['PCM', 'PCM'], ['SMD', 'SMD'], ['CPCM', 'CPCM']];
 const SOLVENTS = [['Water', 'Water'], ['Dichloromethane', 'Dichloromethane'], ['THF', 'THF'], ['Toluene', 'Toluene'], ['Acetonitrile', 'Acetonitrile']];
 const MEMORY_UNITS = [['GB', 'GB'], ['MB', 'MB'], ['MW', 'MW']];
-
-function defaultGates(overrides = {}) {
-  return {
-    termination: true,
-    scf: true,
-    imaginary: null,
-    minMagnitude: 50,
-    thermo: false,
-    finalEnergy: false,
-    ...overrides,
-  };
-}
-
-function defaultSettings(overrides = {}) {
-  const base = {
-    jobType: 'Opt',
-    method: 'B3LYP',
-    basis: '6-31G(d)',
-    memory: '4',
-    memoryUnit: 'GB',
-    nproc: '4',
-    checkpoint: '',
-    charge: 0,
-    multiplicity: 1,
-    dispersion: '',
-    scf: '',
-    grid: '',
-    population: '',
-    verbosity: '',
-    solvation: false,
-    solvationModel: 'PCM',
-    solvent: 'Water',
-    customKeywords: '',
-    ircDirection: 'forward',
-    gates: defaultGates(),
-  };
-  return {
-    ...base,
-    ...overrides,
-    gates: defaultGates({ ...base.gates, ...(overrides.gates || {}) }),
-  };
-}
 
 function calcNode(id, kind, title, x, y, options = {}) {
   return {
@@ -1898,15 +1857,22 @@ async function openProject() {
   try {
     const result = await desktop.openProject();
     if (result.canceled) return;
+    if (result.error) {
+      toast(`Could not open project: ${result.error.message}`);
+      return;
+    }
     state.project = result.project;
     state.selected = { type: 'project', id: null };
     const name = $('#project-name-text');
     if (name) name.textContent = state.project.name || 'Untitled project';
-    state.statusMessage = `Opened ${result.path}`;
+    const warnings = Array.isArray(result.warnings) ? result.warnings.length : 0;
+    state.statusMessage = result.migrated
+      ? `Opened ${result.path} · migrated from v0.1 to schema v${state.project.schemaVersion}${warnings ? ` · ${warnings} warning${warnings === 1 ? '' : 's'}` : ''}`
+      : `Opened ${result.path}`;
     renderGraph();
     renderInspector();
     updateCounts();
-    toast('Project opened.');
+    toast(result.migrated ? 'Project opened and migrated to schema v1.' : 'Project opened.');
   } catch (error) {
     toast(`Could not open project: ${error.message}`);
   }
@@ -1916,7 +1882,13 @@ async function saveProject() {
   if (!desktop) { toast('Open the Electron app to save a native project file.'); return; }
   try {
     const result = await desktop.saveProject(state.project);
-    if (!result.canceled) toast(`Saved ${result.path}`);
+    if (result.canceled) return;
+    if (result.error) {
+      toast(`Could not save project: ${result.error.message}`);
+      return;
+    }
+    if (result.project) state.project = result.project;
+    toast(`Saved ${result.path}`);
   } catch (error) {
     toast(`Could not save project: ${error.message}`);
   }

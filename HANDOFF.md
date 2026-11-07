@@ -118,9 +118,10 @@ licence or machine is not ready, complete the dry run, report the blocker, and k
 
 ## 6. What to work on next
 
-The task queue is in `docs/IMPLEMENTATION_PLAN.md`. The first implementation task after GN-001
-is **GN-002 — versioned project schema + validation**. Do not start GN-003 (queue) before the
-project shape is stable.
+The task queue is in `docs/IMPLEMENTATION_PLAN.md`. **GN-002 (versioned project schema) is
+implemented on `main`**; the next implementation task is **GN-003 — durable queue + topological
+scheduler**. Do not start GN-003 before GN-001 is signed off, because the queue's restart
+behaviour needs one real run to validate against.
 
 Rules:
 
@@ -175,7 +176,7 @@ use the shared folder / bundle path. Do not broadcast to other peers.
 - Renderer verified in Chromium at 1440×900 and 390×844; Electron could not launch in the Linux
   build container (no GTK/display). Windows launch is unverified until you run it.
 - The runner assumes `<input>.out`; if Gaussian writes `.log`, report it (GN-007).
-- No auto-layout persistence beyond the project JSON; no schema validation yet (GN-002).
+- Project files are schema v1 and validated before render; v0.1 files migrate on open (GN-002).
 - No condition/loop execution; the canvas draws them, the runner ignores them.
 - Demo water geometry is not the seeded Diels–Alder molecule.
 - No installer; source checkout + npm is the current distribution.
