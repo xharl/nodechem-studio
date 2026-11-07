@@ -118,11 +118,11 @@ licence or machine is not ready, complete the dry run, report the blocker, and k
 
 ## 6. What to work on next
 
-The task queue is in `docs/IMPLEMENTATION_PLAN.md`. **GN-002 through GN-005 and GN-007 are
-implemented on `main`** (schema, durable queue, checkpoint staging, condition/loop runtime,
-output discovery + final energy); the remaining implementation task is **GN-006 — structure
-import**, then GN-008 packaging. GN-001 (the Windows smoke test) is still the gate for calling
-the runner proven; everything above has only been exercised against a fake runner so far.
+The task queue is in `docs/IMPLEMENTATION_PLAN.md`. **GN-002 through GN-007 are implemented on
+`main`** (schema, durable queue, checkpoint staging, condition/loop runtime, structure import,
+output discovery + final energy). The remaining task is **GN-008 — Windows packaging**. GN-001
+(the Windows smoke test) is still the gate for calling the runner proven; everything above has
+only been exercised against a fake runner and fixture outputs.
 
 Rules:
 

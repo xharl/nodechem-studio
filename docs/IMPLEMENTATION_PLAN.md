@@ -100,13 +100,15 @@ Success at v1:
 | Control flow | safe condition expressions, one-branch release, loop retry/exhaustion, review never auto-passes | `test/controlFlow.test.js`, `test/queue.test.js` |
 | Output discovery | finds `<input>.out` or `<input>.log`, records `outputFile`/`outputSource`, prefers a terminated file | `test/outputDiscovery.test.js`, `test/runManager.test.js` |
 | Final energy gate | post-HF (`CCSD(T)`, `E(CORR)`, MP2…) or SCF fallback, evaluated as a gate | `test/gaussianOutput.test.js` |
+| Structure import | `.xyz`, `.mol`/`.sdf`, `.gjf`/`.com` with element/coordinate/parity validation; project-level geometry feeds every `.gjf` | `test/structureImport.test.js`, `test/projectSchema.test.js`, `test/gaussianInput.test.js` |
 | Dry run | labelled synthetic output, full parser/gate path | run console PASS evidence |
 | Persistence | native Open/Save, schema v1 validation, v0.1 migration, canonical save | `test/projectSchema.test.js` |
 | Packaging | none | `npm run build` only produces `dist/` |
 
 ### Verified gaps
 
-- The graph is seeded with a Diels–Alder demo. The runner uses demo water coordinates.
+- The graph is seeded with a Diels–Alder demo; the molecule defaults to demo water until a
+  structure is imported in the molecule drawer (GN-006).
 - The queue runs calculation blocks in dependency order and survives a restart. Conditions
   release one branch, loops retry up to `maxAttempts`, review gates stop dependents (GN-005);
   output bundles are still unimplemented (GN-008).
@@ -208,7 +210,7 @@ and PR title. A task is not done until its acceptance evidence is in the PR.
 | **GN-003** | Durable queue + topological scheduler — **implemented** (`electron/runner/queue.js`, `src/shared/workflowGraph.js`) | `electron/runner/queue.js`, `runManager.js`, tests | 4-node chain; kill/restart marks interrupted and resumes ready work |
 | **GN-004** | Checkpoint staging between tasks — **implemented** (`electron/runner/checkpoint.js`) | `runManager.js`, `gaussianInput.js`, tests | Only checkpoint edges copy `.chk`; missing/corrupt checkpoint fails with a recorded reason |
 | **GN-005** | Condition and loop runtime — **implemented** (`src/shared/controlFlow.js`) | `src/shared/controlFlow.js`, scheduler, UI state, tests | Failing gate takes the false branch; retry exhausts; review blocks |
-| **GN-006** | Structure import | `src/shared/structureImport.js`, molecule drawer, tests | `.xyz`, `.mol`, `.sdf` import; bad data rejected |
+| **GN-006** | Structure import — **implemented** (`src/shared/structureImport.js`, molecule drawer) | `src/shared/structureImport.js`, molecule drawer, tests | `.xyz`, `.mol`, `.sdf` import; bad data rejected |
 | **GN-007** | Output file discovery and parser hardening — **implemented** (`electron/runner/outputDiscovery.js`, final energy) | `gaussianRunner.js`, `gaussianOutput.js`, tests | Handles `<input>.out` and `<input>.log`; reports which file was parsed; error termination never passes |
 | **GN-008** | Windows packaging | `electron-builder` config, `scripts/`, docs | Installer on clean VM; no Node required; dry run works |
 

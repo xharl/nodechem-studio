@@ -16,6 +16,8 @@
 
 export const SCHEMA_VERSION = 1;
 
+import { isElementSymbol } from './elements.js';
+
 /** Hard cap before JSON parsing; project files are small text documents. */
 export const MAX_PROJECT_BYTES = 8 * 1024 * 1024;
 
@@ -23,6 +25,7 @@ export const LIMITS = Object.freeze({
   nodes: 2000,
   edges: 4000,
   fragments: 64,
+  atoms: 1000,
   errorsReported: 100,
   warningsReported: 200,
 });
@@ -50,6 +53,8 @@ export const MEMORY_UNITS = Object.freeze(['MB', 'GB', 'MW']);
 export const CONDITION_UNKNOWN = Object.freeze(['block-both', 'treat-false', 'treat-true']);
 export const LOOP_MODES = Object.freeze(['retry', 'for-each']);
 export const MERGE_POLICIES = Object.freeze(['all', 'any']);
+export const GEOMETRY_SOURCES = Object.freeze(['demo', 'imported', 'manual']);
+export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'gjf', 'com']);
 
 const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
@@ -291,9 +296,54 @@ function readMemory(c, value, path, { legacy = false, fallback = '4' } = {}) {
 
 /* ── Sections ─────────────────────────────────────────────── */
 
+function normalizeCoords(c, raw, legacy) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    c.error('molecule.coords', 'must be an array of atoms.');
+    return [];
+  }
+  if (raw.length > LIMITS.atoms) {
+    c.error('molecule.coords', `must contain at most ${LIMITS.atoms} atoms.`);
+    return [];
+  }
+  const atoms = [];
+  raw.forEach((atom, index) => {
+    const path = `molecule.coords[${index}]`;
+    if (!isPlainObject(atom)) {
+      c.error(path, 'must be an object with element, x, y and z.');
+      return;
+    }
+    const element = readString(c, atom.element, `${path}.element`, { legacy, fallback: '', max: 3, required: true });
+    if (!element) return;
+    if (!isElementSymbol(element)) {
+      c.error(`${path}.element`, `unknown element symbol "${element}".`);
+      return;
+    }
+    atoms.push({
+      element,
+      x: readNumber(c, atom.x, `${path}.x`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
+      y: readNumber(c, atom.y, `${path}.y`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
+      z: readNumber(c, atom.z, `${path}.z`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
+    });
+  });
+  return atoms;
+}
+
+function normalizeGeometry(c, raw, legacy, coords) {
+  const source = requiredObject(c, raw, 'molecule.geometry', legacy, {});
+  warnUnknown(c, source, new Set(['source', 'file', 'format']), 'molecule.geometry');
+  const kind = readEnum(c, source.source, GEOMETRY_SOURCES, 'molecule.geometry.source', { legacy, fallback: 'demo' });
+  const file = readString(c, source.file, 'molecule.geometry.file', { legacy, fallback: '', max: 260 });
+  const format = readEnum(c, source.format, GEOMETRY_FORMATS, 'molecule.geometry.format', { legacy, fallback: '' });
+  if ((kind === 'imported' || kind === 'manual') && coords.length === 0) {
+    c.error('molecule.coords', `at least one atom is required when the geometry source is "${kind}".`);
+  }
+  return { source: kind, file, format };
+}
+
 function normalizeMolecule(c, raw, legacy) {
   const source = requiredObject(c, raw, 'molecule', legacy, {});
-  warnUnknown(c, source, new Set(['smiles', 'charge', 'multiplicity', 'fragments']), 'molecule');
+  warnUnknown(c, source, new Set(['smiles', 'charge', 'multiplicity', 'fragments', 'coords', 'geometry']), 'molecule');
   const fragmentsRaw = source.fragments;
   let fragments = [];
   if (fragmentsRaw === undefined) {
@@ -311,11 +361,14 @@ function normalizeMolecule(c, raw, legacy) {
       return oneLine(fragment, 400);
     });
   }
+  const coords = normalizeCoords(c, source.coords, legacy);
   return {
     smiles: readString(c, source.smiles, 'molecule.smiles', { legacy, fallback: '', max: 1000 }),
     charge: readInteger(c, source.charge, 'molecule.charge', { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, source.multiplicity, 'molecule.multiplicity', { legacy, fallback: 1, min: 1, max: 10 }),
     fragments,
+    coords,
+    geometry: normalizeGeometry(c, source.geometry, legacy, coords),
   };
 }
 

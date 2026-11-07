@@ -35,6 +35,9 @@ What works today:
   without a Gaussian licence.
 - Native project Open/Save through Electron dialogs. Files carry `schemaVersion: 1`,
   are validated before anything renders, and unversioned v0.1 files migrate on open.
+- Native `.xyz`, `.mol`, `.sdf`, `.gjf`/`.com` import in the molecule drawer: validated element
+  symbols, finite coordinates, charge/multiplicity parity; Z-matrices are refused rather than
+  guessed. Every block builds its input from the imported geometry.
 
 What is deliberately not in v0.1:
 
@@ -42,7 +45,6 @@ What is deliberately not in v0.1:
   concurrent local jobs.
 - Merge `any` policy is recorded but readiness still waits for every input.
 - Output bundling; output nodes stop the queue with a recorded reason.
-- Native `.mol`/`.sdf`/`.xyz` parsing; the runner currently uses a small demo water geometry.
 - Installer and code signing.
 - Any remote execution, job submission, telemetry, or network call.
 
@@ -135,6 +137,8 @@ src/
     projectSchema.js      schema v1, validation, migration, canonical save
     workflowGraph.js      stable topological order + readiness rules
     controlFlow.js        safe condition expression + loop semantics
+    structureImport.js    .xyz/.mol/.sdf/.gjf/.com reader + validation
+    elements.js           periodic-table symbols and atomic numbers
     fixtureOutput.js      labelled synthetic output for dry runs
 test/                     Vitest suites
 docs/

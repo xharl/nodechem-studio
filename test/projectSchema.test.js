@@ -538,3 +538,61 @@ describe('schema helpers', () => {
     expect(summarizeErrors([])).toBe('Unknown validation error.');
   });
 });
+
+describe('project molecule geometry', () => {
+  const imported = () => {
+    const project = validateProject(legacyProject()).project;
+    project.molecule.coords = [
+      { element: 'O', x: 0, y: 0, z: 0.1173 },
+      { element: 'H', x: 0, y: 0.7572, z: -0.4692 },
+      { element: 'H', x: 0, y: -0.7572, z: -0.4692 },
+    ];
+    project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
+    return project;
+  };
+
+  it('migrates v0.1 projects to the demo geometry', () => {
+    const { project } = validateProject(legacyProject());
+    expect(project.molecule.coords).toEqual([]);
+    expect(project.molecule.geometry).toEqual({ source: 'demo', file: '', format: '' });
+  });
+
+  it('round-trips imported coordinates byte-stably', () => {
+    const result = validateProject(imported());
+    expect(result.ok).toBe(true);
+    expect(result.project.molecule.coords).toHaveLength(3);
+    expect(result.project.molecule.geometry.source).toBe('imported');
+    const text = stringifyProject(result.project).text;
+    expect(stringifyProject(parseProjectText(text).project).text).toBe(text);
+  });
+
+  it('rejects an unknown element symbol in a stored geometry', () => {
+    const project = imported();
+    project.molecule.coords[0].element = 'Xx';
+    const result = validateProject(project);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.path === 'molecule.coords[0].element')).toBe(true);
+  });
+
+  it('rejects imported geometry with no atoms', () => {
+    const project = validateProject(legacyProject()).project;
+    project.molecule.geometry = { source: 'imported', file: 'x.xyz', format: 'xyz' };
+    const result = validateProject(project);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.path === 'molecule.coords')).toBe(true);
+  });
+
+  it('rejects a coordinate outside the finite range', () => {
+    const project = imported();
+    project.molecule.coords[1].y = 1e9;
+    const result = validateProject(project);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.path === 'molecule.coords[1].y')).toBe(true);
+  });
+
+  it('accepts manual geometry with atoms', () => {
+    const project = imported();
+    project.molecule.geometry = { source: 'manual', file: '', format: '' };
+    expect(validateProject(project).ok).toBe(true);
+  });
+});

@@ -11,6 +11,7 @@ import {
   outputNameFor,
 } from '../shared/gaussianInput.js';
 import { defaultGates, defaultSettings } from '../shared/projectSchema.js';
+import { parseStructure } from '../shared/structureImport.js';
 
 const desktop = window.desktop || null;
 
@@ -80,6 +81,8 @@ const project = {
     charge: 0,
     multiplicity: 1,
     fragments: ['C=CC=C', 'C=C'],
+    coords: [],
+    geometry: { source: 'demo', file: '', format: '' },
   },
   defaults: {
     method: 'B3LYP',
@@ -662,7 +665,7 @@ function renderProjectInspector() {
       <div class="card">
         <div class="molecule-row">
           <div class="structure-icon">2D</div>
-          <div><strong>Project structure</strong><span>${state.project.molecule.fragments.length} fragments · charge ${state.project.molecule.charge} · multiplicity ${state.project.molecule.multiplicity}</span></div>
+          <div><strong>Project structure</strong><span>${state.project.molecule.coords?.length || 'demo'} atoms · ${state.project.molecule.fragments.length} fragments · charge ${state.project.molecule.charge} · multiplicity ${state.project.molecule.multiplicity}</span></div>
         </div>
         <button type="button" class="btn" data-open-modal="molecule">Edit molecule</button>
       </div>
@@ -1429,6 +1432,10 @@ function openMoleculeDrawer(tab = 'structure') {
       charge: state.project.molecule.charge,
       multiplicity: state.project.molecule.multiplicity,
       fragments: [...state.project.molecule.fragments],
+      coords: Array.isArray(state.project.molecule.coords)
+        ? state.project.molecule.coords.map((atom) => ({ ...atom }))
+        : [],
+      geometry: { source: 'demo', file: '', format: '', ...(state.project.molecule.geometry || {}) },
       method: state.project.defaults.method,
       basis: state.project.defaults.basis,
       memory: state.project.defaults.memory,
@@ -1461,16 +1468,29 @@ function renderDrawer() {
   ];
   let body = '';
   if (drawer.tab === 'structure') {
+    const atomCount = draft.coords.length;
+    const sourceLabel = draft.geometry.source === 'imported' && atomCount
+      ? `${esc(draft.geometry.file || 'imported file')} · ${esc(draft.geometry.format || 'structure')}`
+      : 'Project uses the built-in demo water until you import a structure.';
     body = `
       <div class="form-section">
         <div class="section-label">Structure source</div>
-        <textarea class="textarea" data-drawer-field="smiles" rows="4" placeholder="SMILES, e.g. C=CC=C.C=C">${esc(draft.smiles)}</textarea>
-        <div class="drop-zone" style="margin-top:10px"><strong>Drop a structure file</strong><span>.mol · .sdf · .xyz · .gjf · .com</span><span>File parsing is planned; the v0.1 runner uses the demo water geometry.</span></div>
+        <textarea class="textarea" data-drawer-field="smiles" rows="3" placeholder="SMILES, e.g. C=CC=C.C=C">${esc(draft.smiles)}</textarea>
+        <div class="drop-zone" style="margin-top:10px">
+          <strong>${atomCount ? `${atomCount} atoms` : 'Demo water geometry'}</strong>
+          <span>${sourceLabel}</span>
+          <div class="run-actions" style="margin:8px 0 0">
+            <button type="button" class="btn small" data-action="import-structure">Import structure file</button>
+            ${atomCount ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
+          </div>
+          <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.gjf,.com" hidden>
+        </div>
       </div>
-      <div class="callout green"><strong>Project-level structure.</strong> Blocks inherit this molecule; each block keeps its own charge, multiplicity, method, basis, and gates.</div>
+      <div class="callout green"><strong>Project-level structure.</strong> The queue builds every calculation input from this geometry; each block keeps its own charge, multiplicity, method, basis, and gates.</div>
       <div class="form-section" style="margin-top:14px">
         <div class="section-label">Project summary</div>
         <div class="card">
+          <div class="kv"><span>Atoms</span><code>${atomCount || 'demo (3)'}</code></div>
           <div class="kv"><span>Fragments</span><code>${draft.fragments.length}</code></div>
           <div class="kv"><span>Charge</span><code>${esc(draft.charge)}</code></div>
           <div class="kv"><span>Multiplicity</span><code>${esc(draft.multiplicity)}</code></div>
@@ -1519,7 +1539,7 @@ function renderDrawer() {
     </div>
     <div class="modal-body">
       ${body}
-      <div class="callout" style="margin-top:14px"><strong>v0.1 boundary.</strong> The runner uses a demo water geometry. Native structure parsing and project-level molecule propagation are the next milestone.</div>
+      <div class="callout" style="margin-top:14px"><strong>Imported geometry.</strong> Every calculation block in this project builds its input from these coordinates; save the project to keep them.</div>
     </div>
     <div class="modal-foot">
       <div class="modal-note">Changes apply to this project only.</div>
@@ -1535,6 +1555,13 @@ function saveMolecule() {
   state.project.molecule.charge = Number(draft.charge) || 0;
   state.project.molecule.multiplicity = Number(draft.multiplicity) || 1;
   state.project.molecule.fragments = [...draft.fragments];
+  state.project.molecule.coords = (draft.coords || []).map((atom) => ({
+    element: atom.element,
+    x: atom.x,
+    y: atom.y,
+    z: atom.z,
+  }));
+  state.project.molecule.geometry = { ...draft.geometry };
   state.project.defaults.method = draft.method;
   state.project.defaults.basis = draft.basis;
   state.project.defaults.memory = draft.memory;
@@ -1543,6 +1570,29 @@ function saveMolecule() {
   closeDrawer();
   renderInspector();
   toast('Project molecule and defaults updated.');
+}
+
+async function importStructureFile(file) {
+  if (!state.drawer || !file) return;
+  try {
+    const structure = parseStructure(await file.text(), { filename: file.name });
+    state.drawer.draft.coords = structure.atoms;
+    state.drawer.draft.charge = structure.charge;
+    state.drawer.draft.multiplicity = structure.multiplicity;
+    state.drawer.draft.geometry = { source: 'imported', file: file.name, format: structure.format };
+    renderDrawer();
+    toast(`Imported ${structure.atoms.length} atoms from ${file.name}${structure.warnings.length ? ` · ${structure.warnings[0]}` : ''}.`);
+  } catch (error) {
+    toast(`Could not import structure: ${error.message}`);
+  }
+}
+
+function clearImportedGeometry() {
+  if (!state.drawer) return;
+  state.drawer.draft.coords = [];
+  state.drawer.draft.geometry = { source: 'demo', file: '', format: '' };
+  renderDrawer();
+  toast('Geometry reset to the demo water molecule.');
 }
 
 /* ── Zoom, validation, toast ──────────────────────────────── */
@@ -1653,13 +1703,14 @@ function buildInputForNode(node) {
     charge: state.project.molecule.charge,
     multiplicity: state.project.molecule.multiplicity,
   };
+  const imported = Array.isArray(state.project.molecule.coords) && state.project.molecule.coords.length > 0;
   return buildGaussianInput({
     title: node.title,
     settings,
     molecule: {
       charge: state.project.molecule.charge,
       multiplicity: state.project.molecule.multiplicity,
-      coords: DEMO_WATER,
+      coords: imported ? state.project.molecule.coords : DEMO_WATER,
     },
     inputName: `${safeBase(node.id)}.gjf`,
     oldCheckpoint: oldCheckpointFor(node),
@@ -2171,6 +2222,8 @@ function handleAction(action, element) {
     case 'add-fragment':
       if (state.drawer) { state.drawer.draft.fragments.push(''); renderDrawer(); }
       break;
+    case 'import-structure': $('#structure-file')?.click(); break;
+    case 'clear-geometry': clearImportedGeometry(); break;
     case 'save-molecule': saveMolecule(); break;
     case 'open-run-console': openRunConsole(); break;
     case 'close-run-console': closeRunConsole(); break;
@@ -2231,6 +2284,12 @@ function onDocumentClick(event) {
 
 function onDocumentChange(event) {
   const target = event.target;
+  if (target.id === 'structure-file') {
+    const file = target.files?.[0];
+    if (file) importStructureFile(file);
+    target.value = '';
+    return;
+  }
   if (target.id === 'run-dry' || target.id === 'run-exe' || target.id === 'run-scratch') {
     saveRunConfig();
     return;

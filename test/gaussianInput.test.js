@@ -108,3 +108,36 @@ describe('Gaussian input builder', () => {
     expect(outputNameFor('water.com')).toBe('water.out');
   });
 });
+
+describe('imported geometry', () => {
+  const coords = [
+    { element: 'O', x: 0, y: 0, z: 0.1173 },
+    { element: 'H', x: 0, y: 0.7572, z: -0.4692 },
+    { element: 'H', x: 0, y: -0.7572, z: -0.4692 },
+  ];
+
+  it('is byte-deterministic and uses the supplied coordinates', () => {
+    const build = () => buildGaussianInput({
+      title: 'imported water',
+      settings: baseSettings,
+      molecule: { charge: 0, multiplicity: 1, coords },
+      inputName: 'water.gjf',
+    });
+    const first = build();
+    expect(build()).toBe(first);
+    expect(first).toMatch(/O\s+0\.000000\s+0\.000000\s+0\.117300/);
+    expect(first).toMatch(/H\s+0\.000000\s+-0\.757200\s+-0\.469200/);
+  });
+
+  it('reflects a different imported geometry', () => {
+    const other = [{ element: 'C', x: 0, y: 0, z: 0 }, { element: 'O', x: 1.2, y: 0, z: 0 }];
+    const text = buildGaussianInput({
+      title: 'CO',
+      settings: baseSettings,
+      molecule: { charge: 0, multiplicity: 1, coords: other },
+      inputName: 'co.gjf',
+    });
+    expect(text).toMatch(/C\s+0\.000000\s+0\.000000\s+0\.000000/);
+    expect(text).toMatch(/O\s+1\.200000\s+0\.000000\s+0\.000000/);
+  });
+});
