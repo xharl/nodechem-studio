@@ -25,6 +25,8 @@ When a run finishes, or when you select a finished run in **Recent runs** or in 
 below the output shows what the parser actually reported:
 
 - the **engine** that ran, and the run status,
+- the **excited states** table when the job printed a TD record (energy in eV, wavelength, f and
+  the dominant transitions),
 - the **gate list** with its verdict and evidence,
 - parsed values — termination, SCF energy and cycles, frequencies and the imaginary count, final
   energy, charges, thermochemistry when present,

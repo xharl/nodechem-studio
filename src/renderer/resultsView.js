@@ -462,6 +462,38 @@ function errorCard(record, parsed) {
   return card('Error termination', blocks.join(''), 'is-wide is-error');
 }
 
+function excitedStatesCard(parsed, flags) {
+  const block = parsed?.excitedStates;
+  const states = Array.isArray(block?.states) ? block.states.filter(isObject) : [];
+  if (!Number.isFinite(block?.count) || block.count === 0 || states.length === 0) return '';
+  const rows = states.slice(0, 20).map((state) => {
+    const dominant = Array.isArray(state.transitions) && state.transitions.length
+      ? [...state.transitions]
+        .sort((a, b) => Math.abs(Number(b.coefficient) || 0) - Math.abs(Number(a.coefficient) || 0))
+        .slice(0, 2)
+        .map((transition) => `${esc(transition.from)}→${esc(transition.to)} (${esc(Number(transition.coefficient).toFixed(3))})`)
+        .join(' · ')
+      : MISSING_TEXT;
+    const label = [state.spin, state.symmetry].filter(Boolean).join('-');
+    return '<tr data-excited-state="' + esc(state.index) + '">'
+      + `<td>${esc(state.index)}</td>`
+      + `<td>${esc(label || MISSING_TEXT)}</td>`
+      + `<td>${Number.isFinite(state.energyEv) ? state.energyEv.toFixed(4) : MISSING_TEXT}</td>`
+      + `<td>${Number.isFinite(state.wavelengthNm) ? state.wavelengthNm.toFixed(2) : MISSING_TEXT}</td>`
+      + `<td>${Number.isFinite(state.oscillatorStrength) ? state.oscillatorStrength.toFixed(4) : MISSING_TEXT}</td>`
+      + `<td class="is-left">${dominant}</td>`
+      + '</tr>';
+  }).join('');
+  const body = '<table class="results-table" data-field="excited-states">'
+    + '<thead><tr><th>#</th><th>State</th><th>eV</th><th>nm</th><th>f</th><th class="is-left">Dominant transitions</th></tr></thead>'
+    + `<tbody>${rows}</tbody></table>`
+    + (states.length > 20
+      ? `<p class="results-missing">Showing the first 20 of ${esc(block.count)} parsed states.</p>`
+      : '')
+    + caveatHtml(flags, 'These excitation energies');
+  return card('Excited states', body, 'is-wide');
+}
+
 function methodsCard(record) {
   let result;
   try {
@@ -597,6 +629,7 @@ export function resultsPanelHtml(record) {
     thermochemistryCard(parsed, flags),
     methodsCard(record),
     frequenciesCard(parsed, flags),
+    excitedStatesCard(parsed, flags),
     chargesCard(parsed, flags),
     t1Card(parsed, flags),
     resourcesCard(parsed, flags),

@@ -855,6 +855,60 @@ function parseSpinContamination(joined) {
 
 /* ── Link assembly ───────────────────────────────────────────── */
 
+/* ── Excited states (TD-DFT) ─────────────────────────────────── */
+
+/**
+ * Parse the `Excited State N:` table Gaussian prints for a TD or CIS job.
+ *
+ * The line Gaussian writes is:
+ *
+ *   Excited State   1:      Singlet-A      4.0115 eV  309.03 nm  f=0.1234  <S**2>=0.000
+ *      12 -> 15         0.70123
+ *
+ * Nothing is derived: an unparsable line is skipped and the count is the number
+ * of states actually read. A job with no table returns `{ count: 0, states: [] }`.
+ */
+const EXCITED_STATE = /^\s*Excited State\s+(\d+):\s+(\S+?)\s+([0-9.]+)\s+eV\s+([0-9.]+)\s+nm\s+f=([0-9.]+)(?:\s+<S\*\*2>=(-?[0-9.]+))?/;
+const TRANSITION_LINE = /^\s*(\d+)\s*->\s*(\d+)\s+(-?[0-9.]+)\s*$/;
+
+function parseExcitedStates(lines) {
+  const states = [];
+  let current = null;
+  for (const line of lines) {
+    const match = line.match(EXCITED_STATE);
+    if (match) {
+      const label = String(match[2] || '');
+      const [spin, ...symmetryParts] = label.split('-');
+      current = {
+        index: Number(match[1]),
+        label,
+        spin: spin || null,
+        symmetry: symmetryParts.join('-') || null,
+        energyEv: toNumber(match[3]),
+        wavelengthNm: toNumber(match[4]),
+        oscillatorStrength: toNumber(match[5]),
+        s2: match[6] === undefined ? null : toNumber(match[6]),
+        transitions: [],
+      };
+      states.push(current);
+      continue;
+    }
+    const transition = line.match(TRANSITION_LINE);
+    if (transition && current) {
+      current.transitions.push({
+        from: Number(transition[1]),
+        to: Number(transition[2]),
+        coefficient: toNumber(transition[3]),
+      });
+    }
+  }
+  return { count: states.length, states };
+}
+
+function emptyExcitedStates() {
+  return { count: 0, states: [] };
+}
+
 function parseLink(section, index) {
   const { lines, startLine } = section;
   const joined = lines.join('\n');
@@ -904,6 +958,7 @@ function parseLink(section, index) {
     thermochemistry: parseThermochemistry(joined, lines),
     finalEnergy: parseFinalEnergy(joined, scf),
     spinContamination: parseSpinContamination(joined),
+    excitedStates: parseExcitedStates(lines),
     charges: parseCharges(lines),
     t1Diagnostic: parseT1Diagnostic(lines),
     resources: parseResources(joined),
@@ -1030,6 +1085,10 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     ? spinLink.spinContamination
     : { before: null, after: null };
 
+  // Excited states belong to the last link that printed a TD table.
+  const excitedLink = reversed.find((link) => link.excitedStates.count > 0) || null;
+  const excitedStates = excitedLink ? excitedLink.excitedStates : emptyExcitedStates();
+
   return {
     status,
     termination: terminationCode === 'normal'
@@ -1045,6 +1104,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     thermochemistry,
     finalEnergy,
     spinContamination,
+    excitedStates,
     charges,
     t1Diagnostic: t1Link ? t1Link.t1Diagnostic : null,
     resources: resourcesLink ? resourcesLink.resources : emptyResources(),

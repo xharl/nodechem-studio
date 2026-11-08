@@ -17,6 +17,10 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
 - **Dispersion** (D3(BJ) or D3), **SCF** tightening, **integration grid**, **population analysis**
   (NBO, Hirshfeld, MK charges), **implicit solvation** (PCM, SMD, CPCM) and **verbosity**.
 - **Job types**: `SP`, `Opt`, `Opt Freq`, `Freq`, `Opt=TS`, `IRC` and `Scan`.
+- **Excited states (TD-DFT/CIS)**: `TD=(NStates=N)` on an `SP` or `Opt` block, with singlets,
+  triplets or a 50/50 run. The output's excitation energies, wavelengths, oscillator strengths and
+  dominant transitions are parsed into the results panel. Other job types cannot carry `TD`, and
+  the input builder refuses them rather than writing a route that fails.
 - **Transition-state control**: force constants (`CalcFC`, `CalcAll`, `ReadFC`), optimisation
   convergence (`Tight`, `VeryTight`) and the derived UltraFine grid.
 - **Checkpoint hand-offs** between blocks (`%OldChk` plus `Geom=Check` and `Guess=Read`).

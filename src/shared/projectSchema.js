@@ -69,6 +69,7 @@ export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3']);
 export const SCF_OPTIONS = Object.freeze(['', 'Tight', 'VeryTight']);
 export const GRID_OPTIONS = Object.freeze(['', 'Fine', 'UltraFine']);
 export const POPULATION_OPTIONS = Object.freeze(['', 'NBO', 'Hirshfeld', 'MK']);
+export const TD_TRIPLETS_MODES = Object.freeze(['', 'triplets', 'both']);
 export const VERBOSITY_OPTIONS = Object.freeze(['', 'Normal', 'Verbose']);
 export const SOLVATION_MODELS = Object.freeze(['PCM', 'SMD', 'CPCM']);
 export const MEMORY_UNITS = Object.freeze(['MB', 'GB', 'MW']);
@@ -126,7 +127,7 @@ const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -164,6 +165,8 @@ export function defaultSettings(overrides = {}) {
     solvent: 'Water',
     customKeywords: '',
     ircDirection: 'forward',
+    tdStates: 0,
+    tdTriplets: '',
     xtbMethod: 'gfn2',
     xtbOptLevel: 'normal',
     xtbThreads: '',
@@ -285,6 +288,15 @@ function readInteger(c, value, path, { legacy = false, fallback = 0, min = -Infi
     return fallback;
   }
   return number;
+}
+
+/**
+ * Optional integer: absent means "not set" rather than an error, so a project
+ * written before the field existed still opens cleanly.
+ */
+function readOptionalInteger(c, value, path, { fallback = 0, min = -Infinity, max = Infinity } = {}) {
+  if (value === undefined || value === null || value === '') return fallback;
+  return readInteger(c, value, path, { legacy: true, fallback, min, max });
 }
 
 function readNumber(c, value, path, { legacy = false, fallback = 0, min = -Infinity, max = Infinity } = {}) {
@@ -505,6 +517,10 @@ function normalizeSettings(c, raw, path, legacy) {
     solvent: readString(c, source.solvent, `${path}.solvent`, { legacy, fallback: 'Water', max: 40 }) || 'Water',
     customKeywords,
     ircDirection: readEnum(c, source.ircDirection, IRC_DIRECTIONS, `${path}.ircDirection`, { legacy, fallback: 'forward' }),
+    // TD-DFT: 0 states means "not an excited-state job"; the builder clamps the
+    // upper bound and refuses job types Gaussian cannot combine with TD.
+    tdStates: readOptionalInteger(c, source.tdStates, `${path}.tdStates`, { fallback: 0, min: 0, max: 200 }),
+    tdTriplets: readEnum(c, source.tdTriplets, TD_TRIPLETS_MODES, `${path}.tdTriplets`, { legacy, fallback: '' }),
     xtbMethod: readEnum(c, source.xtbMethod, XTB_METHOD_IDS, `${path}.xtbMethod`, { legacy, fallback: 'gfn2' }),
     xtbOptLevel: readEnum(c, source.xtbOptLevel, XTB_OPT_LEVELS, `${path}.xtbOptLevel`, { legacy, fallback: 'normal' }),
     xtbThreads: readXtbThreads(c, source.xtbThreads, `${path}.xtbThreads`, { legacy, fallback: '' }),

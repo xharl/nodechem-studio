@@ -54,8 +54,23 @@ function routeValues(settings = {}) {
     verbosity: settings.verbosity ? oneLine(settings.verbosity) : null,
     solvationModel: solvated ? oneLine(settings.solvationModel, 'PCM') : null,
     solvent: solvated ? oneLine(settings.solvent, 'Water') : null,
+    td: tdKeywordFor(settings),
     customKeywords: oneLine(settings.customKeywords, ''),
   };
+}
+
+/**
+ * The TD keyword for a TD-DFT/CIS job, or `null` when excited states were not
+ * requested. `tdTriplets` chooses singlets only (default), triplets only, or a
+ * 50/50 run, which is Gaussian's own vocabulary rather than a paraphrase.
+ */
+export function tdKeywordFor(settings = {}) {
+  const raw = Number(settings.tdStates ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const states = Math.max(1, Math.min(200, Math.floor(raw)));
+  const mode = String(settings.tdTriplets || '');
+  const suffix = mode === 'triplets' ? ',Triplets' : mode === 'both' ? ',50-50' : '';
+  return `TD=(NStates=${states}${suffix})`;
 }
 
 export function routeFor(settings = {}) {
@@ -65,6 +80,7 @@ export function routeFor(settings = {}) {
   if (values.scf) tokens.push(`SCF=${values.scf}`);
   if (values.grid) tokens.push(`Integral=${values.grid}`);
   if (values.population) tokens.push(`Pop=${values.population}`);
+  if (values.td) tokens.push(values.td);
   if (values.verbosity) tokens.push(`Output=${values.verbosity}`);
   if (values.solvationModel) {
     tokens.push(`SCRF=(${values.solvationModel},Solvent=${values.solvent})`);
@@ -95,6 +111,7 @@ export function methodBlockFor(settings = {}) {
     solvation: values.solvationModel ? `${values.solvationModel}/${values.solvent}` : null,
     grid: values.grid,
     scf: values.scf,
+    td: values.td,
   };
 }
 
@@ -114,6 +131,14 @@ export function buildGaussianInput({
   if (!['MB', 'GB', 'MW'].includes(unit)) throw new Error('Memory unit must be MB, GB, or MW.');
   const nproc = finiteNumber(settings.nproc ?? 1, 'Core count', { min: 1, max: 1024 });
   if (!Number.isInteger(nproc)) throw new Error('Core count must be an integer.');
+
+  // TD is a route keyword on top of a wavefunction job. Gaussian does not
+  // combine it with a frequency, a saddle search, an IRC or a scan, so the
+  // builder refuses those combinations instead of writing a route that fails.
+  if (tdKeywordFor(settings) && !['SP', 'Opt'].includes(String(settings.jobType || 'Opt'))) {
+    throw new Error('Excited states (TD) are available for SP and Opt jobs only; '
+      + `${settings.jobType} cannot carry a TD keyword.`);
+  }
 
   const charge = finiteNumber(molecule.charge ?? settings.charge ?? 0, 'Charge', { min: -10, max: 10 });
   if (!Number.isInteger(charge)) throw new Error('Charge must be an integer.');

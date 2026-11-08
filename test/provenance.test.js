@@ -131,6 +131,7 @@ describe('method block', () => {
       solvation: 'SMD/THF',
       grid: 'UltraFine',
       scf: 'VeryTight',
+      td: null,
     });
     expect(routeFor(settings)).toBe(
       '#p PBE0/def2-TZVP Opt EmpiricalDispersion=GD3BJ SCF=VeryTight Integral=UltraFine SCRF=(SMD,Solvent=THF)',
@@ -146,6 +147,7 @@ describe('method block', () => {
       solvation: null,
       grid: null,
       scf: null,
+      td: null,
     });
     expect(routeFor(settings)).toBe('#p B3LYP/def2-SVP Opt EmpiricalDispersion=GD3BJ');
   });

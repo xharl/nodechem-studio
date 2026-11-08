@@ -7,6 +7,7 @@
 
 import {
   DEMO_WATER,
+  tdKeywordFor,
 } from '../shared/gaussianInput.js';
 import {
   DRAFT_KEY,
@@ -301,6 +302,8 @@ function routeFull(settings) {
   const grid = gridFor(settings);
   if (grid) tokens.push(`Integral=${grid}`);
   if (settings.population) tokens.push(`Pop=${settings.population}`);
+  const td = tdKeywordFor(settings);
+  if (td) tokens.push(td);
   if (settings.verbosity) tokens.push(`Output=${settings.verbosity}`);
   if (settings.solvation) tokens.push(`SCRF=(${settings.solvationModel},Solvent=${settings.solvent})`);
   if (settings.customKeywords) tokens.push(settings.customKeywords);
@@ -1189,6 +1192,25 @@ function calcInspector(node) {
     selectField('Output verbosity', 'verbosity', VERBOSITY, s.verbosity),
   ].join(''));
 
+  // Issue #60: TD-DFT is a route keyword on a wavefunction job. The group is
+  // always present for Gaussian so the setting is discoverable; the note says
+  // why a Freq/TS/IRC/Scan block cannot carry it.
+  const tdEligible = s.jobType === 'SP' || s.jobType === 'Opt';
+  const tdSummary = s.tdStates > 0
+    ? `${s.tdStates} states${s.tdTriplets === 'triplets' ? ' · triplets' : s.tdTriplets === 'both' ? ' · 50/50' : ''}`
+    : 'off';
+  const excitedGroup = group('Excited states (TD)', tdSummary, s.tdStates > 0, [
+    inputField('States', 'tdStates', s.tdStates ?? 0, { type: 'number', min: 0, max: 200 }),
+    selectField('Spin states', 'tdTriplets', [
+      ['', 'Singlets only'],
+      ['triplets', 'Triplets only'],
+      ['both', '50/50 singlets + triplets'],
+    ], s.tdTriplets || ''),
+    tdEligible
+      ? '<div class="field full"><span class="inspector-note">Emits <code>TD=(NStates=N)</code> on the route. Excitation energies, wavelengths, oscillator strengths and the dominant transitions are parsed from the output.</span></div>'
+      : '<div class="field full"><span class="inspector-note">TD requires a single-point or optimisation job. Choose SP or Opt to enable it; the input builder refuses the other job types.</span></div>',
+  ].join(''));
+
   const gaussianSolvationGroup = group('Solvation', s.solvation ? `${s.solvationModel} · ${s.solvent}` : 'off', s.solvation, [
     switchRow('Implicit solvation', 'PCM / SMD / CPCM', 'solvation', s.solvation),
     selectField('Model', 'solvationModel', SOLVATION_MODELS, s.solvationModel),
@@ -1297,6 +1319,7 @@ function calcInspector(node) {
     <div class="code-block" style="margin-bottom:10px">${routeLines.map((line) => `<div>${line}</div>`).join('')}</div>
     ${jobGroup}
     ${isXtb ? xtbGroup : methodGroup}
+    ${isXtb ? '' : excitedGroup}
     ${isXtb ? xtbSolvationGroup : gaussianSolvationGroup}
     ${moleculeGroup}
     ${gatesGroup}
@@ -1701,8 +1724,9 @@ function updateNodeField(node, key, value) {
     } else if (key === 'xtbThreads') {
       const count = Number(value);
       node.settings.xtbThreads = value === '' || !Number.isInteger(count) || count < 1 || count > 256 ? '' : count;
-    } else if (['charge', 'multiplicity', 'imaginary', 'minMagnitude'].includes(key)) {
-      node.settings[key] = value === '' ? (key === 'imaginary' || key === 'minMagnitude' ? null : 0) : Number(value);
+    } else if (['charge', 'multiplicity', 'imaginary', 'minMagnitude', 'tdStates'].includes(key)) {
+      const nullWhenEmpty = key === 'imaginary' || key === 'minMagnitude';
+      node.settings[key] = value === '' ? (nullWhenEmpty ? null : 0) : Number(value);
     } else if (key === 'jobType') {
       node.settings.jobType = value;
       node.kind = kindForJob(value);

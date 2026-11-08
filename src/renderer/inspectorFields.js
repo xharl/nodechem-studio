@@ -82,6 +82,8 @@ export function calcInspectorFieldIds(engineId, settings = {}) {
       'method.grid',
       'method.population',
       'method.verbosity',
+      'method.tdStates',
+      'method.tdTriplets',
     );
   }
 
