@@ -21,9 +21,9 @@ export function showsGaussianResources(engineId) {
   return engineId !== 'xtb';
 }
 
-/** Checkpoint hand-off is Gaussian-only until the queue handles xtbrestart. */
+/** Only the engines that write a restart file usable by the next block. */
 export function showsCheckpointHandoff(engineId) {
-  return engineId !== 'xtb';
+  return engineId === 'gaussian' || engineId === 'orca';
 }
 
 export function showsXtbThreads(engineId) {

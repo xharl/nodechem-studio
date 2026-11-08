@@ -90,7 +90,7 @@ graph.
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `engine` | enum | `gaussian`, `xtb`, `orca` |
+| `engine` | enum | `gaussian`, `xtb`, `orca`, `psi4` |
 | `method` | string | Gaussian functional / xTB method default |
 | `basis` | string | Gaussian basis |
 | `memory`, `memoryUnit` | string, enum | Gaussian-only |
@@ -120,7 +120,7 @@ Type-specific payloads:
 `counterpoiseChargeStates`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`.
 
-`settings.engine` is a per-block override (`gaussian`, `xtb` or `orca`); an empty string means "use
+`settings.engine` is a per-block override (`gaussian`, `xtb`, `orca` or `psi4`); an empty string means "use
 `defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
 edge between them is a geometry hand-off the queue either accepts or refuses with a recorded reason.
 `solvationModel` is validated against the engine the block resolves to:

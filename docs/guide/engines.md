@@ -1,6 +1,6 @@
 # Engines
 
-NodeChem Studio drives three calculation engines. The engine is resolved per block: a calculation
+NodeChem Studio drives four calculation engines. The engine is resolved per block: a calculation
 block that names its own engine (inspector → **Engine**) runs on that engine, and a block that leaves
 the field at **Project default** follows **Molecule → Defaults**. A saved project keeps whatever it
 saved; the app never switches an engine behind your back, and a block that never set the field keeps
@@ -252,10 +252,10 @@ What ORCA does **not** give you through this builder:
   this builder; use `def2-TZVP`, which carries ECPs for the heavy elements it covers. `ωB97X-D` is
   also refused: ORCA's `wB97X-D3`/`wB97X-D4` are different functionals from the Gaussian keyword, so
   mapping one to the other would silently change the level of theory.
-- No Gaussian `.chk` checkpoint hand-off. ORCA's restart file is `<job>.gbw`; the builder can write
-  `%moinp "<job>.gbw"` and names the artifact `<job>.gbw`, but the queue still transfers only
-  `.chk`/`xtbrestart` artifacts, so an ORCA checkpoint edge is not usable in this build. Use a
-  geometry hand-off for now.
+- No Gaussian `.chk` checkpoint hand-off. ORCA's restart file is `<job>.gbw`: the builder writes
+  `%moinp "<job>.gbw"`, the queue transfers that file between ORCA blocks, and an ORCA edge that
+  names a `.chk` is refused rather than staged under the wrong name. A cross-engine edge still
+  hands over a geometry, not a checkpoint.
 
 ### Setting up ORCA
 
@@ -270,11 +270,22 @@ What ORCA does **not** give you through this builder:
 4. Click **Preflight**. For ORCA it checks the platform, that the executable exists and is named
    `orca`/`orca.exe`, and (on Linux/macOS) that it is executable. ORCA needs no Link 1 and no
    `share/xtb` parameter directory, so those Gaussian/xTB checks do not run.
-5. **Execution is not wired in this build.** The app builds the ORCA input, checks the executable and
-   parses an ORCA log, but it cannot launch ORCA yet (#98) — ORCA writes to stdout, which needs its
-   own runner. A queue that contains an ORCA block is refused with "no runner yet" rather than
-   handing an ORCA input to Gaussian. Until the runner lands, run the generated input in ORCA
-   yourself and keep the log beside the run folder.
+5. **Run it.** The app spawns the driver as `orca <input>.inp` in the run folder and captures
+   **stdout** as the run's output file, which is what `orca job.inp > job.out` would have given you.
+   stderr is kept out of that file and stored in the run record (`provenance.orca.stderr`), so a
+   driver that fails before ORCA starts still says why. ORCA's side files that the process actually
+   wrote — `<job>.gbw`, `<job>.xyz`, `<job>.hess`, `<job>_trj.xyz`, `<job>.property.txt` — are listed
+   in `provenance.orca.artifacts`.
+
+   Three behaviours worth knowing:
+
+   - **The exit code is not the verdict.** ORCA can exit 0 after an error banner, so the record's
+     status comes from the text (`ORCA TERMINATED NORMALLY` / `ORCA finished by error termination in
+     <module>`). A run that exits 0 with an error termination is recorded as failed.
+   - **A run that printed nothing is failed, not "needs review".** Saying nothing is not a result;
+     the record quotes stderr in that case.
+   - **Cancel and timeout stop the whole process group.** ORCA's driver spawns the real modules as
+     children; signalling the driver alone leaves them running.
 
 ### What this build proves about the ORCA parser
 
@@ -284,6 +295,10 @@ The parser was written from the output shapes documented in the **ORCA 6.0 manua
 `ORCA finished by error termination in <module>`). **No live ORCA binary was run for this build.**
 Its tests use synthetic fixtures that reproduce those line shapes, so they prove the parser reads
 the documented format — not that a particular ORCA 5/6 revision prints it identically.
+
+The same limit applies to execution: the runner is tested against a stand-in driver script that
+prints those fixtures, exits 0 after an error banner, prints nothing, sleeps and gets cancelled. It
+proves the spawning, capture, termination and cancellation paths, and nothing about ORCA itself.
 
 The first real run should be a small single point. Check the parsed `FINAL SINGLE POINT ENERGY`, the
 SCF cycle count and the termination line against the log; if a revision prints a different shape,
@@ -301,6 +316,94 @@ Two parser choices are deliberate:
 If **Dispersion** is set to `None`, the builder writes no dispersion keyword. ORCA 6 may then apply
 its own default (D4 for many functionals), so record the `Dispersion correction` line in the log
 before comparing energies across engines; the manifest records only the keyword the builder wrote.
+
+## Psi4 — open source, LGPL-3.0
+
+Psi4 is an open-source electronic-structure package. In this app it gives you:
+
+- **Methods**: HF, B3LYP, PBE0, M06-2X, ωB97X-D, B97-D, MP2, CCSD, CCSD(T) and SAPT0.
+- **Bases**: def2-SVP/TZVP/QZVP, 6-31G(d), 6-31G(d,p), 6-311++G(d,p), cc-pVDZ/TZVP/QZVP and
+  aug-cc-pVDZ.
+- **Job types**: `SP`, `Opt`, `Freq` and `Opt Freq` — the last writes `optimize(...)` followed by
+  `frequencies(...)` in one script.
+- **SAPT0** on a dimer, with the interaction energy split into electrostatics, exchange, induction
+  and dispersion.
+
+Psi4's input is **code** (Psithon, a Python dialect), which is why this engine's builder is stricter
+than the others: every line of the script is written by the app, and a project field is never
+interpolated as a statement. A title containing a quote lands in a `#` comment, not in a call.
+
+What a Psi4 block will **not** do in this build, each refused by name rather than dropped:
+
+- **Implicit solvation** — Psi4 core has no PCM/SMD; that needs PCMSolver and a separate setup.
+- **TD-DFT excited states**, **NMR shieldings**, **NBO populations** and **transition-state
+  searches** — not written by this builder yet.
+- **A separate dispersion correction** — Psi4 takes D3 through the functional name, so choose
+  ωB97X-D or B97-D instead of a `-D3BJ` field.
+- **Gaussian grid keywords and custom routes** — no equivalent is guessed.
+- **Frequencies at CCSD/CCSD(T)** — Psi4 has no analytic Hessian there; run the frequency at DFT
+  or MP2 level.
+- **Checkpoint hand-off** — Psi4 leaves no restart file this app can hand to another block; a
+  downstream block reads the upstream geometry instead.
+
+Two things the parser does deliberately, because a Psi4 log can mislead:
+
+- **SAPT reports an interaction energy, not a total energy.** The result therefore carries no
+  `finalEnergy`; the numbers live under `extras.sapt` in mEh, kcal/mol and kJ/mol. Putting a
+  monomer-pair interaction in the same field as a molecular energy would invite the wrong comparison.
+- **`Psi4 exiting successfully` is about the process, not the science.** Psi4 prints it even when an
+  optimisation inside the run failed with `Could not converge geometry optimization`. The run record
+  reports the optimisation as incomplete and lets the gates decide; the termination line is not a
+  pass.
+
+### Setting up Psi4
+
+1. Install Psi4 1.4 or newer (conda-forge is the usual route) so a `psi4` executable exists
+   (`psi4.exe` on Windows). Psi4 needs `PSIDATADIR` to find its basis sets; a conda installation
+   sets it from its launcher.
+2. Set **Molecule → Defaults → Engine** to `Psi4`, then choose method and basis. The geometry comes
+   from the **Structure** tab.
+3. In **Run**, select the `psi4` executable with **Browse**.
+4. **Preflight** checks the platform, that the executable exists and is named `psi4`, that it is
+   runnable on Linux/macOS, and warns when `PSIDATADIR` is not set in the environment.
+5. **Run it.** The app spawns `psi4 <task>.dat` in the run folder. Psi4 1.9+ writes its formatted
+   log to `<task>.out` **itself**; older builds print it to stdout. The runner takes whichever exists:
+   a non-empty `<task>.out` left by Psi4 is read as the artifact (`outputSource: file`), otherwise the
+   captured stdout is written there. A run folder is fresh, so an existing file at that name can only
+   be Psi4's own log — and writing the (empty) capture over it would destroy the record.
+   stderr is never merged into the artifact and is kept under `provenance.psi4.stderr`. Threads come
+   from the block's `nproc` through `OMP_NUM_THREADS` and `MKL_NUM_THREADS`.
+
+An error termination (`Psi4 encountered an error. Buy a developer more coffee!`) is recorded as
+failed, and so is a run that printed nothing at all — the record quotes stderr in that case.
+
+### What this build proves about the Psi4 parser
+
+Two corpora, because the format changed:
+
+- **Psi4 1.1rc3 – 1.4a1**, eight complete logs from Psi4's own test suite and RMG-Py, in
+  `test/fixtures/real/psi4-*.out`: HF, B3LYP frequencies with thermochemistry, two optimisations (one
+  converged, one that is not), MP2, CCSD, SAPT0 and a PSIO error termination.
+- **Psi4 1.11**, five runs produced in this repository by the official `psi4/psi4:1.11` container
+  image and kept in `test/fixtures/psi4-live/`: a single point, an optimisation, a frequency job, an
+  open-shell UKS run and a SAPT0 dimer. The inputs beside them were written by this app's builder, so
+  the pair also proves the generated script is one Psi4 accepts.
+
+A live run found a real difference the older logs could not: Psi4 1.9+ writes its log to
+`<task>.out` itself rather than to stdout, and the first version of the runner overwrote that file
+with an empty capture. The runner now prefers the file Psi4 wrote.
+
+The end-to-end path was exercised the same way: the app's own `RunManager` and `Psi4Runner` spawned a
+containerised Psi4 1.11 through a wrapper, and the run record came back `completed`, gates `pass`,
+`-76.35815199866961` Eh, 7 SCF cycles, Psi4 `1.11`.
+
+Three blocks changed shape in 1.9+ and the parser accepts both: `Energy and wave function
+converged.`, `Optimizer: Optimization complete!` with no step count, the `Freq [cm^-1]` table instead
+of the `#  #` list, and `Total G, Gibbs energy at`.
+
+What is still not proven: a 1.11 failure mode other than the ones in the corpus (the 1.1 logs cover
+the error banner and a non-converged optimisation), and any platform other than Linux. A block shape
+the parser does not recognise is reported as `unknown`, never guessed.
 
 ## Which settings belong to which engine
 

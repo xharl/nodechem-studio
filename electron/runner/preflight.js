@@ -63,6 +63,7 @@ export async function preflight(config = {}, options = {}) {
   const engine = engineOrDefault(config.engine);
   const isXtb = engine.id === 'xtb';
   const isOrca = engine.id === 'orca';
+  const isPsi4 = engine.id === 'psi4';
   const dryRun = Boolean(config.dryRun);
   const executable = String(config.executable || '').trim();
   const scratchDir = String(config.scratchDir || '').trim();
@@ -110,6 +111,32 @@ export async function preflight(config = {}, options = {}) {
             id: 'orca-full-path',
             label: 'ORCA executable is not an absolute path',
             detail: 'ORCA parallel runs must be started by the full path to the driver (`/opt/orca/orca job.inp`). The runner passes this value unchanged.',
+          });
+        }
+      } catch (error) {
+        add('executable-exists', 'Executable exists', false, error.message);
+      }
+    }
+  } else if (isPsi4) {
+    add('executable', 'Psi4 executable configured', Boolean(executable), executable || 'Not configured');
+    if (executable) {
+      try {
+        const stat = await fsp.stat(executable);
+        add('executable-exists', 'Executable exists', stat.isFile(), executable);
+        add('executable-name', 'Psi4 executable', /^psi4(\.exe)?$/i.test(path.basename(executable)),
+          `Found ${path.basename(executable)}`);
+        if (isPosix(platform)) {
+          const permission = await executablePermission(executable);
+          add('executable-permission', 'Console executable is runnable', permission.ok, permission.detail);
+        }
+        // Psi4 finds its basis sets through PSIDATADIR. A conda launcher sets it
+        // itself; a bare binary needs it in the environment, so warn rather than
+        // block a setup that will work.
+        if (!env.PSIDATADIR) {
+          warnings.push({
+            id: 'psi4-datadir',
+            label: 'PSIDATADIR is not set in this environment',
+            detail: 'Psi4 needs PSIDATADIR to find its basis sets. A conda installation sets it from its launcher; a bare binary needs it exported.',
           });
         }
       } catch (error) {

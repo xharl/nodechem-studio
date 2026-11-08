@@ -1,4 +1,8 @@
-# Real Gaussian output excerpts
+# Real engine output files
+
+## Gaussian
+
+These files are verbatim excerpts from Gaussian 16 logs published in public
 
 These files are verbatim excerpts from Gaussian 16 logs published in public
 repositories, kept small (the summary block plus its headers). They exist so the
@@ -26,3 +30,25 @@ Attribution: the source repositories are public; the excerpts are reproduced for
 parser testing only. Gaussian itself is licensed separately by Gaussian, Inc.
 | `g16-h2o-raman.out` | `exa-analytics/exatomic` (`exatomic/static/gaussian/g16-h2o-321g-freq.out`), G16, `Freq=Raman` on water | Raman activities 11.4937 / 95.6630 / 44.0813 Å⁴/amu and both depolarisation ratios; the file contains the short and the long layout of the same table |
 | `g16-dvb-td.out` | `cclib/cclib` (`data/Gaussian/basicGaussian16/dvb_td.out`), G16 TD-DFT on divinylbenzene | Rotatory-strength block in both conventions (velocity and length); **achiral**, so every value is printed as zero — it proves the column layout, not the signs |
+
+
+## Psi4
+
+Verbatim Psi4 outputs from the Psi4 project's own test suite and two public
+repositories. They are complete files, not excerpts, so the parser sees the
+block order a real run produces.
+
+| File | Source | Job | Psi4 version |
+|---|---|---|---|
+| `psi4-scf1.out` | `psi4/psi4`, `tests/scf1/output.ref` | RHF/cc-pVQZ single point | 1.1rc3.dev5 |
+| `psi4-dft-freq.out` | `psi4/psi4`, `tests/dft-freq/output.ref` | B3LYP/6-31G* frequencies + thermochemistry | 1.1rc3.dev5 |
+| `psi4-opt1.out` | `psi4/psi4`, `tests/opt1/output.ref` | optimisation that converges, then one that does not | 1.1rc3.dev5 |
+| `psi4-opt2.out` | `psi4/psi4`, `tests/opt2/output.ref` | two converged optimisations (allene, DZ) | 1.1rc3.dev5 |
+| `psi4-mp2-1.out` | `psi4/psi4`, `tests/mp2-1/output.ref` | MP2/6-31G(d,p) | 1.1rc3.dev5 |
+| `psi4-cc1.out` | `psi4/psi4`, `tests/cc1/output.ref` | CCSD/6-31G(d,p) | 1.1rc3.dev5 |
+| `psi4-sapt1.out` | `psi4/psi4`, `tests/sapt1/output.ref` | SAPT0/cc-pVDZ on a dimer | 1.1rc3.dev5 |
+| `psi4-io-error.out` | `ReactionMechanismGenerator/RMG-Py`, `arkane/data/psi4/IO_error.out` | ADC job that dies in PSIO | 1.4a1.dev75 |
+
+No Psi4 binary was run for this repository: these files are the corpus because
+they come from the program's own test suite. A later Psi4 release that changes a
+block shape should be added here as a new file rather than editing one.

@@ -4,17 +4,19 @@ A desktop application for building and running computational-chemistry workflows
 calculation blocks on a canvas, connect them, and run one block or the whole workflow. Every run
 writes a folder with the exact input, the raw output and a provenance record you can hash and share.
 
-Two engines, and each block picks the one it runs on:
+Four engines, and each block picks the one it runs on:
 
 | Engine | Licence | Level of theory |
 | --- | --- | --- |
 | **Gaussian 16** | Commercial — licensed separately by Gaussian, Inc. | DFT and wavefunction methods with explicit basis sets |
 | **xTB** (GFN0/GFN1/GFN2/GFN-FF) | Open source (LGPL) | Fast semi-empirical and force-field methods |
+| **ORCA** 5/6 | Free for academic use — licensed separately by FACCTs | DFT and wavefunction methods from a simple `.inp` |
+| **Psi4** 1.4+ | Open source (LGPL-3.0) | DFT, wavefunction methods and SAPT from a Psithon `.dat` |
 
 A project can mix them: an xTB pre-optimisation feeding a Gaussian frequency job is a normal graph,
-with the hand-off refused when the receiving block cannot accept the geometry. The app bundles
-neither engine. It drives an installation you already have, on the machine it is installed on.
-Without either, the dry run exercises the whole pipeline on a labelled fixture.
+with the hand-off refused when the receiving block cannot accept the geometry. The app bundles no
+engine. It drives an installation you already have, on the machine it is installed on. Without any,
+the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
@@ -34,9 +36,10 @@ you trust a result.
   refuses to overwrite a file changed on disk since it was opened.
 - **A durable queue** — runs blocks in dependency order, survives a restart, reconciles an
   interrupted task instead of calling it complete, and records branch decisions and attempts.
-- **Two engines, chosen per block** — Gaussian 16 job types down to `Opt=TS`, IRC and scans; xTB
-  with GFN0/1/2 and GFN-FF, solvation, threads and restart hand-off, judged by the same validity
-  protocol where the checks apply.
+- **Four engines, chosen per block** — Gaussian 16 job types down to `Opt=TS`, IRC and scans; xTB
+  with GFN0/1/2 and GFN-FF, solvation, threads and restart hand-off; ORCA 5/6 with `Opt`, `Freq`,
+  CPCM/SMD and `.gbw` hand-off; Psi4 with HF, DFT, MP2, CCSD(T) and SAPT0 — each judged by the same
+  validity protocol where the checks apply.
 - **Conformer and protomer ensembles** — a Structure block runs CREST (GFN2 or GFN-FF) or imports a
   multi-XYZ, ranks the members by energy, prunes by energy window and RMSD, and refuses to choose a
   protomer for you. A downstream block runs the member you picked, and `run.json` records which one
@@ -92,7 +95,7 @@ data directory and requirements, and
 | [Install](docs/guide/install.md) | Artifacts, requirements, data locations |
 | [Your first project](docs/guide/first-project.md) | Dry run, workflow, own geometry, saving |
 | [The canvas](docs/guide/canvas.md) | Blocks, connections, states, inspector |
-| [Engines](docs/guide/engines.md) | Gaussian 16 vs xTB, job types, defaults, xTB setup |
+| [Engines](docs/guide/engines.md) | Gaussian 16, xTB, ORCA and Psi4, job types, defaults, setup |
 | [Conformers](docs/guide/conformers.md) | CREST or imported ensembles, ranking, protomers, choosing a member |
 | [Workflows](docs/guide/workflow.md) | Queue, conditions, loops, checkpoints, cluster export |
 | [Results](docs/guide/results.md) | Gates, validity checks, thermochemistry, viewer, bundles |

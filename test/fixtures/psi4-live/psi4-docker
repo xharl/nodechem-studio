@@ -1,0 +1,7 @@
+#!/bin/sh
+# Wrapper that lets the app's Psi4Runner spawn a real Psi4 1.11 interpreter.
+# The container image is the engine; the mount is this fixture directory.
+HOST_DIR=/home/xeyve/.hermes/Projects/gaussian-node-studio/test/fixtures/psi4-live/runs
+REL=$(pwd | sed "s|^.*/psi4-live/runs||")
+exec docker run --rm --user 0:0 -e HOME=/work -e OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}" \
+  -v "$HOST_DIR":/work -w "/work${REL}" psi4/psi4:1.11 psi4 "$@"

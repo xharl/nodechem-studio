@@ -15,23 +15,45 @@ export const BROWSER_PREVIEW_CONSOLE_HINT = 'Browser preview: the local runner i
 
 const FIXTURE_HINT = 'Dry run writes a synthetic fixture log and evaluates the parser.';
 
+const EXECUTABLE_LABEL = Object.freeze({
+  gaussian: 'Gaussian 16 executable',
+  xtb: 'xTB executable',
+  orca: 'ORCA executable',
+  psi4: 'Psi4 executable',
+});
+
+const EXECUTABLE_PLACEHOLDER = Object.freeze({
+  gaussian: 'C:\\G16W\\g16.exe',
+  xtb: '/usr/local/bin/xtb or C:\\xtb\\bin\\xtb.exe',
+  // ORCA's parallel driver must be called by its full path, so the example is a
+  // path and not a bare name.
+  orca: '/opt/orca/orca or C:\\ORCA\\orca.exe',
+  psi4: '/opt/conda/bin/psi4 or C:\\Psi4\\bin\\psi4.exe',
+});
+
+const DRY_RUN_HINT = Object.freeze({
+  gaussian: `${FIXTURE_HINT} Uncheck to launch the licensed Gaussian 16 installation.`,
+  xtb: `${FIXTURE_HINT} Uncheck to run the xTB executable.`,
+  orca: `${FIXTURE_HINT} Uncheck to run the ORCA driver.`,
+  psi4: `${FIXTURE_HINT} Uncheck to run the Psi4 interpreter.`,
+});
+
 /** Label above the executable field — the engine named is the one that runs. */
 export function executableLabelFor(engineId) {
-  return engineOrDefault(engineId).id === 'xtb' ? 'xTB executable' : 'Gaussian 16 executable';
+  const id = engineOrDefault(engineId).id;
+  return EXECUTABLE_LABEL[id] || EXECUTABLE_LABEL.gaussian;
 }
 
 /** Example path shown in the empty executable field. */
 export function executablePlaceholderFor(engineId) {
-  return engineOrDefault(engineId).id === 'xtb'
-    ? '/usr/local/bin/xtb or C:\\xtb\\bin\\xtb.exe'
-    : 'C:\\G16W\\g16.exe';
+  const id = engineOrDefault(engineId).id;
+  return EXECUTABLE_PLACEHOLDER[id] || EXECUTABLE_PLACEHOLDER.gaussian;
 }
 
 /** Run-console hint under the dry-run checkbox. Dry run stays a fixture. */
 export function dryRunHintFor(engineId) {
-  return engineOrDefault(engineId).id === 'xtb'
-    ? `${FIXTURE_HINT} Uncheck to run the xTB executable.`
-    : `${FIXTURE_HINT} Uncheck to launch the licensed Gaussian 16 installation.`;
+  const id = engineOrDefault(engineId).id;
+  return DRY_RUN_HINT[id] || DRY_RUN_HINT.gaussian;
 }
 
 /** Status label for a run: `dry run`, or the engine that produced the record. */
@@ -45,8 +67,17 @@ export function runEngineLabel(engineId, { dryRun = false } = {}) {
  * rather than promise Gaussian keywords that are never emitted.
  */
 export function checkpointHandoffNote(engineId) {
-  return engineOrDefault(engineId).id === 'xtb'
-    ? 'Gaussian checkpoint hand-off is not applied to xTB; xTB re-reads '
-      + '<code>xtbrestart</code> from its own run directory.'
-    : 'Adds <code>%OldChk</code>, <code>Geom=Checkpoint</code> and <code>Guess=Read</code> to this task.';
+  const id = engineOrDefault(engineId).id;
+  if (id === 'xtb') {
+    return 'Gaussian checkpoint hand-off is not applied to xTB; xTB re-reads '
+      + '<code>xtbrestart</code> from its own run directory.';
+  }
+  if (id === 'orca') {
+    return 'Stages the upstream <code>.gbw</code> in this run folder and adds '
+      + '<code>%moinp</code> to this task; an ORCA edge cannot read a Gaussian <code>.chk</code>.';
+  }
+  if (id === 'psi4') {
+    return 'Psi4 blocks have no checkpoint file; a Psi4 step reads the upstream geometry instead.';
+  }
+  return 'Adds <code>%OldChk</code>, <code>Geom=Checkpoint</code> and <code>Guess=Read</code> to this task.';
 }

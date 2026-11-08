@@ -275,17 +275,42 @@ function projectFailure(error) {
   };
 }
 
+const EXECUTABLE_DIALOG = Object.freeze({
+  gaussian: {
+    title: 'Locate the licensed Gaussian executable',
+    windowsDefault: () => defaultGaussianExecutablePath('win32'),
+    windowsFilter: 'Gaussian for Windows',
+  },
+  xtb: {
+    title: 'Locate the xTB executable',
+    windowsDefault: () => 'C:\\xtb\\bin\\xtb.exe',
+    windowsFilter: 'xTB executable',
+  },
+  psi4: {
+    title: 'Locate the Psi4 executable',
+    windowsDefault: () => 'C:\\Psi4\\bin\\psi4.exe',
+    windowsFilter: 'Psi4 for Windows',
+  },
+  orca: {
+    title: 'Locate the ORCA driver',
+    windowsDefault: () => 'C:\\ORCA\\orca.exe',
+    windowsFilter: 'ORCA for Windows',
+  },
+});
+
 async function chooseExecutable(config = {}) {
   const engine = engineOrDefault(config.engine);
-  const isXtb = engine.id === 'xtb';
+  const copy = EXECUTABLE_DIALOG[engine.id] || EXECUTABLE_DIALOG.gaussian;
+  const posixDefault = engine.id === 'xtb' ? '/usr/local/bin/xtb'
+    : engine.id === 'orca' ? '/opt/orca/orca'
+      : engine.id === 'psi4' ? '/opt/conda/bin/psi4'
+        : defaultGaussianExecutablePath(process.platform);
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: isXtb ? 'Locate the xTB executable' : 'Locate the licensed Gaussian executable',
-    defaultPath: isXtb
-      ? (process.platform === 'win32' ? 'C:\\xtb\\bin\\xtb.exe' : '/usr/local/bin/xtb')
-      : defaultGaussianExecutablePath(process.platform),
+    title: copy.title,
+    defaultPath: process.platform === 'win32' ? copy.windowsDefault() : posixDefault,
     properties: ['openFile'],
     filters: process.platform === 'win32'
-      ? [{ name: isXtb ? 'xTB executable' : 'Gaussian for Windows', extensions: ['exe'] }, { name: 'All files', extensions: ['*'] }]
+      ? [{ name: copy.windowsFilter, extensions: ['exe'] }, { name: 'All files', extensions: ['*'] }]
       : [{ name: 'All files', extensions: ['*'] }],
   });
   return result.canceled ? null : result.filePaths[0];

@@ -6,10 +6,14 @@ const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
 // constrained to one safe path segment, starting with an alphanumeric so `.`
 // and `..` can never escape targetDir.
 const SAFE_RESTART_ARTIFACT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,123}$/;
+// ORCA's restart data is a `<job>.gbw` file, named by the block or derived from
+// the checkpoint field, and read from the working directory on the next run.
+const SAFE_ORCA_RESTART = /^[A-Za-z0-9._-]{1,124}\.gbw$/i;
 const FIXTURE_HEADER = 'FIXTURE CHECKPOINT — synthetic staging artifact, ';
 const FIXTURE_DETAIL = {
   gaussian: 'not a Gaussian checkpoint\n',
   xtb: 'not an xTB restart file\n',
+  orca: 'not an ORCA .gbw file\n',
 };
 
 /**
@@ -31,15 +35,18 @@ export async function stageCheckpoint({
   engine = 'gaussian',
 }) {
   const isXtb = engine === 'xtb';
-  const safe = isXtb ? SAFE_RESTART_ARTIFACT : SAFE_CHECKPOINT;
+  const isOrca = engine === 'orca';
+  const safe = isXtb ? SAFE_RESTART_ARTIFACT : isOrca ? SAFE_ORCA_RESTART : SAFE_CHECKPOINT;
   if (!safe.test(String(checkpoint))) {
     throw new Error(isXtb
       ? 'Checkpoint hand-off name must be a safe restart-artifact basename.'
-      : 'Checkpoint hand-off name must be a safe .chk basename.');
+      : isOrca
+        ? 'Checkpoint hand-off name must be a safe .gbw basename.'
+        : 'Checkpoint hand-off name must be a safe .chk basename.');
   }
   const target = path.join(targetDir, checkpoint);
   const fixture = async (reason) => {
-    await fsp.writeFile(target, `${FIXTURE_HEADER}${FIXTURE_DETAIL[isXtb ? 'xtb' : 'gaussian']}reason: ${reason}\n`, 'utf8');
+    await fsp.writeFile(target, `${FIXTURE_HEADER}${FIXTURE_DETAIL[isXtb ? 'xtb' : isOrca ? 'orca' : 'gaussian']}reason: ${reason}\n`, 'utf8');
     const stat = await fsp.stat(target);
     return { file: checkpoint, bytes: stat.size, sourceRunId, kind: 'fixture', reason };
   };
