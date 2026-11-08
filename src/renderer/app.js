@@ -6209,7 +6209,7 @@ function wireEvents() {
 
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
-export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, simpleInspector, state };
+export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, resultFacts, runStateOf, simpleInspector, state, syncNodeStatesFromQueue };
 
 function applyAppInfo() {
   const chip = $('#app-version-chip');
