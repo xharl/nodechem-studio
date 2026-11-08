@@ -71,7 +71,7 @@ export class RunManager {
     if (engine.id === 'gaussian') return new GaussianRunner();
     // ORCA ships an input builder, a parser and preflight discovery (#31), but no
     // runner: handing its .inp to g16 would run a different program and print a
-    // parseable-looking failure. Refuse until the runner lands (#93).
+    // parseable-looking failure. Refuse until the runner lands (#98).
     throw new Error(`${engine.label || engine.id} has no runner yet: its input and parser are available,`
       + ' but execution is not wired. Run the job in ORCA and import the output, or use Gaussian/xTB.');
   }

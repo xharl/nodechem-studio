@@ -265,7 +265,7 @@ What ORCA does **not** give you through this builder:
    `orca`/`orca.exe`, and (on Linux/macOS) that it is executable. ORCA needs no Link 1 and no
    `share/xtb` parameter directory, so those Gaussian/xTB checks do not run.
 5. **Execution is not wired in this build.** The app builds the ORCA input, checks the executable and
-   parses an ORCA log, but it cannot launch ORCA yet (#93) — ORCA writes to stdout, which needs its
+   parses an ORCA log, but it cannot launch ORCA yet (#98) — ORCA writes to stdout, which needs its
    own runner. A queue that contains an ORCA block is refused with "no runner yet" rather than
    handing an ORCA input to Gaussian. Until the runner lands, run the generated input in ORCA
    yourself and keep the log beside the run folder.

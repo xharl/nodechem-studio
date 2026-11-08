@@ -363,7 +363,7 @@ describe('RunManager large-output handling', () => {
 describe('RunManager engine selection', () => {
   // ORCA has an input builder and a parser since #31, but no runner. Falling back
   // to the Gaussian runner would execute g16 on an ORCA .inp and record whatever
-  // came back; refusing is the only honest answer until the runner exists (#93).
+  // came back; refusing is the only honest answer until the runner exists (#98).
   it('refuses an engine with no runner instead of borrowing the Gaussian one', () => {
     const manager = new RunManager({ root: os.tmpdir() });
     expect(() => manager.runnerFor(ENGINES.orca)).toThrow(/no runner yet/);
