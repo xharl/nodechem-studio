@@ -26,6 +26,7 @@ ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--timeout <seconds>]
 ncs report <out-dir> [--flow <id>] [--out <file>]
+ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 ```
@@ -42,6 +43,11 @@ ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 - `report` rebuilds the HTML report from the newest queue under `<out-dir>/queues/` and writes
   `<out-dir>/reports/index.html` unless `--out` names another file. `--flow` restricts it to one
   flow; without it every flow that has a queue is combined into one document.
+- `export` prints every `run.json` under `<out-dir>/runs/` in one versioned envelope, with the
+  absolute path of the schema the records were validated against. `--schema-version` defaults to 1;
+  an unknown version is refused with the path of the version this build ships. One non-conforming
+  record refuses the whole export instead of returning the readable subset. `--out` writes the
+  envelope to a file and prints its path.
 
 ## Exit codes
 
@@ -106,12 +112,22 @@ ncs run my-project.ncs --out ./runs --executable /opt/g16/g16 --crest /opt/crest
 Cluster export refuses a project that contains a conformer block — the export would otherwise build
 its first calculation from the project geometry rather than the member you chose.
 
+## Scripting from a shell or a notebook
+
+The run record is a published contract:
+[`schemas/run-record.v1.schema.json`](../../schemas/run-record.v1.schema.json). `ncs export`
+returns `run.json` unchanged inside an envelope that names the schema version and its path, so a
+script can validate the payload itself. `clients/python/` is a stdlib-only client for the same
+records. Both are documented in [Scripting against NodeChem Studio](../SCRIPTING.md); a host that
+wants a fifth engine should read [Engine plugins](../ENGINE_PLUGIN.md).
+
 ## What is not here yet
 
-- The proposed stable, versioned JSON schemas for the canonical result and the run record are not
-  frozen as a public API; the project file already carries a `schemaVersion`, the run record does not.
-- There is no separate client library for reading run folders: the run folder is ordinary JSON and
-  text, and `ncs run` prints the summary a script needs.
+- A REST or socket server; the machine interface is the CLI and the run folder.
+- A user-directory plugin loader. `registerEngine(spec)` is the seam, but the desktop queue still
+  resolves the built-in engines through `src/shared/engines/index.js`.
+- Machine-readable refusal codes on every command. Exit codes are the branch point; only
+  `ncs export` also emits a `code` in its JSON refusal.
 
 ## Next
 
