@@ -25,6 +25,7 @@
 import { createHash } from 'node:crypto';
 import { parseCube, BOHR_TO_ANGSTROM } from './cubeFile.js';
 import { parseFchk } from './fchk.js';
+import { parseMolden } from './molden.js';
 
 export { BOHR_TO_ANGSTROM };
 
@@ -457,19 +458,23 @@ function looksLikeCube(text) {
 export function detectWavefunctionFormat(text) {
   const source = String(text ?? '');
   if (!source.trim()) return '';
+  const firstLine = source.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/).find((line) => line.trim());
+  if (firstLine && /^\s*\[Molden Format\](?:\s|$)/i.test(firstLine)) return 'molden';
   if (/^\s*(?:Number of atoms|Atomic numbers|Current cartesian coordinates)\s+[IR]\b/m.test(source)) return 'fchk';
   if (looksLikeCube(source)) return 'cube';
   return '';
 }
 
-/** Parse a cube or a checkpoint, whichever the text turns out to be. */
+/** Parse a cube, a checkpoint or a Molden file, whichever the text turns out to be. */
 export function readWavefunction(text, { filename = '', maxChars } = {}) {
   const kind = detectWavefunctionFormat(text);
   if (kind === 'cube') return { kind, parsed: parseCube(text, maxChars ? { maxChars } : undefined) };
   if (kind === 'fchk') return { kind, parsed: parseFchk(text, maxChars ? { maxChars } : undefined) };
+  if (kind === 'molden') return { kind, parsed: parseMolden(text, maxChars ? { maxChars } : undefined) };
   throw new Error(
-    `${filename || 'The file'} is neither a Gaussian cube nor a formatted checkpoint. `
-    + 'A cube starts with two comment lines and an "atoms ox oy oz" header; an fchk starts with "Number of atoms".',
+    `${filename || 'The file'} is neither a Gaussian cube nor a formatted checkpoint (nor a Molden file). `
+    + 'A cube starts with two comment lines and an "atoms ox oy oz" header; an fchk starts with "Number of atoms"; '
+    + 'a Molden file starts with "[Molden Format]".',
   );
 }
 
@@ -502,6 +507,9 @@ function summariseCube(cube) {
 
 function summariseFchk(fchk) {
   const summary = {
+    // `parseFchk` and `parseMolden` both set `format`; the block keeps the same
+    // shape either way, and a caller can tell which reader produced it.
+    format: fchk.format || 'fchk',
     fields: { found: [...fchk.found], missing: [...fchk.missing] },
     units: fchk.units,
     orbitalGap: orbitalGap(fchk),
@@ -543,9 +551,10 @@ export function buildWavefunctionRecord({ cube = null, fchk = null, artifacts = 
 /**
  * Read one or more files into a single run-record block.
  *
- * `files` is `[{ text, filename }]`. One cube and one checkpoint fit in a
- * record; a second of either is refused rather than silently replaced, because
- * two densities are two results.
+ * `files` is `[{ text, filename }]`. One cube and one checkpoint (or Molden
+ * file, which produces the same checkpoint-shaped fields) fit in a record; a
+ * second of either is refused rather than silently replaced, because two
+ * densities are two results.
  */
 export function wavefunctionRecord(files, { maxChars } = {}) {
   const list = Array.isArray(files) ? files : [files];
@@ -561,7 +570,7 @@ export function wavefunctionRecord(files, { maxChars } = {}) {
       if (cube) throw new Error('Only one cube fits in a wavefunction record; attach the second cube to its own run.');
       cube = parsed;
     } else {
-      if (fchk) throw new Error('Only one checkpoint fits in a wavefunction record; attach the second one to its own run.');
+      if (fchk) throw new Error('Only one checkpoint or Molden file fits in a wavefunction record; attach the second one to its own run.');
       fchk = parsed;
     }
     artifacts.push({

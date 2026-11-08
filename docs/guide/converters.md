@@ -87,9 +87,9 @@ trajectory, the record says why (`cache.skipped`) instead of writing an empty fi
 ## Molden: why it starts from a checkpoint, not a log
 
 A log has energies and geometries. Molden needs the **basis functions** and the **MO coefficients**,
-and only a formatted checkpoint carries them — so `ncs convert job.fchk --format molden` is the only
-path, and pointing `--format molden` at a log is refused with that sentence rather than writing a
-file whose orbitals are empty.
+and of the files `ncs convert` accepts today only a formatted checkpoint carries them — so
+`ncs convert job.fchk --format molden` is the only path, and pointing `--format molden` at a log is
+refused with that sentence rather than writing a file whose orbitals are empty.
 
 What the writer does with a checkpoint:
 
@@ -122,8 +122,8 @@ coefficients within 5·10⁻⁹ of the checkpoint, 70 electrons.
 
 ## Next
 
-- [Wavefunctions: cubes and formatted checkpoints](wavefunction.md) — what the two wavefunction
-  files hold.
+- [Wavefunctions: cubes, formatted checkpoints and Molden files](wavefunction.md) — what the
+  wavefunction files hold.
 - [Results and analysis](results.md) — the numbers a run reports before export.
 - [Command line](cli.md) — the rest of `ncs`.
 

@@ -42,8 +42,8 @@ Reference pages:
 
 - [Troubleshooting](troubleshooting.md) — symptom, cause, action.
 - [FAQ](faq.md) — short answers to the questions testers ask first.
-- [Wavefunctions](wavefunction.md) — what a `.cube` and an `.fchk` contain, what the app reads from
-  them, and which analyses are still deferred.
+- [Wavefunctions](wavefunction.md) — what a `.cube`, an `.fchk` and a `.molden` contain, what the app
+  reads from them, and which analyses are still deferred.
 - [Converters](converters.md) — `ncs convert`: extxyz, xyz, SDF and JCAMP-DX, and the conventions
   each one carries.
 - [Output corpus](parser-corpus.md) — the real Gaussian logs the parser is tested against, and the
