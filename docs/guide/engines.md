@@ -153,9 +153,15 @@ xTB is an open-source (LGPL) family of fast approximate methods. In this app it 
 - **GFN2-xTB** (default), **GFN1-xTB**, **GFN0-xTB** and the **GFN-FF** force field.
 - **Job types** `SP`, `Opt`, `Opt Freq` and `Freq`, with xTB optimisation levels `crude`, `sloppy`,
   `loose`, `lax`, `normal`, `tight`, `vtight`, `extreme`.
-- **Implicit solvation**: `ALPB` or `GBSA` with Water, Dichloromethane, THF, Toluene or
-  Acetonitrile. The inspector exposes both models; the builder emits `--alpb <solvent>` or
-  `--gbsa <solvent>` and the choice is recorded in `run.json`.
+- **Implicit solvation**: `ALPB` (analytical linearised Poisson–Boltzmann) or `GBSA` (generalised
+  Born with a surface-area term) with Water, Dichloromethane, THF, Toluene or Acetonitrile. ALPB is
+  the default and the recommended model for solvation free energies; GBSA is the older
+  generalised-Born model, kept for reproducing published GBSA results. The inspector exposes both
+  models; the builder emits `--alpb <solvent>` or `--gbsa <solvent>` and the choice is recorded in
+  `run.json`. xTB has no `PCM`, `SMD` or `CPCM` — those are Gaussian-only models, and the project
+  schema refuses them on a block that resolves to xTB, with a message naming ALPB and GBSA. A
+  project saved before that rule may still carry `PCM` on an xTB block whose solvation is off; it
+  opens unchanged, but switching solvation on requires choosing `ALPB` or `GBSA`.
 - **Threads** via `OMP_NUM_THREADS`, from the `Threads` field in the inspector.
 - **Restart hand-off** between blocks: xTB re-reads `xtbrestart` from its working directory, and a
   checkpoint edge copies the upstream run's `xtbrestart` into the downstream run folder.

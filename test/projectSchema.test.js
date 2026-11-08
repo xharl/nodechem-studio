@@ -613,3 +613,104 @@ describe('project molecule geometry', () => {
     expect(validateProject(project).ok).toBe(true);
   });
 });
+
+describe('project schema v1 — engine-specific solvation models (#102)', () => {
+  /** One xTB calc block whose settings start from the real factory. */
+  const xtbProject = (settings = {}) => {
+    const project = projectWithNode(calcNode({
+      settings: defaultSettings({
+        jobType: 'SP', method: '', basis: '', engine: 'xtb',
+        solvation: true, solvationModel: 'ALPB',
+        ...settings,
+      }),
+    }));
+    project.defaults.engine = 'xtb';
+    return project;
+  };
+
+  it('round-trips ALPB and GBSA through stringifyProject and parseProjectText', () => {
+    for (const model of ['ALPB', 'GBSA']) {
+      const saved = stringifyProject(xtbProject({ solvationModel: model }));
+      expect(saved.ok, summarizeErrors(saved.errors)).toBe(true);
+      expect(saved.text).toContain(`"solvationModel": "${model}"`);
+      const reopened = parseProjectText(saved.text);
+      expect(reopened.ok).toBe(true);
+      expect(reopened.project.nodes[0].settings.solvationModel).toBe(model);
+      expect(reopened.project.nodes[0].settings.solvation).toBe(true);
+    }
+  });
+
+  it('rejects a Gaussian solvation model on an xTB block with a precise message', () => {
+    const result = validateProject(xtbProject({ solvationModel: 'PCM' }));
+    expect(result.ok).toBe(false);
+    const error = result.errors.find((item) => item.path === 'nodes[0].settings.solvationModel');
+    expect(error).toBeDefined();
+    expect(error.message).toContain('"PCM"');
+    expect(error.message).toContain('Gaussian-only');
+    expect(error.message).toContain('xTB accepts ALPB or GBSA');
+  });
+
+  it('defaults an xTB block with no model to ALPB', () => {
+    const settings = defaultSettings({ jobType: 'SP', method: '', basis: '', engine: 'xtb', solvation: true });
+    delete settings.solvationModel;
+    const project = projectWithNode(calcNode({ settings }));
+    project.defaults.engine = 'xtb';
+    const result = validateProject(project);
+    expect(result.ok).toBe(true);
+    expect(result.project.nodes[0].settings.solvationModel).toBe('ALPB');
+  });
+
+  it('keeps an empty model readable on an xTB block', () => {
+    const result = validateProject(xtbProject({ solvation: false, solvationModel: '' }));
+    expect(result.ok).toBe(true);
+    expect(result.project.nodes[0].settings.solvationModel).toBe('');
+  });
+
+  it('tolerates the legacy PCM placeholder while solvation is off, but not once it is on', () => {
+    // defaultSettings() has always written PCM; the renderer only rewrites it
+    // when solvation is toggled, so pre-#102 xTB projects carry it on blocks
+    // that never enabled solvation. It is inert there and must stay readable.
+    const off = validateProject(xtbProject({ solvation: false, solvationModel: 'PCM' }));
+    expect(off.ok, summarizeErrors(off.errors)).toBe(true);
+    expect(off.project.nodes[0].settings.solvationModel).toBe('PCM');
+
+    const on = validateProject(xtbProject({ solvation: true, solvationModel: 'PCM' }));
+    expect(on.ok).toBe(false);
+  });
+
+  it('resolves the engine from defaults.engine when the block inherits it', () => {
+    const project = xtbProject({ engine: '' });
+    expect(validateProject(project).ok).toBe(true);
+    project.nodes[0].settings.solvationModel = 'PCM';
+    expect(validateProject(project).ok).toBe(false);
+  });
+
+  it('honours a per-block xTB override in a Gaussian project', () => {
+    const project = projectWithNode(calcNode({
+      settings: defaultSettings({
+        jobType: 'SP', engine: 'xtb', solvation: true, solvationModel: 'ALPB',
+      }),
+    }));
+    expect(project.defaults.engine).toBe('gaussian');
+    expect(validateProject(project).ok).toBe(true);
+    project.nodes[0].settings.solvationModel = 'PCM';
+    expect(validateProject(project).ok).toBe(false);
+  });
+
+  it('keeps the Gaussian list for ALPB and for a project with no engine set', () => {
+    const alpb = validateProject(projectWithNode(calcNode({
+      settings: defaultSettings({ solvation: true, solvationModel: 'ALPB' }),
+    })));
+    expect(alpb.ok).toBe(false);
+    expect(alpb.errors.some((error) => error.message === 'must be one of: PCM, SMD, CPCM.')).toBe(true);
+
+    // No `defaults.engine` at all is the historical file shape: Gaussian, as before.
+    const legacy = legacyProject();
+    delete legacy.defaults.engine;
+    legacy.nodes[0].settings.solvationModel = 'ALPB';
+    const result = validateProject(legacy);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.path === 'nodes[0].settings.solvationModel'
+      && error.message === 'must be one of: PCM, SMD, CPCM.')).toBe(true);
+  });
+});
