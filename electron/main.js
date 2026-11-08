@@ -11,6 +11,7 @@ import { defaultGaussianExecutablePath } from './runner/gaussianPlatform.js';
 import { writeClusterExport, importClusterExport } from './runner/clusterFiles.js';
 import { writeRunBundle } from './runner/runBundle.js';
 import { isSafeRunId } from '../src/shared/runBundle.js';
+import { fingerprint, writeGuardDecision } from '../src/shared/projectMerge.js';
 import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
 import { buildDiagnostics } from '../src/shared/diagnostics.js';
 import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js';
@@ -257,6 +258,7 @@ async function readProjectFile(filePath) {
   }
   try {
     const text = await fsp.readFile(target, 'utf8');
+    knownProjectHashes.set(target, fingerprint(text));
     const parsed = parseProjectText(text);
     if (!parsed.ok) {
       return { canceled: false, path: target, error: projectFailure(parsed) };
@@ -287,6 +289,9 @@ function suggestedProjectName(project) {
   return projectFileName(project);
 }
 
+/** Path → sha256 of the exact bytes the app last read or wrote. */
+const knownProjectHashes = new Map();
+
 async function saveProject(project, filePath) {
   const serialized = stringifyProject(project);
   if (!serialized.ok) {
@@ -306,7 +311,23 @@ async function saveProject(project, filePath) {
     if (result.canceled || !result.filePath) return { canceled: true };
     target = withProjectExtension(result.filePath);
   }
+  // Concurrency guard for a project on a shared drive: if the bytes on disk
+  // are not the bytes this process last read or wrote, another editor changed
+  // the file and a silent overwrite would destroy that change.
+  const known = knownProjectHashes.get(target);
+  const currentText = known ? await fsp.readFile(target, 'utf8').catch(() => null) : null;
+  const decision = writeGuardDecision(known, currentText);
+  if (!decision.allow) {
+    return {
+      canceled: false,
+      error: {
+        message: `${path.basename(target)} changed on disk since it was opened (another editor or machine). `
+          + 'Reopen the project to load the current version, or save under a new name.',
+      },
+    };
+  }
   await fsp.writeFile(target, serialized.text, 'utf8');
+  knownProjectHashes.set(target, fingerprint(serialized.text));
   return {
     canceled: false,
     path: target,

@@ -19,12 +19,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 
-import { validateProject } from '../src/shared/projectSchema.js';
+import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
+import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { buildWorkflowTasks } from '../src/shared/workflowTasks.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 
-const EXIT = Object.freeze({ ok: 0, usage: 1, invalid: 2, gate: 3, engine: 4 });
+const EXIT = Object.freeze({ ok: 0, usage: 1, invalid: 2, gate: 3, engine: 4, conflict: 5 });
 const TERMINAL = new Set(['completed', 'failed', 'needs-review', 'blocked', 'cancelled']);
 
 const USAGE = `ncs — headless NodeChem Studio
@@ -33,8 +34,11 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs build-input <project.ncs> --node <id> [--out <file>]
   ncs run <project.ncs> --out <dir> [--dry-run] [--executable <path>]
       [--timeout <seconds>] [--json]
+  ncs diff <a.ncs> <b.ncs> [--json]
+  ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
 
-Exit codes: 0 success, 2 invalid project, 3 gate failure, 4 engine failure.
+Exit codes: 0 success, 2 invalid project, 3 gate failure, 4 engine failure,
+5 merge conflict.
 `;
 
 function fail(message, code = EXIT.usage) {
@@ -231,6 +235,64 @@ async function commandRun({ positional, flags }) {
   process.exit(EXIT.ok);
 }
 
+async function commandDiff({ positional, flags }) {
+  const [a, b] = positional;
+  if (!a || !b) fail('diff needs two project files.');
+  const left = await readProject(a);
+  const right = await readProject(b);
+  if (!left.result.ok || !right.result.ok) {
+    process.stderr.write(`${JSON.stringify({ a: validityJson(a, left.result), b: validityJson(b, right.result) }, null, 2)}\n`);
+    process.exit(EXIT.invalid);
+  }
+  const diff = diffProjects(left.result.project, right.result.project);
+  if (flags.json || !process.stdout.isTTY) {
+    process.stdout.write(`${JSON.stringify(diff, null, 2)}\n`);
+    process.exit(EXIT.ok);
+  }
+  if (diff.empty) {
+    process.stdout.write(`${a} and ${b} are structurally identical.\n`);
+    process.exit(EXIT.ok);
+  }
+  for (const id of diff.nodes.added) process.stdout.write(`+ node ${id}\n`);
+  for (const id of diff.nodes.removed) process.stdout.write(`- node ${id}\n`);
+  for (const entry of diff.nodes.changed) {
+    for (const field of entry.fields) process.stdout.write(`~ ${entry.id}.${field.field}: ${JSON.stringify(field.before)} -> ${JSON.stringify(field.after)}\n`);
+  }
+  for (const key of diff.edges.added) process.stdout.write(`+ edge ${key}\n`);
+  for (const key of diff.edges.removed) process.stdout.write(`- edge ${key}\n`);
+  for (const entry of diff.meta) process.stdout.write(`~ ${entry.field}\n`);
+  process.exit(EXIT.ok);
+}
+
+async function commandMerge({ positional, flags }) {
+  const [baseFile, oursFile, theirsFile] = positional;
+  if (!baseFile || !oursFile || !theirsFile) fail('merge needs <base> <ours> <theirs>.');
+  const base = await readProject(baseFile);
+  const ours = await readProject(oursFile);
+  const theirs = await readProject(theirsFile);
+  if (!base.result.ok || !ours.result.ok || !theirs.result.ok) {
+    process.stderr.write(`${JSON.stringify({ base: validityJson(baseFile, base.result), ours: validityJson(oursFile, ours.result), theirs: validityJson(theirsFile, theirs.result) }, null, 2)}\n`);
+    process.exit(EXIT.invalid);
+  }
+  const merged = mergeProjects(base.result.project, ours.result.project, theirs.result.project);
+  if (!merged.ok) {
+    process.stdout.write(`${JSON.stringify({ ok: false, conflicts: merged.conflicts }, null, 2)}\n`);
+    process.stderr.write(`ncs: ${merged.conflicts.length} conflict(s); nothing was written.\n`);
+    process.exit(EXIT.conflict);
+  }
+  // Serialise through the same writer the app uses, so a merged file is byte
+  // shaped like a saved one rather than a raw JSON dump.
+  const serialized = stringifyProject(merged.project);
+  if (!serialized.ok) {
+    process.stderr.write(`${JSON.stringify({ ok: false, errors: serialized.errors || [] }, null, 2)}\n`);
+    process.exit(EXIT.invalid);
+  }
+  const out = path.resolve(String(flags.out || oursFile));
+  await fs.writeFile(out, serialized.text, 'utf8');
+  process.stdout.write(`${JSON.stringify({ ok: true, out, diff: diffProjects(ours.result.project, serialized.project) }, null, 2)}\n`);
+  process.exit(EXIT.ok);
+}
+
 const { command, positional, flags } = parseArgs(process.argv.slice(2));
 if (!command || command === '--help' || command === '-h' || command === 'help') {
   process.stdout.write(USAGE);
@@ -240,6 +302,8 @@ const handlers = {
   validate: commandValidate,
   'build-input': commandBuildInput,
   run: commandRun,
+  diff: commandDiff,
+  merge: commandMerge,
 };
 const handler = handlers[command];
 if (!handler) fail(`unknown command "${command}".`);

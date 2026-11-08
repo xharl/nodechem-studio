@@ -122,3 +122,61 @@ describe('ncs run', () => {
     expect(engine.stderr).toMatch(/not found/i);
   }, 180000);
 });
+
+describe('ncs diff and ncs merge', () => {
+  async function divergent(edit) {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ncs-merge-'));
+    const base = JSON.parse(await readFile(example('opt-freq.ncs'), 'utf8'));
+    const ours = JSON.parse(JSON.stringify(base));
+    const theirs = JSON.parse(JSON.stringify(base));
+    edit(ours, theirs);
+    const files = {};
+    for (const [name, project] of [['base', base], ['ours', ours], ['theirs', theirs]]) {
+      files[name] = path.join(dir, `${name}.ncs`);
+      await writeFile(files[name], JSON.stringify(project), 'utf8');
+    }
+    return { dir, files };
+  }
+
+  it('reports structural changes between two projects', async () => {
+    const { files } = await divergent((ours, theirs) => {
+      ours.nodes[0].title = 'Renamed by us';
+      theirs.nodes.push({ ...theirs.nodes[0], id: 'extra', title: 'Extra' });
+    });
+    const result = await ncs(['diff', files.ours, files.theirs, '--json']);
+    expect(result.code).toBe(0);
+    const diff = JSON.parse(result.stdout);
+    expect(diff.nodes.added).toEqual(['extra']);
+    expect(diff.nodes.changed).toHaveLength(1);
+    expect(diff.nodes.changed[0].fields[0]).toMatchObject({ field: 'title', before: 'Renamed by us' });
+  });
+
+  it('merges non-overlapping edits and writes a valid project', async () => {
+    const { dir, files } = await divergent((ours, theirs) => {
+      ours.nodes[0].title = 'Renamed by us';
+      const calc = theirs.nodes.find((node) => node.type === 'calc');
+      calc.settings.method = 'M06-2X';
+    });
+    const out = path.join(dir, 'merged.ncs');
+    const result = await ncs(['merge', files.base, files.ours, files.theirs, '--out', out]);
+    expect(result.code).toBe(0);
+    const merged = JSON.parse(await readFile(out, 'utf8'));
+    expect(merged.nodes[0].title).toBe('Renamed by us');
+    expect(merged.nodes.some((node) => node.settings?.method === 'M06-2X')).toBe(true);
+    expect(validateProject(merged).ok).toBe(true);
+  });
+
+  it('refuses overlapping edits with exit 5 and writes nothing', async () => {
+    const { dir, files } = await divergent((ours, theirs) => {
+      ours.nodes[0].title = 'One';
+      theirs.nodes[0].title = 'Two';
+    });
+    const out = path.join(dir, 'merged.ncs');
+    const result = await ncs(['merge', files.base, files.ours, files.theirs, '--out', out]);
+    expect(result.code).toBe(5);
+    const report = JSON.parse(result.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.conflicts[0].path).toBe(`${report.conflicts[0].id}.title`);
+    await expect(readFile(out, 'utf8')).rejects.toThrow();
+  });
+});

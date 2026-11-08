@@ -25,6 +25,8 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--executable <path>] [--timeout <seconds>]
+ncs diff <a.ncs> <b.ncs> [--json]
+ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 ```
 
 - `validate` prints the schema errors, warnings and the pre-run validity findings as JSON. Every
@@ -43,9 +45,29 @@ ncs run <project.ncs> --out <dir> [--dry-run] [--executable <path>] [--timeout <
 | 2 | The project does not validate, or a task could not be built. |
 | 3 | A run finished but its gates failed — the result exists and needs review. |
 | 4 | A run or the queue failed outright; nothing usable was produced. |
+| 5 | A merge found overlapping edits; nothing was written. |
 
 The split between 3 and 4 matters in a script: 3 means "look at the numbers", 4 means "the engine
 did not produce a result".
+
+## Collaborating on a project
+
+`.ncs` is JSON with a stable id per block, so two people can work on the same project and reconcile
+it without a server:
+
+```
+ncs diff their.ncs mine.ncs          # nodes added / removed / changed, per field
+ncs merge base.ncs mine.ncs their.ncs --out merged.ncs
+```
+
+The merge is structural and keyed by node id. Edits to different blocks, or to different fields of
+the same block, merge cleanly. When both sides changed the same field, the merge prints one conflict
+per field (`{ kind, id, path, base, ours, theirs }`) and writes nothing — exit 5. A delete on one
+side against an edit on the other is a conflict too; nothing is discarded silently.
+
+The app itself refuses to overwrite a project that changed on disk since it was opened, and tells you
+to reopen or save under a new name. That is a hash check, not a lock: two machines can still edit the
+same file, but the second save is refused instead of destroying the first.
 
 ## Dry runs in CI
 

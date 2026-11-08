@@ -145,6 +145,23 @@ docs/              documentation; the user guide lives in docs/guide/
 - **Unsigned builds.** No auto-update, no crash reporting, no code signing.
 - **No remote execution, submission, cloud API or telemetry.** This is intentional.
 
+## Collaboration model
+
+NodeChem Studio is **single-user and local**: no accounts, no server, no shared store. A project is
+one `.ncs` file, and the app refuses to overwrite a file that changed on disk since it was opened
+(hash check, with a message telling you to reopen or save under a new name).
+
+Two people *can* work on the same project on a shared drive, reconciled rather than live-synced:
+
+```
+ncs diff theirs.ncs mine.ncs
+ncs merge base.ncs mine.ncs theirs.ncs --out merged.ncs
+```
+
+The merge is structural, keyed by block id: edits to different blocks or different fields merge, and
+overlapping edits are refused with a per-field conflict report (exit 5) instead of a silent
+last-write-wins. See [Headless CLI](docs/guide/cli.md#collaborating-on-a-project).
+
 ## Safety and licensing
 
 NodeChem Studio is free software under the **Apache License 2.0** (see [`LICENSE`](LICENSE)). That
