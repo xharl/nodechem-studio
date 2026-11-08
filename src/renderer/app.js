@@ -112,7 +112,7 @@ const BASIS_SETS = [
 const JOB_TYPES = [
   ['Opt', 'Optimization'], ['Opt Freq', 'Optimization + frequency'],
   ['Opt=TS', 'Transition state'], ['Freq', 'Frequency'], ['IRC', 'IRC path'],
-  ['SP', 'Single point'], ['Scan', 'PES scan'],
+  ['SP', 'Single point'], ['Scan', 'PES scan'], ['NMR', 'NMR shieldings'],
 ];
 const IRC_DIRECTIONS = [['forward', 'Forward'], ['reverse', 'Reverse'], ['both', 'Both directions']];
 const DISPERSIONS = [['', 'None'], ['GD3BJ', 'D3(BJ)'], ['GD3', 'D3']];
@@ -286,7 +286,7 @@ const outgoing = (id) => state.project.edges.filter((edge) => edge.from === id);
 const statusFor = (node) => STATUS[node.state] || STATUS.blocked;
 function kindForJob(jobType) {
   return ({
-    Opt: 'Opt', 'Opt Freq': 'O+F', 'Opt=TS': 'TS', Freq: 'Freq', IRC: 'IRC', SP: 'SP', Scan: 'Scan',
+    Opt: 'Opt', 'Opt Freq': 'O+F', 'Opt=TS': 'TS', Freq: 'Freq', IRC: 'IRC', SP: 'SP', Scan: 'Scan', NMR: 'NMR',
   }[jobType] || 'SP');
 }
 

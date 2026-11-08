@@ -109,6 +109,21 @@ rather than implied. Where the parser finds no thermochemistry section, the pane
 xTB's free energy already uses mRRHO; the app adds no quasi-harmonic or standard-state correction on
 top of it.
 
+## NMR shieldings
+
+An `NMR` job produces an **NMR** card with every atom's isotropic shielding, anisotropy and tensor
+eigenvalues, the gauge Gaussian used (GIAO), and a simulated spectrum.
+
+Gaussian reports **absolute** isotropic shieldings in ppm. A chemical shift is
+`σ_reference − σ_isotropic`, and the reference must be computed at the same level of theory — there is
+no universal TMS number. The card therefore starts in absolute mode; entering a reference in the
+**σ_ref** field converts the table and the figure to shifts, and the caption prints the reference it
+used. Without one, the figure says *absolute shielding*, because it is not a spectrum in ppm shift.
+
+Broadening is a Lorentzian with a FWHM you set in the card (default 0.10 ppm) and the caption always
+states it, along with the number of nuclei in the trace. Raman activities, VCD/ROA rotational
+strengths and conformer-weighted spectra are not implemented.
+
 ## Reaction paths and scans
 
 An `IRC` job and a `Scan` job produce a **Reaction path** / **Potential-energy scan** card, read from

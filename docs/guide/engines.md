@@ -16,7 +16,7 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
   basis set: def2-SVP, def2-TZVP, 6-31G(d), 6-311+G(d,p), cc-pVTZ or SDD.
 - **Dispersion** (D3(BJ) or D3), **SCF** tightening, **integration grid**, **population analysis**
   (NBO, Hirshfeld, MK charges), **implicit solvation** (PCM, SMD, CPCM) and **verbosity**.
-- **Job types**: `SP`, `Opt`, `Opt Freq`, `Freq`, `Opt=TS`, `IRC` and `Scan`.
+- **Job types**: `SP`, `Opt`, `Opt Freq`, `Freq`, `Opt=TS`, `IRC`, `Scan` and `NMR`.
 - **Excited states (TD-DFT/CIS)**: `TD=(NStates=N)` on an `SP` or `Opt` block, with singlets,
   triplets or a 50/50 run. The output's excitation energies, wavelengths, oscillator strengths and
   dominant transitions are parsed into the results panel. Other job types cannot carry `TD`, and
@@ -187,7 +187,7 @@ written to the run folder; it is not automatically loaded back as the project ge
 | Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` |
 | Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload |
 | Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile |
-| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan | SP, Opt, Opt Freq, Freq |
+| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq |
 | Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` |
 | Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` |
 | Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder |

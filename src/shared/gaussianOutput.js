@@ -15,6 +15,7 @@
 import { terminationCodeOf } from './engines/canonical.js';
 import { ELEMENTS } from './elements.js';
 import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
+import { parseShieldings } from './nmr.js';
 import { summarizeValidity } from './validityChecks.js';
 
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
@@ -1139,6 +1140,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   // them; absence means the job was neither, which is not an empty path.
   const reactionPath = parseIrcSummary(text);
   const scan = parseScanSummary(text);
+  const nmr = parseShieldings(text);
 
   return {
     status,
@@ -1158,6 +1160,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     excitedStates,
     reactionPath,
     scan,
+    nmr,
     charges,
     t1Diagnostic: t1Link ? t1Link.t1Diagnostic : null,
     resources: resourcesLink ? resourcesLink.resources : emptyResources(),

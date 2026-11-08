@@ -19,6 +19,7 @@ import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 import { pathBarrier, profileSvg, profilePoints } from '../shared/reactionPath.js';
+import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -579,6 +580,72 @@ function reactionPathCard(runRecord, parsed, flags) {
   return card(irc ? 'Reaction path' : 'Potential-energy scan', body, 'is-wide');
 }
 
+/**
+ * NMR shieldings. Gaussian reports absolute isotropic shieldings; a chemical
+ * shift is `σ_reference − σ_isotropic` and needs a reference computed at the
+ * same level, so the panel starts in absolute mode and only shows shifts once
+ * the user supplies one. The gauge, the reference and the broadening are
+ * printed with the numbers.
+ */
+function nmrCard(parsed, flags) {
+  const nmr = parsed?.nmr;
+  if (!nmr || !Array.isArray(nmr.atoms) || nmr.atoms.length === 0) return '';
+  const elements = [...new Set(nmr.atoms.map((atom) => atom.element))];
+  const nuclei = elements
+    .map((element) => ({ element, nucleus: element === 'H' ? '1H' : `13${element}`.replace('13', '13') }))
+    .filter((entry) => elementForNucleus(entry.nucleus) === entry.element);
+  const options = (nuclei.length ? nuclei : [{ element: elements[0], nucleus: elements[0] }])
+    .map((entry) => `<option value="${esc(entry.nucleus)}">${esc(entry.nucleus)}</option>`).join('');
+  const initialNucleus = nuclei.length ? nuclei[0].nucleus : (elements.includes('H') ? '1H' : `${elements[0]}`);
+
+  const body = `<p class="results-note">Absolute isotropic shieldings from a ${esc(nmr.gauge || 'unknown')} calculation`
+    + `${nmr.method ? ` (${esc(nmr.method)})` : ''}, ${esc(nmr.count)} atoms. A chemical shift is `
+    + '<code>σ_reference − σ_isotropic</code> and the reference must come from the same level of theory; '
+    + 'enter it below to convert. Without one, the figure plots absolute shielding — it is not a spectrum in ppm shift.</p>'
+    + '<div class="nmr-controls">'
+    + `<label>Nucleus <select data-nmr-nucleus>${options}</select></label>`
+    + '<label>σ<sub>ref</sub> / ppm <input type="number" step="0.01" data-nmr-reference placeholder="not set"></label>'
+    + '<label>FWHM / ppm <input type="number" step="0.01" min="0.001" data-nmr-fwhm value="0.10"></label>'
+    + '</div>'
+    + `<div data-field="nmr-figure">${nmrSectionHtml(nmr, { nucleus: initialNucleus })}</div>`
+    + caveatHtml(flags, 'These shieldings');
+  return card('NMR', body, 'is-wide');
+}
+
+/** The figure and peak table for one nucleus, recomputed when a control changes. */
+function nmrSectionHtml(nmr, { nucleus = '1H', referencePpm = null, fwhmPpm = 0.1 } = {}) {
+  const element = elementForNucleus(nucleus) || nucleus;
+  const rows = nmr.atoms.filter((atom) => atom.element === element).slice(0, 40);
+  if (rows.length === 0) {
+    return `<p class="results-missing">No ${esc(nucleus)} nucleus in this output.</p>`;
+  }
+  const shifts = nmrShifts(rows, { referencePpm });
+  const spectrum = nmrSpectrum({ atoms: nmr.atoms, nucleus, referencePpm, fwhmPpm });
+  const polyline = spectrum ? nmrPolyline(spectrum) : '';
+  const figure = polyline
+    ? '<figure class="results-spectrum" data-field="nmr-spectrum">'
+      + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated NMR spectrum">'
+      + `<polyline points="${polyline}" class="spectrum-curve"/>`
+      + '</svg>'
+      + `<figcaption>${esc(spectrum.units)} · ${esc(rows.length)} ${esc(element)} nuclei · `
+      + `Lorentzian broadening, FWHM ${esc(spectrum.fwhmPpm.toFixed(2))} ppm`
+      + `${spectrum.referencePpm === null ? ' · no reference set (absolute shielding)' : ` · reference σ_ref = ${esc(spectrum.referencePpm.toFixed(2))} ppm`}`
+      + '</figcaption>'
+      + '</figure>'
+    : '';
+  const rowsHtml = shifts.map((atom) => '<tr>'
+    + `<td>${esc(atom.index)}</td>`
+    + `<td>${esc(atom.element)}</td>`
+    + `<td>${esc(atom.isotropic.toFixed(4))}</td>`
+    + `<td>${atom.shiftPpm === null ? MISSING_TEXT : esc(atom.shiftPpm.toFixed(4))}</td>`
+    + `<td>${esc(atom.anisotropy.toFixed(4))}</td>`
+    + '</tr>').join('');
+  const table = '<table class="results-table" data-field="nmr-shieldings">'
+    + '<thead><tr><th>Atom</th><th>Element</th><th>σ<sub>iso</sub> / ppm</th><th>Shift / ppm</th><th>Anisotropy / ppm</th></tr></thead>'
+    + `<tbody>${rowsHtml}</tbody></table>`;
+  return figure + table;
+}
+
 function methodsCard(record) {
   let result;
   try {
@@ -716,6 +783,7 @@ export function resultsPanelHtml(record) {
     frequenciesCard(parsed, flags),
     excitedStatesCard(parsed, flags),
     reactionPathCard(record, parsed, flags),
+    nmrCard(parsed, flags),
     chargesCard(parsed, flags),
     t1Card(parsed, flags),
     resourcesCard(parsed, flags),
@@ -790,6 +858,34 @@ export function installResultsView({
     consoleEl?.classList.add('has-results');
     mountCompareBar(record);
   };
+
+  /**
+   * The NMR card owns its broadening and reference controls: changing either
+   * recomputes the figure and the table from the parsed shieldings without a
+   * round trip to the main process.
+   */
+  const rerenderNmr = () => {
+    const nmr = currentRecord?.parsed?.nmr;
+    const holder = container.querySelector('[data-field="nmr-figure"]');
+    if (!nmr || !holder) return;
+    const value = (selector) => container.querySelector(selector)?.value ?? '';
+    const reference = value('[data-nmr-reference]').trim();
+    holder.innerHTML = nmrSectionHtml(nmr, {
+      nucleus: value('[data-nmr-nucleus]') || '1H',
+      referencePpm: reference === '' ? null : Number(reference),
+      fwhmPpm: Number(value('[data-nmr-fwhm]')) > 0 ? Number(value('[data-nmr-fwhm]')) : 0.1,
+    });
+  };
+  container.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+  });
+  container.addEventListener('change', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+  });
 
   /**
    * Difference-first comparison against any other finished run. The select is
@@ -1086,6 +1182,10 @@ const RESULTS_VIEW_CSS = `
 .spectrum-curve { fill: none; stroke: #a8b8ff; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
 .spectrum-label { fill: var(--faint); font-size: 7px; font-family: var(--mono); }
 .profile-peak { fill: #a8b8ff; stroke: #0c1119; stroke-width: 1; }
+.nmr-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 8px; font-size: 10px; color: var(--muted); }
+.nmr-controls label { display: flex; align-items: center; gap: 5px; }
+.nmr-controls input, .nmr-controls select { width: 92px; font: inherit; padding: 2px 4px; background: var(--well, #07090d); color: var(--text, #e9edf4); border: 1px solid var(--line, #223); border-radius: 4px; }
+.nmr-controls input[type="number"] { width: 78px; }
 .results-spectrum figcaption { margin-top: 3px; color: var(--faint); font-size: 8.5px; line-height: 1.45; }
 .results-provenance { border-top: 1px solid var(--line); padding-top: 7px; }
 .results-provenance summary {

@@ -63,13 +63,14 @@ export const NODE_STATES = Object.freeze([
 
 export const EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch', 'loop']);
 export const BRANCHES = Object.freeze(['true', 'false']);
-export const JOB_TYPES = Object.freeze(['Opt', 'Opt Freq', 'Opt=TS', 'Freq', 'IRC', 'SP', 'Scan']);
+export const JOB_TYPES = Object.freeze(['Opt', 'Opt Freq', 'Opt=TS', 'Freq', 'IRC', 'SP', 'Scan', 'NMR']);
 export const IRC_DIRECTIONS = Object.freeze(['forward', 'reverse', 'both']);
 export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3']);
 export const SCF_OPTIONS = Object.freeze(['', 'Tight', 'VeryTight']);
 export const GRID_OPTIONS = Object.freeze(['', 'Fine', 'UltraFine']);
 export const POPULATION_OPTIONS = Object.freeze(['', 'NBO', 'Hirshfeld', 'MK']);
 export const TD_TRIPLETS_MODES = Object.freeze(['', 'triplets', 'both']);
+export const NMR_NUCLEI = Object.freeze(['1H', '13C', '15N', '19F', '31P', '29Si']);
 export const VERBOSITY_OPTIONS = Object.freeze(['', 'Normal', 'Verbose']);
 export const SOLVATION_MODELS = Object.freeze(['PCM', 'SMD', 'CPCM']);
 export const MEMORY_UNITS = Object.freeze(['MB', 'GB', 'MW']);

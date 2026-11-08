@@ -165,6 +165,9 @@ export function gridOverridden(settings = {}) {
  */
 export function jobKeywordFor(settings = {}) {
   const jobType = oneLine(settings.jobType, 'Opt');
+  // An NMR job is a single point with the shielding keyword. Gaussian's default
+  // gauge is GIAO; the output states which gauge produced the numbers.
+  if (jobType === 'NMR') return 'NMR';
   if (jobType === 'IRC') {
     const direction = settings.ircDirection === 'both'
       ? 'forward,reverse'
