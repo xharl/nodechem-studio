@@ -15,6 +15,7 @@
  */
 
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
+import { explainRunFailure } from '../shared/errorSignatures.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -438,6 +439,22 @@ function errorCard(record, parsed) {
   if (runnerError) {
     blocks.push(kv([fieldValue('Runner error', esc(runnerError), 'runner-error')]));
   }
+  // Offline signature table: an explanation is only shown when a signature
+  // actually matched. An unmatched failure says so instead of guessing.
+  const diagnosis = explainRunFailure(record);
+  if (diagnosis?.matched && diagnosis.explanation) {
+    const { title, cause, action, docs } = diagnosis.explanation;
+    blocks.push(
+      '<div class="results-diagnosis" data-field="error-explanation"'
+      + ` data-signature="${esc(diagnosis.signature.id)}" data-severity="${esc(diagnosis.severity)}">`
+      + `<h5 class="results-diagnosis-title">${esc(title)}</h5>`
+      + `<p class="results-diagnosis-cause">${esc(cause)}</p>`
+      + `<p class="results-diagnosis-action"><strong>Next step:</strong> ${esc(action)}</p>`
+      + '</div>',
+    );
+  } else if (errorTermination || runnerError) {
+    blocks.push(`<p class="results-missing" data-field="error-explanation">No known signature matched this failure. Read the cause line above; nothing is inferred.</p>`);
+  }
   if (!blocks.length) {
     blocks.push(`<p class="results-missing" data-field="error-cause">${MISSING_TEXT}</p>`);
   }
@@ -846,6 +863,19 @@ const RESULTS_VIEW_CSS = `
   background: #080b11; color: #c8d2e0; font: 9px/1.5 var(--mono); white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.results-diagnosis {
+  margin-top: 8px; padding: 8px 9px; border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  background: rgba(255, 255, 255, .03);
+}
+.results-diagnosis[data-severity="fatal"] { border-color: rgba(248, 113, 113, .38); }
+.results-diagnosis-title {
+  margin: 0 0 4px; font-size: 10px; font-weight: 650; letter-spacing: .01em;
+}
+.results-diagnosis-cause { margin: 0 0 5px; color: var(--muted); font-size: 9.5px; line-height: 1.5; }
+.results-diagnosis-action { margin: 0; font-size: 9.5px; line-height: 1.5; }
+.results-diagnosis-action strong { color: var(--text); font-weight: 650; }
 .results-provenance { border-top: 1px solid var(--line); padding-top: 7px; }
 .results-provenance summary {
   cursor: pointer; color: var(--muted); font-size: 9px; letter-spacing: .08em;

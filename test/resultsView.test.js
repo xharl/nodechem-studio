@@ -426,6 +426,35 @@ describe('results surface — error termination', () => {
     expect(field(html, 'error-lines')).toContain('Convergence criterion not met.');
     expect(html).toContain('data-gate="Normal termination" data-result="fail"');
   });
+
+  it('adds an offline explanation when a signature matches', () => {
+    const errorText = readFileSync(
+      fileURLToPath(new URL('./fixtures/synthetic-error-termination.out', import.meta.url)),
+      'utf8',
+    );
+    const html = resultsPanelHtml(recordFor(parseGaussianOutput(errorText), { status: 'failed' }));
+    expect(html).toContain('data-field="error-explanation"');
+    expect(html).toContain('data-signature="scf-convergence-short"');
+    expect(html).toContain('Next step:');
+    expect(html).toContain('SCF did not converge');
+  });
+
+  it('says so when no signature matches instead of guessing', () => {
+    const html = resultsPanelHtml({
+      status: 'failed',
+      engine: 'gaussian',
+      parsed: {
+        status: 'error',
+        errorTermination: {
+          cause: 'Something nobody has catalogued yet.',
+          terminationLine: 'Error termination via Lnk1e',
+          lines: ['Something nobody has catalogued yet.'],
+        },
+      },
+    });
+    expect(field(html, 'error-explanation')).toContain('No known signature matched');
+    expect(html).not.toContain('Next step:');
+  });
 });
 
 describe('results surface — HTML escaping', () => {
