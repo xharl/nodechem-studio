@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { recordSchemaPath, validateRecord } from '../schemas/record-schema.js';
+import { RECORD_SCHEMA_VERSION, recordSchemaPath, recordSchemaVersions, validateRecord } from '../schemas/record-schema.js';
 
 /**
  * `ncs export` is the machine door onto run folders. These tests drive the real
@@ -64,8 +64,10 @@ describe('ncs export', () => {
 
     const envelope = JSON.parse(result.stdout);
     expect(envelope.kind).toBe('nodechem-studio.records');
-    expect(envelope.schemaVersion).toBe(1);
-    expect(envelope.schema).toBe(recordSchemaPath(1));
+    // The default export names the newest contract this build ships. The
+    // records themselves still declare the version they were written for.
+    expect(envelope.schemaVersion).toBe(RECORD_SCHEMA_VERSION);
+    expect(envelope.schema).toBe(recordSchemaPath(RECORD_SCHEMA_VERSION));
     expect(envelope.recordCount).toBe(2);
     expect(envelope.records.map((record) => record.id)).toEqual(records.map((record) => record.id).sort());
     // The record is exported unchanged, not reshaped.
@@ -88,7 +90,8 @@ describe('ncs export', () => {
     expect(result.code).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('unsupported run-record schema version "9"');
-    expect(result.stderr).toContain(recordSchemaPath(1));
+    expect(result.stderr).toContain(`this build ships version ${recordSchemaVersions().join(', ')}`);
+    expect(result.stderr).toContain(recordSchemaPath(RECORD_SCHEMA_VERSION));
   });
 
   it('refuses a bare --schema-version as a usage error', async () => {
@@ -111,7 +114,7 @@ describe('ncs export', () => {
     expect(result.stdout).toBe('');
     const refusal = JSON.parse(result.stderr.slice(0, result.stderr.lastIndexOf('}') + 1));
     expect(refusal.code).toBe('record-invalid');
-    expect(refusal.schema).toBe(recordSchemaPath(1));
+    expect(refusal.schema).toBe(recordSchemaPath(RECORD_SCHEMA_VERSION));
     expect(refusal.failures.map((failure) => failure.runId)).toEqual([broken.id]);
     expect(refusal.failures[0].errors.some((error) => error.path === '/status')).toBe(true);
   });

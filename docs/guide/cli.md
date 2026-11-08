@@ -25,8 +25,9 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--timeout <seconds>]
-ncs report <out-dir> [--flow <id>] [--out <file>]
+ncs report <out-dir> [--flow <id>] [--include-imported] [--out <file>]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
+ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--json]
 ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicity <n>] [--out <file>] [--json]
 ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
 ncs diff <a.ncs> <b.ncs> [--json]
@@ -132,7 +133,10 @@ its first calculation from the project geometry rather than the member you chose
 ## Scripting from a shell or a notebook
 
 The run record is a published contract:
-[`schemas/run-record.v1.schema.json`](../../schemas/run-record.v1.schema.json). `ncs export`
+[`schemas/run-record.v2.schema.json`](../../schemas/run-record.v2.schema.json) (v1 is kept
+unchanged beside it; `--schema-version 1` still emits it). `ncs record import` writes the
+imported-result kind — a number another program computed, labelled `imported, not run here`.
+`ncs export`
 returns `run.json` unchanged inside an envelope that names the schema version and its path, so a
 script can validate the payload itself. `clients/python/` is a stdlib-only client for the same
 records. Both are documented in [Scripting against NodeChem Studio](../SCRIPTING.md); a host that

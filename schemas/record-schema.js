@@ -1,13 +1,21 @@
 /**
- * The run-record contract, version 1.
+ * The run-record contract, versions 1 and 2.
  *
- * `run-record.v1.schema.json` is the public description of `run.json`. This
- * module is the one place that knows which schema file belongs to which
- * version, and it carries a small dependency-free validator so the CLI can
- * refuse to export a record that does not conform. The validator implements the
- * JSON Schema keywords the record schema uses — not the whole standard. A
- * schema change that needs a new keyword must extend this file in the same
- * commit.
+ * `run-record.v1.schema.json` is the public description of the `run.json` the
+ * runners write; `run-record.v2.schema.json` is the same document plus one
+ * record kind that is not a run at all. This module is the one place that knows
+ * which schema file belongs to which version, and it carries a small
+ * dependency-free validator so the CLI can refuse to export a record that does
+ * not conform. The validator implements the JSON Schema keywords the record
+ * schemas use — not the whole standard. A schema change that needs a new
+ * keyword must extend this file in the same commit.
+ *
+ * Why v2 rather than an extra field in v1: v1's envelope is closed and carries
+ * no `kind`, and its `provenance.kind` enum is closed too, so there is no
+ * extension point a second record shape could use. v2 is a tagged union whose
+ * run branch is v1 verbatim: every v1 document validates unchanged, and the v1
+ * file is never edited, so a document written for v1 still validates against
+ * the version it was written for.
  *
  * Why not a JSON Schema library: the app has no runtime dependencies, and the
  * test that validates real records must exercise the same code the CLI runs.
@@ -16,12 +24,13 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-/** The record contract this build writes and exports. */
-export const RECORD_SCHEMA_VERSION = 1;
+/** The newest record contract this build writes and exports by default. */
+export const RECORD_SCHEMA_VERSION = 2;
 
 /** Version → file. A new major adds an entry; old files stay in the tree. */
 export const RECORD_SCHEMA_FILES = Object.freeze({
   1: 'run-record.v1.schema.json',
+  2: 'run-record.v2.schema.json',
 });
 
 export class RecordSchemaError extends Error {
@@ -157,7 +166,7 @@ export function validateAgainstSchema(value, schema, root = schema, path = '') {
 
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     for (const key of Array.isArray(schema.required) ? schema.required : []) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) add(path, `is missing required property "${key}"`);
+      if (!Object.prototype.hasOwnProperty.call(value, key)) add(pointer(path, key), `is missing required property "${key}"`);
     }
     const properties = schema.properties && typeof schema.properties === 'object' ? schema.properties : {};
     for (const [key, entry] of Object.entries(value)) {

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "kind": "imported",
+  "id": "spartan-wb97xd3-def2tzvp",
+  "program": "Spartan '26",
+  "version": "26.0.1",
+  "method": "ωB97X-D3",
+  "basis": "def2-TZVP",
+  "energy": -2107.7761757,
+  "sourceSha256": "9f2c0d5e7a41b8639c0e5f2d7a41b8639c0e5f2d7a41b8639c0e5f2d7a41b863",
+  "sourceName": "study-01.spartan.out",
+  "title": "Converged single point (Spartan '26 study)",
+  "importedAt": "2026-11-08T19:38:00.000Z"
+}

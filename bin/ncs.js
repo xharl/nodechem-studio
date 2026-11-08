@@ -21,6 +21,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
@@ -53,6 +54,12 @@ import {
   recordSchemaVersions,
   validateRecord,
 } from '../schemas/record-schema.js';
+import {
+  ImportedRecordError,
+  buildImportedRecord,
+  importedBadgeLabel,
+  validateImportedRecord,
+} from '../src/shared/importedRecord.js';
 
 const EXIT = Object.freeze({ ok: 0, usage: 1, invalid: 2, gate: 3, engine: 4, conflict: 5, partial: 5 });
 const TERMINAL = new Set(['completed', 'failed', 'needs-review', 'partial', 'blocked', 'cancelled']);
@@ -64,8 +71,12 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
       [--max-parallel N] [--executable <path>] [--crest <path>]
       [--timeout <seconds>] [--json]
-  ncs report <out-dir> [--flow <id>] [--out <file>]
+  ncs report <out-dir> [--flow <id>] [--include-imported] [--out <file>]
   ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
+  ncs record import --program <name> --version <version> --method <method>
+      --basis <basis> --energy <hartree> (--source <file>|--source-sha256 <hex>)
+      --out <out-dir|file.json> [--id <id>] [--title <text>] [--notes <text>]
+      [--json]
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
   ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
@@ -408,7 +419,7 @@ async function queueRunRecords(queue) {
  * single `flow` does the same for `ncs report --flow`. A flow with no queue is
  * simply absent: the report describes what ran.
  */
-async function collectReportModels(outDir, { flow = null, flows = null } = {}) {
+async function collectReportModels(outDir, { flow = null, flows = null, includeImported = false } = {}) {
   const queuesDir = path.join(outDir, 'queues');
   let entries;
   try {
@@ -449,6 +460,7 @@ async function collectReportModels(outDir, { flow = null, flows = null } = {}) {
       generatedAt,
       appVersion: 'cli',
       recordInfo: queueRecordInfo(queue),
+      includeImported,
     }));
   }
   return models;
@@ -492,7 +504,10 @@ async function commandReport({ positional, flags }) {
   if (!outArg) fail('report needs an output directory.');
   const outDir = path.resolve(outArg);
   const wantedFlow = typeof flags.flow === 'string' ? String(flags.flow) : null;
-  const models = await collectReportModels(outDir, { flow: wantedFlow });
+  // Issue #131: an imported result is listed either way; this flag decides
+  // whether its number is also shown in the energy columns, labelled.
+  const includeImported = flags['include-imported'] === true || flags['include-imported'] === 'true';
+  const models = await collectReportModels(outDir, { flow: wantedFlow, includeImported });
   if (models.length === 0) {
     fail(wantedFlow
       ? `no queue for flow "${wantedFlow}" under ${outDir}.`
@@ -619,6 +634,159 @@ async function commandExport({ positional, flags }) {
   }
   process.stdout.write(text);
   process.exit(EXIT.ok);
+}
+
+/**
+ * `ncs record import` — write a record for a number another program computed.
+ *
+ * This is not log parsing (a different feature, and a guess about a foreign
+ * format). The caller states the provenance: program, version, method, basis,
+ * the energy in Hartree, and either the file to hash here or a hash computed on
+ * the machine that did the work. The record is validated against the published
+ * contract before it reaches disk, and it is written where a run's `run.json`
+ * lives so the same readers find it — as a different kind, never as a run.
+ *
+ * Refusals are machine-readable on stderr and exit 2, like `ncs export`:
+ *   { "ok": false, "code": "imported-invalid", "field": "program", "message": … }
+ */
+function importedRefusal(error) {
+  process.stderr.write(`${JSON.stringify({
+    ok: false,
+    code: error.code || 'imported-invalid',
+    field: error.field ?? null,
+    message: error.message,
+    errors: Array.isArray(error.errors) ? error.errors : undefined,
+  }, null, 2)}\n`);
+  process.exit(EXIT.invalid);
+}
+
+function slug(value, fallback) {
+  const slugged = String(value || '')
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slugged || fallback;
+}
+
+async function commandRecordImport({ positional, flags }) {
+  if (positional.length > 0) {
+    fail(`record import takes no positional arguments (got "${positional[0]}"); name the target with --out.`);
+  }
+  if (typeof flags.out !== 'string') {
+    fail('record import needs --out <out-dir|file.json>.');
+  }
+
+  const sourceFile = typeof flags.source === 'string' ? path.resolve(flags.source) : null;
+  const sourceHash = typeof flags['source-sha256'] === 'string' ? flags['source-sha256'].trim() : null;
+  if ((sourceFile === null) === (sourceHash === null)) {
+    importedRefusal(new ImportedRecordError(
+      'name exactly one source: --source <file> hashes the file here, --source-sha256 <hex> takes a digest computed where the calculation ran.',
+      { field: 'sourceSha256' },
+    ));
+  }
+
+  let sourceSha256 = sourceHash;
+  let sourceName = null;
+  if (sourceFile !== null) {
+    let bytes;
+    try {
+      bytes = await fs.readFile(sourceFile);
+    } catch (error) {
+      importedRefusal(new ImportedRecordError(
+        `cannot read ${sourceFile}: ${error.code === 'ENOENT' ? 'there is no such file' : error.message}`,
+        { field: 'sourceSha256' },
+      ));
+    }
+    sourceSha256 = createHash('sha256').update(bytes).digest('hex');
+    sourceName = path.basename(sourceFile);
+  }
+
+  const rawEnergy = typeof flags.energy === 'string' ? flags.energy.trim() : null;
+  if (rawEnergy === null || rawEnergy === '') {
+    fail('record import needs --energy <hartree>.');
+  }
+  const energy = Number(rawEnergy);
+  if (!Number.isFinite(energy)) {
+    importedRefusal(new ImportedRecordError(
+      `--energy must be a number in Hartree, got ${JSON.stringify(rawEnergy)}. Nothing is converted from another unit.`,
+      { field: 'energy' },
+    ));
+  }
+
+  const idFlag = typeof flags.id === 'string' ? flags.id : null;
+  let record;
+  try {
+    record = buildImportedRecord({
+      id: idFlag || `imported-${slug(flags.program, 'program')}-${slug(flags.method, 'method')}`,
+      program: flags.program,
+      version: flags.version,
+      method: flags.method,
+      basis: flags.basis,
+      energy,
+      sourceSha256,
+      sourceName,
+      title: flags.title,
+      notes: flags.notes,
+    });
+  } catch (error) {
+    if (error instanceof ImportedRecordError) importedRefusal(error);
+    throw error;
+  }
+
+  // The builder and the published schema must agree; the schema is the contract.
+  const verdict = validateRecord(record, { version: 2 });
+  if (!verdict.ok) {
+    importedRefusal(Object.assign(new ImportedRecordError(
+      `the record does not conform to schema version 2 (${recordSchemaPath(2)}).`,
+      { field: verdict.errors[0]?.path || null },
+    ), { errors: verdict.errors }));
+  }
+  const local = validateImportedRecord(record);
+  if (!local.ok) {
+    importedRefusal(Object.assign(new ImportedRecordError('the record is missing a required field.', {
+      field: local.errors[0]?.path || null,
+    }), { errors: local.errors }));
+  }
+
+  const out = path.resolve(flags.out);
+  const target = path.extname(out).toLowerCase() === '.json'
+    ? out
+    : path.join(out, 'runs', record.id, 'run.json');
+  const existing = await fs.stat(target).then(() => true, () => false);
+  if (existing) {
+    importedRefusal(Object.assign(new ImportedRecordError(
+      `${target} already exists. An imported record is evidence; it is not overwritten by a second import.`,
+      { field: 'id', code: 'imported-exists' },
+    ), { code: 'imported-exists' }));
+  }
+
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify({
+      ok: true,
+      file: target,
+      kind: record.kind,
+      badge: importedBadgeLabel(record),
+      record,
+    }, null, 2)}\n`);
+    process.exit(EXIT.ok);
+  }
+  // Like `ncs report`, the path is the one line a script needs; the label goes
+  // to stderr so it is visible to a human without being parsed as a path.
+  process.stderr.write(`${importedBadgeLabel(record)}\n`);
+  process.stdout.write(`${target}\n`);
+  process.exit(EXIT.ok);
+}
+
+async function commandRecord({ positional, flags }) {
+  const [subcommand, ...rest] = positional;
+  if (subcommand === undefined) fail('record needs a subcommand; the only one is import.');
+  if (subcommand === 'import') return commandRecordImport({ positional: rest, flags });
+  fail(`unknown record subcommand "${subcommand}"; the only one is import.`);
 }
 
 async function commandDiff({ positional, flags }) {
@@ -1085,6 +1253,7 @@ const handlers = {
   run: commandRun,
   report: commandReport,
   export: commandExport,
+  record: commandRecord,
   diff: commandDiff,
   merge: commandMerge,
   convert: commandConvert,

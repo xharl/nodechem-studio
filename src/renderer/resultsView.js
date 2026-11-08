@@ -30,6 +30,7 @@ import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
 import { overlayPolyline, scaleToSpectrum } from '../shared/overlay.js';
 import { importSpectrumText, sameAxisUnits } from '../shared/spectrumImport.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
+import { IMPORTED_BADGE_TEXT, importedBadgeHtml, importedSummary } from '../shared/importedRecord.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -905,17 +906,57 @@ function kineticsBlockHtml(options, flags) {
 }
 
 /**
+ * The one card an imported record gets. There is no SCF table, no termination,
+ * no gate: those describe a run, and no run happened. The number is printed with
+ * the label attached, and the provenance that makes the label checkable.
+ */
+function importedEnergyCard(imported) {
+  const level = [imported.method, imported.basis].filter((value) => value !== null).join('/') || null;
+  return card('Imported energy', kv([
+    fieldValue(
+      'Final energy',
+      `${esc(hartreeText(imported.energyHartree) ?? MISSING_TEXT)} <span class="results-badge is-imported">${esc(IMPORTED_BADGE_TEXT)}</span>`,
+      'imported-energy',
+    ),
+    fieldValue('Program', safeText(`${imported.program ?? ''}${imported.version ? ` ${imported.version}` : ''}`.trim() || null), 'imported-program'),
+    fieldValue('Level of theory', safeText(level), 'imported-level'),
+    fieldValue('Source file', safeText(imported.sourceName), 'imported-source'),
+    fieldValue('Source SHA-256', imported.sourceSha256 ? esc(imported.sourceSha256) : missingHtml(), 'imported-source-sha256'),
+    fieldValue('Imported at', safeText(formatTimestamp(imported.importedAt)), 'imported-at'),
+  ]) + '<p class="results-note">The hash identifies the file these numbers were read from; '
+    + 'it does not prove the calculation, and no executable ran here.</p>', 'is-imported');
+}
+
+/**
  * pKa and redox cycles.
  *
  * A cycle is a group of blocks whose free energies are subtracted, so it is
  * carried on the parsed output as `cycles[]` (see `docs/guide/results.md`).
  * Every number is rendered with the reference and citation it was anchored to,
  * and an incomplete cycle prints `not reported` with the missing block named.
+ *
+ * Issue 131: an imported result can be shown *beside* the cycles when the
+ * caller asks for it (`options.includeImported`). It is never folded into a
+ * cycle: subtracting a number this app did not compute would be a derived
+ * quantity with two provenances and one label.
  */
-function solutionEnergeticsCard(record, parsed, flags) {
+function solutionEnergeticsCard(record, parsed, flags, options = {}) {
   const cycles = Array.isArray(parsed?.cycles) ? parsed.cycles
     : Array.isArray(record?.cycles) ? record.cycles : [];
-  if (cycles.length === 0) return '';
+  const requested = isObject(options) && options.includeImported === true && Array.isArray(options.imported)
+    ? options.imported
+    : [];
+  const importedBlocks = requested
+    .map((entry) => importedSummary(entry))
+    .filter(Boolean)
+    .map((imported) => '<div data-field="imported-energetics">'
+      + `<p class="results-note">${importedBadgeHtml(imported)}</p>`
+      + `<p class="results-note" data-field="imported-energetics-value">Reference energy E = ${esc(hartreeText(imported.energyHartree) ?? MISSING_TEXT)}`
+      + ` at ${esc(imported.method ?? MISSING_TEXT)}/${esc(imported.basis ?? MISSING_TEXT)}, computed by ${esc(imported.program ?? MISSING_TEXT)}`
+      + `${imported.version ? ` ${esc(imported.version)}` : ''}. `
+      + `This value is shown beside the cycles, not inside one: it is not subtracted from anything here.</p>`
+      + '</div>')
+    .join('');
   const blocks = cycles.map((cycle) => {
     if (cycle?.kind === 'pka') {
       const result = pkaCycle(cycle);
@@ -943,8 +984,8 @@ function solutionEnergeticsCard(record, parsed, flags) {
     }
     return '';
   }).join('');
-  if (!blocks) return '';
-  return card('Solution energetics', blocks + caveatHtml(flags, 'These cycle results'), 'is-wide');
+  if (!blocks && !importedBlocks) return '';
+  return card('Solution energetics', blocks + importedBlocks + caveatHtml(flags, 'These cycle results'), 'is-wide');
 }
 
 /**
@@ -1443,21 +1484,38 @@ export function resultsPanelHtml(record, options = {}) {
   const gates = isObject(record.gates) ? record.gates : null;
   const flags = flagsFor(record);
   const status = statusOf(record);
+  const imported = importedSummary(record);
   const engineId = engineOf(record, parsed);
-  const engineLabel = engineId
-    ? (Object.hasOwn(ENGINE_LABELS, engineId) ? ENGINE_LABELS[engineId] : engineId)
-    : null;
+  const engineLabel = imported
+    ? imported.program
+    : engineId
+      ? (Object.hasOwn(ENGINE_LABELS, engineId) ? ENGINE_LABELS[engineId] : engineId)
+      : null;
   const overall = gates ? gateResult(gates.overall) : null;
   const title = text(record.title);
 
-  const badges = [
-    `<span class="results-badge is-status-${esc(status)}" data-role="run-status">${esc(status)}</span>`,
-    overall ? `<span class="results-badge is-gates-${overall}" data-role="gates-overall">gates ${esc(overall)}</span>` : '',
-    flags.fixture ? '<span class="results-badge is-fixture" data-role="fixture-badge">FIXTURE</span>' : '',
-    flags.truncated ? '<span class="results-badge is-truncated" data-role="truncated-badge">TRUNCATED</span>' : '',
-  ].filter(Boolean).join('');
+  // Issue 131: an imported record is never given the run treatment. It has no
+  // status, no gates and no fixture flag, because none of those happened here;
+  // the header carries the one badge that says what it is.
+  const badges = imported
+    ? [
+      importedBadgeHtml(record),
+      flags.truncated ? '<span class="results-badge is-truncated" data-role="truncated-badge">TRUNCATED</span>' : '',
+    ].filter(Boolean).join('')
+    : [
+      `<span class="results-badge is-status-${esc(status)}" data-role="run-status">${esc(status)}</span>`,
+      overall ? `<span class="results-badge is-gates-${overall}" data-role="gates-overall">gates ${esc(overall)}</span>` : '',
+      flags.fixture ? '<span class="results-badge is-fixture" data-role="fixture-badge">FIXTURE</span>' : '',
+      flags.truncated ? '<span class="results-badge is-truncated" data-role="truncated-badge">TRUNCATED</span>' : '',
+    ].filter(Boolean).join('');
 
   const banners = [
+    imported
+      ? '<p class="results-banner is-imported" data-role="imported-banner">'
+        + `Imported result — this number was computed by ${esc(imported.program ?? MISSING_TEXT)}`
+        + `${imported.version ? ` ${esc(imported.version)}` : ''}, not by NodeChem Studio. `
+        + 'The source hash identifies the file it came from; it does not certify the calculation.</p>'
+      : '',
     flags.fixture
       ? '<p class="results-banner is-fixture" data-role="fixture-banner">Fixture output — synthetic dry-run data, not a real calculation. Treat every number below as test data.</p>'
       : '',
@@ -1466,30 +1524,35 @@ export function resultsPanelHtml(record, options = {}) {
       : '',
   ].filter(Boolean).join('');
 
-  const cards = [
-    runCard(record, parsed, status, engineLabel),
-    programCard(parsed, flags),
-    energyCard(parsed, flags),
-    saptCard(parsed, flags),
-    thermochemistryCard(parsed, flags),
-    methodsCard(record),
-    frequenciesCard(parsed, flags),
-    excitedStatesCard(parsed, flags, record),
-    orbitalsCard(parsed, flags),
-    reactionPathCard(record, parsed, flags, options),
-    solutionEnergeticsCard(record, parsed, flags),
-    trajectoryCard(parsed, flags),
-    nmrCard(parsed, flags),
-    ramanCard(parsed, flags),
-    vcdCard(parsed, flags),
-    ecdCard(parsed, flags),
-    chargesCard(parsed, flags),
-    sensitivityCard(record),
-    t1Card(parsed, flags),
-    resourcesCard(parsed, flags),
-    errorCard(record, parsed),
-    gatesCard(gates),
-  ].filter(Boolean).join('');
+  const cards = imported
+    ? [
+      importedEnergyCard(imported),
+      solutionEnergeticsCard(record, parsed, flags, options),
+    ].filter(Boolean).join('')
+    : [
+      runCard(record, parsed, status, engineLabel),
+      programCard(parsed, flags),
+      energyCard(parsed, flags),
+      saptCard(parsed, flags),
+      thermochemistryCard(parsed, flags),
+      methodsCard(record),
+      frequenciesCard(parsed, flags),
+      excitedStatesCard(parsed, flags, record),
+      orbitalsCard(parsed, flags),
+      reactionPathCard(record, parsed, flags, options),
+      solutionEnergeticsCard(record, parsed, flags, options),
+      trajectoryCard(parsed, flags),
+      nmrCard(parsed, flags),
+      ramanCard(parsed, flags),
+      vcdCard(parsed, flags),
+      ecdCard(parsed, flags),
+      chargesCard(parsed, flags),
+      sensitivityCard(record),
+      t1Card(parsed, flags),
+      resourcesCard(parsed, flags),
+      errorCard(record, parsed),
+      gatesCard(gates),
+    ].filter(Boolean).join('');
 
   return `<section class="results-panel" data-status="${esc(status)}"`
     + ` data-engine="${engineId ? esc(engineId) : ''}"`
@@ -1498,7 +1561,7 @@ export function resultsPanelHtml(record, options = {}) {
     + '<header class="results-head"><div class="results-head-copy">'
     + `<span class="results-eyebrow">Results · ${esc(engineLabel || MISSING_TEXT)}`
     + `${text(record.id) ? ` · ${esc(record.id)}` : ''}</span>`
-    + `<h3 class="results-title">${title ? esc(title) : 'Untitled run'}</h3>`
+    + `<h3 class="results-title">${title ? esc(title) : (imported ? 'Imported result' : 'Untitled run')}</h3>`
     + `</div><div class="results-badges">${badges}</div></header>`
     + (banners ? `<div class="results-banners">${banners}</div>` : '')
     + `<div class="results-grid">${cards}</div>`
@@ -1943,6 +2006,7 @@ const RESULTS_VIEW_CSS = `
 .results-badge.is-gates-unknown { color: var(--kind-condition); border-color: color-mix(in srgb, var(--kind-condition) 45%, var(--border-subtle)); }
 .results-badge.is-status-cancelled, .results-badge.is-status-unknown { color: var(--text-secondary); }
 .results-badge.is-fixture { color: var(--kind-condition); background: var(--tone-orange-6a); border-color: var(--tone-orange-13a); }
+.results-badge.is-imported { color: var(--tone-blue-126); background: var(--tone-blue-100a); border-color: var(--tone-blue-106a); }
 .results-badge.is-truncated { color: var(--state-review); background: var(--tone-red-6a); border-color: var(--tone-red-13a); }
 .results-banners { display: flex; flex-direction: column; gap: 6px; }
 .results-banner {
@@ -1951,6 +2015,7 @@ const RESULTS_VIEW_CSS = `
 }
 .results-banner.is-fixture { color: var(--tone-yellow-1); background: var(--tone-orange-5a); border-color: var(--tone-orange-12a); }
 .results-banner.is-truncated { color: var(--tone-red-16); background: var(--tone-red-5a); border-color: var(--tone-red-12a); }
+.results-banner.is-imported { color: var(--tone-blue-126); background: var(--tone-blue-100a); border-color: var(--tone-blue-106a); }
 .results-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .results-card {
   min-width: 0; padding: 9px 10px; border: 1px solid var(--border-subtle); border-radius: 9px;
