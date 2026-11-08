@@ -1,0 +1,43 @@
+{
+  "schema_name": "qcschema_output",
+  "schema_version": 2,
+  "molecule": {
+    "schema_name": "qcschema_molecule",
+    "schema_version": 2,
+    "symbols": ["O", "H", "H"],
+    "geometry": [
+      0.0, 0.0, 0.2216648744,
+      0.0, 1.4309006216, -0.8866594977,
+      0.0, -1.4309006216, -0.8866594977
+    ],
+    "molecular_charge": 0,
+    "molecular_multiplicity": 1,
+    "name": "water"
+  },
+  "driver": "energy",
+  "model": {
+    "method": "B3LYP",
+    "basis": "def2-SVP",
+    "dispersion": "GD3BJ"
+  },
+  "keywords": {},
+  "provenance": {
+    "creator": "NodeChem Studio test fixture (synthetic)",
+    "version": "0.0.0-fixture",
+    "routine": "test/fixtures/qcschema/README.md",
+    "engine": "none",
+    "method": "B3LYP",
+    "basis": "def2-SVP",
+    "run_id": "synthetic-water-energy"
+  },
+  "properties": {
+    "return_energy": -76.0
+  },
+  "success": true,
+  "return_result": -76.0,
+  "extras": {
+    "nodechem": {
+      "synthetic": true
+    }
+  }
+}

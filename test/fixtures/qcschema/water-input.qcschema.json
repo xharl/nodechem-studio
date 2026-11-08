@@ -1,0 +1,30 @@
+{
+  "schema_name": "qcschema_input",
+  "schema_version": 2,
+  "molecule": {
+    "schema_name": "qcschema_molecule",
+    "schema_version": 2,
+    "symbols": ["O", "H", "H"],
+    "geometry": [
+      0.0, 0.0, 0.2216648744,
+      0.0, 1.4309006216, -0.8866594977,
+      0.0, -1.4309006216, -0.8866594977
+    ],
+    "molecular_charge": 0,
+    "molecular_multiplicity": 1,
+    "name": "water"
+  },
+  "driver": "energy",
+  "model": {
+    "method": "B3LYP",
+    "basis": "def2-SVP"
+  },
+  "keywords": {
+    "scf_type": "df"
+  },
+  "provenance": {
+    "creator": "NodeChem Studio test fixture (synthetic)",
+    "version": "0.0.0-fixture",
+    "routine": "test/fixtures/qcschema/README.md"
+  }
+}
