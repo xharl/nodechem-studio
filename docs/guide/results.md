@@ -19,8 +19,10 @@ Two questions get answered separately, and that separation is the most important
 - **How do I get every run into a spreadsheet?** → **Export run dataset** in the overflow menu,
   as CSV or JSON. One row per finished run: engine, job type, method, basis, dispersion,
   solvation, status, gate and validity verdicts, energies, imaginary count, SCF cycles, elapsed
-  time, dry-run flag and both hashes. Missing values are empty cells, never zeros; a dry run stays
-  flagged. The JSON envelope carries a schema version and the app version.
+  time, dry-run flag and both hashes. A run that carries wavefunction files fills the HOMO/LUMO
+  cells when the log printed no orbital table, and adds the cube statistics, the charge-sum check,
+  the spin state and a digest per file. Missing values are empty cells, never zeros; a dry run
+  stays flagged. The JSON envelope carries a schema version and the app version.
 
 - **What is in this folder of old logs?** → **Batch import logs…** in the overflow menu. Pick a
   folder and every `.log`/`.out` file is parsed with the same parser a live run uses, then listed
@@ -355,6 +357,19 @@ mass-weighted, and the card says so.
 **Save figure…** writes an SVG of the current view at 3× with no captions or controls: atoms, bonds
 and a scale bar measured with the same camera as the drawing, labelled `1 Å`.
 
+## Wavefunction files
+
+A run can also carry the `.fchk` and `.cube` files a Gaussian job produced. The app reads them
+offline (it never calls `formchk` or `cubegen`): the checkpoint supplies the geometry, orbital
+energies, charges and electron counts, and the cube supplies a scalar field with its extrema and the
+voxel each occurs at. From those it derives a HOMO/LUMO gap, the spin state implied by the
+alpha/beta counts, and a charge-sum check against the total charge.
+
+The numbers are summarised in the run record next to the file digests, and the dataset export gains
+a column group for them. Nothing is drawn from a cube yet — there is no isosurface, no ESP map and
+no QTAIM analysis. [Wavefunctions](wavefunction.md) describes the format, the units rule (a
+negative grid count means Å) and exactly what is deferred.
+
 ## Methods text
 
 Every run can produce a methods paragraph written from the record: engine and version, method,
@@ -421,7 +436,9 @@ analysis. The conflict is reported as a blocking pre-run finding, and the input 
 route, rather than silently dropping one of the two. Run the charges and the orbitals in separate blocks.
 
 A log without the print is reported as **not printed**, never as a zero gap: the card is absent, and the
-dataset export leaves the `homo_ev`, `lumo_ev`, `gap_ev` and `hardness_ev` cells empty.
+dataset export leaves the `homo_ev`, `lumo_ev`, `gap_ev` and `hardness_ev` cells empty. A run that also
+carries a formatted checkpoint is the exception for the first three: the checkpoint holds the same
+converged orbitals, so those cells are filled from it (see [Wavefunctions](wavefunction.md)).
 
 ## Next
 
