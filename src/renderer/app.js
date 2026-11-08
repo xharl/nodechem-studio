@@ -21,6 +21,7 @@ import {
 import { defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
+import * as shared from '../shared/workflowTasks.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
 import {
   MODERN_ROUTE_PRESET,
@@ -2395,28 +2396,11 @@ function selectedCalcNode() {
 }
 
 function gatesForNode(node) {
-  const settings = node.settings;
-  const job = String(settings.jobType || '');
-  const frequency = job.includes('Freq');
-  const expectedImaginary = frequency
-    ? (Number.isInteger(settings.gates.imaginary) ? settings.gates.imaginary : (job === 'Opt=TS' ? 1 : 0))
-    : null;
-  return {
-    expectedImaginary,
-    minMagnitude: settings.gates.minMagnitude ?? 50,
-    requireOptimization: job.startsWith('Opt'),
-    requireFrequency: frequency,
-    requireThermochemistry: Boolean(settings.gates.thermo),
-    requireFinalEnergy: Boolean(settings.gates.finalEnergy),
-  };
+  return shared.gatesForNode(node);
 }
 
 function checkpointNameFor(node) {
-  const engine = engineOrDefault(state.project?.defaults?.engine);
-  return engine.checkpointArtifact({
-    checkpointName: node?.settings?.checkpoint || '',
-    nodeId: safeBase(node?.id || 'task'),
-  });
+  return shared.checkpointNameFor(state.project, node);
 }
 
 /**
@@ -2425,42 +2409,16 @@ function checkpointNameFor(node) {
  * builds the input from, including the labelled demo water fallback.
  */
 function validityForNode(node) {
-  const molecule = moleculeForNode(node);
-  return {
-    settings: {
-      jobType: node.settings.jobType,
-      method: node.settings.method,
-      basis: node.settings.basis,
-      dispersion: node.settings.dispersion,
-      disabledChecks: Array.isArray(node.settings.disabledChecks) ? node.settings.disabledChecks : [],
-    },
-    molecule,
-    upstream: validityUpstreamFor(node),
-  };
+  return shared.validityForNode(state.project, node);
 }
 
 function oldCheckpointFor(node) {
-  const source = checkpointSourceNode(node);
-  return source ? checkpointNameFor(source) : '';
+  return shared.oldCheckpointFor(state.project, node);
 }
 
 /** Issue #25: upstream evidence for the optimisation-convergence check. */
 function validityUpstreamFor(node) {
-  const source = checkpointSourceNode(node);
-  if (!source) return null;
-  return {
-    id: source.id,
-    title: source.title,
-    state: source.state,
-    output: source.output ? source.output.file || source.output : null,
-    settings: {
-      jobType: source.settings?.jobType,
-      method: source.settings?.method,
-      basis: source.settings?.basis,
-      dispersion: source.settings?.dispersion,
-    },
-    parsed: null,
-  };
+  return shared.validityUpstreamFor(state.project, node);
 }
 
 /**
@@ -2469,78 +2427,34 @@ function validityUpstreamFor(node) {
  * builder enforces; warnings stay visible in Validate.
  */
 function blockingValidityFinding(node, settings, molecule) {
-  const engine = engineOrDefault(state.project?.defaults?.engine);
-  const result = runValidityChecks({
-    settings,
-    molecule,
-    parsed: null,
-    upstream: validityUpstreamFor(node),
-  }, { phase: 'pre', engine: engine.id });
-  const blocking = new Set(VALIDITY_CHECKS.filter((check) => check.blocking).map((check) => check.id));
-  return result.findings.find((finding) => finding.status === CHECK_STATUS.FAIL && blocking.has(finding.id)) || null;
+  return shared.blockingValidityFinding(state.project, node, settings, molecule);
 }
 
 /** The block whose checkpoint feeds this one, or null. Mirrors %OldChk. */
 function checkpointSourceNode(node) {
-  const edge = state.project.edges.find((item) => item.to === node.id && item.type === 'checkpoint');
-  return edge ? nodeById(edge.from) : null;
+  return shared.checkpointSourceNode(state.project, node);
 }
 
 /** Issue #15 findings for a node's force-constant choice. */
 function tsForceConstantIssues(node) {
-  if (node?.type !== 'calc') return { errors: [], warnings: [] };
-  return checkTsForceConstants({ settings: node.settings, upstream: checkpointSourceNode(node) });
+  return shared.tsForceConstantIssues(state.project, node);
 }
 
 /** Issue #16 findings for a node's optimization convergence and integration grid. */
 function optConvergenceIssues(node) {
-  if (node?.type !== 'calc') return [];
-  return [
-    ...optConvergenceWarnings(node.settings),
-    ...freqGeometryWarnings({ settings: node.settings, upstream: checkpointSourceNode(node) }),
-  ];
+  return shared.optConvergenceIssues(state.project, node);
 }
 
 function moleculeForNode(node) {
-  const settings = node?.settings && typeof node.settings === 'object' ? node.settings : {};
-  const charge = Number.isInteger(settings.charge) ? settings.charge : state.project.molecule.charge;
-  const multiplicity = Number.isInteger(settings.multiplicity) ? settings.multiplicity : state.project.molecule.multiplicity;
-  const coords = Array.isArray(state.project.molecule.coords) && state.project.molecule.coords.length > 0
-    ? state.project.molecule.coords : DEMO_WATER;
-  return { charge, multiplicity, coords };
+  return shared.moleculeForNode(state.project, node);
 }
 
 function settingsForNode(node) {
-  const engine = engineOrDefault(state.project?.defaults?.engine);
-  // Issue #41: an xTB run must not carry the Gaussian Link 0 fields the
-  // inspector hides. Gaussian keeps its settings byte-for-byte.
-  return runSettingsFor(engine.id, {
-    ...node.settings,
-  });
+  return shared.settingsForNode(state.project, node);
 }
 
 function buildRunInput(node) {
-  const engine = engineOrDefault(state.project?.defaults?.engine);
-  // A ReadFC TS block without a usable checkpoint hand-off has nothing to read.
-  // Force-constant rules are Gaussian route rules; xTB refuses the job type
-  // itself with its own message.
-  const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(node);
-  if (issues.errors.length > 0) throw new Error(issues.errors[0]);
-  const settings = settingsForNode(node);
-  const molecule = moleculeForNode(node);
-  const blocking = blockingValidityFinding(node, settings, molecule);
-  if (blocking) throw new Error(blocking.message);
-  const base = safeBase(node.id);
-  if (engine.id === 'xtb') {
-    return engine.buildInput({ title: node.title, settings, molecule, inputName: `${base}.xyz` });
-  }
-  return engine.buildInput({
-    title: node.title,
-    settings,
-    molecule,
-    inputName: `${base}.gjf`,
-    oldCheckpoint: oldCheckpointFor(node),
-  });
+  return shared.buildRunInput(state.project, node);
 }
 
 /** The engine's own input text, for the inspector preview. */
@@ -2812,53 +2726,11 @@ async function verifyCurrentRun() {
 /* ── Workflow queue ───────────────────────────────────────── */
 
 function checkpointSourceFor(node) {
-  const edge = state.project.edges.find((item) => item.to === node.id && item.type === 'checkpoint');
-  if (!edge) return null;
-  const source = nodeById(edge.from);
-  if (!source) return null;
-  return { nodeId: source.id, checkpoint: checkpointNameFor(source) };
+  return shared.checkpointSourceFor(state.project, node);
 }
 
 function buildWorkflowTasks() {
-  const tasks = state.project.nodes.map((node) => {
-    if (node.type !== 'calc') {
-      return {
-        nodeId: node.id,
-        type: node.type,
-        title: node.title,
-        kind: node.kind || node.type,
-        executable: false,
-        condition: node.type === 'condition'
-          ? { expression: node.condition?.expression || '', unknown: node.condition?.unknown || 'block-both' }
-          : null,
-        loop: node.type === 'loop'
-          ? { maxAttempts: node.loop?.maxAttempts || 3, mode: node.loop?.mode || 'retry', target: node.loop?.target || '' }
-          : null,
-        merge: node.type === 'merge' ? { policy: node.merge?.policy || 'all' } : null,
-      };
-    }
-    const built = buildRunInput(node);
-    return {
-      nodeId: node.id,
-      type: 'calc',
-      title: node.title,
-      kind: node.kind || 'Calc',
-      executable: true,
-      engine: built.engine,
-      argv: built.argv,
-      route: built.route,
-      inputName: built.inputName,
-      outputName: built.outputName,
-      inputText: built.inputText,
-      settings: settingsForNode(node),
-      gates: gatesForNode(node),
-      validity: validityForNode(node),
-      checkpointName: checkpointNameFor(node),
-      checkpointFrom: checkpointSourceFor(node),
-    };
-  });
-  if (!tasks.some((task) => task.executable)) throw new Error('The workflow has no calculation blocks to run.');
-  return tasks;
+  return shared.buildWorkflowTasks(state.project);
 }
 
 function applyQueue(queue) {

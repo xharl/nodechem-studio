@@ -33,6 +33,7 @@ Reference pages:
   gaps it does not cover yet.
 - [Privacy and licensing](privacy-and-licensing.md) — what leaves the machine (nothing) and what
   the licence does and does not grant.
+- [Headless CLI](cli.md) — `ncs validate`, `ncs build-input` and `ncs run`, with its exit codes.
 
 Normative references, for people reading code or writing tooling:
 

@@ -11,14 +11,10 @@ import { isOptJob } from '../shared/tsForceConstants.js';
 
 /**
  * Gaussian Link 0 / resource fields. xTB ignores all of them; a thread count
- * is passed through OMP_NUM_THREADS instead (see `XtbRunner`).
+ * is passed through OMP_NUM_THREADS instead (see `XtbRunner`). The list and the
+ * shaping live in `src/shared/engineSettings.js` so the CLI shares them.
  */
-export const GAUSSIAN_RESOURCE_KEYS = Object.freeze([
-  'memory',
-  'memoryUnit',
-  'nproc',
-  'checkpoint',
-]);
+export { GAUSSIAN_RESOURCE_KEYS, runSettingsFor } from '../shared/engineSettings.js';
 
 export function showsGaussianResources(engineId) {
   return engineId !== 'xtb';
@@ -31,20 +27,6 @@ export function showsCheckpointHandoff(engineId) {
 
 export function showsXtbThreads(engineId) {
   return engineId === 'xtb';
-}
-
-/**
- * Build the settings object sent to a run. Gaussian keeps every key exactly as
- * it was; xTB drops the hidden Gaussian resource fields so the payload cannot
- * imply that memory, cores or a checkpoint file affect the run.
- */
-export function runSettingsFor(engineId, settings = {}) {
-  const source = settings && typeof settings === 'object' ? settings : {};
-  const next = { ...source };
-  if (engineId === 'xtb') {
-    for (const key of GAUSSIAN_RESOURCE_KEYS) delete next[key];
-  }
-  return next;
 }
 
 const GATE_FIELDS = Object.freeze([
