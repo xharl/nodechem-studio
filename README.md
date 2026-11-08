@@ -20,14 +20,19 @@ the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
-**Status: v0.3.0 — early preview.** Released 2026-11-08. The graph, the durable queue, the dry-run
+**Status: v0.4.0 — early preview.** This tree is the 0.4.0 release; the tag names it. The graph, the durable queue, the dry-run
 path, per-block engine selection, undo/redo, project templates, crash-safe drafts, three themes, the
-workflow report, the headless CLI, spectra and thermochemistry, reaction energetics, conformer and
-protomer ensembles, the structure viewer's animation and superposition, and every engine's input
-builder and parser are implemented and covered by tests. `main` also carries the work landed since
-that tag: multi-flow projects with dataset inputs, barrier stages and artifact outputs; fan-out that
-follows a branch; constrained optimisation and QST2/QST3; Eyring kinetics, pKa and redox cycles; CBS
-and benchmark analysis; and a versioned scripting surface with a Python client.
+workflow report, the headless CLI, spectra and thermochemistry, reaction energetics, the structure
+viewer's animation and superposition, and every engine's input builder and parser are implemented
+and covered by tests. Since 0.3.0 a project holds several flows: dataset inputs drive one run per
+record, barrier stages wait for a whole stage, and output blocks write artifacts with a SHA-256
+manifest. Fan-out follows the branch with per-member checkpoints; constrained optimisation and
+QST2/QST3 are first-class; Eyring kinetics, pKa, redox cycles, CBS extrapolation and benchmarks are
+computed from run records; Psi4 and ORCA execute rather than only parse; and a versioned scripting
+surface (run-record schema, `ncs export`, a Python client) sits beside QCSchema, Molden, WFN/WFX,
+JCAMP-DX and ChemDraw CDXML readers. Conformers record where an imported ensemble came from and in
+which unit its energies were reported, and a number another program computed can be recorded as
+`imported` — labelled, never mistaken for a run this app performed.
 What has *not* been proven is a run driven by this app: no licensed Gaussian job and no real xTB job
 has been executed by the project's automated tests. On 2026-11-08 a peer run did execute 25
 app-written cases on Gaussian 16 Rev A.03 (Windows), and those logs now pin the parsers as fixtures;
@@ -80,8 +85,8 @@ driving the same job from the app's own run console remains unverified. Read
 
 | Platform | How |
 | --- | --- |
-| Windows 10/11 x64 | Run `nodechem-studio-0.3.0-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
-| Linux x64 | `chmod +x nodechem-studio-0.3.0-x86_64.AppImage` and run it. Unsigned. |
+| Windows 10/11 x64 | Run `nodechem-studio-0.4.0-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
+| Linux x64 | `chmod +x nodechem-studio-0.4.0-x86_64.AppImage` and run it. Unsigned. |
 | From source | Node 22+, then `npm ci && npm run dev`. |
 
 Neither artifact installs Gaussian or xTB. Both are unsigned; `SHA256SUMS`, a CycloneDX SBOM and a
