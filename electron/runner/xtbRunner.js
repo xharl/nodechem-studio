@@ -81,62 +81,81 @@ export class XtbRunner {
     const args = Array.isArray(argv) && argv.length > 0 ? argv : [];
     if (args.length === 0) throw new Error('xTB run has no arguments.');
 
-    let stdout = '';
-    let stderr = '';
-    let truncated = false;
-    let timeout = null;
+    const runOnce = async (emitOutput) => {
+      let stdout = '';
+      let stderr = '';
+      let truncated = false;
+      let timeout = null;
 
-    const child = spawn(executable, args, {
-      cwd,
-      env,
-      windowsHide: true,
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    this.child = child;
+      const child = spawn(executable, args, {
+        cwd,
+        env,
+        windowsHide: true,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      this.child = child;
 
-    child.stdout.on('data', (chunk) => {
-      const text = chunk.toString('utf8');
-      if (stdout.length < MAX_OUTPUT_BYTES) {
-        stdout += text;
-        if (stdout.length >= MAX_OUTPUT_BYTES) truncated = true;
+      child.stdout.on('data', (chunk) => {
+        const text = chunk.toString('utf8');
+        if (stdout.length < MAX_OUTPUT_BYTES) {
+          stdout += text;
+          if (stdout.length >= MAX_OUTPUT_BYTES) truncated = true;
+        }
+        emitOutput({ stream: 'stdout', text });
+      });
+      child.stderr.on('data', (chunk) => {
+        const text = chunk.toString('utf8');
+        if (stderr.length < MAX_OUTPUT_BYTES) stderr += text;
+        emitOutput({ stream: 'stderr', text });
+      });
+
+      if (timeoutMs > 0) {
+        timeout = setTimeout(() => this.cancel(), timeoutMs);
       }
-      onOutput({ stream: 'stdout', text });
-    });
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString('utf8');
-      if (stderr.length < MAX_OUTPUT_BYTES) stderr += text;
-      onOutput({ stream: 'stderr', text });
-    });
 
-    if (timeoutMs > 0) {
-      timeout = setTimeout(() => this.cancel(), timeoutMs);
-    }
+      const exit = await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', (code, signal) => resolve({ code, signal }));
+      }).finally(() => {
+        if (timeout) clearTimeout(timeout);
+        this.child = null;
+      });
 
-    const exit = await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (code, signal) => resolve({ code, signal }));
-    }).finally(() => {
-      if (timeout) clearTimeout(timeout);
-      this.child = null;
-    });
+      // stderr is merged into the artifact because xTB reports fatal errors there.
+      const outputText = stderr.trim() ? `${stdout}\n${stderr}` : stdout;
+      await fsp.writeFile(path.join(cwd, outputName), outputText, 'utf8');
+      const stat = await fsp.stat(path.join(cwd, outputName)).catch(() => null);
 
-    // stderr is merged into the artifact because xTB reports fatal errors there.
-    const outputText = stderr.trim() ? `${stdout}\n${stderr}` : stdout;
-    await fsp.writeFile(path.join(cwd, outputName), outputText, 'utf8');
-    const stat = await fsp.stat(path.join(cwd, outputName)).catch(() => null);
-
-    return {
-      exitCode: exit.code,
-      signal: exit.signal,
-      cancelled: this.cancelled,
-      outputText,
-      outputName,
-      outputSource: 'stdout',
-      truncated,
-      outputBytes: stat ? { size: stat.size, bytesRead: stat.size, truncated, windows: [] } : null,
-      parameterPath,
+      return {
+        exitCode: exit.code,
+        signal: exit.signal,
+        cancelled: this.cancelled,
+        outputText,
+        outputName,
+        outputSource: 'stdout',
+        truncated,
+        outputBytes: stat ? { size: stat.size, bytesRead: stat.size, truncated, windows: [] } : null,
+        parameterPath,
+      };
     };
+
+    let result = await runOnce(onOutput);
+    // xTB 6.8.0 emits "Could not read topology file" on the first GFN-FF
+    // invocation in a fresh run directory after it has already written
+    // gfnff_topo. A second invocation reads that topology and is clean. Keep
+    // this as a setup pass so the scientific output is the clean second run;
+    // a residual runtime exception is still classified as an error by the
+    // parser, so this cannot hide a real failure.
+    if (
+      args.includes('--gfnff')
+      && !result.cancelled
+      && /gfnff_setup:\s*Could not read topology file/i.test(result.outputText)
+      && fs.existsSync(path.join(cwd, 'gfnff_topo'))
+    ) {
+      result = await runOnce(() => {});
+    }
+    return result;
   }
 
   cancel() {

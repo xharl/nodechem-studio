@@ -16,7 +16,8 @@
  *     terminationCode: 'normal' | 'error' | 'none',
  *     termination: <engine's own phrase, for display only>,
  *     complete: boolean,                          // false when the parse is partial
- *     scf: { status: 'converged'|'failed'|'unknown', energyHartree, cycles, method },
+ *     scf: { status: 'converged'|'failed'|'unknown', energyHartree, cycles, method,
+ *            applicable: boolean },
  *     optimization: { completed, stationary, cycles },
  *     frequencies: { count, imaginaryCount, imaginaryValues, minImaginary },
  *     thermochemistry: { freeEnergyHartree, enthalpyHartree, zpeHartree, entropyTreatment },
@@ -106,6 +107,8 @@ export function canonicalResult({
       energyHartree: finiteOrNull(scf.energyHartree),
       cycles: integerOrNull(scf.cycles),
       method: scf.method ? String(scf.method) : null,
+      /** False for a force-field result that has a final energy but no SCF loop. */
+      applicable: scf.applicable !== false,
     },
     optimization: {
       completed: Boolean(optimization.completed),

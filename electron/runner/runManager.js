@@ -277,6 +277,8 @@ export class RunManager {
     const parsed = engine.parse(outputText, {
       truncated: Boolean(context.outputMeta?.truncated),
       byteRange: context.outputMeta?.outputBytes || null,
+      argv: Array.isArray(payload.argv) ? payload.argv.map(String) : null,
+      route: payload.route || null,
     });
     // Issue #25: the validity checks run on the parsed records, never on the
     // exit code. They are reported next to the gates (gates.validity) and do

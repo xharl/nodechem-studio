@@ -37,6 +37,7 @@ const ENERGY_SOURCE_LABELS = Object.freeze({
   scf: 'SCF',
   'post-hf': 'post-HF correlation',
   scc: 'xTB SCC',
+  'force-field': 'GFN-FF energy',
 });
 
 const HARTREE_DIGITS = 10;
@@ -261,12 +262,23 @@ function energyCard(parsed, flags) {
   const sourceLabel = source
     ? (Object.hasOwn(ENERGY_SOURCE_LABELS, source) ? ENERGY_SOURCE_LABELS[source] : source)
     : null;
-  return card('Energy', kv([
+  const scfApplicable = scf.applicable !== false;
+  const rows = [
     fieldValue('Final energy', hartreeText(finalEnergy.hartree) ?? missingHtml(), 'final-energy'),
     fieldValue('Source', sourceLabel ? esc(sourceLabel) : missingHtml(), 'final-energy-source'),
-    fieldValue('SCF energy', hartreeText(scf.energyHartree) ?? missingHtml(), 'scf-energy'),
-    fieldValue('SCF status', safeText(scf.status), 'scf-status'),
-  ]) + caveatHtml(flags, 'The final energy'));
+  ];
+  if (scfApplicable) {
+    rows.push(
+      fieldValue('SCF energy', hartreeText(scf.energyHartree) ?? missingHtml(), 'scf-energy'),
+      fieldValue('SCF status', safeText(scf.status), 'scf-status'),
+    );
+  } else {
+    rows.push(
+      fieldValue('SCF energy', missingHtml(), 'scf-energy'),
+      fieldValue('SCF status', 'not applicable (force-field result)', 'scf-status'),
+    );
+  }
+  return card('Energy', kv(rows) + caveatHtml(flags, 'The final energy'));
 }
 
 function thermochemistryCard(parsed, flags) {

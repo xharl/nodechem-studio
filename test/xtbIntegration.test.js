@@ -52,7 +52,7 @@ async function runBuilt(built) {
     cwd: dir,
     outputName: built.outputName,
   });
-  return { dir, result, parsed: parseXtbOutput(result.outputText) };
+  return { dir, result, parsed: parseXtbOutput(result.outputText, { argv: built.argv }) };
 }
 
 describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
@@ -112,6 +112,24 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     await fsp.rm(dir, { recursive: true, force: true });
   }, 120_000);
 
+  it('runs GFN-FF Opt Freq without a topology runtime exception', async () => {
+    const built = buildXtbInput({
+      title: 'water gfnff freq',
+      settings: { jobType: 'Opt Freq', xtbMethod: 'gfnff', xtbOptLevel: 'tight' },
+      molecule: { charge: 0, multiplicity: 1, coords: WATER },
+      inputName: 'water-ff.xyz',
+    });
+    const { dir, result, parsed } = await runBuilt(built);
+
+    expect(result.exitCode).toBe(0);
+    expect(parsed.status).toBe('completed');
+    expect(parsed.extras.runtimeException).not.toBe(true);
+    expect(parsed.finalEnergy.source).toBe('force-field');
+    expect(parsed.scf.applicable).toBe(false);
+    expect(parsed.frequencies.count).toBe(3);
+    await fsp.rm(dir, { recursive: true, force: true });
+  }, 120_000);
+
   it('classifies a missing input file as a failure with exit 128', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gns-xtb-'));
     const runner = new XtbRunner();
@@ -134,6 +152,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
       title: 'water opt',
       engine: 'xtb',
       argv: built.argv,
+      route: built.route,
       inputText: built.inputText,
       inputName: built.inputName,
       outputName: built.outputName,
@@ -149,6 +168,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     expect(record.exitCode).toBe(0);
     expect(record.parsed.engine).toBe('xtb');
     expect(record.parsed.terminationCode).toBe('normal');
+    expect(record.parsed.route).toBe(built.route);
     expect(record.parsed.optimization.completed).toBe(true);
     expect(record.parsed.finalEnergy.hartree).not.toBeNull();
     expect(record.gates.overall).toBe('pass');

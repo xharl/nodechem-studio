@@ -393,35 +393,46 @@ function lastFrequencyBlock(lines) {
   return values;
 }
 
+function methodIdFor(label) {
+  const token = String(label || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (token.includes('gfnff')) return 'gfnff';
+  const match = /gfn([012])/.exec(token);
+  return match ? `gfn${match[1]}` : null;
+}
+
 /**
  * Parse one xTB output text.
  *
  * `truncated` mirrors the Gaussian parser: a partial read can never be
- * reported as complete.
+ * reported as complete. `argv` and `route` are the invocation that produced
+ * the text; GFN-FF has no Hamiltonian line in its summary, so the argv is the
+ * authoritative signal that the result is a force-field energy rather than an
+ * SCC result.
  */
-export function parseXtbOutput(text, { truncated = false } = {}) {
+export function parseXtbOutput(text, { truncated = false, argv = null, route = null } = {}) {
   if (typeof text !== 'string') throw new TypeError('xTB output must be text.');
   const lines = text.split(/\r\n|\n|\r/);
 
   const normalTermination = /^normal termination of xtb\b/im.test(text);
   const abnormalTermination = /^abnormal termination of xtb\b/im.test(text);
   const fatalError = /Program stopped due to fatal error|^\s*-1-\s*Error:/im.test(text);
+  const runtimeException = /\[WARNING\]\s*Runtime exception occurred|gfnff_setup:\s*Could not read topology file/i.test(text);
+  const runtimeExceptionDetail = runtimeException
+    ? (/-1-\s*gfnff_setup:[^\r\n]*/i.exec(text)?.[0] || 'xTB runtime exception')
+    : null;
   // A plain single point never prints "normal termination of xtb"; it ends with
   // the timing footer. Only optimisations and frequency runs emit the marker.
   const completedFooter = /\*\s*finished run on\s+\d{4}\//i.test(text);
 
-  const terminationCode = normalTermination
-    ? TERMINATION.NORMAL
-    : (abnormalTermination || fatalError) ? TERMINATION.ERROR
+  const terminationCode = (runtimeException || abnormalTermination || fatalError)
+    ? TERMINATION.ERROR
+    : normalTermination ? TERMINATION.NORMAL
       : completedFooter ? TERMINATION.NORMAL : TERMINATION.NONE;
 
   const versionMatch = /xtb version\s+([\w.\-]+)\s*\(([0-9a-f]+)\)/i.exec(text);
 
   const convergenceIterations = firstInteger(text, String.raw`convergence criteria satisfied after\s+(\d+)\s+iterations`);
   const scfFailed = /SCC\s+did\s+not\s+converge|SCC convergence failed|SCF failed/i.test(text);
-  const scfStatus = scfFailed ? 'failed'
-    : (convergenceIterations !== null || terminationCode === TERMINATION.NORMAL) ? 'converged'
-      : 'unknown';
 
   const optCycles = firstInteger(text, String.raw`GEOMETRY OPTIMIZATION CONVERGED AFTER\s+(\d+)\s+ITERATIONS`);
   const optimizationCompleted = optCycles !== null;
@@ -451,26 +462,35 @@ export function parseXtbOutput(text, { truncated = false } = {}) {
   const gradientNorm = lastNumber(text, String.raw`gradient norm\s+(${NUMBER})\s+Eh`);
   // The summary table reports the Hamiltonian explicitly: `:  Hamiltonian  GFN2-xTB  :`
   const hamiltonian = /^\s*:\s*Hamiltonian\s+(\S+)\s*:/im.exec(text)?.[1] || null;
+  const methodId = hamiltonianFromArgv(argv) || methodIdFor(hamiltonian);
+  const forceField = methodId === 'gfnff';
+  const scfStatus = runtimeException ? 'failed'
+    : forceField ? 'unknown'
+      : scfFailed ? 'failed'
+        : (convergenceIterations !== null || terminationCode === TERMINATION.NORMAL) ? 'converged'
+          : 'unknown';
 
-  return canonicalResult({
+  const result = canonicalResult({
     engine: XTB_ENGINE_ID,
     program: {
       name: 'xtb',
       version: versionMatch?.[1] || null,
       revision: versionMatch?.[2] || null,
     },
-    termination: normalTermination
-      ? 'normal termination of xtb'
-      : abnormalTermination ? 'abnormal termination of xtb'
-        : completedFooter ? 'completed (timing footer, no explicit marker)'
-          : 'No termination marker',
+    termination: runtimeException
+      ? 'normal termination of xtb (runtime exception)'
+      : normalTermination ? 'normal termination of xtb'
+        : abnormalTermination ? 'abnormal termination of xtb'
+          : completedFooter ? 'completed (timing footer, no explicit marker)'
+            : 'No termination marker',
     terminationCode,
     complete: !truncated,
     scf: {
       status: scfStatus,
-      energyHartree: totalEnergy,
-      cycles: convergenceIterations,
-      method: hamiltonian,
+      energyHartree: forceField ? null : totalEnergy,
+      cycles: forceField ? null : convergenceIterations,
+      method: hamiltonian || (forceField ? 'GFN-FF' : null),
+      applicable: !forceField,
     },
     optimization: {
       completed: optimizationCompleted,
@@ -493,15 +513,19 @@ export function parseXtbOutput(text, { truncated = false } = {}) {
     },
     finalEnergy: {
       hartree: totalEnergy,
-      source: totalEnergy !== null ? 'scc' : null,
+      source: totalEnergy !== null ? (forceField ? 'force-field' : 'scc') : null,
     },
     extras: {
       homoLumoGapEv: homoLumoGap,
       gradientNorm,
       optimisedGeometryFile: /optimized geometry written to:\s*(\S+)/i.exec(text)?.[1] || null,
+      runtimeException,
+      runtimeExceptionDetail,
     },
     lineCount: lines.length,
   });
+  if (route !== null && String(route).trim() !== '') result.route = String(route).trim();
+  return result;
 }
 
 /**
@@ -590,8 +614,13 @@ export function classifyXtbTermination(text, exitCode) {
   const normal = /^normal termination of xtb\b/im.test(body);
   const abnormal = /^abnormal termination of xtb\b/im.test(body);
   const fatal = /Program stopped due to fatal error|^\s*-1-\s*Error:/im.test(body);
+  const runtime = /\[WARNING\]\s*Runtime exception occurred|gfnff_setup:\s*Could not read topology file/i.test(body);
   const completedFooter = /\*\s*finished run on\s+\d{4}\//i.test(body);
 
+  if (runtime) {
+    const detail = /-1-\s*gfnff_setup:[^\r\n]*/i.exec(body)?.[0] || 'xTB runtime exception';
+    return { code: TERMINATION.ERROR, reason: detail };
+  }
   if (normal) return { code: TERMINATION.NORMAL, reason: 'normal termination of xtb' };
   if (abnormal || fatal) {
     return {

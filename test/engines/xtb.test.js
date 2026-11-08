@@ -13,6 +13,7 @@ import {
   xtbMethodBlock,
 } from '../../src/shared/engines/xtb.js';
 import { terminationCodeOf, canonicalResult } from '../../src/shared/engines/canonical.js';
+import { evaluateGates } from '../../src/shared/gaussianOutput.js';
 import { ENGINES, engineFor, engineOrDefault, isEngineId } from '../../src/shared/engines/index.js';
 
 const fixture = (name) => fs.readFileSync(path.join(import.meta.dirname, '..', 'fixtures', 'xtb', name), 'utf8');
@@ -269,6 +270,41 @@ describe('xTB output parser — real 6.8.0 output', () => {
     expect(parsed.frequencies.minImaginary).toBeLessThan(0);
     expect(parsed.thermochemistry.freeEnergyHartree).not.toBeNull();
   });
+
+  it('labels a GFN-FF energy as a force-field result, not an SCC result', () => {
+    const parsed = parseXtbOutput(fixture('water-gfnff.out'), {
+      argv: ['water.xyz', '--gfnff', '--ohess', 'tight'],
+      route: 'GFN-FF Opt Freq',
+    });
+    expect(parsed.status).toBe('completed');
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-0.327655963434, 9);
+    expect(parsed.finalEnergy.source).toBe('force-field');
+    expect(parsed.scf.applicable).toBe(false);
+    expect(parsed.scf.status).toBe('unknown');
+    expect(parsed.scf.energyHartree).toBeNull();
+    expect(parsed.scf.cycles).toBeNull();
+    expect(parsed.route).toBe('GFN-FF Opt Freq');
+
+    const gates = evaluateGates(parsed, { requireFrequency: true, requireThermochemistry: true, requireFinalEnergy: true });
+    const scfGate = gates.gates.find((gate) => gate.name === 'SCF record');
+    expect(scfGate.result).toBe('pass');
+    expect(scfGate.detail).toMatch(/not applicable/i);
+  });
+
+  it('marks an xTB runtime exception as an error even when xTB also prints normal termination', () => {
+    const parsed = parseXtbOutput(fixture('water-gfnff-runtime-exception.out'), {
+      argv: ['water.xyz', '--gfnff', '--ohess', 'tight'],
+    });
+    expect(parsed.status).toBe('error');
+    expect(parsed.terminationCode).toBe('error');
+    expect(parsed.termination).toMatch(/runtime exception/i);
+    expect(parsed.extras.runtimeException).toBe(true);
+    expect(parsed.finalEnergy.source).toBe('force-field');
+
+    const gates = evaluateGates(parsed, { requireFrequency: true, requireThermochemistry: true, requireFinalEnergy: true });
+    expect(gates.overall).toBe('fail');
+    expect(gates.gates.find((gate) => gate.name === 'Normal termination').result).toBe('fail');
+  });
 });
 
 describe('xTB termination classifier', () => {
@@ -284,6 +320,12 @@ describe('xTB termination classifier', () => {
 
   it('treats an unexplained non-zero exit as an error', () => {
     expect(classifyXtbTermination('nothing useful', 128).code).toBe('error');
+  });
+
+  it('treats a runtime exception as an error even when xTB prints normal termination', () => {
+    const classified = classifyXtbTermination(fixture('water-gfnff-runtime-exception.out'), 0);
+    expect(classified.code).toBe('error');
+    expect(classified.reason).toMatch(/runtime exception|topology/i);
   });
 
   it('leaves an empty run unknown rather than guessing', () => {
