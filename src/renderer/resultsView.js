@@ -27,7 +27,8 @@ import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
 import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
 import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
-import { overlayPolyline, parseMeasuredSpectrum, scaleToSpectrum } from '../shared/overlay.js';
+import { overlayPolyline, scaleToSpectrum } from '../shared/overlay.js';
+import { importSpectrumText, sameAxisUnits } from '../shared/spectrumImport.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 
 const MISSING_TEXT = 'not reported';
@@ -1028,7 +1029,7 @@ function ramanCard(parsed, flags) {
     + 'scattering cross-section, which would need the excitation wavelength and a population factor.</p>'
     + '<div class="nmr-controls">'
     + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-raman-fwhm value="12"></label>'
-    + '<label>Measured CSV <input type="file" accept=".csv,.txt,text/csv,text/plain" data-raman-overlay></label>'
+    + '<label>Measured trace <input type="file" accept=".csv,.txt,.jdx,.dx,text/csv,text/plain" data-raman-overlay></label>'
     + '</div>'
     + `<div data-field="raman-figure">${ramanSectionHtml(modes, { fwhmCm: 12 })}</div>`
     + caveatHtml(flags, 'These activities');
@@ -1036,7 +1037,7 @@ function ramanCard(parsed, flags) {
 }
 
 /** The figure and the per-mode table, recomputed when a control changes. */
-export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '' } = {}) {
+export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '', overlayNote = '' } = {}) {
   const spectrum = ramanSpectrum(modes, { fwhmCm });
   if (!spectrum) return '<p class="results-missing">No Raman activity was printed, so there is nothing to plot.</p>';
   const simulated = ramanPolyline(spectrum);
@@ -1052,6 +1053,7 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
     + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(modes.length)} modes · `
     + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
     + (scaled ? ` · measured series “${esc(overlayName || 'imported')}” scaled by ×${esc(scaled.scale.toPrecision(4))} to match the strongest simulated peak` : '')
+    + (overlayNote ? `<br>${esc(overlayNote)}` : '')
     + '</figcaption>'
     + '</figure>';
 
@@ -1627,6 +1629,7 @@ export function installResultsView({
    */
   let ramanMeasured = null;
   let ramanOverlayName = '';
+  let ramanOverlayNote = '';
   const rerenderEcd = () => {
     const parsed = currentRecord?.parsed;
     const holder = container.querySelector('[data-field="ecd-figure"]');
@@ -1642,7 +1645,7 @@ export function installResultsView({
     if (!modes || !holder) return;
     const raw = container.querySelector('[data-raman-fwhm]')?.value ?? '';
     const fwhmCm = Number(raw) > 0 ? Number(raw) : 12;
-    holder.innerHTML = ramanSectionHtml(modes, { fwhmCm, measured: ramanMeasured, overlayName: ramanOverlayName });
+    holder.innerHTML = ramanSectionHtml(modes, { fwhmCm, measured: ramanMeasured, overlayName: ramanOverlayName, overlayNote: ramanOverlayNote });
   };
 
   /**
@@ -1735,13 +1738,32 @@ export function installResultsView({
       const file = target.files[0];
       const reader = new FileReader();
       reader.onload = () => {
-        ramanMeasured = parseMeasuredSpectrum(String(reader.result || ''));
-        ramanOverlayName = file.name;
-        rerenderRaman();
-        if (!ramanMeasured) {
-          const holder = container.querySelector('[data-field="raman-figure"]');
-          if (holder) holder.insertAdjacentHTML('afterbegin', '<p class="results-missing">That file has no two-column numeric rows, so nothing was overlayed.</p>');
+        // A JCAMP-DX file and a two-column dump arrive through the same input;
+        // importSpectrumText decides which it is and the reader's refusals are
+        // printed verbatim rather than collapsed into "nothing was overlayed".
+        const text = String(reader.result || '');
+        ramanMeasured = null;
+        ramanOverlayName = '';
+        ramanOverlayNote = '';
+        try {
+          const imported = importSpectrumText(text);
+          if (!imported) {
+            ramanOverlayNote = 'That file holds no two-column numeric rows and no JCAMP-DX data section, so nothing was overlayed.';
+          } else if (imported.format === 'jcamp-dx' && sameAxisUnits(imported.xUnits, '1/CM') === false) {
+            ramanOverlayNote = `That JCAMP-DX file declares ${imported.xUnits} on its x axis, not 1/CM, so it is not drawn against a vibrational spectrum.`;
+          } else {
+            ramanMeasured = imported;
+            ramanOverlayName = file.name;
+            if (imported.format === 'jcamp-dx') {
+              ramanOverlayNote = imported.xUnitsUnknown
+                ? `Imported ${imported.npoints} points from ${imported.axis}; the file declares no ##XUNITS, so its axis is assumed to match the simulated one.`
+                : `Imported ${imported.npoints} points from ${imported.axis} in ${imported.xUnits}.`;
+            }
+          }
+        } catch (error) {
+          ramanOverlayNote = error.message;
         }
+        rerenderRaman();
       };
       reader.readAsText(file);
     }

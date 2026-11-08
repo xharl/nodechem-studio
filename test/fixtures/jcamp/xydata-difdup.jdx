@@ -1,0 +1,15 @@
+##TITLE= synthetic X++(Y..Y) with DIF and DUP compression
+##JCAMP-DX=5.00
+##DATA TYPE=INFRARED SPECTRUM
+##ORIGIN=synthetic fixture for the JCAMP reader tests
+##XUNITS=1/CM
+##YUNITS=ARBITRARY UNITS
+##XFACTOR=1
+##YFACTOR=1
+##NPOINTS=10
+##FIRSTX=1600
+##LASTX=1609
+##XYDATA= (X++(Y..Y))
+1600 A000J000JJJ
+1605 %U ?7 ?-10
+##END=
