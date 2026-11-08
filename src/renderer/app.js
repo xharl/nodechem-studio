@@ -21,7 +21,35 @@ import {
   draftIsRestorable,
   normalizeDraft,
 } from '../shared/draft.js';
-import { JOB_TYPES as SHARED_JOB_TYPES, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import {
+  attachGraphAliases,
+  activeFlow,
+  activeFlowId,
+  datasetById,
+  enabledRecords,
+  flowById,
+  flowsOf,
+  hydrateProject,
+  recordsOf,
+  setFlowGraph,
+} from '../shared/flows.js';
+import { parseDataset } from '../shared/datasetImport.js';
+import {
+  duplicateFlowGraph,
+  flowIdFromTitle,
+  flowTabModels,
+  nextFlowTitle,
+  slugifyGraphId,
+  uniqueGraphId,
+} from './flowTabs.js';
+import { groupTasksByRecord, recordSummaryLabel } from './recordSummary.js';
+import {
+  OUTPUT_KIND_LABELS,
+  defaultOutputPath,
+  outputOf,
+  outputPathError,
+} from './outputFields.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
   formatPopulation,
@@ -179,6 +207,7 @@ const project = {
     memoryUnit: 'GB',
     nproc: '4',
   },
+  runner: { maxParallel: 1 },
   nodes: [
     calcNode('r-opt', 'Opt', 'Reactant optimization', 10, 40, {
       state: 'passed',
@@ -254,6 +283,13 @@ const project = {
   ],
 };
 
+// Schema v2 (RFC 0001): the seed graph lives in a flow. `nodes`/`edges` stay
+// as the active flow's aliases, which is what every existing reader uses.
+hydrateProject(project);
+// A dataset is the only source of record scopes; an empty list keeps a seed
+// project behaving exactly like a v1 one.
+if (!Array.isArray(project.datasets)) project.datasets = [];
+
 const state = {
   project,
   selected: { type: 'project', id: null },
@@ -267,6 +303,9 @@ const state = {
   drag: null,
   pan: null,
   toastTimer: null,
+  renamingFlowId: null,
+  confirmDeleteFlowId: null,
+  datasetImportNodeId: null,
   statusMessage: 'Preview project · choose a calculation block to run it locally',
   projectPath: null,
   savedSnapshot: null,
@@ -357,6 +396,16 @@ function gateChips(node) {
   return parts.length ? parts : ['standard gates'];
 }
 
+function datasetForInputNode(node) {
+  return node?.type === 'input' ? datasetById(state.project, node.input?.datasetId) : null;
+}
+
+function inputRecordCounts(node) {
+  const dataset = datasetForInputNode(node);
+  if (!dataset) return { total: 0, enabled: 0 };
+  return { total: recordsOf(dataset).length, enabled: enabledRecords(dataset).length };
+}
+
 function nodeDetail(node) {
   if (node.type === 'calc') {
     // The card must describe the engine the project actually runs.
@@ -375,7 +424,16 @@ function nodeDetail(node) {
   }
   if (node.type === 'loop') return `max ${node.loop.maxAttempts} attempts · ${nodeById(node.loop.target)?.title || 'no target'}`;
   if (node.type === 'merge') return node.merge.policy === 'any' ? 'wait for any input' : 'wait for all inputs';
-  if (node.type === 'output') return `${node.output.bundle} · manifest`;
+  if (node.type === 'input') {
+    const dataset = datasetForInputNode(node);
+    if (!dataset) return 'no dataset bound · import a file';
+    const counts = inputRecordCounts(node);
+    return `${dataset.title} · ${counts.enabled} of ${counts.total} enabled`;
+  }
+  if (node.type === 'output') {
+    const output = outputOf(node);
+    return `${output.kind.toUpperCase()} · ${output.path}`;
+  }
   if (node.type === 'note') return node.note.text;
   return '';
 }
@@ -395,7 +453,21 @@ function nodeFoot(node) {
   }
   if (node.type === 'loop') return { left: `until ${node.loop.until}`, right: `×${node.loop.maxAttempts}` };
   if (node.type === 'merge') return { left: `policy: ${node.merge.policy}`, right: 'join' };
-  if (node.type === 'output') return { left: 'bundle + manifest', right: 'zip' };
+  if (node.type === 'input') {
+    const dataset = datasetForInputNode(node);
+    const counts = inputRecordCounts(node);
+    return {
+      left: dataset ? `${counts.enabled}/${counts.total} enabled` : 'not bound',
+      right: dataset?.source?.format ? String(dataset.source.format).toUpperCase() : 'no dataset',
+    };
+  }
+  if (node.type === 'output') {
+    const output = outputOf(node);
+    return {
+      left: output.include === 'record' ? 'one file per record' : 'one file per flow',
+      right: output.manifest ? 'manifest' : 'no manifest',
+    };
+  }
   if (node.type === 'note') return { left: 'annotation', right: '' };
   return { left: '', right: '' };
 }
@@ -405,6 +477,7 @@ function kindCode(node) {
   if (node.type === 'conformers') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
+  if (node.type === 'input') return 'IN';
   if (node.type === 'output') return 'OUT';
   if (node.type === 'note') return '✎';
   return node.kind;
@@ -415,6 +488,7 @@ function kindLabel(node) {
   if (node.type === 'conformers') return 'Structure';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
+  if (node.type === 'input') return 'Data';
   if (node.type === 'output') return 'Data';
   if (node.type === 'note') return 'Note';
   return 'Calculation';
@@ -444,6 +518,9 @@ function portHtml(node) {
     return `<span class="port left" aria-hidden="true"></span><span class="port bottom" data-from="${node.id}" data-port="bottom" tabindex="0" role="button" aria-label="Connect loop back"></span><span class="loop-tag">↻</span>`;
   }
   if (node.type === 'output') return '<span class="port left" aria-hidden="true"></span>';
+  if (node.type === 'input') {
+    return `<span class="port right" data-from="${node.id}" data-port="right" tabindex="0" role="button" aria-label="Connect dataset output"></span>`;
+  }
   if (node.type === 'merge') {
     return `<span class="port left" aria-hidden="true"></span><span class="port right" data-from="${node.id}" data-port="right" tabindex="0" role="button" aria-label="Connect output"></span>`;
   }
@@ -628,11 +705,171 @@ function renderPreview() {
   path.setAttribute('d', `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`);
 }
 
+/* ── Flow tabs ────────────────────────────────────────────── */
+
+function renderFlowTabs() {
+  const el = $('#flow-tabs');
+  if (!el) return;
+  const tabs = flowTabModels(state.project);
+  const tabHtml = tabs.map((tab) => {
+    if (state.renamingFlowId === tab.id) {
+      return `<span class="flow-tab is-editing"><input class="flow-rename" data-flow-rename="${esc(tab.id)}" value="${esc(tab.title)}" aria-label="Flow title" spellcheck="false" autocomplete="off"></span>`;
+    }
+    const meta = tab.recordCount > 0 ? `${tab.recordCount} rec` : `${tab.nodeCount} blk`;
+    const title = `${tab.title} · ${countLabel(tab.nodeCount, 'block')}`
+      + `${tab.recordCount > 0 ? ` · ${countLabel(tab.recordCount, 'record')}` : ''}`;
+    return `<button type="button" role="tab" class="flow-tab${tab.active ? ' is-active' : ''}" data-flow-id="${esc(tab.id)}" aria-selected="${tab.active}" title="${esc(title)}">
+      <span class="flow-tab-title">${esc(tab.title)}</span><span class="flow-tab-meta">${esc(meta)}</span>
+    </button>`;
+  }).join('');
+  const pendingDelete = state.confirmDeleteFlowId ? flowById(state.project, state.confirmDeleteFlowId) : null;
+  const actions = pendingDelete
+    ? `<span class="flow-confirm">Delete “${esc(pendingDelete.title || pendingDelete.id)}”?
+        <button type="button" class="tool danger" data-action="confirm-delete-flow">Delete</button>
+        <button type="button" class="tool" data-action="cancel-delete-flow">Cancel</button>
+      </span>`
+    : `<span class="flow-actions">
+        <button type="button" class="tool" data-action="duplicate-flow" title="Duplicate the active flow without its runs">Duplicate</button>
+        <button type="button" class="tool" data-action="rename-flow" title="Rename the active flow">Rename</button>
+        <button type="button" class="tool" data-action="delete-flow" title="Delete the active flow">Delete</button>
+      </span>`;
+  el.innerHTML = `${tabHtml}
+    <button type="button" class="flow-add" data-action="add-flow" title="Add a flow" aria-label="Add a flow">+</button>
+    <span class="flow-spacer"></span>${actions}`;
+  if (state.renamingFlowId) {
+    const input = $('.flow-rename', el);
+    input?.focus();
+    input?.select();
+  }
+}
+
+function switchFlow(id) {
+  const wanted = String(id || '');
+  if (!wanted || activeFlowId(state.project) === wanted) return;
+  if (!flowById(state.project, wanted)) return;
+  state.project.activeFlowId = wanted;
+  attachGraphAliases(state.project);
+  state.selected = { type: 'project', id: null };
+  state.renamingFlowId = null;
+  state.confirmDeleteFlowId = null;
+  renderGraph();
+  renderInspector();
+}
+
+function addFlow() {
+  if (!Array.isArray(state.project.flows)) state.project.flows = [];
+  const flows = state.project.flows;
+  if (flows.length >= LIMITS.flows) {
+    toast(`A project can hold at most ${LIMITS.flows} flows.`);
+    return;
+  }
+  const title = nextFlowTitle(flows);
+  const id = flowIdFromTitle(title, flows.map((flow) => flow.id));
+  flows.push({ id, title, nodes: [], edges: [] });
+  state.project.activeFlowId = id;
+  attachGraphAliases(state.project);
+  state.selected = { type: 'project', id: null };
+  state.renamingFlowId = null;
+  state.confirmDeleteFlowId = null;
+  renderGraph();
+  renderInspector();
+  toast(`“${title}” added. Add blocks to build its graph.`);
+}
+
+function duplicateActiveFlow() {
+  const flow = activeFlow(state.project);
+  if (!flow) return;
+  if (state.project.flows.length >= LIMITS.flows) {
+    toast(`A project can hold at most ${LIMITS.flows} flows.`);
+    return;
+  }
+  const title = `${flow.title || flow.id} copy`;
+  const id = flowIdFromTitle(title, state.project.flows.map((entry) => entry.id));
+  const copy = duplicateFlowGraph(flow, { id, title });
+  const index = state.project.flows.indexOf(flow);
+  state.project.flows.splice(index + 1, 0, copy);
+  state.project.activeFlowId = id;
+  attachGraphAliases(state.project);
+  state.selected = { type: 'project', id: null };
+  state.renamingFlowId = null;
+  state.confirmDeleteFlowId = null;
+  renderGraph();
+  renderInspector();
+  toast(`“${title}” duplicated · outputs and run states were cleared.`);
+}
+
+function startFlowRename() {
+  const flow = activeFlow(state.project);
+  if (!flow) return;
+  state.renamingFlowId = flow.id;
+  state.confirmDeleteFlowId = null;
+  renderFlowTabs();
+}
+
+function commitFlowRename(input) {
+  const id = input?.dataset?.flowRename;
+  const flow = id ? flowById(state.project, id) : null;
+  if (!flow || state.renamingFlowId !== id) {
+    state.renamingFlowId = null;
+    renderFlowTabs();
+    return;
+  }
+  const title = String(input.value || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (title) flow.title = title;
+  state.renamingFlowId = null;
+  renderGraph();
+  renderInspector();
+}
+
+function cancelFlowRename() {
+  state.renamingFlowId = null;
+  renderFlowTabs();
+}
+
+function requestDeleteFlow() {
+  if (flowsOf(state.project).length <= 1) {
+    toast('A project needs at least one flow.');
+    return;
+  }
+  const flow = activeFlow(state.project);
+  if (!flow) return;
+  state.confirmDeleteFlowId = flow.id;
+  state.renamingFlowId = null;
+  renderFlowTabs();
+}
+
+function confirmDeleteFlow() {
+  const id = state.confirmDeleteFlowId;
+  const flows = flowsOf(state.project);
+  if (!id || flows.length <= 1) {
+    state.confirmDeleteFlowId = null;
+    renderFlowTabs();
+    return;
+  }
+  const index = flows.findIndex((flow) => flow.id === id);
+  const remaining = flows.filter((flow) => flow.id !== id);
+  const fallback = remaining[Math.min(index, remaining.length - 1)] || remaining[0];
+  state.project.flows = remaining;
+  state.project.activeFlowId = fallback.id;
+  state.confirmDeleteFlowId = null;
+  attachGraphAliases(state.project);
+  state.selected = { type: 'project', id: null };
+  renderGraph();
+  renderInspector();
+  toast(`Flow deleted. Run folders stay on disk.`);
+}
+
+function cancelDeleteFlow() {
+  state.confirmDeleteFlowId = null;
+  renderFlowTabs();
+}
+
 function renderGraph() {
   const container = nodesEl();
   if (!container) return;
   container.innerHTML = state.project.nodes.map(renderNodeCard).join('');
   renderEdges();
+  renderFlowTabs();
   updateCounts();
   refreshDirty();
 }
@@ -686,6 +923,9 @@ function applyHistorySnapshot(snapshot) {
     toast('That history step could not be restored.');
     return;
   }
+  // A snapshot is plain JSON: `nodes`/`edges` are a second copy, so point
+  // them back at the active flow's arrays before anything reads them.
+  hydrateProject(state.project);
   state.selected = { type: 'project', id: null };
   state.connecting = null;
   state.keyboardConnect = null;
@@ -695,6 +935,7 @@ function applyHistorySnapshot(snapshot) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
+  syncMaxParallelInput();
 }
 
 function undoEdit() {
@@ -891,6 +1132,7 @@ function restoreDraft(draft) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
+  syncMaxParallelInput();
   toast('Draft restored. Save it to keep it.');
 }
 
@@ -1585,8 +1827,146 @@ function conformersInspector(node) {
   </div>`;
 }
 
+function datasetTitleFromFilename(filename, count) {
+  const base = String(filename || '').split(/[\\/]/).pop().replace(/\.[^.]+$/, '').trim() || 'Dataset';
+  return `${base.slice(0, 130)} (${count})`;
+}
+
+/** A project-relative source path: no separators that a browser file lacks. */
+function datasetSourcePath(filename) {
+  return String(filename || '')
+    .split(/[\\/]/)
+    .map((segment) => segment.replace(/[^A-Za-z0-9._-]/g, '_'))
+    .filter((segment) => segment && segment !== '..')
+    .join('/')
+    .slice(0, 300);
+}
+
+function importDatasetText(text, { filename = '', format = '', nodeId = null } = {}) {
+  const node = nodeId ? nodeById(nodeId) : null;
+  if (!node || node.type !== 'input') return null;
+  const result = parseDataset(text, { filename, format });
+  if (result.records.length === 0) {
+    toast(`Could not import dataset: ${result.errors[0] || 'no record with coordinates was found.'}`);
+    return null;
+  }
+  if (!node.input || typeof node.input !== 'object') {
+    node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
+  }
+  if (!Array.isArray(state.project.datasets)) state.project.datasets = [];
+  const source = {
+    kind: filename ? 'file' : 'inline',
+    path: filename ? datasetSourcePath(filename) : '',
+    format: result.format,
+  };
+  const title = datasetTitleFromFilename(filename || 'Pasted dataset', result.records.length);
+  let dataset = datasetById(state.project, node.input.datasetId);
+  const replaced = Boolean(dataset);
+  if (dataset) {
+    dataset.title = title;
+    dataset.source = source;
+    dataset.records = result.records;
+  } else {
+    const base = String(filename || '').split(/[\\/]/).pop().replace(/\.[^.]+$/, '') || 'dataset';
+    dataset = {
+      id: uniqueGraphId(slugifyGraphId(base, 'dataset'), state.project.datasets.map((entry) => entry.id)),
+      title,
+      source,
+      fields: { label: '', charge: '', multiplicity: '' },
+      records: result.records,
+      notes: '',
+    };
+    state.project.datasets.push(dataset);
+  }
+  node.input.datasetId = dataset.id;
+  if (!node.title || node.title === 'Dataset input') node.title = title;
+  renderGraph();
+  renderInspector();
+  const skipped = result.errors.length ? ` · ${result.errors.length} record(s) skipped` : '';
+  const warnings = result.warnings.length ? ` · ${result.warnings.length} warning(s)` : '';
+  toast(`${replaced ? 'Replaced' : 'Imported'} ${result.records.length} record${result.records.length === 1 ? '' : 's'}`
+    + ` from ${filename || 'pasted text'}${skipped}${warnings}.`);
+  return dataset;
+}
+
+async function importDatasetFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    importDatasetText(text, {
+      filename: file.name,
+      nodeId: state.datasetImportNodeId || (state.selected.type === 'node' ? state.selected.id : null),
+    });
+  } catch (error) {
+    toast(`Could not read the dataset file: ${error.message}`);
+  }
+}
+
+function inputInspector(node) {
+  const datasets = Array.isArray(state.project.datasets) ? state.project.datasets : [];
+  const dataset = datasetForInputNode(node);
+  const records = dataset ? recordsOf(dataset) : [];
+  const counts = inputRecordCounts(node);
+  const options = [
+    '<option value="">— choose a dataset —</option>',
+    ...datasets.map((entry) => `<option value="${esc(entry.id)}"${entry.id === dataset?.id ? ' selected' : ''}>${esc(entry.title || entry.id)}</option>`),
+  ].join('');
+  const recordRows = records.length
+    ? records.map((record) => `
+      <tr class="${record.enabled === false ? 'is-disabled' : ''}">
+        <td><span class="record-label">${esc(record.label || record.id)}</span><span class="record-id">${esc(record.id)}</span></td>
+        <td>${esc(record.charge)}</td>
+        <td>${esc(record.multiplicity)}</td>
+        <td><input type="checkbox" data-dataset-id="${esc(dataset.id)}" data-dataset-record="${esc(record.id)}"${record.enabled === false ? '' : ' checked'} aria-label="Enable ${esc(record.label || record.id)}"></td>
+      </tr>`).join('')
+    : '';
+  const datasetCard = dataset
+    ? `<div class="kv"><span>Source</span><code>${esc(dataset.source?.format || '')}${dataset.source?.path ? ` · ${esc(dataset.source.path)}` : ' · inline'}</code></div>
+       <div class="kv"><span>Records</span><code>${counts.enabled} of ${counts.total} enabled</code></div>
+       ${records.length ? `<div class="dataset-table-wrap">
+         <table class="dataset-table">
+           <thead><tr><th>Record</th><th>q</th><th>mult</th><th>on</th></tr></thead>
+           <tbody>${recordRows}</tbody>
+         </table>
+       </div>` : '<div class="callout red"><strong>No records.</strong> This dataset has no geometry to run.</div>'}`
+    : '<div class="callout"><strong>No dataset bound.</strong> Import an SDF, XYZ, CSV or JSON file of geometries, or paste its text below.</div>';
+
+  return `${inspectorHead(
+    'Data · input',
+    node.title,
+    dataset ? `${esc(dataset.title)} · ${counts.total} record${counts.total === 1 ? '' : 's'}` : 'no dataset bound',
+  )}
+  <div class="inspector-scroll">
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">Runs once per enabled record</span></div>
+    ${group('Dataset', dataset ? `${counts.total}` : 'none', true, [
+      `<div class="field full"><label>Dataset</label><select class="select" data-input-field="datasetId">${options}</select></div>`,
+      datasetCard,
+      '<div class="field full"><button type="button" class="btn" data-action="import-dataset">Import dataset file…</button></div>',
+      '<input type="file" id="dataset-file" accept=".sdf,.sd,.mol,.xyz,.csv,.json" hidden>',
+      `<details class="dataset-paste">
+        <summary>Paste records instead</summary>
+        <div class="field full"><label>Format</label><select class="select" id="dataset-paste-format">
+          <option value="">Detect</option><option value="sdf">SDF</option><option value="xyz">XYZ</option><option value="csv">CSV</option><option value="json">JSON</option>
+        </select></div>
+        <div class="field full"><label>Dataset text</label><textarea class="textarea" id="dataset-paste" rows="6" spellcheck="false" placeholder="$$$$&#10;… or a CSV header, or a JSON array"></textarea></div>
+        <button type="button" class="btn small" data-action="import-dataset-paste">Import pasted text</button>
+      </details>`,
+    ].join(''))}
+    <div class="inspector-actions-row">
+      <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
+      <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
+    </div>
+  </div>
+  <div class="inspector-footer">
+    <button type="button" class="btn primary" data-action="validate">Validate</button>
+    <button type="button" class="btn" data-action="delete-node">Delete</button>
+  </div>`;
+}
+
 function simpleInspector(node) {
   const isNote = node.type === 'note';
+  const output = node.type === 'output' ? outputOf(node) : null;
+  const pathError = output ? outputPathError(output.path, output.kind) : '';
   const body = isNote
     ? [
       inputField('Title', 'title', node.title, { full: true }),
@@ -1602,15 +1982,23 @@ function simpleInspector(node) {
       ].join('')
       : [
         inputField('Title', 'title', node.title, { full: true }),
-        inputField('Bundle name', 'bundle', node.output.bundle, { full: true }),
-        switchRow('Include manifest', 'DAG + provenance sidecar', 'manifest', node.output.manifest, { attr: 'data-output-field="manifest"' }),
-        `<div class="field full"><label>Notes</label><textarea class="textarea" data-output-field="notes" rows="3">${esc(node.output.notes)}</textarea></div>`,
+        `<div class="field full"><label>Output kind</label><select class="select" data-output-field="kind">
+          ${Object.entries(OUTPUT_KIND_LABELS).map(([value, label]) => `<option value="${value}"${output.kind === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}
+        </select></div>`,
+        `<div class="field full"><label>Path</label><input class="input${pathError ? ' is-invalid' : ''}" data-output-field="path" value="${esc(output.path)}" spellcheck="false" autocomplete="off" aria-invalid="${pathError ? 'true' : 'false'}">
+          ${pathError ? `<p class="field-hint is-error">${esc(pathError)}</p>` : '<p class="field-hint">Relative to the output folder; the extension follows the kind.</p>'}</div>`,
+        `<div class="field full"><label>Include</label><select class="select" data-output-field="include">
+          <option value="records"${output.include === 'records' ? ' selected' : ''}>One artifact for the whole flow</option>
+          <option value="record"${output.include === 'record' ? ' selected' : ''}>One artifact per record</option>
+        </select></div>`,
+        switchRow('Include manifest', 'SHA-256 list beside the artifact', 'manifest', output.manifest, { attr: 'data-output-field="manifest"' }),
+        `<div class="field full"><label>Notes</label><textarea class="textarea" data-output-field="notes" rows="3">${esc(output.notes)}</textarea></div>`,
       ].join('');
 
   return `${inspectorHead(
-    isNote ? 'Annotation' : node.type === 'merge' ? 'Control · join' : 'Project output',
+    isNote ? 'Annotation' : node.type === 'merge' ? 'Control · join' : 'Data · output',
     node.title,
-    isNote ? 'freeform note' : node.type === 'merge' ? 'combine branches' : 'bundle + manifest',
+    isNote ? 'freeform note' : node.type === 'merge' ? 'combine branches' : `${output.kind.toUpperCase()} · ${output.path}`,
   )}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${isNote ? '' : statusPill(node.state)}<span class="inspector-note">${incoming(node.id).length} input${incoming(node.id).length === 1 ? '' : 's'}</span></div>
@@ -1698,6 +2086,7 @@ function renderInspector() {
     if (node.type === 'conformers') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
     if (node.type === 'condition') { el.innerHTML = conditionInspector(node); return; }
     if (node.type === 'loop') { el.innerHTML = loopInspector(node); return; }
+    if (node.type === 'input') { el.innerHTML = inputInspector(node); return; }
     el.innerHTML = simpleInspector(node);
     return;
   }
@@ -1724,8 +2113,11 @@ const BLOCKS = [
     { type: 'loop', icon: '↻', title: 'Loop', note: 'retry with max attempts' },
     { type: 'merge', icon: '⋈', title: 'Join', note: 'merge branches' },
   ] },
+  { group: 'Data', items: [
+    { type: 'input', icon: 'IN', title: 'Dataset input', note: 'run the graph once per record' },
+    { type: 'output', icon: 'OUT', title: 'Output file', note: 'csv / json / html / zip' },
+  ] },
   { group: 'Project', items: [
-    { type: 'output', icon: 'OUT', title: 'Output bundle', note: 'zip + manifest' },
     { type: 'note', icon: '✎', title: 'Note', note: 'annotation on the canvas' },
     { type: 'checkpoint', icon: 'CHK', title: 'Checkpoint hand-off', note: 'applied to a connection' },
   ] },
@@ -1814,10 +2206,23 @@ function addBlock(type) {
       id, type: 'merge', kind: 'Merge', title: 'Join branches', state: 'ready', ...position,
       merge: { policy: 'all', notes: '' },
     };
+  } else if (type === 'input') {
+    const dataset = Array.isArray(state.project.datasets) ? state.project.datasets[0] : null;
+    node = {
+      id, type: 'input', kind: 'Input', title: dataset?.title || 'Dataset input', state: 'ready', ...position,
+      input: { datasetId: dataset?.id || '', recordFilter: { field: '', equals: '' } },
+    };
   } else if (type === 'output') {
     node = {
-      id, type: 'output', kind: 'Output', title: 'Project output', state: 'ready', ...position,
-      output: { bundle: 'project.zip', manifest: true, notes: '' },
+      id, type: 'output', kind: 'Output', title: 'Output file', state: 'ready', ...position,
+      output: {
+        kind: 'html',
+        path: defaultOutputPath('html'),
+        include: 'records',
+        bundle: 'project.zip',
+        manifest: true,
+        notes: '',
+      },
     };
   } else if (type === 'note') {
     node = {
@@ -1956,8 +2361,10 @@ function updateValidityCheck(node, id, enabled) {
 function removeNode(id) {
   const node = nodeById(id);
   if (!node) return;
-  state.project.nodes = state.project.nodes.filter((item) => item.id !== id);
-  state.project.edges = state.project.edges.filter((edge) => edge.from !== id && edge.to !== id);
+  setFlowGraph(state.project, {
+    nodes: state.project.nodes.filter((item) => item.id !== id),
+    edges: state.project.edges.filter((edge) => edge.from !== id && edge.to !== id),
+  });
   state.selected = { type: 'project', id: null };
   renderGraph();
   renderInspector();
@@ -1985,7 +2392,7 @@ function duplicateNode(id) {
 function removeEdge(id) {
   const edge = edgeById(id);
   if (!edge) return;
-  state.project.edges = state.project.edges.filter((item) => edgeId(item) !== id);
+  setFlowGraph(state.project, { edges: state.project.edges.filter((item) => edgeId(item) !== id) });
   state.selected = { type: 'node', id: edge.to };
   renderGraph();
   renderInspector();
@@ -2056,7 +2463,9 @@ function addConnection(fromId, toId, port) {
   if (duplicate) { toast('That connection already exists.'); return false; }
 
   if (type === 'branch') {
-    state.project.edges = state.project.edges.filter((edge) => !(edge.from === fromId && edge.type === 'branch' && edge.branch === branch));
+    setFlowGraph(state.project, {
+      edges: state.project.edges.filter((edge) => !(edge.from === fromId && edge.type === 'branch' && edge.branch === branch)),
+    });
   }
   state.project.edges.push({
     from: fromId,
@@ -2745,6 +3154,25 @@ function validateGraph() {
     });
   const errors = findings.flatMap(({ node, errors: list }) => list.map((message) => `${node.title}: ${message}`));
   const warnings = findings.flatMap(({ node, warnings: list }) => list.map((message) => `${node.title} ${message}`));
+  for (const node of state.project.nodes) {
+    if (node.type === 'input') {
+      if (!node.input?.datasetId) {
+        errors.push(`${node.title}: no dataset is bound.`);
+        continue;
+      }
+      const dataset = datasetForInputNode(node);
+      if (!dataset) {
+        errors.push(`${node.title}: dataset "${node.input.datasetId}" is not in this project.`);
+      } else if (enabledRecords(dataset).length === 0) {
+        errors.push(`${node.title}: dataset "${dataset.title}" has no enabled records.`);
+      }
+    }
+    if (node.type === 'output') {
+      const output = outputOf(node);
+      const pathError = outputPathError(output.path, output.kind);
+      if (pathError) errors.push(`${node.title}: ${pathError}`);
+    }
+  }
   if (errors.length > 0) {
     const more = errors.length > 1 ? ` · +${errors.length - 1} more` : '';
     state.statusMessage = `Validation failed · ${errors[0]}${more}`;
@@ -2867,6 +3295,33 @@ function updateRunConsoleCopy() {
     hint.textContent = dryRunHintFor(engineId);
     hint.classList.remove('is-warn');
   }
+}
+
+function syncMaxParallelInput() {
+  const input = $('#run-max-parallel');
+  if (!input) return;
+  const value = Math.max(1, Math.min(Number(state.project?.runner?.maxParallel) || 1, LIMITS.maxParallel));
+  input.value = String(value);
+}
+
+/**
+ * The queue's degree of parallelism. The control edits the project setting as
+ * well, so a saved project keeps the value the next run will use.
+ */
+function applyMaxParallel(value) {
+  const clamped = Math.max(1, Math.min(Number(value) || 1, LIMITS.maxParallel));
+  if (!state.project.runner || typeof state.project.runner !== 'object') state.project.runner = {};
+  state.project.runner.maxParallel = clamped;
+  const input = $('#run-max-parallel');
+  if (input) input.value = String(clamped);
+  refreshDirty();
+  return clamped;
+}
+
+function maxParallelForQueue() {
+  const input = $('#run-max-parallel');
+  const value = input ? Number(input.value) : Number(state.project?.runner?.maxParallel);
+  return applyMaxParallel(Number.isFinite(value) && value > 0 ? value : 1);
 }
 
 function openRunConsole() {
@@ -3222,6 +3677,7 @@ async function startSelectedConformerRun(node) {
         executable: $('#run-exe').value.trim(),
         crestExecutable,
         scratchDir: $('#run-scratch').value.trim(),
+        maxParallel: maxParallelForQueue(),
       },
     });
     applyQueue(queue);
@@ -3339,6 +3795,42 @@ function renderQueue() {
   $('#resume-workflow')?.toggleAttribute('disabled', !canResume);
   $('#cancel-workflow')?.toggleAttribute('disabled', !active);
   $('#report-workflow')?.toggleAttribute('disabled', !queue.id || queue.status === 'running');
+  renderRecordSummary();
+}
+
+/**
+ * RFC 0001: when the plan iterates a dataset, the queue's task list is one row
+ * per block per record. This groups it back into one row per record with the
+ * status, gate verdict and first error. A queue with no record ids renders
+ * nothing here, so the single-molecule console is byte-for-byte unchanged.
+ */
+function renderRecordSummary() {
+  const el = $('#run-records');
+  if (!el) return;
+  const group = groupTasksByRecord(state.queue.tasks);
+  if (!group.hasRecords) {
+    el.hidden = true;
+    el.innerHTML = '';
+    return;
+  }
+  const failed = group.records.filter((record) => record.failed);
+  const rows = group.records.map((record) => `
+    <tr class="is-${esc(record.status)}">
+      <td><span class="record-label">${esc(record.label)}</span><span class="record-id">${esc(record.id)}</span></td>
+      <td><span class="record-status is-${esc(record.status)}">${esc(record.status)}</span></td>
+      <td>${esc(record.gates || '—')}</td>
+      <td class="record-error" title="${esc(record.error)}">${esc(record.error || '')}</td>
+    </tr>`).join('');
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="run-records-head"><span>Records</span><span>${esc(recordSummaryLabel(group))}</span></div>
+    ${failed.length ? `<div class="callout red run-partial"><strong>Partial run.</strong> Failed record${failed.length === 1 ? '' : 's'}: ${failed.map((record) => esc(record.label)).join(', ')}. The other records continue.</div>` : ''}
+    <div class="record-table-wrap">
+      <table class="record-table">
+        <thead><tr><th>Record</th><th>Status</th><th>Gates</th><th>Error</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
 }
 
 async function startWorkflow() {
@@ -3394,6 +3886,7 @@ async function startWorkflowUnlocked() {
         executable: $('#run-exe').value.trim(),
         crestExecutable: $('#run-crest').value.trim(),
         scratchDir: $('#run-scratch').value.trim(),
+        maxParallel: maxParallelForQueue(),
       },
     });
     applyQueue(queue);
@@ -3514,7 +4007,9 @@ function handleQueueEvent(event) {
   if (event.type === 'queue-started') {
     const queuedEngine = event.queue.tasks.find((task) => task.engine)?.engine
       || state.project?.defaults?.engine;
-    setStatusMessage(`Workflow running · ${countLabel(event.queue.tasks.length, 'block')} · ${runEngineLabel(queuedEngine, { dryRun: event.queue.options?.dryRun })}`);
+    const records = groupTasksByRecord(event.queue.tasks);
+    const recordCopy = records.hasRecords ? ` · ${countLabel(records.total, 'record')}` : '';
+    setStatusMessage(`Workflow running · ${countLabel(event.queue.tasks.length, 'block')}${recordCopy} · ${runEngineLabel(queuedEngine, { dryRun: event.queue.options?.dryRun })}`);
   }
   if (event.type === 'queue-done') {
     const verdict = event.queue.status;
@@ -3562,6 +4057,7 @@ function applyOpenedProject(result) {
     return false;
   }
   state.project = result.project;
+  hydrateProject(state.project);
   state.selected = { type: 'project', id: null };
   state.history = null;
   markProjectSaved(result.path);
@@ -3575,6 +4071,7 @@ function applyOpenedProject(result) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
+  syncMaxParallelInput();
   toast(result.migrated ? 'Project opened and migrated to schema v1.' : 'Project opened.');
   return true;
 }
@@ -3842,6 +4339,7 @@ function applyTemplateProject(templateId) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
+  syncMaxParallelInput();
   toast(templateId === BLANK_TEMPLATE.id ? 'Blank project created.' : 'Template applied.');
 }
 
@@ -4284,6 +4782,25 @@ function handleAction(action, element) {
     case 'toggle-export-menu': toggleExportMenu(); break;
     case 'quit': window.close(); break;
     case 'toggle-palette': togglePalette(); break;
+    case 'add-flow': addFlow(); break;
+    case 'duplicate-flow': duplicateActiveFlow(); break;
+    case 'rename-flow': startFlowRename(); break;
+    case 'delete-flow': requestDeleteFlow(); break;
+    case 'confirm-delete-flow': confirmDeleteFlow(); break;
+    case 'cancel-delete-flow': cancelDeleteFlow(); break;
+    case 'import-dataset': {
+      if (state.selected.type === 'node') state.datasetImportNodeId = state.selected.id;
+      $('#dataset-file')?.click();
+      break;
+    }
+    case 'import-dataset-paste': {
+      const nodeId = state.selected.type === 'node' ? state.selected.id : state.datasetImportNodeId;
+      importDatasetText($('#dataset-paste')?.value || '', {
+        format: $('#dataset-paste-format')?.value || '',
+        nodeId,
+      });
+      break;
+    }
     case 'validate': validateGraph(); break;
     case 'zoom-in': setZoom(state.zoom + 0.05); break;
     case 'zoom-out': setZoom(state.zoom - 0.05); break;
@@ -4412,6 +4929,9 @@ function onDocumentClick(event) {
   const blockButton = event.target.closest('[data-block]');
   if (blockButton) addBlock(blockButton.dataset.block);
 
+  const flowTab = event.target.closest('[data-flow-id]');
+  if (flowTab) switchFlow(flowTab.dataset.flowId);
+
   const drawerTab = event.target.closest('[data-drawer-tab]');
   if (drawerTab && state.drawer) {
     state.drawer.tab = drawerTab.dataset.drawerTab;
@@ -4430,6 +4950,10 @@ function onDocumentClick(event) {
 
 function onDocumentChange(event) {
   const target = event.target;
+  if (target.matches('[data-flow-rename]')) {
+    commitFlowRename(target);
+    return;
+  }
   if (target.matches('[data-record-select]')) {
     const draft = state.drawer?.draft;
     if (!draft) return;
@@ -4442,8 +4966,37 @@ function onDocumentChange(event) {
     target.value = '';
     return;
   }
+  if (target.id === 'dataset-file') {
+    const file = target.files?.[0];
+    if (file) importDatasetFile(file);
+    target.value = '';
+    return;
+  }
   if (target.id === 'run-dry' || target.id === 'run-exe' || target.id === 'run-scratch') {
     saveRunConfig();
+    return;
+  }
+  if (target.id === 'run-max-parallel') {
+    applyMaxParallel(target.value);
+    return;
+  }
+  if (target.dataset.inputField) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'input') return;
+    if (!node.input) node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
+    node.input[target.dataset.inputField] = target.value;
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.datasetRecord) {
+    const dataset = datasetById(state.project, target.dataset.datasetId);
+    const record = recordsOf(dataset).find((entry) => entry.id === target.dataset.datasetRecord);
+    if (!record) return;
+    record.enabled = target.checked;
+    renderGraph();
+    renderInspector();
     return;
   }
   if (target.dataset.nodeField) {
@@ -4500,7 +5053,7 @@ function onDocumentChange(event) {
     if (key === 'target') {
       const edge = state.project.edges.find((item) => item.from === node.id && item.type === 'loop');
       if (!target.value) {
-        if (edge) state.project.edges = state.project.edges.filter((item) => item !== edge);
+        if (edge) setFlowGraph(state.project, { edges: state.project.edges.filter((item) => item !== edge) });
       } else if (edge) { edge.to = target.value; edge.toPort = 'bottomIn'; }
       else state.project.edges.push({ from: node.id, to: target.value, type: 'loop', fromPort: 'bottom', toPort: 'bottomIn' });
     }
@@ -4521,7 +5074,7 @@ function onDocumentChange(event) {
     const branch = target.dataset.branchEdit;
     let edge = state.project.edges.find((item) => item.from === node.id && item.type === 'branch' && item.branch === branch);
     if (!target.value) {
-      if (edge) state.project.edges = state.project.edges.filter((item) => item !== edge);
+      if (edge) setFlowGraph(state.project, { edges: state.project.edges.filter((item) => item !== edge) });
     } else if (edge) {
       edge.to = target.value;
       edge.toPort = 'left';
@@ -4545,9 +5098,21 @@ function onDocumentChange(event) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'output') return;
+    if (!node.output || typeof node.output !== 'object') node.output = outputOf(node);
     const key = target.dataset.outputField;
-    if (target.type === 'checkbox') node.output[key] = target.checked;
-    else node.output[key] = target.value;
+    if (key === 'kind') {
+      const nextKind = Object.prototype.hasOwnProperty.call(OUTPUT_KIND_LABELS, target.value) ? target.value : 'zip';
+      const previousDefault = defaultOutputPath(outputOf(node).kind);
+      if (!node.output.path || node.output.path === previousDefault) node.output.path = defaultOutputPath(nextKind);
+      node.output.kind = nextKind;
+    } else if (key === 'include') {
+      node.output.include = target.value === 'record' ? 'record' : 'records';
+    } else if (target.type === 'checkbox') {
+      node.output[key] = target.checked;
+    } else {
+      node.output[key] = target.value;
+    }
+    renderGraph();
     renderInspector();
     return;
   }
@@ -4683,6 +5248,8 @@ function wireEvents() {
       return;
     }
     if (event.key === 'Escape') {
+      if (state.renamingFlowId) { cancelFlowRename(); return; }
+      if (state.confirmDeleteFlowId) { cancelDeleteFlow(); return; }
       if (state.drawer) { closeDrawer(); return; }
       if (!$('#app-menu')?.hidden) { closeAppMenu(); return; }
       if (!$('#export-menu')?.hidden) { closeExportMenu(); return; }
@@ -4784,7 +5351,7 @@ function wireEvents() {
 
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
-export { calcInspector, state };
+export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, simpleInspector, state };
 
 function applyAppInfo() {
   const chip = $('#app-version-chip');
@@ -4812,6 +5379,7 @@ function init() {
   if (window.innerWidth <= 820) state.inspectorHidden = true;
   readRunConfig();
   updateRunConsoleCopy();
+  syncMaxParallelInput();
   if (desktop?.onRunEvent) desktop.onRunEvent(handleRunEvent);
   if (desktop?.onQueueEvent) desktop.onQueueEvent(handleQueueEvent);
   if (desktop?.onOpenProjectPath) desktop.onOpenProjectPath((filePath) => { openProjectPath(filePath); });

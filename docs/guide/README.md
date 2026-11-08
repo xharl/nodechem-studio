@@ -24,6 +24,8 @@ If you are new, read these in order:
 4. [Engines](engines.md) — choose Gaussian 16 or xTB, and know which settings belong to which.
 4b. [Conformers and protomers](conformers.md) — search or import an ensemble, then choose the shape a
    later block runs.
+4c. [Datasets and input blocks](datasets.md) — import a family of geometries and run the graph once
+   per record, with outputs for the whole set.
 5. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.
 6. [Results](results.md) — the results panel, gates, validity checks, methods text, run bundles.
 7. [Projects and runs on disk](project-files.md) — the `.ncs` file and the run folder.
