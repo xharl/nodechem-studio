@@ -1,0 +1,18 @@
+# NodeChem Studio — generated Psi4 input
+# water-freq
+# Every line below is written by the app; edit and re-run at your own risk.
+
+memory 2048 mb
+
+molecule {
+0 1
+  O  0.000000  0.000000  0.117300
+  H  0.000000  0.757200  -0.469200
+  H  0.000000  -0.757200  -0.469200
+}
+
+set basis def2-svp
+set reference rhf
+set scf_type df
+
+frequencies('b3lyp')

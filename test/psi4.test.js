@@ -229,6 +229,53 @@ describe('Psi4 output parser — real logs', () => {
   });
 });
 
+describe('Psi4 1.11 — runs produced by the container image', () => {
+  const live = (name) => readFileSync(`test/fixtures/psi4-live/${name}`, 'utf8');
+
+  it('reads the 1.11 single point, including its renamed convergence line', () => {
+    const parsed = parsePsi4Output(live('water-sp.out'));
+    expect(parsed.program.version).toBe('1.11');
+    expect(parsed.scf.status).toBe('converged');
+    expect(parsed.scf.cycles).toBe(7);
+    expect(parsed.extras.reference).toBe('RKS');
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-76.35815199866961, 9);
+  });
+
+  it('reads the 1.11 optimisation: bare completion marker and a step table', () => {
+    const parsed = parsePsi4Output(live('water-opt.out'));
+    expect(parsed.optimization.completed).toBe(true);
+    expect(parsed.optimization.cycles).toBe(3);
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-76.35832576761888, 9);
+    expect(parsed.extras.finalGeometry).toHaveLength(3);
+  });
+
+  it('reads the 1.11 frequency table instead of the old `#  #` list', () => {
+    const parsed = parsePsi4Output(live('water-freq.out'));
+    expect(parsed.frequencies.count).toBe(3);
+    expect(parsed.frequencies.imaginaryCount).toBe(0);
+    expect(parsed.thermochemistry.zpeHartree).toBeCloseTo(0.02168016, 8);
+    expect(parsed.thermochemistry.enthalpyHartree).toBeCloseTo(-76.33269184, 8);
+    expect(parsed.thermochemistry.freeEnergyHartree).toBeCloseTo(-76.35410402, 8);
+    // The well-bottom energy, not the last displaced-point energy.
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-76.358152, 6);
+    expect(parsed.finalEnergy.source).toBe('freq-reference');
+  });
+
+  it('reads an open-shell 1.11 run as UKS', () => {
+    const parsed = parsePsi4Output(live('uhf.out'));
+    expect(parsed.extras.reference).toBe('UKS');
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-75.90190402047804, 9);
+  });
+
+  it('reads a live SAPT0 table and still refuses to call it a total energy', () => {
+    const parsed = parsePsi4Output(live('sapt.out'));
+    expect(parsed.extras.sapt.totalMha).toBeCloseTo(-4.15242375, 8);
+    expect(parsed.extras.sapt.totalKcal).toBeCloseTo(-2.60568524, 8);
+    expect(parsed.extras.sapt.exchangeMha).toBeCloseTo(2.98675228, 8);
+    expect(parsed.finalEnergy.hartree).toBeNull();
+  });
+});
+
 describe('Psi4 termination classifier', () => {
   it('treats a clean exit as normal and an error banner as an error', () => {
     expect(classifyPsi4Termination('*** Psi4 exiting successfully. Buy a developer a beer!', 0))

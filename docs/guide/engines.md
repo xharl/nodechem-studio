@@ -366,27 +366,44 @@ Two things the parser does deliberately, because a Psi4 log can mislead:
 3. In **Run**, select the `psi4` executable with **Browse**.
 4. **Preflight** checks the platform, that the executable exists and is named `psi4`, that it is
    runnable on Linux/macOS, and warns when `PSIDATADIR` is not set in the environment.
-5. **Run it.** The app spawns `psi4 <task>.dat` and captures **stdout** as `<task>.out`, which is
-   what `psi4 job.dat > job.out` gives you. stderr stays out of that file and is recorded under
-   `provenance.psi4.stderr`. Threads come from the block's `nproc` through `OMP_NUM_THREADS` and
-   `MKL_NUM_THREADS`.
+5. **Run it.** The app spawns `psi4 <task>.dat` in the run folder. Psi4 1.9+ writes its formatted
+   log to `<task>.out` **itself**; older builds print it to stdout. The runner takes whichever exists:
+   a non-empty `<task>.out` left by Psi4 is read as the artifact (`outputSource: file`), otherwise the
+   captured stdout is written there. A run folder is fresh, so an existing file at that name can only
+   be Psi4's own log — and writing the (empty) capture over it would destroy the record.
+   stderr is never merged into the artifact and is kept under `provenance.psi4.stderr`. Threads come
+   from the block's `nproc` through `OMP_NUM_THREADS` and `MKL_NUM_THREADS`.
 
 An error termination (`Psi4 encountered an error. Buy a developer more coffee!`) is recorded as
 failed, and so is a run that printed nothing at all — the record quotes stderr in that case.
 
 ### What this build proves about the Psi4 parser
 
-The parser is tested against **real Psi4 output files** kept in
-`test/fixtures/real/psi4-*.out`: eight complete logs from Psi4's own test suite and RMG-Py, covering
-HF, B3LYP frequencies with thermochemistry, two optimisations (one converged, one that is not), MP2,
-CCSD, SAPT0 and a PSIO error termination. The version range is Psi4 1.1rc3 – 1.4a1.
+Two corpora, because the format changed:
 
-**No Psi4 binary was run for this build**, so the runner is exercised against a stand-in driver
-script that prints those fixtures, an error banner, or nothing. That proves the spawn, capture,
-thread and cancellation paths — not that a Psi4 1.9 installation prints these blocks byte-for-byte.
-The first real run should be a water single point: compare `@RKS Final Energy:` and
-`Psi4 exiting successfully`, and if a block shape has changed, the parser reports the value as
-`unknown` rather than guessing.
+- **Psi4 1.1rc3 – 1.4a1**, eight complete logs from Psi4's own test suite and RMG-Py, in
+  `test/fixtures/real/psi4-*.out`: HF, B3LYP frequencies with thermochemistry, two optimisations (one
+  converged, one that is not), MP2, CCSD, SAPT0 and a PSIO error termination.
+- **Psi4 1.11**, five runs produced in this repository by the official `psi4/psi4:1.11` container
+  image and kept in `test/fixtures/psi4-live/`: a single point, an optimisation, a frequency job, an
+  open-shell UKS run and a SAPT0 dimer. The inputs beside them were written by this app's builder, so
+  the pair also proves the generated script is one Psi4 accepts.
+
+A live run found a real difference the older logs could not: Psi4 1.9+ writes its log to
+`<task>.out` itself rather than to stdout, and the first version of the runner overwrote that file
+with an empty capture. The runner now prefers the file Psi4 wrote.
+
+The end-to-end path was exercised the same way: the app's own `RunManager` and `Psi4Runner` spawned a
+containerised Psi4 1.11 through a wrapper, and the run record came back `completed`, gates `pass`,
+`-76.35815199866961` Eh, 7 SCF cycles, Psi4 `1.11`.
+
+Three blocks changed shape in 1.9+ and the parser accepts both: `Energy and wave function
+converged.`, `Optimizer: Optimization complete!` with no step count, the `Freq [cm^-1]` table instead
+of the `#  #` list, and `Total G, Gibbs energy at`.
+
+What is still not proven: a 1.11 failure mode other than the ones in the corpus (the 1.1 logs cover
+the error banner and a non-converged optimisation), and any platform other than Linux. A block shape
+the parser does not recognise is reported as `unknown`, never guessed.
 
 ## Which settings belong to which engine
 

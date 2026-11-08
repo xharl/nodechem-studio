@@ -103,6 +103,33 @@ describe.skipIf(!canSpawnShell)('Psi4Runner', () => {
     expect(Date.now() - started).toBeLessThan(4000);
   });
 
+  it('reads the log Psi4 writes itself instead of clobbering it with an empty capture', async () => {
+    // Psi4 1.9+ writes `<input>.out` in the working directory and prints
+    // nothing to stdout. Writing our capture over that file would destroy the
+    // only record of the calculation.
+    const root = await sandbox();
+    const dir = await fsp.mkdtemp(path.join(root, 'bin-'));
+    const script = path.join(dir, 'psi4');
+    await fsp.writeFile(path.join(dir, 'payload.txt'), FIXTURE, 'utf8');
+    await fsp.writeFile(script, [
+      '#!/bin/sh',
+      'job="$1"',
+      'cp "$(dirname "$0")/payload.txt" "${job%.dat}.out"',
+      'exit 0',
+      '',
+    ].join('\n'), 'utf8');
+    await fsp.chmod(script, 0o755);
+    const cwd = await fsp.mkdtemp(path.join(root, 'run-'));
+
+    const result = await new Psi4Runner().run({
+      executable: script, argv: ['job.dat'], cwd, outputName: 'job.out',
+    });
+
+    expect(result.outputText).toContain('Psi4 exiting successfully');
+    expect(result.outputSource).toBe('file');
+    expect(await fsp.readFile(path.join(cwd, 'job.out'), 'utf8')).toContain('FIXTURE OUTPUT');
+  });
+
   it('refuses a run with no arguments', async () => {
     await expect(new Psi4Runner().run({ executable: '/bin/true', argv: [], cwd: os.tmpdir(), outputName: 'x.out' }))
       .rejects.toThrow(/no arguments/);

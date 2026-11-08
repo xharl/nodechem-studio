@@ -102,19 +102,40 @@ export class Psi4Runner {
       this.child = null;
     });
 
+    // Psi4 1.9+ writes its formatted log to `<input>.out` in the working
+    // directory and may print nothing to stdout. The run folder is fresh, so a
+    // non-empty file at that name is Psi4's own log — reading it is right, and
+    // writing our (empty) capture over it would destroy the only record of the
+    // calculation.
     const target = path.join(cwd, outputName);
-    await fsp.writeFile(target, stdout, 'utf8');
+    const existing = await fsp.stat(target).catch(() => null);
+    let text = stdout;
+    let outputSource = 'stdout';
+    if (existing?.isFile() && existing.size > 0) {
+      const fromFile = await fsp.readFile(target, 'utf8');
+      if (fromFile.length > MAX_OUTPUT_BYTES) {
+        text = fromFile.slice(0, MAX_OUTPUT_BYTES);
+        truncated = true;
+      } else {
+        text = fromFile;
+      }
+      outputSource = 'file';
+    } else {
+      await fsp.writeFile(target, stdout, 'utf8');
+    }
     const stat = await fsp.stat(target).catch(() => null);
 
     return {
       exitCode: exit.code,
       signal: exit.signal,
       cancelled: this.cancelled,
-      outputText: stdout,
+      outputText: text,
       outputName,
-      outputSource: 'stdout',
+      outputSource,
       truncated,
-      outputBytes: stat ? { size: stat.size, bytesRead: stat.size, truncated, windows: [] } : null,
+      outputBytes: stat
+        ? { size: stat.size, bytesRead: Math.min(stat.size, text.length), truncated, windows: [] }
+        : null,
       stderr,
     };
   }

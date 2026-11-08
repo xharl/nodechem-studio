@@ -454,18 +454,36 @@ function finalStructure(text) {
  * a negative value for an imaginary mode.
  */
 function frequencyBlock(text) {
-  const index = text.lastIndexOf('#  #');
-  if (index === -1) return { values: [], scalingFactor: null };
-  const tail = text.slice(index, index + 20000);
-  const values = [];
-  const row = new RegExp(String.raw`^\s*(\d+):\s*(${NUMBER})\s*$`, 'gm');
-  let match;
-  while ((match = row.exec(tail)) !== null) {
-    const value = toNumber(match[2]);
-    if (value !== null) values.push(value);
-  }
   const scaling = new RegExp(String.raw`Scaling factor for frequencies\s*=\s*(${NUMBER})`, 'i').exec(text);
-  return { values, scalingFactor: scaling ? toNumber(scaling[1]) : null };
+  const scalingFactor = scaling ? toNumber(scaling[1]) : null;
+
+  // Psi4 1.1–1.4: a `#  #` block with one `N: value` line per mode.
+  const index = text.lastIndexOf('#  #');
+  if (index !== -1) {
+    const tail = text.slice(index, index + 20000);
+    const values = [];
+    const row = new RegExp(String.raw`^\s*(\d+):\s*(${NUMBER})\s*$`, 'gm');
+    let match;
+    while ((match = row.exec(tail)) !== null) {
+      const value = toNumber(match[2]);
+      if (value !== null) values.push(value);
+    }
+    if (values.length > 0) return { values, scalingFactor };
+  }
+
+  // Psi4 1.9+: a table whose `Freq [cm^-1]` row carries the values, and an
+  // imaginary mode written `1234.56i` rather than a negative number.
+  const values = [];
+  const table = /^\s*Freq \[cm\^-1\]\s+(.+)$/gm;
+  let row;
+  while ((row = table.exec(text)) !== null) {
+    for (const token of row[1].trim().split(/\s+/)) {
+      const imaginary = /^(-?[\d.]+)i$/i.exec(token);
+      const value = imaginary ? -Math.abs(toNumber(imaginary[1]) ?? 0) : toNumber(token);
+      if (value !== null && Number.isFinite(value)) values.push(value);
+    }
+  }
+  return { values, scalingFactor };
 }
 
 /**
@@ -483,10 +501,28 @@ function optimizationSummary(text) {
   const complete = last(String.raw`Optimization is complete!\s*\(in (\d+) steps?\)`);
   const failed = last(String.raw`Optimization has failed!\s*\(in (\d+) steps?\)`);
   const stuck = last(String.raw`Could not converge geometry optimization in (\d+) iterations`);
+  // Psi4 1.9+ prints `Optimizer: Optimization complete!` with no step count; the
+  // count is the last row of the `Step   Total Energy` table.
+  const bareComplete = /Optimizer:\s*Optimization complete!/i.exec(text);
+  const bareFailed = /Optimizer:\s*Optimization (?:failed|did not converge)/i.exec(text);
+  const stepCount = (() => {
+    const start = text.lastIndexOf('Total Energy');
+    const tail = text.slice(Math.max(0, start - 200), start + 20000);
+    const rows = /^\s+(\d+)\s+-?\d+\.\d+/gm;
+    let match;
+    let max = null;
+    while ((match = rows.exec(tail)) !== null) {
+      const value = Number(match[1]);
+      if (Number.isFinite(value) && (max === null || value > max)) max = value;
+    }
+    return max;
+  })();
   const attempted = /==> Optimization Summary <==|OPTKING|Optimization is complete!|Optimization has failed!|Could not converge geometry optimization/i.test(text);
   const newest = [complete, failed, stuck].filter(Boolean).sort((a, b) => a.index - b.index).at(-1) || null;
   if (complete && newest === complete) return { completed: true, cycles: complete.cycles, attempted: true };
   if (newest) return { completed: false, cycles: newest.cycles, attempted: true };
+  if (bareComplete) return { completed: true, cycles: stepCount, attempted: true };
+  if (bareFailed) return { completed: false, cycles: stepCount, attempted: true };
   return { completed: false, cycles: null, attempted: attempted || null };
 }
 
@@ -590,13 +626,19 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
     }
     return max;
   })();
-  const scfConverged = /Energy converged\./.test(body);
-  const reference = new RegExp(String.raw`@(?:DF-)?(R|U|RO)(?:HF|KS)\s+Final Energy:`).exec(body)?.[1] || null;
+  // Psi4 1.1–1.4 print `Energy converged.`; 1.9+ print `Energy and wave function converged.`
+  const scfConverged = /Energy(?: and wave function)? converged\./i.test(body);
+  const reference = new RegExp(String.raw`@(?:DF-)?((?:RO|U|R)(?:HF|KS))\s+Final Energy:`).exec(body)?.[1] || null;
 
   const sapt = saptResults(body);
   const mp2 = lastNumber(body, String.raw`MP2 Total Energy \(a\.u\.\)\s*:\s*(${NUMBER})`);
   const ccsd = lastNumber(body, String.raw`Total\s+CCSD\s+energy\s*=\s*(${NUMBER})`);
   const total = lastNumber(body, String.raw`Total Energy\s*=\s*(${NUMBER})`);
+  // A frequency job prints `Total Energy =` once per displaced geometry, so the
+  // last one is a displaced point, not the reference. The thermochemistry block
+  // states the electronic energy at the well bottom; that is the number the job
+  // reports as its result.
+  const electronicAtBottom = lastNumber(body, String.raw`Total E(?:_e|_0|0)?, Electronic energy at well bottom(?: at 0 \[K\])?\s+(${NUMBER}) \[Eh\]`);
 
   let finalEnergy = null;
   let finalSource = null;
@@ -612,6 +654,9 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   } else if (mp2 !== null) {
     finalEnergy = mp2;
     finalSource = 'mp2';
+  } else if (electronicAtBottom !== null) {
+    finalEnergy = electronicAtBottom;
+    finalSource = 'freq-reference';
   } else if (total !== null) {
     finalEnergy = total;
     finalSource = 'total-energy';
@@ -625,8 +670,8 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   const lastGeometry = finalStructure(body) || geometries[geometries.length - 1]?.atoms || null;
   const frequencies = frequencyBlock(body);
   const enthalpy = lastNumber(body, String.raw`Total H, Enthalpy at\s+${NUMBER} \[K\]\s+(${NUMBER}) \[Eh\]`);
-  const gibbs = lastNumber(body, String.raw`Total G, Free enthalpy at\s+${NUMBER} \[K\]\s+(${NUMBER}) \[Eh\]`);
-  const zpe = lastNumber(body, String.raw`Vibrational ZPE\s+[-\d.]+ \[kcal/mol\]\s+[-\d.]+ \[kJ/mol\]\s+(${NUMBER}) \[Eh\]`);
+  const gibbs = lastNumber(body, String.raw`Total G,\s*(?:Free enthalpy|Gibbs energy) at\s+${NUMBER} \[K\]\s+(${NUMBER}) \[Eh\]`);
+  const zpe = lastNumber(body, String.raw`Vibrational ZP(?:E|VE)\s+[-\d.]+ \[kcal/mol\]\s+[-\d.]+ \[kJ/mol\]\s+(${NUMBER}) \[Eh\]`);
   const temperature = lastNumber(body, String.raw`Temperature:\s+(${NUMBER}) \[K\]`);
 
   const imaginary = frequencies.values.filter((value) => value < -0.001);
