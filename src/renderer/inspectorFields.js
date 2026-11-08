@@ -8,6 +8,7 @@
  */
 
 import { isOptJob } from '../shared/tsForceConstants.js';
+import { isCompositeJobType } from '../shared/routePresets.js';
 
 /**
  * Gaussian Link 0 / resource fields. xTB ignores all of them; a thread count
@@ -55,21 +56,28 @@ export function calcInspectorFieldIds(engineId, settings = {}) {
     if (isOptJob(jobType)) fields.push('job.optConvergence');
     if (jobType === 'Opt=TS') fields.push('job.forceConstants');
     fields.push('job.memory', 'job.memoryUnit', 'job.nproc', 'job.checkpoint');
-    fields.push(
-      'method.routePreset',
-      'method.method',
-      'method.basis',
-      'method.dispersion',
-      'method.scf',
-      'method.grid',
-      'method.population',
-      'method.verbosity',
-      'method.tdStates',
-      'method.tdTriplets',
-    );
+    // A composite keyword carries its own method, basis and job steps (#77), and
+    // the inspector replaces the whole group with a note, so none of these
+    // fields exist while one is chosen.
+    if (!isCompositeJobType(jobType)) {
+      fields.push(
+        'method.routePreset',
+        'method.method',
+        'method.basis',
+        'method.dispersion',
+        'method.scf',
+        'method.grid',
+        'method.population',
+        'method.verbosity',
+        'method.tdStates',
+        'method.tdTriplets',
+      );
+    }
   }
 
-  fields.push('solvation.enabled', 'solvation.model', 'solvation.solvent');
+  // Solvation belongs to both engines; a composite route refuses it.
+  if (!isCompositeJobType(jobType)) fields.push('solvation.enabled', 'solvation.model', 'solvation.solvent');
+
   fields.push('molecule.charge', 'molecule.multiplicity');
   fields.push(...GATE_FIELDS);
   if (engineId !== 'xtb') fields.push('validity.checks');

@@ -19,7 +19,7 @@ import {
   draftIsRestorable,
   normalizeDraft,
 } from '../shared/draft.js';
-import { defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import { JOB_TYPES as SHARED_JOB_TYPES, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
   formatPopulation,
@@ -27,6 +27,7 @@ import {
 } from '../shared/conformers.js';
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
+import { buildOrcaInput } from '../shared/engines/orca.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
@@ -36,6 +37,7 @@ import {
   applyRoutePreset,
   defaultDispersionFor,
   dispersionForMethodChange,
+  isCompositeJobType,
   routePresetIdFor,
 } from '../shared/routePresets.js';
 import { parseStructureRecords } from '../shared/structureImport.js';
@@ -117,11 +119,20 @@ const BASIS_SETS = [
   ['def2-SVP', 'def2-SVP'], ['6-31G(d)', '6-31G(d)'], ['6-311+G(d,p)', '6-311+G(d,p)'],
   ['def2-TZVP', 'def2-TZVP'], ['cc-pVTZ', 'cc-pVTZ'], ['SDD', 'SDD'],
 ];
-const JOB_TYPES = [
-  ['Opt', 'Optimization'], ['Opt Freq', 'Optimization + frequency'],
-  ['Opt=TS', 'Transition state'], ['Freq', 'Frequency'], ['IRC', 'IRC path'],
-  ['SP', 'Single point'], ['Scan', 'PES scan'], ['NMR', 'NMR shieldings'],
-];
+// The job-type list lives in the schema so a new type cannot be offered by one
+// side and refused by the other. Composite methods (#77) arrive through the same
+// list; they take no method/basis pair, so the inspector hides that group.
+const JOB_TYPE_LABELS = {
+  Opt: 'Optimization',
+  'Opt Freq': 'Optimization + frequency',
+  'Opt=TS': 'Transition state',
+  Freq: 'Frequency',
+  IRC: 'IRC path',
+  SP: 'Single point',
+  Scan: 'PES scan',
+  NMR: 'NMR shieldings',
+};
+const JOB_TYPES = SHARED_JOB_TYPES.map((id) => [id, JOB_TYPE_LABELS[id] || `${id} · composite`]);
 const IRC_DIRECTIONS = [['forward', 'Forward'], ['reverse', 'Reverse'], ['both', 'Both directions']];
 const DISPERSIONS = [['', 'None'], ['GD3BJ', 'D3(BJ)'], ['GD3', 'D3'], ['D4', 'D4 (Gaussian 16 C.01+)']];
 const SCF_OPTIONS = [['', 'Default'], ['Tight', 'Tight'], ['VeryTight', 'Very tight']];
@@ -293,12 +304,16 @@ const incoming = (id) => state.project.edges.filter((edge) => edge.to === id);
 const outgoing = (id) => state.project.edges.filter((edge) => edge.from === id);
 const statusFor = (node) => STATUS[node.state] || STATUS.blocked;
 function kindForJob(jobType) {
+  if (isCompositeJobType(jobType)) return 'Composite';
   return ({
     Opt: 'Opt', 'Opt Freq': 'O+F', 'Opt=TS': 'TS', Freq: 'Freq', IRC: 'IRC', SP: 'SP', Scan: 'Scan', NMR: 'NMR',
   }[jobType] || 'SP');
 }
 
 function routeShort(settings) {
+  // A composite keyword is the whole route: Gaussian supplies method, basis and
+  // job steps, so a "method/basis" prefix would describe a route it refuses.
+  if (isCompositeJobType(settings?.jobType)) return `#p ${settings.jobType}`;
   // The preview must show the route that will be written: a heavy element with
   // an ECP basis becomes GenECP and carries a basis/ECP block after the atoms.
   const coords = state.project?.molecule?.coords || [];
@@ -1134,6 +1149,23 @@ function calcInspector(node) {
     } catch (error) {
       routeLines.push(`xTB cannot run this block: ${esc(error.message)}`);
     }
+  } else if (engine.id === 'orca') {
+    // ORCA never reads a Gaussian route: show the keywords the builder would
+    // actually write, or the reason it refuses.
+    try {
+      const built = buildOrcaInput({
+        title: node.title,
+        settings: s,
+        molecule: moleculeForNode(node),
+        inputName: `${node.id}.inp`,
+      });
+      routeLines.push(...built.inputText.split('\n')
+        .filter((line) => line.startsWith('!') || line.startsWith('%'))
+        .slice(0, 4)
+        .map(esc));
+    } catch (error) {
+      routeLines.push(`ORCA cannot run this block: ${esc(error.message)}`);
+    }
   } else {
     routeLines.push(`%Chk=${esc(s.checkpoint || chkName(node.id))}`);
     if (checkpointSource) routeLines.push(`%OldChk=${esc(chkName(checkpointSource.id))}`);
@@ -1211,6 +1243,14 @@ function calcInspector(node) {
       : '',
   ].join(''));
 
+  // A composite method carries its own sequence in one keyword: Gaussian cannot
+  // run `G4/6-31G(d)`, so offering the pair here would invite a route the builder
+  // refuses. Show what the keyword actually runs instead.
+  const compositeJob = isCompositeJobType(s.jobType);
+  const compositeNote = '<div class="field full"><span class="inspector-note">'
+    + '<strong>' + esc(s.jobType) + '</strong> is a composite method: Gaussian runs its own fixed '
+    + 'sequence and reports one 0 K energy. Method, basis, dispersion, solvation and excited-state '
+    + 'settings do not apply and are refused if set.</span></div>';
   const methodGroup = group('Method & basis', `${s.method}/${s.basis}`, true, [
     selectField('Route preset', 'routePreset', [
       ['', 'Custom'],
@@ -1374,10 +1414,10 @@ function calcInspector(node) {
     ${callout}
     <div class="code-block" style="margin-bottom:10px">${routeLines.map((line) => `<div>${line}</div>`).join('')}</div>
     ${jobGroup}
-    ${isXtb ? xtbGroup : methodGroup}
-    ${isXtb ? '' : excitedGroup}
-    ${isXtb ? '' : ramanGroup}
-    ${isXtb ? xtbSolvationGroup : gaussianSolvationGroup}
+    ${isXtb ? xtbGroup : compositeJob ? compositeNote : methodGroup}
+    ${isXtb || compositeJob ? '' : excitedGroup}
+    ${isXtb || compositeJob ? '' : ramanGroup}
+    ${isXtb ? xtbSolvationGroup : compositeJob ? '' : gaussianSolvationGroup}
     ${moleculeGroup}
     ${gatesGroup}
     ${isXtb ? '' : validityGroup}
@@ -1873,8 +1913,29 @@ function updateNodeField(node, key, value) {
       const nullWhenEmpty = key === 'imaginary' || key === 'minMagnitude';
       node.settings[key] = value === '' ? (nullWhenEmpty ? null : 0) : Number(value);
     } else if (key === 'jobType') {
+      const wasComposite = isCompositeJobType(node.settings.jobType);
       node.settings.jobType = value;
       node.kind = kindForJob(value);
+      const nowComposite = isCompositeJobType(value);
+      // A composite keyword carries its own method, basis, dispersion and job
+      // steps; leaving the Gaussian pair behind makes the builder refuse the
+      // route, and the inspector hides those fields while composite is chosen,
+      // so the user could not clear them. Clear on the way in, restore the
+      // project default on the way out.
+      if (nowComposite && !wasComposite) {
+        node.settings.method = '';
+        node.settings.basis = '';
+        node.settings.dispersion = '';
+        node.settings.solvation = false;
+        node.settings.population = '';
+        node.settings.orbitals = false;
+        node.settings.tdStates = 0;
+        node.settings.customKeywords = '';
+      } else if (wasComposite && !nowComposite) {
+        node.settings.method = state.project?.defaults?.method || MODERN_ROUTE_PRESET.method;
+        node.settings.basis = state.project?.defaults?.basis || MODERN_ROUTE_PRESET.basis;
+        node.settings.dispersion = defaultDispersionFor(node.settings.method);
+      }
     } else if (key === 'method') {
       node.settings.method = value;
       node.settings.dispersion = dispersionForMethodChange(value, node.settings.dispersion);

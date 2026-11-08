@@ -67,7 +67,13 @@ export class RunManager {
   /** Build the process runner for an engine. Tests inject a fake one. */
   runnerFor(engine) {
     if (this.createRunner) return this.createRunner(engine);
-    return engine.id === 'xtb' ? new XtbRunner() : new GaussianRunner();
+    if (engine.id === 'xtb') return new XtbRunner();
+    if (engine.id === 'gaussian') return new GaussianRunner();
+    // ORCA ships an input builder, a parser and preflight discovery (#31), but no
+    // runner: handing its .inp to g16 would run a different program and print a
+    // parseable-looking failure. Refuse until the runner lands (#93).
+    throw new Error(`${engine.label || engine.id} has no runner yet: its input and parser are available,`
+      + ' but execution is not wired. Run the job in ORCA and import the output, or use Gaussian/xTB.');
   }
 
   /** Internal subscribers (the queue) receive the same events as the renderer. */

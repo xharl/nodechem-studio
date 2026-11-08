@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { RunManager } from '../electron/runner/runManager.js';
+import { ENGINES } from '../src/shared/engines/index.js';
 import { readOutputFile } from '../electron/runner/gaussianRunner.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 
@@ -357,4 +358,16 @@ describe('RunManager large-output handling', () => {
     expect(runJson.gates.overall).toBe('unknown');
     expect(runJson.gates.overall).not.toBe('pass');
   }, 180000);
+});
+
+describe('RunManager engine selection', () => {
+  // ORCA has an input builder and a parser since #31, but no runner. Falling back
+  // to the Gaussian runner would execute g16 on an ORCA .inp and record whatever
+  // came back; refusing is the only honest answer until the runner exists (#93).
+  it('refuses an engine with no runner instead of borrowing the Gaussian one', () => {
+    const manager = new RunManager({ root: os.tmpdir() });
+    expect(() => manager.runnerFor(ENGINES.orca)).toThrow(/no runner yet/);
+    expect(manager.runnerFor(ENGINES.gaussian).constructor.name).toMatch(/GaussianRunner/);
+    expect(manager.runnerFor(ENGINES.xtb).constructor.name).toMatch(/XtbRunner/);
+  });
 });

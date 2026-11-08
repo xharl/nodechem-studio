@@ -66,6 +66,16 @@ describe('engine-aware calculation inspector', () => {
     expect(calcInspectorFieldIds('gaussian', { jobType: 'Freq' })).not.toContain('job.optConvergence');
     expect(calcInspectorFieldIds('gaussian', { jobType: 'Freq' })).not.toContain('job.forceConstants');
     expect(calcInspectorFieldIds('gaussian', { jobType: 'IRC' })).toContain('job.ircDirection');
+    // A composite keyword supplies its own method, basis and job steps (#77): the
+    // inspector replaces the whole group with a note, and the builder refuses a
+    // leftover pair, so none of those fields may be advertised.
+    const composite = calcInspectorFieldIds('gaussian', { jobType: 'G4' });
+    expect(composite).not.toContain('method.method');
+    expect(composite).not.toContain('method.basis');
+    expect(composite).not.toContain('method.dispersion');
+    expect(composite).not.toContain('solvation.enabled');
+    expect(composite).toContain('job.jobType');
+    expect(composite).toContain('job.memory');
   });
 
   it('offers xTB solvation controls but Gaussian PCM/SMD wording only to Gaussian', () => {

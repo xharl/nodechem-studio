@@ -290,8 +290,11 @@ Linux/macOS Gaussian job has been run.
 | macOS package | **Open** — runner supports macOS; there is no build to sign or test | §5 Phase 6 |
 | Code signing | **Open** — no certificate; both installers are unsigned | §5 Phase 6 |
 | Conformer fan-out into sibling calculations (#80) | **Shipped after 0.3** — one task per retained member, member-paired edges and checkpoints, per-member `run.json`, report grouping. A single run fed by several fanned-out branches is refused (#86). Propagating the fan through a chain (#87) is open | §4b, `src/shared/workflowTasks.js` |
-| Engine abstraction + ORCA (#31) | Milestone `1.0 — reach` | GitHub issue |
-| Molecular builder (#58), wavefunction analysis (#59), multiscale QM/MM (#67), composite methods (#77) | Backlog, no milestone yet | GitHub issues |
+| Engine abstraction + ORCA (#31) | **Partly shipped** — engine interface, ORCA input builder, log parser and preflight are in; ORCA execution needs a stdout-capturing runner (#93), and validity/renderer copy still assume Gaussian | `src/shared/engines/` |
+| Molecular builder (#58) | Backlog, no milestone yet | GitHub issue |
+| Wavefunction analysis (#59) | **Ingest half shipped** — cube and fchk parsers, derived values, export columns; orbital rendering, QTAIM, NCI and the attach flow remain | `src/shared/wavefunction.js` |
+| Composite methods and counterpoise (#77) | **Shipped** — composite job types with a gate that refuses a component energy, counterpoise/BSSE, docs; per-link expansion is not implemented | `src/shared/gaussianOutput.js` |
+| Multiscale QM/MM, MD and docking (#67) | **On hold by decision** (2026-11-08) — not scoped or scheduled; the issue stays open | GitHub issue |
 | HPC submit/monitor (#64) | **Deferred by decision** (2026-11-08) — no cluster work until the local workflow is settled; cluster export remains the supported path | GitHub issue |
 | Release verification (checksums, SBOM, provenance) and the update notice | **Shipped after 0.3** — `src/shared/updateCheck.js`, `scripts/release-assets.mjs`; the workflow steps only run on the next tag | §5 Phase 3, `docs/guide/install.md` |
 | VCD/ROA (#78) | **Blocked on data** — needs one real Gaussian `Freq=(VCD)` log to write the parser against | GitHub issue |
