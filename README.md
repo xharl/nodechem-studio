@@ -67,8 +67,10 @@ you trust a result.
 | Linux x64 | `chmod +x nodechem-studio-0.3.0-x86_64.AppImage` and run it. Unsigned. |
 | From source | Node 22+, then `npm ci && npm run dev`. |
 
-Neither artifact installs Gaussian or xTB. See [Install](docs/guide/install.md) for the data
-directory, requirements and the unsigned-build warning.
+Neither artifact installs Gaussian or xTB. Both are unsigned; `SHA256SUMS`, a CycloneDX SBOM and a
+build-provenance attestation accompany every release. See [Install](docs/guide/install.md) for the
+data directory and requirements, and
+[how to verify your download](docs/guide/install.md#verify-your-download).
 
 ## First five minutes
 

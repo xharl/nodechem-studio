@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   package:
@@ -23,6 +25,12 @@ jobs:
       - run: npm run dist:linux
         env:
           GIT_COMMIT: ${{ github.sha }}
+      - run: node scripts/release-assets.mjs release
+      - name: Generate SBOM
+        run: npm sbom --sbom-format cyclonedx --package-lock-only > sbom.cdx.json
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release/*.AppImage
       - uses: actions/upload-artifact@v7
         with:
           name: nodechem-studio-linux
@@ -30,4 +38,6 @@ jobs:
             release/*.AppImage
             release/*.blockmap
             release/latest*.yml
+            release/SHA256SUMS
+            sbom.cdx.json
           if-no-files-found: error
