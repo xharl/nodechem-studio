@@ -85,6 +85,7 @@ graph.
 | `multiplicity` | integer | default 1 |
 | `fragments[]` | string[] | ≤ 64, ≤ 400 chars each |
 | `coords[]` | object[] | `{ element, x, y, z, fragment? }`, ≤ 1000 atoms, Å; `fragment` is a 1-based counterpoise label |
+| `geometry` | object | `{ source, file, format, dimension? }` — `source` is `demo`, `imported` or `manual`, `format` names the reader that produced the coordinates, and `dimension: "2d"` marks a drawing (a CDXML import) whose bond lengths are page units with every atom at z = 0: a depiction, never a structure to run on unoptimised |
 
 `defaults`:
 

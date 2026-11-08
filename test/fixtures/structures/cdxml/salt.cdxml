@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd">
+<CDXML CreationProgram="Synthetic fixture (hand-written, not ChemDraw output)" Name="sodium chloride">
+  <fonttable>
+    <font id="1" charset="iso-8859-1" name="Arial"/>
+  </fonttable>
+  <colortable>
+    <color id="0" r="1" g="1" b="1"/>
+  </colortable>
+  <page id="1" BoundingBox="60 90 180 110">
+    <fragment id="2" Name="sodium cation">
+      <n id="11" p="80.00 100.00">
+        <t id="12" p="80.00 100.00">
+          <s font="1" size="10">Na</s>
+          <s font="1" size="7">+</s>
+        </t>
+      </n>
+    </fragment>
+    <fragment id="3" Name="chloride anion">
+      <n id="21" p="140.00 100.00">
+        <t id="22" p="140.00 100.00">
+          <s font="1" size="10">Cl</s>
+          <s font="1" size="7">-</s>
+        </t>
+      </n>
+    </fragment>
+  </page>
+</CDXML>

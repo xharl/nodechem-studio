@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd">
+<CDXML CreationProgram="Synthetic fixture (hand-written, not ChemDraw output)" Name="unrecognised label">
+  <fonttable>
+    <font id="1" charset="iso-8859-1" name="Arial"/>
+  </fonttable>
+  <page id="1" BoundingBox="70 90 140 110">
+    <fragment id="2" Name="labelled group">
+      <n id="11" p="90.00 100.00"/>
+      <n id="12" p="110.00 100.00">
+        <t id="13" p="110.00 100.00">
+          <s font="1" size="10">CO</s>
+          <s font="1" size="7">2</s>
+          <s font="1" size="10">H</s>
+        </t>
+      </n>
+      <b id="21" B="11" E="12" Order="1"/>
+    </fragment>
+  </page>
+</CDXML>

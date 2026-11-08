@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd">
+<CDXML CreationProgram="Synthetic fixture (hand-written, not ChemDraw output)" Name="wedge cue">
+  <fonttable>
+    <font id="1" charset="iso-8859-1" name="Arial"/>
+  </fonttable>
+  <colortable>
+    <color id="0" r="1" g="1" b="1"/>
+  </colortable>
+  <page id="1" BoundingBox="70 80 130 120">
+    <fragment id="2" Name="wedge cue">
+      <n id="11" p="100.00 100.00"/>
+      <n id="12" p="114.00 100.00">
+        <t id="13" p="114.00 100.00"><s font="1" size="10">O</s></t>
+      </n>
+      <n id="14" p="86.00 100.00">
+        <t id="15" p="86.00 100.00"><s font="1" size="10">N</s></t>
+      </n>
+      <n id="16" p="100.00 114.00">
+        <t id="17" p="100.00 114.00"><s font="1" size="10">C</s></t>
+      </n>
+      <n id="18" p="100.00 86.00">
+        <t id="19" p="100.00 86.00"><s font="1" size="10">H</s></t>
+      </n>
+      <b id="21" B="11" E="12" Order="1" Display="WedgeBegin"/>
+      <b id="22" B="11" E="14" Order="1"/>
+      <b id="23" B="11" E="16" Order="1" Display="WedgedHashBegin"/>
+      <b id="24" B="11" E="18" Order="1"/>
+    </fragment>
+  </page>
+</CDXML>

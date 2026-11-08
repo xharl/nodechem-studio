@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd">
+<CDXML CreationProgram="Synthetic fixture (hand-written, not ChemDraw output)" Name="butane skeleton">
+  <fonttable>
+    <font id="1" charset="iso-8859-1" name="Arial"/>
+  </fonttable>
+  <page id="1" BoundingBox="70 90 140 120">
+    <fragment id="2">
+      <n id="11" p="80.00 100.00"/>
+      <n id="12" p="93.00 106.00"/>
+      <n id="13" p="106.00 100.00"/>
+      <n id="14" p="119.00 106.00"/>
+      <b id="21" B="11" E="12" Order="1"/>
+      <b id="22" B="12" E="13" Order="1"/>
+      <b id="23" B="13" E="14" Order="1"/>
+    </fragment>
+  </page>
+</CDXML>

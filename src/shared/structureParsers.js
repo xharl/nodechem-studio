@@ -56,6 +56,15 @@ function elementFromPdbName(name) {
   return isElementSymbol(one) ? one : '';
 }
 
+/* ── CDXML ────────────────────────────────────────────────── */
+
+/**
+ * ChemDraw's XML drawing format (#120). The reader lives in `cdxml.js`; it is
+ * re-exported here because every other format reader is reached through this
+ * module, and `structureImport.js` should not grow a second back door.
+ */
+export { isCdxmlDocument, parseCdxmlRecords as parseCdxml } from './cdxml.js';
+
 /* ── PDB / PDBQT ──────────────────────────────────────────── */
 
 /**
