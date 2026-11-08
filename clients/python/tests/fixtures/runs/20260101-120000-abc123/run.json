@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "20260101-120000-abc123",
+  "status": "completed",
+  "engine": "xtb",
+  "argv": [
+    "sp.xyz",
+    "--gfn",
+    "2"
+  ],
+  "dryRun": true,
+  "title": "Fixture single point",
+  "inputName": "sp.xyz",
+  "outputName": "sp.out",
+  "outputFile": "sp.out",
+  "outputSource": "fixture",
+  "truncated": false,
+  "outputBytes": {
+    "size": 120,
+    "bytesRead": 120,
+    "truncated": false,
+    "windows": []
+  },
+  "executable": null,
+  "scratchDir": null,
+  "checkpointHandoff": null,
+  "inputSha256": null,
+  "outputSha256": null,
+  "app": {
+    "version": "test",
+    "commit": "unknown"
+  },
+  "provenance": {
+    "kind": "fixture",
+    "jobType": "SP",
+    "method": {
+      "hamiltonian": "gfn2"
+    },
+    "input": {
+      "name": "sp.xyz",
+      "bytes": 42
+    },
+    "output": null
+  },
+  "startedAt": "2026-01-01T12:00:00.000Z",
+  "finishedAt": "2026-01-01T12:00:01.000Z",
+  "exitCode": 0,
+  "parsed": {
+    "canonicalVersion": 1,
+    "engine": "xtb",
+    "status": "completed",
+    "terminationCode": "normal",
+    "termination": "normal termination of xtb",
+    "complete": true,
+    "finalEnergy": {
+      "hartree": -5.070370764545,
+      "source": "scc"
+    }
+  },
+  "gates": {
+    "overall": "pass",
+    "gates": [
+      {
+        "name": "Normal termination",
+        "required": true,
+        "result": "pass",
+        "detail": null
+      }
+    ],
+    "complete": true,
+    "validity": null
+  },
+  "cache": null,
+  "error": null
+}

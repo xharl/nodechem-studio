@@ -50,12 +50,18 @@ Reference pages:
   gaps it does not cover yet.
 - [Privacy and licensing](privacy-and-licensing.md) — the one outbound call (an update check you
   trigger), and what the licence does and does not grant.
-- [Headless CLI](cli.md) — `ncs validate`, `ncs build-input`, `ncs run` and `ncs report`, with its
-  exit codes.
+- [Headless CLI](cli.md) — `ncs validate`, `ncs build-input`, `ncs run`, `ncs report`
+  and `ncs export`, with its exit codes.
+- [Scripting and the record schema](../SCRIPTING.md) — `run.json` as a versioned contract,
+  `ncs export`, and the stdlib-only Python client.
+- [Engine plugins](../ENGINE_PLUGIN.md) — the `registerEngine` spec, its refusals, and why
+  the built-in four do not move.
 
 Normative references, for people reading code or writing tooling:
 
 - [`docs/PROJECT-FORMAT.md`](../PROJECT-FORMAT.md) — the `.ncs` document and the on-disk layout.
+- [`schemas/run-record.v1.schema.json`](../../schemas/run-record.v1.schema.json) — the run-record
+  contract (JSON Schema draft 2020-12).
 - [`docs/CLUSTER_EXPORT.md`](../CLUSTER_EXPORT.md) — the SLURM/PBS export folder and manifest.
 - [`docs/IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) — phased plan and remaining work.
 - [`README.md`](../../README.md) — the project landing page.

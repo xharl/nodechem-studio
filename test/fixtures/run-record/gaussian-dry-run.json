@@ -1,0 +1,610 @@
+{
+  "schemaVersion": 1,
+  "id": "20261108-183053-srzesw",
+  "status": "completed",
+  "engine": "gaussian",
+  "argv": [
+    "sp-energy.gjf"
+  ],
+  "dryRun": true,
+  "title": "Single-point energy",
+  "inputName": "sp-energy.gjf",
+  "outputName": "sp-energy.out",
+  "outputFile": "sp-energy.out",
+  "outputSource": "fixture",
+  "truncated": false,
+  "outputBytes": {
+    "size": 705,
+    "bytesRead": 705,
+    "truncated": false,
+    "windows": [
+      {
+        "name": "fixture",
+        "start": 0,
+        "end": 705,
+        "bytes": 705,
+        "supplied": [
+          "banner",
+          "route",
+          "geometry",
+          "scf",
+          "optimization",
+          "frequencies",
+          "thermochemistry",
+          "termination"
+        ]
+      }
+    ]
+  },
+  "executable": null,
+  "scratchDir": "/tmp/ncs-fixture-gaussian/runs/20261108-183053-srzesw/scratch",
+  "checkpointHandoff": null,
+  "inputSha256": "ebc2eb3671619741f8ea85faaa4eab0885d40435872913db665996828039b943",
+  "outputSha256": "2dc471c495991adaa55996dd2e1c7fd7cea038219ca18c2d4de72bde111e8450",
+  "app": {
+    "version": "cli",
+    "commit": "unknown"
+  },
+  "provenance": {
+    "kind": "fixture",
+    "jobType": "SP",
+    "method": {
+      "functional": "B3LYP",
+      "basis": "def2-SVP",
+      "dispersion": "GD3BJ",
+      "solvation": null,
+      "grid": null,
+      "scf": null,
+      "td": null
+    },
+    "input": {
+      "name": "sp-energy.gjf",
+      "bytes": 251
+    },
+    "output": {
+      "name": "sp-energy.out",
+      "source": "fixture",
+      "bytes": 705,
+      "hashSource": "file",
+      "sha256": "2dc471c495991adaa55996dd2e1c7fd7cea038219ca18c2d4de72bde111e8450"
+    }
+  },
+  "startedAt": "2026-11-08T18:30:53.011Z",
+  "finishedAt": "2026-11-08T18:30:53.402Z",
+  "exitCode": 0,
+  "parsed": {
+    "status": "completed",
+    "termination": "Normal termination of Gaussian",
+    "program": {
+      "name": null,
+      "version": null,
+      "revision": null
+    },
+    "route": "#P B3LYP/6-31G(d) Opt Freq",
+    "scf": {
+      "status": "converged",
+      "energyHartree": -76,
+      "cycles": 8,
+      "method": "RB3LYP",
+      "failure": null
+    },
+    "optimization": {
+      "completed": true,
+      "stationary": true,
+      "cycles": null,
+      "steps": null,
+      "convergence": null
+    },
+    "geometry": {
+      "input": null,
+      "standard": null,
+      "final": null
+    },
+    "finalGeometry": null,
+    "frequencies": {
+      "count": 4,
+      "imaginaryCount": 0,
+      "imaginaryValues": [],
+      "minImaginary": null,
+      "values": [
+        610,
+        1580,
+        3650,
+        3760
+      ],
+      "lowest": [
+        610,
+        1580,
+        3650,
+        3760
+      ],
+      "invalid": false,
+      "invalidTokens": []
+    },
+    "raman": null,
+    "rotatoryStrengths": null,
+    "orbitals": {
+      "matched": false,
+      "reason": "no orbital eigenvalues in this log",
+      "alpha": null,
+      "beta": null,
+      "line": null,
+      "openShell": false,
+      "gapEv": null
+    },
+    "thermochemistry": {
+      "molecularMassAmu": null,
+      "symmetryNumber": null,
+      "rotationalConstantsGHz": null,
+      "rotationalTemperaturesK": null,
+      "freeEnergyHartree": -76.02,
+      "enthalpyHartree": null,
+      "thermalEnergyHartree": null,
+      "zeroPointEnergyHartree": null,
+      "zeroPointCorrectionHartree": null,
+      "thermalCorrectionEnergyHartree": null,
+      "thermalCorrectionEnthalpyHartree": null,
+      "thermalCorrectionFreeEnergyHartree": null,
+      "zeroPointVibrationalEnergyJoulesPerMol": null,
+      "zeroPointVibrationalEnergyKcalPerMol": null,
+      "temperatureK": null,
+      "pressureAtm": null,
+      "thermalEnergyKcalPerMol": {
+        "total": null,
+        "electronic": null,
+        "translational": null,
+        "rotational": null,
+        "vibrational": null
+      },
+      "heatCapacityCalPerMolK": {
+        "total": null,
+        "electronic": null,
+        "translational": null,
+        "rotational": null,
+        "vibrational": null
+      },
+      "entropyCalPerMolK": {
+        "total": null,
+        "electronic": null,
+        "translational": null,
+        "rotational": null,
+        "vibrational": null
+      }
+    },
+    "finalEnergy": {
+      "hartree": -76,
+      "source": "scf"
+    },
+    "composite": null,
+    "counterpoise": null,
+    "spinContamination": {
+      "before": null,
+      "after": null
+    },
+    "spinSquared": {
+      "value": null,
+      "source": null,
+      "s": null
+    },
+    "wavefunctionStability": {
+      "stable": null,
+      "detail": null
+    },
+    "excitedStates": {
+      "count": 0,
+      "states": []
+    },
+    "reactionPath": null,
+    "scan": null,
+    "nmr": null,
+    "trajectory": null,
+    "normalModes": null,
+    "normalModesMeta": null,
+    "charges": {
+      "mulliken": [],
+      "lowdin": [],
+      "nbo": [],
+      "esp": [],
+      "dipole": null
+    },
+    "t1Diagnostic": null,
+    "resources": {
+      "nBasis": null,
+      "basisFunctions": null,
+      "primitiveGaussians": null,
+      "processors": null,
+      "memory": null,
+      "cpuSeconds": null,
+      "elapsedSeconds": null
+    },
+    "errorTermination": null,
+    "links": [
+      {
+        "index": 0,
+        "line": 1,
+        "program": {
+          "name": null,
+          "version": null,
+          "revision": null
+        },
+        "route": "#P B3LYP/6-31G(d) Opt Freq",
+        "termination": "normal",
+        "geometry": {
+          "input": null,
+          "standard": null,
+          "final": null
+        },
+        "scf": {
+          "status": "converged",
+          "energyHartree": -76,
+          "cycles": 8,
+          "method": "RB3LYP",
+          "failure": null,
+          "records": [
+            {
+              "line": 15,
+              "method": "RB3LYP",
+              "energyHartree": -76,
+              "cycles": 8
+            }
+          ]
+        },
+        "steps": [
+          {
+            "index": 0,
+            "line": 15,
+            "scf": {
+              "records": [
+                {
+                  "line": 15,
+                  "method": "RB3LYP",
+                  "energyHartree": -76,
+                  "cycles": 8
+                }
+              ],
+              "status": "converged"
+            },
+            "optimization": {
+              "convergence": null
+            }
+          }
+        ],
+        "optimization": {
+          "completed": true,
+          "stationary": true,
+          "cycles": null,
+          "steps": null,
+          "convergence": null,
+          "history": []
+        },
+        "frequencies": {
+          "count": 4,
+          "imaginaryCount": 0,
+          "imaginaryValues": [],
+          "minImaginary": null,
+          "values": [
+            610,
+            1580,
+            3650,
+            3760
+          ],
+          "lowest": [
+            610,
+            1580,
+            3650,
+            3760
+          ],
+          "invalid": false,
+          "invalidTokens": []
+        },
+        "raman": null,
+        "frequencyBlocks": [
+          {
+            "index": 0,
+            "line": 20,
+            "values": [
+              610,
+              1580,
+              3650,
+              3760
+            ],
+            "invalidTokens": [],
+            "reducedMasses": [],
+            "forceConstants": [],
+            "irIntensities": [],
+            "lowFrequencies": null,
+            "count": 4,
+            "invalid": false,
+            "imaginaryCount": 0,
+            "imaginaryValues": [],
+            "minImaginary": null,
+            "lowest": [
+              610,
+              1580,
+              3650,
+              3760
+            ],
+            "lowModes": [
+              {
+                "wavenumber": 610,
+                "reducedMass": null,
+                "forceConstant": null,
+                "irIntensity": null
+              },
+              {
+                "wavenumber": 1580,
+                "reducedMass": null,
+                "forceConstant": null,
+                "irIntensity": null
+              },
+              {
+                "wavenumber": 3650,
+                "reducedMass": null,
+                "forceConstant": null,
+                "irIntensity": null
+              },
+              {
+                "wavenumber": 3760,
+                "reducedMass": null,
+                "forceConstant": null,
+                "irIntensity": null
+              }
+            ]
+          }
+        ],
+        "thermochemistry": {
+          "molecularMassAmu": null,
+          "symmetryNumber": null,
+          "rotationalConstantsGHz": null,
+          "rotationalTemperaturesK": null,
+          "freeEnergyHartree": -76.02,
+          "enthalpyHartree": null,
+          "thermalEnergyHartree": null,
+          "zeroPointEnergyHartree": null,
+          "zeroPointCorrectionHartree": null,
+          "thermalCorrectionEnergyHartree": null,
+          "thermalCorrectionEnthalpyHartree": null,
+          "thermalCorrectionFreeEnergyHartree": null,
+          "zeroPointVibrationalEnergyJoulesPerMol": null,
+          "zeroPointVibrationalEnergyKcalPerMol": null,
+          "temperatureK": null,
+          "pressureAtm": null,
+          "thermalEnergyKcalPerMol": {
+            "total": null,
+            "electronic": null,
+            "translational": null,
+            "rotational": null,
+            "vibrational": null
+          },
+          "heatCapacityCalPerMolK": {
+            "total": null,
+            "electronic": null,
+            "translational": null,
+            "rotational": null,
+            "vibrational": null
+          },
+          "entropyCalPerMolK": {
+            "total": null,
+            "electronic": null,
+            "translational": null,
+            "rotational": null,
+            "vibrational": null
+          }
+        },
+        "finalEnergy": {
+          "hartree": -76,
+          "source": "scf"
+        },
+        "composite": {
+          "expected": null,
+          "found": false,
+          "method": null,
+          "keyword": null,
+          "zeroPointEnergyHartree": null,
+          "thermalEnergyHartree": null,
+          "enthalpyHartree": null,
+          "freeEnergyHartree": null
+        },
+        "counterpoise": null,
+        "spinContamination": {
+          "before": null,
+          "after": null
+        },
+        "spinSquared": {
+          "value": null,
+          "s": null
+        },
+        "wavefunctionStability": {
+          "stable": null,
+          "detail": null
+        },
+        "excitedStates": {
+          "count": 0,
+          "states": []
+        },
+        "charges": {
+          "mulliken": [],
+          "lowdin": [],
+          "nbo": [],
+          "esp": [],
+          "dipole": null
+        },
+        "t1Diagnostic": null,
+        "resources": {
+          "nBasis": null,
+          "basisFunctions": null,
+          "primitiveGaussians": null,
+          "processors": null,
+          "memory": null,
+          "cpuSeconds": null,
+          "elapsedSeconds": null
+        },
+        "error": null
+      }
+    ],
+    "complete": true,
+    "bytes": {
+      "size": 705,
+      "bytesRead": 705,
+      "truncated": false,
+      "windows": [
+        {
+          "name": "fixture",
+          "start": 0,
+          "end": 705,
+          "bytes": 705,
+          "supplied": [
+            "banner",
+            "route",
+            "geometry",
+            "scf",
+            "optimization",
+            "frequencies",
+            "thermochemistry",
+            "termination"
+          ]
+        }
+      ]
+    },
+    "lineCount": 26
+  },
+  "gates": {
+    "overall": "pass",
+    "gates": [
+      {
+        "name": "Output complete",
+        "required": true,
+        "result": "pass",
+        "detail": "read 705 of 705 bytes (fixture)"
+      },
+      {
+        "name": "Normal termination",
+        "required": true,
+        "result": "pass",
+        "detail": "Normal termination of Gaussian"
+      },
+      {
+        "name": "SCF record",
+        "required": true,
+        "result": "pass",
+        "detail": "-76 Eh after 8 cycles"
+      },
+      {
+        "name": "Final energy record",
+        "required": true,
+        "result": "pass",
+        "detail": "-76 Eh (scf)"
+      }
+    ],
+    "complete": true,
+    "validity": {
+      "overall": "pass",
+      "findings": [
+        {
+          "id": "charge-multiplicity",
+          "status": "pass",
+          "message": "10 electrons with charge 0 and multiplicity 1; the parity is consistent.",
+          "evidence": {
+            "charge": 0,
+            "multiplicity": 1,
+            "atoms": 3,
+            "electrons": 10,
+            "method": "RB3LYP"
+          },
+          "severity": null,
+          "title": "Charge / multiplicity",
+          "phase": "post"
+        },
+        {
+          "id": "spin-contamination",
+          "status": "pass",
+          "message": "Restricted reference RB3LYP is a spin eigenfunction; expected S**2 0 by construction.",
+          "evidence": {
+            "method": "RB3LYP",
+            "multiplicity": 1,
+            "expected": 0,
+            "before": null,
+            "after": null,
+            "limits": {
+              "warn": 0.1,
+              "fail": 0.5
+            }
+          },
+          "severity": null,
+          "title": "Spin contamination",
+          "phase": "post"
+        },
+        {
+          "id": "imaginary-frequencies",
+          "status": "skipped",
+          "message": "A SP job makes no minimum or saddle claim, so imaginary modes were not judged.",
+          "evidence": null,
+          "severity": null,
+          "title": "Stationary-point frequencies",
+          "phase": "post"
+        },
+        {
+          "id": "engine-settings",
+          "status": "pass",
+          "detail": "This block runs on Gaussian; no xTB-only setting is in use.",
+          "severity": null,
+          "title": "Engine / settings",
+          "phase": "post"
+        },
+        {
+          "id": "method-basis-compatibility",
+          "status": "pass",
+          "message": "B3LYP/def2-SVP, with GD3BJ as the only dispersion term.",
+          "evidence": {
+            "method": "B3LYP",
+            "basis": "def2-SVP",
+            "dispersion": "GD3BJ",
+            "elements": [
+              "O",
+              "H"
+            ],
+            "ecpBasis": true,
+            "heavyElements": [],
+            "issues": [],
+            "geometryChecked": true
+          },
+          "severity": null,
+          "title": "Method / basis compatibility",
+          "phase": "post"
+        },
+        {
+          "id": "counterpoise-bsse",
+          "status": "skipped",
+          "message": "This block does not request a counterpoise correction.",
+          "evidence": null,
+          "severity": null,
+          "title": "Counterpoise / BSSE",
+          "phase": "post"
+        },
+        {
+          "id": "opt-convergence",
+          "status": "skipped",
+          "message": "A SP job does not claim a minimum, so optimisation convergence was not judged.",
+          "evidence": null,
+          "severity": null,
+          "title": "Optimisation convergence",
+          "phase": "post"
+        },
+        {
+          "id": "conformer-spread",
+          "status": "skipped",
+          "message": "This block does not read a conformer ensemble.",
+          "evidence": null,
+          "severity": null,
+          "title": "Conformer ensemble",
+          "phase": "post"
+        }
+      ],
+      "errors": [],
+      "warnings": [],
+      "unknowns": []
+    }
+  },
+  "error": null,
+  "cache": null
+}

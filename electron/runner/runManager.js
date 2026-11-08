@@ -158,6 +158,9 @@ export class RunManager {
       : null;
 
     const record = {
+      // The published contract this record conforms to (schemas/run-record.v1.schema.json).
+      // Additive: records written before it are still read without the field.
+      schemaVersion: 1,
       id: runId,
       status: stageError ? 'failed' : 'running',
       engine: engine.id,

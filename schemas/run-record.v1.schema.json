@@ -1,0 +1,410 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodechem.studio/schemas/run-record.v1.schema.json",
+  "title": "NodeChem Studio run record (schemaVersion 1)",
+  "description": "One run.json, as written by the Electron runner and by the cluster importer. The envelope is closed: a new top-level field is a schema change. Engine-specific evidence lives under `parsed`, `provenance` and `provenance.method`, which are open objects by design.",
+  "x-nodechem": {
+    "schemaVersion": 1,
+    "recordFile": "run.json",
+    "producedBy": [
+      "electron/runner/runManager.js",
+      "electron/runner/clusterFiles.js"
+    ]
+  },
+  "type": "object",
+  "required": [
+    "id",
+    "status",
+    "dryRun",
+    "title",
+    "inputName",
+    "outputName",
+    "outputFile",
+    "outputSource",
+    "truncated",
+    "executable",
+    "scratchDir",
+    "checkpointHandoff",
+    "provenance",
+    "startedAt",
+    "finishedAt",
+    "exitCode",
+    "parsed",
+    "gates",
+    "error"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "Record contract version. Optional because records written before the contract was published, and cluster-import records, do not carry it."
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 124,
+      "pattern": "^[A-Za-z0-9._-]+$",
+      "description": "Run id, also the run folder name."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["running", "completed", "failed", "needs-review", "cancelled"]
+    },
+    "engine": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Engine id: gaussian, xtb, orca, psi4, or a plugin id. Absent on cluster-import records, which do not run anything locally."
+    },
+    "argv": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "The argument vector the runner used (without the executable)."
+    },
+    "dryRun": {
+      "type": "boolean",
+      "description": "True when the output is a labelled fixture, not a calculation."
+    },
+    "title": { "type": "string" },
+    "inputName": { "type": "string", "minLength": 1 },
+    "outputName": { "type": "string", "minLength": 1 },
+    "outputFile": { "type": ["string", "null"] },
+    "outputSource": {
+      "type": ["string", "null"],
+      "description": "Where the parsed text came from: file, stdout, fixture, cluster-import."
+    },
+    "truncated": { "type": "boolean" },
+    "outputBytes": {
+      "anyOf": [{ "$ref": "#/$defs/outputBytes" }, { "type": "null" }]
+    },
+    "executable": { "type": ["string", "null"] },
+    "scratchDir": { "type": ["string", "null"] },
+    "checkpointHandoff": {
+      "anyOf": [{ "$ref": "#/$defs/checkpointHandoff" }, { "type": "null" }]
+    },
+    "inputSha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Absent on cluster-import records."
+    },
+    "outputSha256": {
+      "type": ["string", "null"],
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Absent on cluster-import records."
+    },
+    "app": {
+      "anyOf": [{ "$ref": "#/$defs/app" }, { "type": "null" }],
+      "description": "App version and commit the run was written by. Absent on cluster-import records."
+    },
+    "conformer": {
+      "anyOf": [{ "$ref": "#/$defs/conformer" }, { "type": "null" }],
+      "description": "Present only when the run was built on one member of a conformer ensemble."
+    },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": {
+      "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "null" }]
+    },
+    "exitCode": { "type": ["integer", "null"] },
+    "parsed": {
+      "anyOf": [{ "$ref": "#/$defs/parsed" }, { "type": "null" }],
+      "description": "The engine's parse. The canonical keys below are the ones consumers may rely on; engine-specific evidence is additional and open."
+    },
+    "gates": {
+      "anyOf": [{ "$ref": "#/$defs/gates" }, { "type": "null" }]
+    },
+    "cache": {
+      "anyOf": [{ "$ref": "#/$defs/cache" }, { "type": "null" }],
+      "description": "Typed-array cache written for a non-dry run. Absent on records that never reached finish()."
+    },
+    "error": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "outputBytes": {
+      "type": "object",
+      "required": ["size", "bytesRead", "truncated", "windows"],
+      "additionalProperties": false,
+      "properties": {
+        "size": { "type": "integer", "minimum": 0 },
+        "bytesRead": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" },
+        "windows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "start", "end", "bytes", "supplied"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "start": { "type": "integer", "minimum": 0 },
+              "end": { "type": "integer", "minimum": 0 },
+              "bytes": { "type": "integer", "minimum": 0 },
+              "supplied": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "checkpointHandoff": {
+      "type": "object",
+      "required": ["file", "bytes", "kind"],
+      "additionalProperties": true,
+      "properties": {
+        "file": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sourceRunId": { "type": ["string", "null"] },
+        "kind": { "type": "string", "enum": ["fixture", "copy"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "app": {
+      "type": "object",
+      "required": ["version", "commit"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string" },
+        "commit": { "type": "string" }
+      }
+    },
+    "conformer": {
+      "type": "object",
+      "required": ["nodeId", "title", "generator", "id", "relativeKcal", "population", "protomer", "spreadKcal"],
+      "additionalProperties": false,
+      "properties": {
+        "nodeId": { "type": ["string", "null"] },
+        "title": { "type": "string" },
+        "generator": { "type": "string" },
+        "id": { "type": "string" },
+        "relativeKcal": { "type": ["number", "null"] },
+        "population": { "type": ["number", "null"] },
+        "protomer": { "type": "string" },
+        "spreadKcal": { "type": ["number", "null"] }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Open object: local runs and cluster imports write different keys, and each engine adds its own method block.",
+      "additionalProperties": true,
+      "properties": {
+        "kind": { "type": "string", "enum": ["fixture", "calculation"] },
+        "jobType": { "type": ["string", "null"] },
+        "method": {
+          "type": ["object", "null"],
+          "description": "The engine's method block. Gaussian writes functional/basis/grid/scf/td; xTB writes hamiltonian/optLevel/argv.",
+          "additionalProperties": true
+        },
+        "solvation": { "type": ["string", "null"] },
+        "ecp": {
+          "anyOf": [{ "$ref": "#/$defs/ecp" }, { "type": "null" }]
+        },
+        "input": {
+          "type": "object",
+          "required": ["name", "bytes"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "bytes": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "output": {
+          "anyOf": [{ "$ref": "#/$defs/provenanceOutput" }, { "type": "null" }]
+        },
+        "xtb": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": { "parametersPath": { "type": ["string", "null"] } }
+        },
+        "psi4": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": { "stderr": { "type": ["string", "null"] } }
+        },
+        "orca": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "stderr": { "type": ["string", "null"] },
+            "artifacts": { "type": ["array", "null"] },
+            "driverAbsolutePath": { "type": ["string", "null"] }
+          }
+        },
+        "source": { "type": "string", "description": "cluster-import on imported runs." },
+        "exportDir": { "type": "string" },
+        "exportFormat": { "type": "string" },
+        "exportCreatedAt": { "type": ["string", "null"] },
+        "nodeId": { "type": "string" },
+        "inputStaged": { "type": "boolean" },
+        "importedAt": { "type": "string" }
+      }
+    },
+    "ecp": {
+      "type": "object",
+      "required": ["library", "basis", "version", "sha256", "elements", "symbols"],
+      "additionalProperties": false,
+      "properties": {
+        "library": { "type": "string" },
+        "basis": { "type": ["string", "null"] },
+        "version": { "type": ["string", "null"] },
+        "sha256": { "type": ["string", "null"] },
+        "elements": { "type": "array", "items": { "type": "integer" } },
+        "symbols": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provenanceOutput": {
+      "type": "object",
+      "required": ["name", "source", "bytes", "hashSource", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "source": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "hashSource": { "type": "string", "enum": ["file", "stream"] },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "parsed": {
+      "type": "object",
+      "description": "Engine-owned evidence. Every canonical key is optional here because the Gaussian parser and the canonical parsers expose different subsets; consumers must use the canonical keys when present and treat absence as unknown.",
+      "additionalProperties": true,
+      "properties": {
+        "canonicalVersion": { "type": "integer" },
+        "engine": { "type": "string" },
+        "program": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "name": { "type": ["string", "null"] },
+            "version": { "type": ["string", "null"] },
+            "revision": { "type": ["string", "null"] }
+          }
+        },
+        "status": { "type": "string", "enum": ["completed", "error", "incomplete"] },
+        "terminationCode": { "type": "string", "enum": ["normal", "error", "none"] },
+        "termination": { "type": "string" },
+        "complete": { "type": "boolean" },
+        "scf": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "status": { "type": "string", "enum": ["converged", "failed", "unknown"] },
+            "energyHartree": { "type": ["number", "null"] },
+            "cycles": { "type": ["integer", "null"] },
+            "method": { "type": ["string", "null"] },
+            "applicable": { "type": "boolean" },
+            "failure": { "type": ["string", "null"] }
+          }
+        },
+        "optimization": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "completed": { "type": "boolean" },
+            "stationary": { "type": "boolean" },
+            "cycles": { "type": ["integer", "null"] },
+            "attempted": { "type": ["boolean", "null"] },
+            "steps": { "type": ["integer", "null"] },
+            "convergence": { "type": ["object", "null"] }
+          }
+        },
+        "frequencies": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "count": { "type": "integer" },
+            "imaginaryCount": { "type": "integer" },
+            "imaginaryValues": { "type": "array", "items": { "type": "number" } },
+            "minImaginary": { "type": ["number", "null"] },
+            "scalingFactor": { "type": ["number", "null"] },
+            "entropyTreatment": { "type": ["string", "null"] }
+          }
+        },
+        "thermochemistry": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "freeEnergyHartree": { "type": ["number", "null"] },
+            "enthalpyHartree": { "type": ["number", "null"] },
+            "zpeHartree": { "type": ["number", "null"] },
+            "entropyTreatment": { "type": ["string", "null"] }
+          }
+        },
+        "finalEnergy": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "hartree": { "type": ["number", "null"] },
+            "source": { "type": ["string", "null"] }
+          }
+        },
+        "extras": { "type": "object", "additionalProperties": true },
+        "lineCount": { "type": "integer" }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "required": ["overall", "gates", "complete"],
+      "additionalProperties": false,
+      "properties": {
+        "overall": { "type": "string", "enum": ["pass", "fail", "unknown"] },
+        "gates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "required", "result", "detail"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "required": { "type": "boolean" },
+              "result": { "type": "string", "enum": ["pass", "fail", "unknown", "skipped"] },
+              "detail": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "complete": { "type": "boolean" },
+        "validity": {
+          "anyOf": [{ "$ref": "#/$defs/validity" }, { "type": "null" }]
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "required": ["overall", "findings", "errors", "warnings", "unknowns"],
+      "additionalProperties": false,
+      "properties": {
+        "overall": { "type": "string", "enum": ["pass", "fail", "warning", "unknown"] },
+        "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+        "errors": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+        "unknowns": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["id", "status", "title", "phase"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string" },
+        "status": { "type": "string", "enum": ["pass", "fail", "warning", "unknown", "skipped"] },
+        "title": { "type": "string" },
+        "phase": { "type": "string" },
+        "message": { "type": "string" },
+        "detail": { "type": "string" },
+        "evidence": { "type": ["object", "null"], "additionalProperties": true },
+        "applicability": { "type": "string" },
+        "severity": { "type": ["string", "null"] }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "file": { "type": ["string", "null"] },
+        "kind": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "frames": { "type": "integer", "minimum": 0 },
+        "atoms": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "string" }
+      }
+    }
+  }
+}
