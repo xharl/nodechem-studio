@@ -332,6 +332,38 @@ layout module, so a bundle can never write outside its own folder.
 
 The gates and checks are designed to keep those questions visible, not to answer them for you.
 
+## Frontier orbitals
+
+Gaussian prints orbital eigenvalues only when the route asks for it, so a block carries a
+**Frontier-orbital descriptors** setting that writes `Pop=Full`. When the log contains the print, the
+results panel adds a card with the HOMO and LUMO in hartree and eV, and the quantities derived from that
+pair:
+
+| Quantity | Definition |
+| --- | --- |
+| Gap | E(LUMO) − E(HOMO) |
+| Ionisation potential | −E(HOMO) |
+| Electron affinity | −E(LUMO) |
+| Chemical potential, μ | (IP + EA)/2 |
+| Electronegativity, χ | −μ |
+| Hardness, η | (IP − EA)/2 |
+| Softness, σ | 1/η |
+| Electrophilicity, ω | μ²/(2η) |
+
+Two things the panel is explicit about:
+
+- **These are Koopmans' estimates from orbital energies**, not ΔSCF ionisation potentials or electron
+  affinities. The two differ by several tenths of an eV, and a paper that reports "IP" may mean either.
+- **An open-shell job keeps the alpha and beta manifolds apart.** Each has its own frontier pair, so each
+  gets its own column; the panel never averages them into one gap.
+
+`Pop=Full` cannot share a route with `Pop=NBO`, `Pop=Hirshfeld` or `Pop=MK` — Gaussian would print only one
+analysis. The conflict is reported as a blocking pre-run finding, and the input builder refuses to write the
+route, rather than silently dropping one of the two. Run the charges and the orbitals in separate blocks.
+
+A log without the print is reported as **not printed**, never as a zero gap: the card is absent, and the
+dataset export leaves the `homo_ev`, `lumo_ev`, `gap_ev` and `hardness_ev` cells empty.
+
 ## Next
 
 [Projects and runs on disk →](project-files.md)

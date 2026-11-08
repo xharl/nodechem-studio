@@ -100,9 +100,10 @@ two must decide which quantity they actually want.
 ## To go further
 
 - Run the seven inputs with Gaussian 16 C.01 and diff the first excitation energies against the targets above.
-- For the descriptors in the paper (HOMO, LUMO, gap, IP, EA, χ, η, σ, ω) NodeChem's parser does **not** yet
-  extract orbital energies from the log — the paper reports them from `GaussView` views of the Gaussian output. That is a
-  parser gap, not a workflow gap; the route would also want `pop=full` (or an equivalent orbital print) for
-  the numbers to be recoverable from the log.
+- The paper's descriptors (HOMO, LUMO, gap, IP, EA, χ, η, σ, ω) are now readable: the methanol block carries
+  `Pop=Full`, and NodeChem's frontier-orbital card reports each quantity from the printed eigenvalues. They
+  are **Koopmans' estimates from orbital energies**, whereas the paper's "HOMO/LUMO" numbers come from
+  `GaussView` views of the same output — the comparison is like-for-like only if both use the orbital
+  eigenvalues. If the paper took a ΔSCF difference instead, the two differ by several tenths of an eV.
 - For an emission-consistent comparison, use the **Emission from S1** template with the same B3LYP/6-311++G(d,p)
   and PCM settings, then compare the two numbers explicitly.

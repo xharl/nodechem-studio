@@ -10,6 +10,7 @@ import {
   tdKeywordFor,
 } from '../shared/gaussianInput.js';
 import { basisNameFor, ecpRequirement } from '../shared/ecp.js';
+import { routeFor } from '../shared/gaussianInput.js';
 import {
   DRAFT_KEY,
   DRAFT_VERSION,
@@ -305,21 +306,21 @@ function routeShort(settings) {
   return `${settings.method}/${basisNameFor(settings.basis, ecp)} ${jobKeywordFor(settings)}`;
 }
 
+/**
+ * The route preview is the builder's own output, not a second implementation.
+ * It used to re-assemble the keyword list here, which is how it drifted: the
+ * preview kept showing a route without the frontier-orbital print while the
+ * written input carried `Pop=Full`. A refusal from the builder (for example
+ * `Pop=Full` next to `Pop=NBO`) is shown on the preview instead of thrown.
+ */
 function routeFull(settings) {
-  const tokens = [`#p ${routeShort(settings)}`];
-  if (settings.dispersion) tokens.push(`EmpiricalDispersion=${settings.dispersion}`);
-  if (settings.scf) tokens.push(`SCF=${settings.scf}`);
-  // Same derivation as the written route: an explicit grid, else the
-  // UltraFine default for a DFT optimization at tight convergence.
-  const grid = gridFor(settings);
-  if (grid) tokens.push(`Integral=${grid}`);
-  if (settings.population) tokens.push(`Pop=${settings.population}`);
-  const td = tdKeywordFor(settings);
-  if (td) tokens.push(td);
-  if (settings.verbosity) tokens.push(`Output=${settings.verbosity}`);
-  if (settings.solvation) tokens.push(`SCRF=(${settings.solvationModel},Solvent=${settings.solvent})`);
-  if (settings.customKeywords) tokens.push(settings.customKeywords);
-  return tokens.join(' ');
+  const coords = state.project?.molecule?.coords || [];
+  const ecp = ecpRequirement({ basis: settings.basis, elements: coords.map((atom) => atom.element) });
+  try {
+    return routeFor(settings, { basisName: basisNameFor(settings.basis, ecp) });
+  } catch (error) {
+    return `# route refused: ${error.message}`;
+  }
 }
 
 const chkName = (id) => `${id.replace(/-/g, '_')}.chk`;
@@ -1222,6 +1223,15 @@ function calcInspector(node) {
     selectField('Integration grid', 'grid', gridOptionsFor(s), s.grid),
     gridDefaultNote(s),
     selectField('Population analysis', 'population', POP_OPTIONS, s.population),
+    // Frontier orbitals (#81): a separate switch from the charge analysis,
+    // because Pop=Full and Pop=NBO cannot share one route.
+    switchRow('Frontier-orbital descriptors', 'adds Pop=Full', 'orbitals', s.orbitals === true,
+      { disabled: Boolean(s.population) && String(s.population).toLowerCase() !== 'full' }),
+    '<div class="field full"><span class="inspector-note">'
+      + (s.population && String(s.population).toLowerCase() !== 'full'
+        ? 'Clear the population analysis above to request the orbitals: Gaussian prints one population scheme per route.'
+        : 'Prints the orbital eigenvalues, so the results panel can report HOMO, LUMO, gap, IP, EA, hardness, softness and electrophilicity.')
+      + '</span></div>',
     selectField('Output verbosity', 'verbosity', VERBOSITY, s.verbosity),
   ].join(''));
 

@@ -73,6 +73,10 @@ describe('APN 1 reproduction (Molecules 2024, 29, 1808)', () => {
     // The TD step is single-point at the optimised geometry, read from the chk.
     expect(route).toContain('Geom=Check');
     expect(route).toContain('Guess=Read');
+    // The methanol run also prints the eigenvalues, so the paper's HOMO/LUMO
+    // descriptors can be read from it; the other solvents stay minimal.
+    if (slug === 'meoh') expect(route).toContain('Pop=Full');
+    else expect(route).not.toContain('Pop=');
   });
 
   it('reads every TD geometry from the optimised checkpoint', () => {

@@ -606,6 +606,52 @@ function emissionLine(record, parsed) {
     + 'also needs the zero-point energy of both surfaces.</p>';
 }
 
+function orbitalsCard(parsed, flags) {
+  const orbitals = isObject(parsed?.orbitals) ? parsed.orbitals : null;
+  if (!orbitals || orbitals.matched !== true) return '';
+  const alpha = isObject(orbitals.alpha) ? orbitals.alpha : null;
+  if (!alpha) return '';
+  const beta = isObject(orbitals.beta) ? orbitals.beta : null;
+
+  const rows = [
+    ['HOMO', (d) => `${esc(d.homoHartree.toFixed(5))} Ha`, (d) => `${esc(d.homoEv.toFixed(3))} eV`],
+    ['LUMO', (d) => `${esc(d.lumoHartree.toFixed(5))} Ha`, (d) => `${esc(d.lumoEv.toFixed(3))} eV`],
+    ['Gap', null, (d) => `${esc(d.gapEv.toFixed(3))} eV`],
+    ['Ionisation potential', null, (d) => `${esc(d.ipEv.toFixed(3))} eV`],
+    ['Electron affinity', null, (d) => `${esc(d.eaEv.toFixed(3))} eV`],
+    ['Chemical potential (mu)', null, (d) => `${esc(d.muEv.toFixed(3))} eV`],
+    ['Electronegativity (chi)', null, (d) => `${esc(d.chiEv.toFixed(3))} eV`],
+    ['Hardness (eta)', null, (d) => `${esc(d.etaEv.toFixed(3))} eV`],
+    ['Softness (sigma)', null, (d) => (finite(d.softnessPerEv) === null ? MISSING_TEXT : `${esc(d.softnessPerEv.toFixed(3))} 1/eV`)],
+    ['Electrophilicity (omega)', null, (d) => (finite(d.electrophilicityEv) === null ? MISSING_TEXT : `${esc(d.electrophilicityEv.toFixed(3))} eV`)],
+  ];
+
+  const cell = (fn, descriptor) => (fn ? fn(descriptor) : '');
+  const head = `<tr><th>Quantity</th><th>Alpha${beta ? ' (restricted alpha)' : ''}</th>${beta ? '<th>Beta</th>' : ''}</tr>`;
+  const body = rows.map(([label, hartreeCell, evCell]) => (
+    '<tr>'
+    + `<td>${esc(label)}</td>`
+    + `<td>${hartreeCell ? `${hartreeCell(alpha)} ` : ''}${cell(evCell, alpha)}</td>`
+    + (beta ? `<td>${hartreeCell ? `${hartreeCell(beta)} ` : ''}${cell(evCell, beta)}</td>` : '')
+    + '</tr>'
+  )).join('');
+
+  const note = '<p class="results-note">Orbital energies as printed by <code>Pop=Full</code>, in hartree and eV. '
+    + 'The derived quantities are Koopmans\' estimates: IP = -E(HOMO), EA = -E(LUMO), gap = E(LUMO) - E(HOMO), '
+    + 'and mu, chi, eta, sigma and omega follow from those two numbers. They are not Delta-SCF ionisation '
+    + 'potentials or electron affinities, which differ by several tenths of an eV.'
+    + (beta ? ' The open-shell case keeps the alpha and beta manifolds apart rather than averaging them.' : '')
+    + '</p>';
+
+  return card(
+    'Frontier orbitals',
+    note
+    + `<table class="results-table" data-field="orbitals"><thead>${head}</thead><tbody>${body}</tbody></table>`
+    + caveatHtml(flags, 'These orbital energies'),
+    'is-wide',
+  );
+}
+
 function excitedStatesCard(parsed, flags, record = null) {
   const block = parsed?.excitedStates;
   const states = Array.isArray(block?.states) ? block.states.filter(isObject) : [];
@@ -1102,6 +1148,7 @@ export function resultsPanelHtml(record) {
     methodsCard(record),
     frequenciesCard(parsed, flags),
     excitedStatesCard(parsed, flags, record),
+    orbitalsCard(parsed, flags),
     reactionPathCard(record, parsed, flags),
     trajectoryCard(parsed, flags),
     nmrCard(parsed, flags),

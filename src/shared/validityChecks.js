@@ -118,6 +118,14 @@ export const VALIDITY_CHECKS = Object.freeze([
     description: 'A TS has exactly one imaginary mode; a minimum has none.',
   },
   {
+    id: 'orbital-descriptors',
+    title: 'Frontier-orbital descriptors',
+    phases: Object.freeze(['pre']),
+    blocking: true,
+    engines: Object.freeze(['gaussian']),
+    description: 'Frontier-orbital descriptors need Pop=Full and cannot share a block with another population analysis.',
+  },
+  {
     id: 'engine-settings',
     title: 'Engine / settings',
     phases: Object.freeze(['pre', 'post']),
@@ -924,6 +932,7 @@ function checkEngineSettings({ settings, engine }) {
       ['Stable=Opt', source.stableOpt === true ? 'true' : ''],
       ['The NMR job type', text(source.jobType) === 'NMR' ? 'NMR' : ''],
       ['Raman activities', source.raman === true ? 'true' : ''],
+      ['Frontier-orbital descriptors', source.orbitals === true ? 'true' : ''],
     ].find(([, value]) => value !== '');
     if (offender) {
       return {
@@ -940,7 +949,32 @@ function checkEngineSettings({ settings, engine }) {
   return { id, status: CHECK_STATUS.PASS, detail: 'This block runs on Gaussian; no xTB-only setting is in use.' };
 }
 
+/**
+ * `orbitals: true` asks for frontier-orbital descriptors, which only `Pop=Full`
+ * prints. A block that also requests NBO/Hirshfeld/MK charges would need two
+ * population keywords, so the conflict is reported before the run instead of
+ * being resolved by silently dropping one of the analyses.
+ */
+function checkOrbitalDescriptors({ settings }) {
+  const id = 'orbital-descriptors';
+  const source = settings && typeof settings === 'object' ? settings : {};
+  if (source.orbitals !== true) {
+    return { id, status: CHECK_STATUS.PASS, detail: 'Frontier-orbital descriptors are not requested on this block.' };
+  }
+  const population = String(source.population ?? '').trim();
+  if (population && population.toLowerCase() !== 'full') {
+    return {
+      id,
+      status: CHECK_STATUS.FAIL,
+      detail: `Frontier-orbital descriptors need Pop=Full, but this block also asks for Pop=${population}. `
+        + 'Clear the population analysis here or request the descriptors in a separate block.',
+    };
+  }
+  return { id, status: CHECK_STATUS.PASS, detail: 'The block requests Pop=Full, so HOMO/LUMO energies will be printed.' };
+}
+
 const CHECK_FUNCTIONS = Object.freeze({
+  'orbital-descriptors': checkOrbitalDescriptors,
   'charge-multiplicity': checkChargeMultiplicity,
   'spin-contamination': checkSpinContamination,
   'geometry-sanity': checkGeometrySanity,

@@ -581,9 +581,13 @@ describe('issue #16 — inspector wiring', () => {
     expect(source).toMatch(/optConvergenceIssues\(node\)/);
   });
 
-  it('previews the derived grid instead of re-reading settings.grid', () => {
-    expect(source).toContain('gridFor(settings)');
+  it('previews the derived grid by delegating to the builder, not by re-reading settings.grid', () => {
+    // The preview used to re-assemble the keyword list, which drifted from the
+    // written route (#81 exposed it). It now calls the builder's own
+    // `routeFor`, so the grid — explicit or derived — is the same code path.
+    expect(source).toContain('routeFor(settings');
     expect(source).not.toMatch(/if \(settings\.grid\) tokens\.push\(`Integral=/);
+    expect(source).not.toMatch(/if \(settings\.population\) tokens\.push\(`Pop=/);
   });
 
   it('seeds the TS block that feeds a frequency job with Tight convergence', () => {

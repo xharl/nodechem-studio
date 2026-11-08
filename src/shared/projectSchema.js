@@ -136,7 +136,7 @@ const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'tdRoot', 'spinSweep', 'referenceNodeId',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads', 'engine',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -186,6 +186,7 @@ export function defaultSettings(overrides = {}) {
     ladder: null,
     stableOpt: false,
     raman: false,
+    orbitals: false,
     tdRoot: 0,
     // A spin-state sweep enumerates multiplicities for the same system.
     spinSweep: null,
@@ -829,6 +830,7 @@ function normalizeSettings(c, raw, path, legacy) {
     // Raman activities (#76): a flag on the frequency keyword, off by default so
     // an existing project keeps emitting exactly the route it did before.
     raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),
+    orbitals: readBoolean(c, source.orbitals, `${path}.orbitals`, { legacy, fallback: false, optional: true }),
     // Which excited state an accompanying Opt follows (#75). 0 = not stated.
     tdRoot: readOptionalInteger(c, source.tdRoot, `${path}.tdRoot`, { fallback: 0, min: 0, max: 200 }),
     spinSweep: normalizeSpinSweep(c, source.spinSweep, `${path}.spinSweep`, legacy),

@@ -19,6 +19,7 @@ import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { parseShieldings } from './nmr.js';
 import { animatableModes, parseNormalModes } from './normalModes.js';
 import { attachRaman, parseRamanActivities } from './raman.js';
+import { parseOrbitals } from './orbitals.js';
 import { parseRotatoryStrengths } from './ecd.js';
 import { parseTrajectory } from './trajectory.js';
 import { summarizeValidity } from './validityChecks.js';
@@ -1244,6 +1245,9 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   // ECD (#75): only a chiral TD job prints non-zero rotatory strengths, but the
   // table is present whenever the route asks for it. Null means "not printed".
   const rotatoryStrengths = parseRotatoryStrengths(text);
+  // Frontier orbitals (#81): printed only when the route asked for Pop=Full.
+  // `matched: false` means the print is absent, not that the gap is zero.
+  const orbitals = parseOrbitals(text);
 
   return {
     status,
@@ -1259,6 +1263,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     frequencies,
     raman,
     rotatoryStrengths,
+    orbitals,
     thermochemistry,
     finalEnergy,
     spinContamination,

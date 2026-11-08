@@ -88,6 +88,7 @@ describe('validity checks — contract', () => {
       'spin-contamination',
       'geometry-sanity',
       'imaginary-frequencies',
+      'orbital-descriptors',
       'engine-settings',
       'method-basis-compatibility',
       'opt-convergence',
@@ -591,6 +592,7 @@ describe('running checks', () => {
       'geometry-sanity',
       'method-basis-compatibility',
       'opt-convergence',
+      'orbital-descriptors',
     ]);
   });
 

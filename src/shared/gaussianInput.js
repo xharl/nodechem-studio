@@ -51,7 +51,11 @@ function routeValues(settings = {}) {
     // UltraFine is derived, not stored: a DFT optimization at tight convergence
     // gets the grid Gaussian recommends unless the user chose one explicitly.
     grid: gridFor(settings) || null,
-    population: settings.population ? oneLine(settings.population) : null,
+    // Frontier-orbital descriptors need the eigenvalue print, which is
+    // `Pop=Full`. A block that also asks for NBO/Hirshfeld/MK charges cannot
+    // have both in one keyword set, so it is refused below rather than
+    // silently dropping one of the two analyses.
+    population: orbitalsPopulation(settings),
     verbosity: settings.verbosity ? oneLine(settings.verbosity) : null,
     solvationModel: solvated ? oneLine(settings.solvationModel, 'PCM') : null,
     solvent: solvated ? oneLine(settings.solvent, 'Water') : null,
@@ -60,6 +64,23 @@ function routeValues(settings = {}) {
     stable: settings.stableOpt === true ? 'Stable=Opt' : null,
     customKeywords: oneLine(settings.customKeywords, ''),
   };
+}
+
+/**
+ * The population keyword the route must carry. `orbitals: true` means the user
+ * wants frontier-orbital descriptors, which only `Pop=Full` prints; asking for
+ * another population analysis at the same time is a conflict, not a preference,
+ * so it throws with the two ways out instead of emitting an invented
+ * combined syntax.
+ */
+export function orbitalsPopulation(settings = {}) {
+  const requested = settings.population ? oneLine(settings.population) : null;
+  if (settings.orbitals !== true) return requested;
+  if (requested && requested.toLowerCase() !== 'full') {
+    throw new Error(`Frontier-orbital descriptors need Pop=Full, but this block also asks for Pop=${requested}. `
+      + 'Run the orbital analysis in its own block, or clear the population analysis on this one.');
+  }
+  return 'Full';
 }
 
 /**

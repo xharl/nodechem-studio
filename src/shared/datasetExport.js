@@ -38,6 +38,12 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'conformerRelativeKcal', label: 'conformer_relative_kcal' },
   { key: 'conformerPopulation', label: 'conformer_population' },
   { key: 'conformerProtomer', label: 'conformer_protomer' },
+  // Frontier orbitals (#81). Empty cells when the log carried no Pop=Full
+  // print — never a zero gap.
+  { key: 'homoEv', label: 'homo_ev' },
+  { key: 'lumoEv', label: 'lumo_ev' },
+  { key: 'gapEv', label: 'gap_ev' },
+  { key: 'hardnessEv', label: 'hardness_ev' },
   { key: 'inputSha256', label: 'input_sha256' },
   { key: 'outputSha256', label: 'output_sha256' },
 ]);
@@ -91,6 +97,10 @@ export function runRow(record) {
     conformerMember: text(conformer.id),
     conformerRelativeKcal: num(conformer.relativeKcal),
     conformerPopulation: num(conformer.population),
+    homoEv: num(parsed?.orbitals?.alpha?.homoEv),
+    lumoEv: num(parsed?.orbitals?.alpha?.lumoEv),
+    gapEv: num(parsed?.orbitals?.alpha?.gapEv),
+    hardnessEv: num(parsed?.orbitals?.alpha?.etaEv),
     conformerProtomer: text(conformer.protomer),
     inputSha256: text(run.inputSha256),
     outputSha256: text(run.outputSha256),
