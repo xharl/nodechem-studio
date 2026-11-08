@@ -62,6 +62,7 @@ export async function preflight(config = {}, options = {}) {
   const warnings = [];
   const engine = engineOrDefault(config.engine);
   const isXtb = engine.id === 'xtb';
+  const isOrca = engine.id === 'orca';
   const dryRun = Boolean(config.dryRun);
   const executable = String(config.executable || '').trim();
   const scratchDir = String(config.scratchDir || '').trim();
@@ -85,6 +86,32 @@ export async function preflight(config = {}, options = {}) {
         add('xtb-parameters', 'xTB parameter files found',
           Boolean(parameterPath) || Boolean(env.XTBPATH),
           parameterPath || env.XTBPATH || 'Set XTBPATH to the xTB share/xtb directory');
+      } catch (error) {
+        add('executable-exists', 'Executable exists', false, error.message);
+      }
+    }
+  } else if (isOrca) {
+    add('executable', 'ORCA executable configured', Boolean(executable), executable || 'Not configured');
+    if (executable) {
+      try {
+        const stat = await fsp.stat(executable);
+        add('executable-exists', 'Executable exists', stat.isFile(), executable);
+        add('executable-name', 'ORCA executable', /^orca(\.exe)?$/i.test(path.basename(executable)),
+          `Found ${path.basename(executable)}`);
+        if (isPosix(platform)) {
+          const permission = await executablePermission(executable);
+          add('executable-permission', 'Console executable is runnable', permission.ok, permission.detail);
+        }
+        // ORCA's parallel driver must be called by full pathname; it locates
+        // its module binaries relative to the driver. The runner passes the
+        // selected value unchanged, so warn rather than block a serial setup.
+        if (!path.isAbsolute(executable)) {
+          warnings.push({
+            id: 'orca-full-path',
+            label: 'ORCA executable is not an absolute path',
+            detail: 'ORCA parallel runs must be started by the full path to the driver (`/opt/orca/orca job.inp`). The runner passes this value unchanged.',
+          });
+        }
       } catch (error) {
         add('executable-exists', 'Executable exists', false, error.message);
       }

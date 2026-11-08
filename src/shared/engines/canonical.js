@@ -10,7 +10,7 @@
  *
  *   {
  *     canonicalVersion: 1,
- *     engine: 'gaussian' | 'xtb',
+ *     engine: 'gaussian' | 'xtb' | 'orca',
  *     program: { name, version, revision },      // provenance
  *     status: 'completed' | 'error' | 'incomplete',
  *     terminationCode: 'normal' | 'error' | 'none',

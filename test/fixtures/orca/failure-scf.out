@@ -1,0 +1,29 @@
+
+                                 *****************
+                                 * O   R   C   A *
+                                 *****************
+
+                         Program Version 6.0.0  -   RELEASE  -
+
+|  1> ! B3LYP def2-SVP VeryTightSCF
+
+                **** Energy Check signals convergence ****
+               *****************************************************
+               *                     SUCCESS                       *
+               *           SCF CONVERGED AFTER  12 CYCLES          *
+               *****************************************************
+
+    0    -76.02664842298829    1.255713e+02                    0.400 (TRAH MAcro)   No
+    1    -76.02664842298829    2.255713e+00                    0.400 (TRAH MAcro)   No
+...
+  125    -76.02664842298829    2.255713e-03                    0.400 (TRAH MAcro)   No
+
+               *****************************************************
+               *                     FAILURE                       *
+               *         SCF NOT CONVERGED AFTER 125 CYCLES        *
+               *****************************************************
+
+ORCA finished by error termination in SCF
+Calling Command: /opt/orca/orca_scf water.gbw b
+[file orca_scf/scf.cpp, line 1268]:
+.... aborting the run
