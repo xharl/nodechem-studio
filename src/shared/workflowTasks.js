@@ -15,12 +15,37 @@ import { runSettingsFor } from './engineSettings.js';
 import { DEFAULT_CONFORMER_SETTINGS, crestArgv, xyzText } from './conformers.js';
 import { checkTsForceConstants, freqGeometryWarnings, optConvergenceWarnings } from './tsForceConstants.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from './validityChecks.js';
+import { LIMITS } from './projectSchema.js';
+import {
+  activeFlow,
+  edgesOfFlow,
+  flowById,
+  nodesOfFlow,
+  scopeFor,
+  taskIdFor,
+} from './flows.js';
 
 export const safeBase = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
 
+/** defaultSettings() plants these; a block only overrides a record when it differs. */
+const DEFAULT_CHARGE = 0;
+const DEFAULT_MULTIPLICITY = 1;
+
+/**
+ * A block by id. Ids are unique per flow (schema v2), so a project-wide lookup
+ * is unambiguous; the active flow is searched first because that is the graph
+ * the caller is looking at.
+ */
 export function nodeById(project, id) {
-  const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
-  return nodes.find((node) => node.id === id) || null;
+  const wanted = String(id || '');
+  const local = nodesOfFlow(activeFlow(project)).find((node) => node.id === wanted);
+  if (local) return local;
+  for (const flow of Array.isArray(project?.flows) ? project.flows : []) {
+    const found = nodesOfFlow(flow).find((node) => node.id === wanted);
+    if (found) return found;
+  }
+  const legacy = Array.isArray(project?.nodes) ? project.nodes : [];
+  return legacy.find((node) => node.id === wanted) || null;
 }
 
 /**
@@ -38,19 +63,32 @@ export function settingsForNode(project, node) {
   return runSettingsFor(engine.id, { ...node.settings });
 }
 
-export function moleculeForNode(project, node, conformerMember = null) {
+export function moleculeForNode(project, node, conformerMember = null, record = null) {
   const settings = node?.settings && typeof node.settings === 'object' ? node.settings : {};
   const molecule = project?.molecule || {};
-  const charge = Number.isInteger(settings.charge) ? settings.charge : molecule.charge;
-  const multiplicity = Number.isInteger(settings.multiplicity) ? settings.multiplicity : molecule.multiplicity;
+  // RFC 0001: a record carries its own charge and multiplicity. A block's
+  // fields stay overrides, but only when they differ from the schema default —
+  // every block gets charge 0 / multiplicity 1 from defaultSettings(), so
+  // treating the default as "explicit" would silently ignore the dataset.
+  const chargeOverride = Number.isInteger(settings.charge) && settings.charge !== DEFAULT_CHARGE
+    ? settings.charge : null;
+  const multiplicityOverride = Number.isInteger(settings.multiplicity) && settings.multiplicity !== DEFAULT_MULTIPLICITY
+    ? settings.multiplicity : null;
+  const recordCharge = Number.isInteger(record?.charge) ? record.charge : null;
+  const recordMultiplicity = Number.isInteger(record?.multiplicity) ? record.multiplicity : null;
+  const charge = chargeOverride ?? recordCharge ?? (Number.isInteger(settings.charge) ? settings.charge : molecule.charge);
+  const multiplicity = multiplicityOverride ?? recordMultiplicity
+    ?? (Number.isInteger(settings.multiplicity) ? settings.multiplicity : molecule.multiplicity);
   // Issue #30: a calculation downstream of a conformer block runs on the
   // conformer that was *chosen*, not on the project's single imported geometry.
   // Issue #80: a fanned-out block names the member per task instead.
+  // RFC 0001: a dataset record supplies the geometry for its own run.
   const conformer = conformerForNode(project, node, conformerMember);
   const chosen = conformer?.atoms;
+  const recordCoords = Array.isArray(record?.coords) && record.coords.length > 0 ? record.coords : null;
   const coords = Array.isArray(chosen) && chosen.length > 0
     ? chosen
-    : (Array.isArray(molecule.coords) && molecule.coords.length > 0 ? molecule.coords : DEMO_WATER);
+    : (recordCoords || (Array.isArray(molecule.coords) && molecule.coords.length > 0 ? molecule.coords : DEMO_WATER));
   return { charge, multiplicity, coords };
 }
 
@@ -347,8 +385,8 @@ export function blockingValidityFinding(project, node, settings, molecule, confo
   return result.findings.find((finding) => finding.status === CHECK_STATUS.FAIL && blocking.has(finding.id)) || null;
 }
 
-export function validityForNode(project, node, conformerMember = null) {
-  const molecule = moleculeForNode(project, node, conformerMember);
+export function validityForNode(project, node, conformerMember = null, record = null) {
+  const molecule = moleculeForNode(project, node, conformerMember, record);
   const conformer = conformerForNode(project, node, conformerMember);
   return {
     settings: {
@@ -375,7 +413,7 @@ export function validityForNode(project, node, conformerMember = null) {
 }
 
 /** The engine's input for one calculation node, exactly as it will be written. */
-export function buildRunInput(project, node, { taskId = node?.id, settingsOverride = null, conformerMember = null } = {}) {
+export function buildRunInput(project, node, { taskId = node?.id, settingsOverride = null, conformerMember = null, record = null } = {}) {
   const engine = engineForNode(project, node);
   // A ReadFC TS block without a usable checkpoint hand-off has nothing to read.
   const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node);
@@ -383,8 +421,11 @@ export function buildRunInput(project, node, { taskId = node?.id, settingsOverri
   const settings = settingsOverride || settingsForNode(project, node);
   // A spin-state sweep varies the multiplicity per task, and the multiplicity
   // is printed in the molecule block; an override has to reach it.
-  const baseMolecule = moleculeForNode(project, node, conformerMember);
-  const molecule = Number.isInteger(Number(settings.multiplicity)) && Number(settings.multiplicity) > 0
+  const baseMolecule = moleculeForNode(project, node, conformerMember, record);
+  // A sweep override is the only reason to rewrite the multiplicity here: the
+  // record's own value must survive a block whose field still holds the default.
+  const molecule = settingsOverride
+    && Number.isInteger(Number(settings.multiplicity)) && Number(settings.multiplicity) > 0
     ? { ...baseMolecule, multiplicity: Number(settings.multiplicity) }
     : baseMolecule;
   const blocking = blockingValidityFinding(project, node, settings, molecule, conformerMember);
@@ -457,38 +498,90 @@ export function buildWorkflowTasks(project) {
  * has no chosen member is still refused here, exactly as before: that is a
  * user decision, not a pending computation.
  */
-export function buildWorkflowPlan(project) {
-  const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
+export function buildWorkflowPlan(project, { flowId = null } = {}) {
+  const flow = flowId ? flowById(project, flowId) : activeFlow(project);
+  const flowKey = flow?.id || 'main';
+  const nodes = nodesOfFlow(flow).length > 0 || flow?.nodes
+    ? nodesOfFlow(flow)
+    : (Array.isArray(project?.nodes) ? project.nodes : []);
+  const projectEdges = edgesOfFlow(flow).length > 0 || flow?.edges
+    ? edgesOfFlow(flow)
+    : (Array.isArray(project?.edges) ? project.edges : []);
+
+  // RFC 0001: a block downstream of an input block runs once per record of that
+  // block's dataset; anything else runs once, exactly as every v1 project did.
+  const scopes = new Map();
+  for (const node of nodes) {
+    scopes.set(node.id, scopeFor(project, nodes, projectEdges, node));
+  }
+
   const tasks = [];
   const idsFor = new Map();
-  // Task id -> the fan-out it belongs to. Kept beside `idsFor` because the
-  // member is a property of the task, not of the block.
+  // Task id -> the fan-out it belongs to, and the record it was planned for.
   const fanOf = new Map();
+  const recordOf = new Map();
   const registerFan = (taskId, conformerId, memberId) => fanOf.set(taskId, { conformerId, memberId });
+  const pushTask = (task, recordId = null) => {
+    task.flowId = flowKey;
+    if (recordId) task.recordId = recordId;
+    tasks.push(task);
+    recordOf.set(task.nodeId, recordId || null);
+  };
 
   for (const node of nodes) {
-    if (node.type === 'conformers') {
-      const fanOut = fanOutMembersFor(node);
-      if (fanOut) {
-        const ids = fanOut.members.map((member) => `${node.id}~${member.id}`);
-        fanOut.members.forEach((member, index) => {
-          tasks.push(conformerMemberTask(project, node, { taskId: ids[index], member, ensemble: fanOut }));
-          registerFan(ids[index], node.id, member.id);
-        });
-        idsFor.set(node.id, ids);
-        continue;
-      }
-      tasks.push(conformerSearchTask(project, node));
+    const scope = scopes.get(node.id) || null;
+    const records = scope ? scope.records : [null];
+
+    if (node.type === 'input') {
+      tasks.push({
+        nodeId: node.id,
+        type: 'input',
+        title: node.title,
+        kind: node.kind || 'Input',
+        executable: false,
+        flowId: flowKey,
+        input: {
+          datasetId: node.input?.datasetId || '',
+          datasetTitle: scope?.dataset?.title || '',
+          records: (scope?.records || []).map((record) => ({ id: record.id, label: record.label || record.id })),
+        },
+      });
       idsFor.set(node.id, [node.id]);
       continue;
     }
+
+    if (node.type === 'conformers') {
+      const fanOut = fanOutMembersFor(node);
+      const ids = [];
+      for (const record of records) {
+        const recordId = record?.id || null;
+        if (fanOut) {
+          for (const member of fanOut.members) {
+            const taskId = taskIdFor(node.id, recordId, member.id);
+            pushTask(conformerMemberTask(project, node, { taskId, member, ensemble: fanOut, record }), recordId);
+            registerFan(taskId, node.id, member.id);
+            ids.push(taskId);
+          }
+        } else {
+          const taskId = taskIdFor(node.id, recordId);
+          pushTask(conformerSearchTask(project, node, record), recordId);
+          ids.push(taskId);
+        }
+      }
+      idsFor.set(node.id, ids);
+      continue;
+    }
+
     if (node.type !== 'calc') {
+      // Control-flow blocks are planned once per flow: an output block collects
+      // every record, a merge joins branches, a condition routes them.
       tasks.push({
         nodeId: node.id,
         type: node.type,
         title: node.title,
         kind: node.kind || node.type,
         executable: false,
+        flowId: flowKey,
         condition: node.type === 'condition'
           ? { expression: node.condition?.expression || '', unknown: node.condition?.unknown || 'block-both' }
           : null,
@@ -496,6 +589,7 @@ export function buildWorkflowPlan(project) {
           ? { maxAttempts: node.loop?.maxAttempts || 3, mode: node.loop?.mode || 'retry', target: node.loop?.target || '' }
           : null,
         merge: node.type === 'merge' ? { policy: node.merge?.policy || 'all' } : null,
+        ...(node.type === 'output' ? { output: { ...node.output } } : {}),
       });
       idsFor.set(node.id, [node.id]);
       continue;
@@ -512,104 +606,127 @@ export function buildWorkflowPlan(project) {
       throw new Error(`Block "${node.title}" has a method ladder${spin ? ' and a spin-state sweep' : ''} and a fanned-out conformer ensemble;`
         + ' run the levels on a separate block instead of multiplying both expansions.');
     }
-    if (fanOut) {
-      const ids = fanOut.members.map((member) => `${node.id}~${member.id}`);
-      fanOut.members.forEach((member, index) => {
-        tasks.push(calculationTask(project, node, {
-          taskId: ids[index],
-          conformerMember: member,
-          title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`,
-          fanOut: {
-            conformerId: fanOut.nodeId,
-            memberId: member.id,
-            count: fanOut.members.length,
-            spreadKcal: fanOut.spreadKcal,
-          },
-        }));
-        registerFan(ids[index], fanOut.nodeId, member.id);
-      });
-      idsFor.set(node.id, ids);
-      continue;
-    }
-    if (spin) {
-      const spinIds = spin.multiplicities.map((multiplicity) => `${node.id}.m${multiplicity}`);
-      spin.multiplicities.forEach((multiplicity, index) => {
-        tasks.push(calculationTask(project, node, {
-          taskId: spinIds[index],
-          settingsOverride: { ...settingsForNode(project, node), multiplicity, spinSweep: null },
-          title: `${node.title} — multiplicity ${multiplicity}`,
-          spin: { id: node.id, index, multiplicity, count: spin.multiplicities.length },
-        }));
-      });
-      idsFor.set(node.id, spinIds);
-      continue;
-    }
-    if (!ladder) {
-      tasks.push(calculationTask(project, node, { taskId: node.id }));
-      idsFor.set(node.id, [node.id]);
-      continue;
-    }
 
-    // Task ids must satisfy the queue's SAFE_ID rule, so the separator is a dot.
-    const ids = ladder.rungs.map((rung) => `${node.id}.r${rung.index + 1}`);
-    ladder.rungs.forEach((rung, index) => {
-      const settings = {
-        ...settingsForNode(project, node),
-        method: rung.method || node.settings.method,
-        basis: rung.basis || node.settings.basis,
-        dispersion: rung.dispersion || node.settings.dispersion,
-        ladder: null,
-      };
-      tasks.push(calculationTask(project, node, {
-        taskId: ids[index],
-        settingsOverride: settings,
-        title: `${node.title} — ${rung.label}`,
-        ladder: {
-          id: node.id,
-          index: rung.index,
-          label: rung.label,
-          count: ladder.rungs.length,
-          toleranceKcal: ladder.toleranceKcal,
-        },
-      }));
-    });
+    const ids = [];
+    for (const record of records) {
+      const recordId = record?.id || null;
+      const base = taskIdFor(node.id, recordId);
+      if (fanOut) {
+        for (const member of fanOut.members) {
+          const taskId = taskIdFor(node.id, recordId, member.id);
+          pushTask(calculationTask(project, node, {
+            taskId,
+            record,
+            conformerMember: member,
+            title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`
+              + `${record ? ` · ${record.label || record.id}` : ''}`,
+            fanOut: {
+              conformerId: fanOut.nodeId,
+              memberId: member.id,
+              count: fanOut.members.length,
+              spreadKcal: fanOut.spreadKcal,
+            },
+          }), recordId);
+          registerFan(taskId, fanOut.nodeId, member.id);
+          ids.push(taskId);
+        }
+        continue;
+      }
+      if (spin) {
+        spin.multiplicities.forEach((multiplicity, index) => {
+          const taskId = `${base}.m${multiplicity}`;
+          pushTask(calculationTask(project, node, {
+            taskId,
+            record,
+            settingsOverride: { ...settingsForNode(project, node), multiplicity, spinSweep: null },
+            title: `${node.title} — multiplicity ${multiplicity}`,
+            spin: { id: node.id, index, multiplicity, count: spin.multiplicities.length },
+          }), recordId);
+          ids.push(taskId);
+        });
+        continue;
+      }
+      if (!ladder) {
+        pushTask(calculationTask(project, node, { taskId: base, record }), recordId);
+        ids.push(base);
+        continue;
+      }
+      // Task ids must satisfy the queue's SAFE_ID rule, so the separator is a dot.
+      ladder.rungs.forEach((rung, index) => {
+        const taskId = `${base}.r${index + 1}`;
+        const settings = {
+          ...settingsForNode(project, node),
+          method: rung.method || node.settings.method,
+          basis: rung.basis || node.settings.basis,
+          dispersion: rung.dispersion || node.settings.dispersion,
+          ladder: null,
+        };
+        pushTask(calculationTask(project, node, {
+          taskId,
+          record,
+          settingsOverride: settings,
+          title: `${node.title} — ${rung.label}`,
+          ladder: {
+            id: node.id,
+            index: rung.index,
+            label: rung.label,
+            count: ladder.rungs.length,
+            toleranceKcal: ladder.toleranceKcal,
+          },
+        }), recordId);
+        ids.push(taskId);
+      });
+    }
     idsFor.set(node.id, ids);
   }
 
   const edges = [];
-  for (const edge of Array.isArray(project?.edges) ? project.edges : []) {
+  const recordFor = (taskId) => recordOf.get(taskId) ?? null;
+  const fanFor = (taskId) => fanOf.get(taskId) || null;
+
+  for (const edge of projectEdges) {
     const fromIds = idsFor.get(edge.from) || [];
     const toIds = idsFor.get(edge.to) || [];
+    if (fromIds.length === 0 || toIds.length === 0) continue;
+
     if (edge.type === 'checkpoint') {
-      const fromFan = fanOf.get(fromIds[0]) || null;
-      const toFan = fanOf.get(toIds[0]) || null;
-      if (fromFan) {
+      const fromFan = fanFor(fromIds[0]);
+      const toFan = fanFor(toIds[0]);
+      if (fromFan && !toFan) {
         // One checkpoint x N fanned-out runs has no honest reading: either the
         // consumer is fanned out over the same ensemble and pairs by member, or
         // the workflow is ambiguous and must say so before queueing.
-        if (!toFan || toFan.conformerId !== fromFan.conformerId) {
-          throw new Error(`The checkpoint hand-off from "${nodeById(project, edge.from)?.title || edge.from}" is fanned out over`
-            + ` ${fromIds.length} members, but "${nodeById(project, edge.to)?.title || edge.to}" would read one checkpoint.`
-            + ' Give the consumer its own dependency on the conformer block, or join the branches with a merge first.');
-        }
-        for (const from of fromIds) {
-          const memberId = fanOf.get(from)?.memberId;
-          const to = toIds.find((id) => fanOf.get(id)?.memberId === memberId);
-          if (to) edges.push({ ...edge, from, to });
-        }
-        continue;
+        throw new Error(`The checkpoint hand-off from "${nodeById(project, edge.from)?.title || edge.from}" is fanned out over`
+          + ` ${fromIds.length} members, but "${nodeById(project, edge.to)?.title || edge.to}" would read one checkpoint.`
+          + ' Give the consumer its own dependency on the conformer block, or join the branches with a merge first.');
       }
-      for (const from of fromIds.slice(0, 1)) {
-        for (const to of toIds) edges.push({ ...edge, from, to });
+      for (const to of toIds) {
+        const toFanEntry = fanFor(to);
+        const toRecord = recordFor(to);
+        const from = toFanEntry
+          ? fromIds.find((id) => fanFor(id)?.memberId === toFanEntry.memberId && recordFor(id) === toRecord)
+          : fromIds.find((id) => recordFor(id) === toRecord);
+        if (from) edges.push({ ...edge, from, to });
+        else if (fromIds.length === 1 && !fromFan && !toFanEntry) edges.push({ ...edge, from: fromIds[0], to });
       }
       continue;
     }
+
+    // A barrier waits for every record of its source, so it expands to the full
+    // cross product; a dependency is a same-record hand-off. An unscoped block
+    // broadcasts (single source) or collects (single consumer).
+    const barrier = edge.type === 'barrier';
     for (const from of fromIds) {
       for (const to of toIds) {
-        const a = fanOf.get(from) || null;
-        const b = fanOf.get(to) || null;
+        if (!barrier) {
+          const a = recordFor(from);
+          const b = recordFor(to);
+          if (a && b && a !== b) continue;
+        }
+        const fa = fanFor(from);
+        const fb = fanFor(to);
         // Same ensemble on both ends: member c1 feeds member c1, never c2.
-        if (a && b && a.conformerId === b.conformerId && a.memberId !== b.memberId) continue;
+        if (!barrier && fa && fb && fa.conformerId === fb.conformerId && fa.memberId !== fb.memberId) continue;
         edges.push({ ...edge, from, to });
       }
     }
@@ -623,16 +740,16 @@ export function buildWorkflowPlan(project) {
   // documented exception: collecting the members is what they are for.
   const fanInputs = new Map();
   for (const edge of edges) {
-    const fan = fanOf.get(edge.from);
-    if (!fan || edge.type === 'checkpoint') continue;
+    const fan = fanFor(edge.from);
+    if (!fan || edge.type === 'checkpoint' || edge.type === 'barrier') continue;
     const entry = fanInputs.get(edge.to) || { conformerIds: new Set(), count: 0 };
     entry.conformerIds.add(fan.conformerId);
     entry.count += 1;
     fanInputs.set(edge.to, entry);
   }
   for (const [taskId, entry] of fanInputs) {
-    if (fanOf.has(taskId) || entry.count < 2) continue;
-    const node = nodeById(project, taskId);
+    if (fanFor(taskId) || entry.count < 2) continue;
+    const node = nodeById(project, taskId.split('~')[0]);
     if (!node || (node.type !== 'calc' && node.type !== 'conformers')) continue;
     const ensemble = nodeById(project, [...entry.conformerIds][0]);
     throw new Error(`"${node.title}" would run once but ${entry.count} fanned-out branches feed it,`
@@ -645,14 +762,15 @@ export function buildWorkflowPlan(project) {
   // explicitly so the run record cannot imply it consumed the whole ladder.
   // A fanned-out task reads the checkpoint of *its own member* instead, and the
   // name has to be rebuilt because the member's task id is what the upstream
-  // run actually wrote.
+  // run actually wrote. RFC 0001 adds the record dimension to the same pairing.
   for (const task of tasks) {
     if (!task.checkpointFrom) continue;
     const sourceBlockId = task.checkpointFrom.nodeId;
     const sourceIds = idsFor.get(sourceBlockId) || [];
     if (sourceIds.length === 0) continue;
-    const targetFan = fanOf.get(task.nodeId) || null;
-    const sourceFan = fanOf.get(sourceIds[0]) || null;
+    const targetFan = fanFor(task.nodeId) || null;
+    const sourceFan = fanFor(sourceIds[0]) || null;
+    const targetRecord = recordFor(task.nodeId);
     if (sourceFan && !targetFan) {
       throw new Error(`"${task.title}" builds one run but its checkpoint source is fanned out over ${sourceIds.length} members.`
         + ' Give the consumer its own dependency on the conformer block, or join the branches with a merge first.');
@@ -662,7 +780,8 @@ export function buildWorkflowPlan(project) {
         throw new Error(`"${task.title}" is fanned out over one conformer ensemble but reads a checkpoint fanned out over another.`
           + ' Connect both blocks to the same conformer block.');
       }
-      const paired = sourceIds.find((id) => fanOf.get(id)?.memberId === targetFan.memberId);
+      const paired = sourceIds.find((id) => fanFor(id)?.memberId === targetFan.memberId
+        && recordFor(id) === targetRecord);
       if (!paired) {
         throw new Error(`"${task.title}" has a member ${targetFan.memberId} with no matching checkpoint source task.`);
       }
@@ -674,16 +793,28 @@ export function buildWorkflowPlan(project) {
           checkpoint: checkpointNameFor(project, sourceNode, paired),
         }),
         fanOutMember: targetFan.memberId,
+        ...(targetRecord ? { recordId: targetRecord } : {}),
       };
       continue;
     }
-    if (sourceIds[0] !== sourceBlockId) {
-      task.checkpointFrom = { ...task.checkpointFrom, nodeId: sourceIds[0], ladderPrimary: true };
+    const sameRecord = sourceIds.find((id) => recordFor(id) === targetRecord) || sourceIds[0];
+    if (sameRecord !== sourceBlockId) {
+      task.checkpointFrom = { ...task.checkpointFrom, nodeId: sameRecord, ladderPrimary: true };
     }
   }
 
   if (!tasks.some((task) => task.executable)) throw new Error('The workflow has no calculation blocks to run.');
-  return { tasks, edges };
+
+  // RFC 0001: a family of molecules multiplies every block, so the plan has a
+  // ceiling and names the product that hit it.
+  if (tasks.length > LIMITS.planTasks) {
+    const recordCount = new Set(tasks.map((task) => task.recordId).filter(Boolean)).size;
+    throw new Error(`This workflow expands to ${tasks.length} tasks`
+      + `${recordCount ? ` (${recordCount} records × the blocks they feed)` : ''}; the limit is ${LIMITS.planTasks}.`
+      + ' Disable some records, or split the family across flows.');
+  }
+
+  return { tasks, edges, flowId: flowKey };
 }
 
 function calculationTask(project, node, {
@@ -694,6 +825,7 @@ function calculationTask(project, node, {
   spin = null,
   conformerMember = null,
   fanOut = null,
+  record = null,
 }) {
   // Issue #101: the ensemble has not been searched yet, so there is no member
   // to build from. Emit a task that marks the block pending instead of throwing
@@ -704,7 +836,7 @@ function calculationTask(project, node, {
   if (pending && !conformerMember) {
     return pendingCalculationTask(project, node, { taskId, title, settingsOverride, ladder, spin, pending });
   }
-  const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember });
+  const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember, record });
   const emissionFor = emissionContextFor(project, node, settingsOverride);
   return {
     nodeId: taskId,
@@ -720,7 +852,7 @@ function calculationTask(project, node, {
     inputText: built.inputText,
     settings: settingsOverride || settingsForNode(project, node),
     gates: gatesForNode(node),
-    validity: validityForNode(project, node, conformerMember),
+    validity: validityForNode(project, node, conformerMember, record),
     checkpointName: checkpointNameFor(project, node, taskId),
     checkpointFrom: checkpointSourceFor(project, node),
     // Emission (#75): a TD block whose geometry came from a block that relaxed
@@ -743,6 +875,7 @@ function calculationTask(project, node, {
     ...(fanOut ? { fanOut } : {}),
     ...(emissionFor ? { emission: emissionFor } : {}),
     ...(built.conformer ? { conformer: built.conformer } : {}),
+    ...(record ? { record: { id: record.id, label: record.label || record.id } } : {}),
   };
 }
 
@@ -796,11 +929,11 @@ function pendingCalculationTask(project, node, { taskId, title, settingsOverride
  * the member geometry into it and a downstream calculation reads that member
  * explicitly.
  */
-function conformerMemberTask(project, node, { taskId, member, ensemble }) {
+function conformerMemberTask(project, node, { taskId, member, ensemble, record = null }) {
   const settings = conformerSettingsFor(node);
-  const molecule = project?.molecule || {};
-  const charge = Number.isInteger(node?.settings?.charge) ? node.settings.charge : Number(molecule.charge ?? 0);
-  const multiplicity = Number.isInteger(node?.settings?.multiplicity) ? node.settings.multiplicity : Number(molecule.multiplicity ?? 1);
+  const chemistry = moleculeForNode(project, node, null, record);
+  const charge = chemistry.charge ?? 0;
+  const multiplicity = chemistry.multiplicity ?? 1;
   const inputName = `${safeBase(taskId)}.xyz`;
   return {
     nodeId: taskId,
@@ -855,12 +988,12 @@ function conformerMemberTask(project, node, { taskId, member, ensemble }) {
  * Exported because "Run selected block" on a conformer block runs exactly this
  * search, independent of whether the block is fanned out (#101).
  */
-export function conformerSearchTask(project, node) {
+export function conformerSearchTask(project, node, record = null) {
   const settings = conformerSettingsFor(node);
-  const molecule = project?.molecule || {};
-  const charge = Number.isInteger(node?.settings?.charge) ? node.settings.charge : Number(molecule.charge ?? 0);
-  const multiplicity = Number.isInteger(node?.settings?.multiplicity) ? node.settings.multiplicity : Number(molecule.multiplicity ?? 1);
-  const coords = Array.isArray(molecule.coords) && molecule.coords.length > 0 ? molecule.coords : DEMO_WATER;
+  const chemistry = moleculeForNode(project, node, null, record);
+  const charge = chemistry.charge ?? 0;
+  const multiplicity = chemistry.multiplicity ?? 1;
+  const coords = chemistry.coords;
   const inputName = `${safeBase(node.id)}.xyz`;
   return {
     nodeId: node.id,
@@ -883,5 +1016,6 @@ export function conformerSearchTask(project, node) {
         ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
         : [],
     },
+    ...(record ? { record: { id: record.id, label: record.label || record.id } } : {}),
   };
 }
