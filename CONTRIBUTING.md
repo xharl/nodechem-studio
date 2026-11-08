@@ -40,8 +40,11 @@ on the branch. CI runs them on Linux; the Windows and Linux packaging workflows 
 triggered.
 
 A change that touches user-facing behaviour also updates the page in [`docs/guide/`](docs/guide/) that
-it makes untrue. `test/docs.test.js` checks links, index coverage, version chips and the no-network
-scan, so a broken doc link fails CI like a broken test.
+it makes untrue. Five things are enforced rather than remembered: every settings key returned by
+`defaultSettings()` or `DEFAULT_CONFORMER_SETTINGS` must appear in
+[`docs/PROJECT-FORMAT.md`](docs/PROJECT-FORMAT.md), every page in `docs/guide/` must be linked from
+its index, and `test/docs.test.js` also checks links, version chips and the no-network scan. A
+feature whose prose is missing fails CI like a broken test.
 
 ## What not to commit
 
