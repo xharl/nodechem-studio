@@ -62,6 +62,15 @@ describe('ECP requirement', () => {
     expect(ecpMissingMessage(requirement)).toMatch(/Basis Set Exchange/);
   });
 
+  it('supports SDD for the same heavy elements, with its own library record', () => {
+    const requirement = ecpRequirement({ basis: 'SDD', elements: ['Pd'] });
+    expect(requirement.needed).toBe(true);
+    expect(requirement.blocks).toContain('PD-ECP     4     28');
+    expect(requirement.library).toMatchObject({ basis: 'SDD' });
+    expect(ecpRequirement({ basis: 'SDD', elements: ['Pt'] }).blocks).toContain('PT-ECP     5     60');
+    expect(ecpRequirement({ basis: 'SDD', elements: ['W'] }).missing).toEqual(['W']);
+  });
+
   it('does not claim ECP support for a basis it has no table for', () => {
     expect(ecpRequirement({ basis: '6-31G(d)', elements: ['Pd'] }).needed).toBe(false);
     expect(ecpRequirement({ basis: 'lanl2dz', elements: ['Pd'] }).needed).toBe(false);
@@ -88,6 +97,16 @@ describe('input file', () => {
     expect(text).toMatch(/^#p B3LYP\/def2-SVP SP/m);
     expect(text).not.toMatch(/ECP|\*\*\*\*/);
     expect(text.endsWith('\n\n')).toBe(true);
+  });
+
+  it('writes an SDD GenECP job for a Pd complex', () => {
+    const text = buildGaussianInput({
+      settings: { ...settings, basis: 'SDD' },
+      molecule: pdComplex,
+      inputName: 'pd-sdd.gjf',
+    });
+    expect(text).toMatch(/^#p B3LYP\/GenECP SP/m);
+    expect(text).toContain('PD-ECP     4     28');
   });
 
   it('refuses an ECP basis with no data instead of writing a broken route', () => {
