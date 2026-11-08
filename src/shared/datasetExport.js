@@ -38,7 +38,7 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'conformerRelativeKcal', label: 'conformer_relative_kcal' },
   { key: 'conformerPopulation', label: 'conformer_population' },
   { key: 'conformerProtomer', label: 'conformer_protomer' },
-  // Frontier orbitals (#81). Empty cells when the log carried no Pop=Full
+  // Frontier orbitals (#88). Empty cells when the log carried no Pop=Full
   // print — never a zero gap.
   { key: 'homoEv', label: 'homo_ev' },
   { key: 'lumoEv', label: 'lumo_ev' },

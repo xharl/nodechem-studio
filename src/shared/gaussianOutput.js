@@ -1245,7 +1245,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   // ECD (#75): only a chiral TD job prints non-zero rotatory strengths, but the
   // table is present whenever the route asks for it. Null means "not printed".
   const rotatoryStrengths = parseRotatoryStrengths(text);
-  // Frontier orbitals (#81): printed only when the route asked for Pop=Full.
+  // Frontier orbitals (#88): printed only when the route asked for Pop=Full.
   // `matched: false` means the print is absent, not that the gap is zero.
   const orbitals = parseOrbitals(text);
 

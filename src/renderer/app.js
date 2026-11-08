@@ -1223,7 +1223,7 @@ function calcInspector(node) {
     selectField('Integration grid', 'grid', gridOptionsFor(s), s.grid),
     gridDefaultNote(s),
     selectField('Population analysis', 'population', POP_OPTIONS, s.population),
-    // Frontier orbitals (#81): a separate switch from the charge analysis,
+    // Frontier orbitals (#88): a separate switch from the charge analysis,
     // because Pop=Full and Pop=NBO cannot share one route.
     switchRow('Frontier-orbital descriptors', 'adds Pop=Full', 'orbitals', s.orbitals === true,
       { disabled: Boolean(s.population) && String(s.population).toLowerCase() !== 'full' }),

@@ -583,7 +583,7 @@ describe('issue #16 — inspector wiring', () => {
 
   it('previews the derived grid by delegating to the builder, not by re-reading settings.grid', () => {
     // The preview used to re-assemble the keyword list, which drifted from the
-    // written route (#81 exposed it). It now calls the builder's own
+    // written route (#88 exposed it). It now calls the builder's own
     // `routeFor`, so the grid — explicit or derived — is the same code path.
     expect(source).toContain('routeFor(settings');
     expect(source).not.toMatch(/if \(settings\.grid\) tokens\.push\(`Integral=/);
