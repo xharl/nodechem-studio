@@ -23,7 +23,7 @@ const WATER = [
 const molecule = (overrides = {}) => ({ charge: 0, multiplicity: 1, coords: WATER, ...overrides });
 
 const GAUSSIAN_OPT_FIELDS = [
-  'job.title', 'job.jobType', 'job.optConvergence',
+  'job.title', 'job.jobType', 'job.optConvergence', 'job.constraints',
   'job.memory', 'job.memoryUnit', 'job.nproc', 'job.checkpoint',
   'method.routePreset', 'method.method', 'method.basis', 'method.dispersion',
   'method.scf', 'method.grid', 'method.population', 'method.verbosity',
@@ -66,6 +66,15 @@ describe('engine-aware calculation inspector', () => {
     expect(calcInspectorFieldIds('gaussian', { jobType: 'Freq' })).not.toContain('job.optConvergence');
     expect(calcInspectorFieldIds('gaussian', { jobType: 'Freq' })).not.toContain('job.forceConstants');
     expect(calcInspectorFieldIds('gaussian', { jobType: 'IRC' })).toContain('job.ircDirection');
+    // Issue #93: the constraints editor belongs to the job types that read a
+    // ModRedundant section, and the QST editor only to an STQN job.
+    expect(calcInspectorFieldIds('gaussian', { jobType: 'Opt' })).toContain('job.constraints');
+    expect(calcInspectorFieldIds('gaussian', { jobType: 'Freq' })).not.toContain('job.constraints');
+    expect(calcInspectorFieldIds('gaussian', { jobType: 'Scan' })).not.toContain('job.constraints');
+    expect(calcInspectorFieldIds('xtb', { jobType: 'Opt' })).not.toContain('job.constraints');
+    expect(calcInspectorFieldIds('gaussian', { jobType: 'Opt=QST2' })).toContain('job.qst');
+    expect(calcInspectorFieldIds('gaussian', { jobType: 'Opt=QST2' })).toContain('job.constraints');
+    expect(calcInspectorFieldIds('gaussian', { jobType: 'Opt' })).not.toContain('job.qst');
     // A composite keyword supplies its own method, basis and job steps (#77): the
     // inspector replaces the whole group with a note, and the builder refuses a
     // leftover pair, so none of those fields may be advertised.
@@ -87,7 +96,6 @@ describe('engine-aware calculation inspector', () => {
     expect(gaussian).toContain('solvation.model');
   });
 });
-
 describe('rendered calculation inspector', () => {
   let app;
   let node;
@@ -383,5 +391,85 @@ describe('xTB solvation provenance', () => {
     expect(runJson.provenance.solvation).toEqual({ model: 'ALPB', solvent: 'water', flag: '--alpb' });
     expect(xtbSolvationFromArgv(built.argv)).toEqual({ model: 'ALPB', solvent: 'water', flag: '--alpb' });
     expect(xtbSolvationFromArgv(['gas.xyz', '--gfn', '2'])).toBeNull();
+  });
+});
+
+describe('rendered constraint and QST editors (#93)', () => {
+  let app;
+
+  beforeAll(async () => {
+    vi.stubGlobal('window', {
+      desktop: null,
+      innerWidth: 1440,
+      innerHeight: 900,
+      addEventListener: () => {},
+    });
+    vi.stubGlobal('document', {
+      readyState: 'loading',
+      addEventListener: () => {},
+      querySelector: () => null,
+    });
+    app = await import('../src/renderer/app.js');
+  });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const withNode = (settings, coords, run) => {
+    const node = app.state.project.nodes.find((item) => item.settings.jobType === 'Freq' || item.type === 'calc');
+    const previousSettings = node.settings;
+    const previousCoords = app.state.project.molecule.coords;
+    node.settings = { ...previousSettings, ...settings };
+    app.state.project.molecule.coords = coords;
+    try {
+      return run(app.calcInspector(node));
+    } finally {
+      node.settings = previousSettings;
+      app.state.project.molecule.coords = previousCoords;
+    }
+  };
+
+  const COORDS = [
+    { element: 'C', x: 0, y: 0, z: 0 },
+    { element: 'O', x: 1.4, y: 0, z: 0 },
+    { element: 'H', x: 2, y: 1, z: 0 },
+  ];
+
+  it('lists a constraint in chemical terms with add and remove controls', () => {
+    withNode({ jobType: 'Opt', constraints: [{ kind: 'bond', atoms: [1, 2] }] }, COORDS, (html) => {
+      expect(html).toContain('C1–O2 distance, 1.400 Å');
+      expect(html).toContain('data-action="remove-constraint"');
+      expect(html).toContain('data-action="add-constraint"');
+      expect(html).toContain('data-constraint-part="atom"');
+    });
+  });
+
+  it('says plainly when a constraint index is outside the geometry', () => {
+    withNode({ jobType: 'Opt', constraints: [{ kind: 'bond', atoms: [1, 9] }] }, COORDS, (html) => {
+      expect(html).toContain('Cannot export.');
+      expect(html).toContain('atom 9');
+    });
+  });
+
+  it('renders the QST2 structure editor with its atom-order status', () => {
+    withNode({
+      jobType: 'Opt=QST2',
+      qst: { structures: [{ label: 'product', source: 'copy', nodeId: '', path: '', atoms: COORDS }] },
+    }, COORDS, (html) => {
+      expect(html).toContain('Structure 2 · product');
+      expect(html).toContain('atom order matches');
+      expect(html).toContain('data-action="qst-fill"');
+    });
+  });
+
+  it('shows a QST3 block its missing third structure', () => {
+    withNode({
+      jobType: 'Opt=QST3',
+      qst: { structures: [{ label: 'product', source: 'copy', nodeId: '', path: '', atoms: COORDS }] },
+    }, COORDS, (html) => {
+      expect(html).toContain('Structure 3 · initial TS');
+      expect(html).toContain('needs 2 extra structures');
+    });
   });
 });

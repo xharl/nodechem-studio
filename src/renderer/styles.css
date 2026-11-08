@@ -1494,3 +1494,33 @@ kbd {
 .batch-status.is-completed { background: var(--tone-green-6a); color: var(--tone-green-11); }
 .batch-status.is-error { background: var(--tone-red-2a); color: var(--tone-red-13); }
 .batch-status.is-incomplete, .batch-status.is-unreadable { background: var(--tone-orange-7a); color: var(--tone-yellow-1); }
+
+/* ── Constraints and QST structures (#93) ──────────────────── */
+.constraint-list, .qst-list { display: flex; flex-direction: column; gap: 8px; }
+.constraint-row, .qst-row {
+  border: 1px solid var(--tone-blue-71a);
+  border-radius: 7px;
+  background: var(--tone-blue-20);
+  padding: 7px 8px;
+}
+.constraint-row-head, .qst-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.constraint-desc { color: var(--tone-blue-116); font: var(--text-size-xs) var(--font-mono); }
+.constraint-row-controls, .qst-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.constraint-row-controls .input, .constraint-row-controls .select,
+.qst-row-controls .input, .qst-row-controls .select { min-width: 0; flex: 1 1 90px; }
+.constraint-row-controls .constraint-atom { flex: 0 0 64px; }
+.constraint-add { display: flex; gap: 6px; align-items: center; }
+.constraint-add .select { flex: 1 1 auto; }
+.qst-status { color: var(--text-tertiary); font-size: var(--text-size-xs); }
+.qst-status.bad { color: var(--kind-condition); }

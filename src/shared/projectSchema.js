@@ -51,6 +51,15 @@ import {
   optConvergenceWarnings,
 } from './tsForceConstants.js';
 import {
+  CONSTRAINT_KINDS,
+  MAX_CONSTRAINTS,
+  MAX_QST_STRUCTURES,
+  constraintAtomCount,
+  constraintFindings,
+  constraintSignature,
+  qstFindings,
+} from './constraints.js';
+import {
   CHECK_STATUS,
   VALIDITY_CHECKS,
   VALIDITY_CHECK_IDS,
@@ -95,6 +104,10 @@ export const EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch', '
 export const BRANCHES = Object.freeze(['true', 'false']);
 export const JOB_TYPES = Object.freeze([
   'Opt', 'Opt Freq', 'Opt=TS', 'Freq', 'IRC', 'SP', 'Scan', 'NMR',
+  // Issue #93: STQN transition-state searches read two (QST2) or three (QST3)
+  // molecule specifications from one input, so they are job types, not a
+  // keyword a free-text field could add.
+  'Opt=QST2', 'Opt=QST3',
   // Issue #77: composite methods are job types, not method strings. Each takes
   // no separate method/basis pair and expands to its documented Gaussian links.
   ...COMPOSITE_JOB_TYPES,
@@ -113,6 +126,8 @@ export const CONDITION_UNKNOWN = Object.freeze(['block-both', 'treat-false', 'tr
 export const LOOP_MODES = Object.freeze(['retry', 'for-each']);
 export const MERGE_POLICIES = Object.freeze(['all', 'any']);
 export const GEOMETRY_SOURCES = Object.freeze(['demo', 'imported', 'manual']);
+/** Issue #93: where an extra QST2/QST3 structure was copied from. */
+export const QST_SOURCES = Object.freeze(['copy', 'block', 'file']);
 export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'mol2', 'pdb', 'pdbqt', 'cjson', 'gjf', 'com', 'log']);
 
 /** RFC 0001: what an output block writes. HTML is the report format; no PDF. */
@@ -143,6 +158,8 @@ const JOB_KINDS = {
   Opt: 'Opt',
   'Opt Freq': 'O+F',
   'Opt=TS': 'TS',
+  'Opt=QST2': 'TS',
+  'Opt=QST3': 'TS',
   Freq: 'Freq',
   IRC: 'IRC',
   SP: 'SP',
@@ -189,6 +206,8 @@ const SETTINGS_KEYS = new Set([
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
   'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
   'counterpoise', 'counterpoiseChargeStates',
+  // Issue #93: coordinate constraints and the extra QST2/QST3 structures.
+  'constraints', 'qst',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads', 'engine',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -252,6 +271,10 @@ export function defaultSettings(overrides = {}) {
     // Issue #77: 0 means "not a counterpoise job"; N is the fragment count.
     counterpoise: 0,
     counterpoiseChargeStates: [],
+    // Issue #93: no constraints and no QST on a block that never asked for
+    // them, so every existing project plans and writes byte-identical input.
+    constraints: [],
+    qst: null,
     // Issue #25: validity checks are on by default; a node opts out by id.
     disabledChecks: [],
   };
@@ -911,6 +934,98 @@ function normalizeCounterpoiseChargeStates(c, raw, path) {
   return states;
 }
 
+/**
+ * Issue #93: constraints are stored as `{ kind, atoms, value }`.
+ *
+ * The structure is checked here (kind, atom arity, duplicates, value shape) so
+ * a corrupt file cannot be opened into a run; whether the indices exist in the
+ * geometry, and whether the set leaves anything to optimise, needs the
+ * molecule and is checked in `validateFlow` and again in the input builder.
+ */
+function normalizeConstraints(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    c.error(path, 'must be an array of { kind, atoms, value } constraint objects.');
+    return [];
+  }
+  if (raw.length > MAX_CONSTRAINTS) {
+    c.error(path, `must contain at most ${MAX_CONSTRAINTS} constraints.`);
+    return [];
+  }
+  const constraints = [];
+  raw.forEach((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    if (!isPlainObject(entry)) {
+      c.error(entryPath, 'must be an object with kind, atoms and value.');
+      return;
+    }
+    warnUnknown(c, entry, new Set(['kind', 'atoms', 'value']), entryPath);
+    const kind = readEnum(c, entry.kind, CONSTRAINT_KINDS, `${entryPath}.kind`, { legacy, fallback: '', required: true });
+    if (!kind) return;
+    const expected = constraintAtomCount(kind);
+    const atomsRaw = Array.isArray(entry.atoms) ? entry.atoms : null;
+    if (!atomsRaw || atomsRaw.length !== expected) {
+      const unit = expected === 1 ? 'atom index' : 'atom indices';
+      c.error(`${entryPath}.atoms`,
+        `a ${kind} constraint needs exactly ${expected} ${unit} (1-based, as written in the geometry).`);
+      return;
+    }
+    const atoms = atomsRaw.map((value, atomIndex) => readInteger(c, value, `${entryPath}.atoms[${atomIndex}]`, {
+      legacy, fallback: 1, min: 1, max: LIMITS.atoms,
+    }));
+    const value = entry.value === undefined || entry.value === null || entry.value === ''
+      ? null
+      : readNumber(c, entry.value, `${entryPath}.value`, { legacy, fallback: null, min: -3600, max: 3600 });
+    if (kind === 'freeze' && value !== null) {
+      c.error(`${entryPath}.value`, 'a frozen atom takes no value; freeze a bond, angle or dihedral to hold a number.');
+      return;
+    }
+    const constraint = { kind, atoms, value };
+    const duplicateOf = constraints.findIndex((existing) => constraintSignature(existing) === constraintSignature(constraint));
+    if (duplicateOf !== -1) {
+      c.error(entryPath, `repeats the constraint at ${path}[${duplicateOf}]; remove one of the two.`);
+      return;
+    }
+    constraints.push(constraint);
+  });
+  return constraints;
+}
+
+/**
+ * Issue #93: the extra QST2/QST3 structures. Each one is a complete molecule
+ * specification, and it travels *in the file*: the builder is pure and the CLI
+ * must emit exactly what the app emits, so the coordinates are stored on the
+ * block and `source`/`nodeId`/`path` record where they were copied from.
+ */
+function normalizeQst(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be null or an object with structures.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['structures']), path);
+  const rawStructures = Array.isArray(raw.structures) ? raw.structures : [];
+  if (rawStructures.length > MAX_QST_STRUCTURES) {
+    c.error(`${path}.structures`, `must contain at most ${MAX_QST_STRUCTURES} structures.`);
+  }
+  const structures = rawStructures.slice(0, MAX_QST_STRUCTURES).map((structure, index) => {
+    const entryPath = `${path}.structures[${index}]`;
+    if (!isPlainObject(structure)) {
+      c.error(entryPath, 'must be an object with label, source, atoms and optionally nodeId and path.');
+      return { label: `Structure ${index + 2}`, source: 'copy', nodeId: '', path: '', atoms: [] };
+    }
+    warnUnknown(c, structure, new Set(['label', 'source', 'nodeId', 'path', 'atoms']), entryPath);
+    return {
+      label: readString(c, structure.label, `${entryPath}.label`, { legacy, fallback: '', max: 60 }) || '',
+      source: readEnum(c, structure.source, QST_SOURCES, `${entryPath}.source`, { legacy, fallback: 'copy' }),
+      nodeId: readString(c, structure.nodeId, `${entryPath}.nodeId`, { legacy, fallback: '', max: 64 }) || '',
+      path: readString(c, structure.path, `${entryPath}.path`, { legacy, fallback: '', max: 260 }) || '',
+      atoms: normalizeCoords(c, structure.atoms, legacy, `${entryPath}.atoms`),
+    };
+  });
+  return { structures };
+}
+
 function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   const source = requiredObject(c, raw, path, legacy, {});
   warnUnknown(c, source, SETTINGS_KEYS, path);
@@ -992,6 +1107,9 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // fragments are not all at the complex's charge state.
     counterpoise,
     counterpoiseChargeStates: normalizeCounterpoiseChargeStates(c, source.counterpoiseChargeStates, `${path}.counterpoiseChargeStates`),
+    // Issue #93: frozen coordinates and the extra QST2/QST3 structures.
+    constraints: normalizeConstraints(c, source.constraints, `${path}.constraints`, legacy),
+    qst: normalizeQst(c, source.qst, `${path}.qst`, legacy),
     // The block whose free energy is the reactant in a ΔG‡ for this path. It
     // is declared, never inferred from the graph.
     referenceNodeId: readString(c, source.referenceNodeId, `${path}.referenceNodeId`, { legacy, fallback: '', max: 64 }) || '',
@@ -1462,7 +1580,7 @@ function normalizeReports(c, raw, legacy, flows) {
  * Per-flow integrity: references stay inside the flow, an input block names a
  * dataset that exists and has a runnable record, and a barrier joins real work.
  */
-function validateFlow(c, flow, index, datasets, legacy) {
+function validateFlow(c, flow, index, datasets, legacy, { molecule = null, projectEngine = 'gaussian' } = {}) {
   const path = `flows[${index}]`;
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
 
@@ -1506,6 +1624,34 @@ function validateFlow(c, flow, index, datasets, legacy) {
       .forEach((message) => c.warn(`${nodePath}.settings.grid`, message));
     freqGeometryWarnings({ settings: node.settings, upstream })
       .forEach((message) => c.warn(`${nodePath}.settings.jobType`, message));
+
+    // Issue #93: constraints and QST structures are checked against the
+    // geometry the project holds (a dataset record's coordinates replace it at
+    // plan time, and the builder repeats the check against the written ones).
+    const atoms = Array.isArray(molecule?.coords) ? molecule.coords : null;
+    const engine = node.settings.engine || projectEngine;
+    const constraintReport = constraintFindings({
+      constraints: node.settings.constraints,
+      atoms,
+      jobType: node.settings.jobType,
+      forceConstants: node.settings.forceConstants,
+      engine,
+    });
+    constraintReport.errors.forEach((entry) => {
+      const at = entry.index === null ? '' : `[${entry.index}]`;
+      c.error(`${nodePath}.settings.constraints${at}`, entry.message);
+    });
+    constraintReport.warnings.forEach((message) => c.warn(`${nodePath}.settings.constraints`, message));
+
+    const qstReport = qstFindings({
+      qst: node.settings.qst,
+      atoms,
+      jobType: node.settings.jobType,
+    });
+    qstReport.errors.forEach((entry) => {
+      const at = entry.index === null ? '' : `.structures[${entry.index}]`;
+      c.error(`${nodePath}.settings.qst${at}`, entry.message);
+    });
   });
 
   flow.edges.forEach((edge, edgeIndex) => {
@@ -1609,6 +1755,9 @@ export function validateProject(raw) {
 
   const datasetIds = new Set();
   const datasets = normalizeDatasets(c, raw.datasets, legacy, datasetIds);
+  // Normalised once, before the flows: the per-block constraint and QST checks
+  // need the geometry the flow runs on.
+  const molecule = normalizeMolecule(c, raw.molecule, legacy);
 
   const flows = [];
   const rawFlows = Array.isArray(raw.flows) && raw.flows.length > 0 ? raw.flows : null;
@@ -1641,7 +1790,10 @@ export function validateProject(raw) {
     flows.push({ id: DEFAULT_FLOW_ID, title: 'Workflow', nodes, edges });
   }
 
-  flows.forEach((flow, index) => validateFlow(c, flow, index, datasets, legacy));
+  flows.forEach((flow, index) => validateFlow(c, flow, index, datasets, legacy, {
+    molecule,
+    projectEngine: projectEngineOf(raw.defaults),
+  }));
 
   let activeFlowId = readString(c, raw.activeFlowId, 'activeFlowId', {
     legacy, fallback: flows[0]?.id || DEFAULT_FLOW_ID, max: 64,
@@ -1651,7 +1803,7 @@ export function validateProject(raw) {
   const project = {
     schemaVersion: SCHEMA_VERSION,
     name: readString(c, raw.name, 'name', { legacy, fallback: 'Untitled project', max: 200 }) || 'Untitled project',
-    molecule: normalizeMolecule(c, raw.molecule, legacy),
+    molecule,
     defaults: normalizeDefaults(c, raw.defaults, legacy),
     runner: normalizeRunner(c, raw.runner, legacy),
     datasets,

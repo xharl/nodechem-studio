@@ -146,6 +146,80 @@ time, so `run.json` records the grid that was actually written.
 A `Freq` block whose checkpoint hand-off comes from an optimisation left at the default convergence
 gets a validation warning naming the upstream block.
 
+### Constrained optimisation and relaxed scans
+
+A block can hold **coordinate constraints**: a frozen bond length, bond angle, dihedral or atom.
+Gaussian reads them from a `ModRedundant` section after the molecule specification, so the builder
+names `ModRedundant` on the route and writes one line per constraint:
+
+```
+#p B3LYP/6-31G(d) Opt=(CalcFC,ModRedundant)
+...
+0 1
+C   -0.700000     0.000000     0.000000
+O    0.700000     0.000000     0.000000
+...
+B 1 2 F
+```
+
+The atom numbers are the 1-based numbers of the geometry that is actually in the file. Under
+RFC 0001 a dataset record's coordinates replace the project geometry, so the builder validates
+the indices against the written geometry and refuses an out-of-range index with a message naming
+the atom and the atom count instead of letting Gaussian abort link 103.
+
+Gaussian 16 freezes the coordinate at the value in the geometry; since G09 C.01 a value on the
+`ModRedundant` line is not read. The inspector therefore shows the measured value
+("C1–O2 distance, 1.400 Å") and a declared value is a check: it must match the geometry, or the
+input is refused rather than silently freezing a different number. To freeze a forming bond at
+1.8 Å, import or set a geometry with that bond.
+
+Validation also refuses duplicate constraints (a bond reads the same either way round, an angle
+from either end, a dihedral reversed), a constraint set that leaves no internal degree of freedom,
+constraints on an engine or job type that has no `ModRedundant` section, and a frozen coordinate
+on a `Scan` block — `Scan` steps Gaussian's `Scan` keyword and has no such section.
+
+A constrained optimisation that asks for force constants (`CalcFC` or `CalcAll`) emits them into
+the job keyword, which is what makes it a legitimate `ReadFC` source for a later `Opt=TS` block:
+the usual route to a saddle is a relaxed scan, then a saddle search that reads the curvature the
+scan produced. A constrained saddle search left on the estimated Hessian gets a validation warning.
+
+### QST2 and QST3
+
+`Opt=QST2` and `Opt=QST3` are **job types**. STQN needs two or three complete molecule
+specifications in one input — reactant, product, and for QST3 an initial TS guess — so the block
+stores the extra structures itself. The inspector's **QST2 / QST3** group copies them from the
+block's own geometry, from the parsed final geometry of a finished block, or from a structure file;
+the coordinates are snapshotted into the block, so the project file carries them and
+`ncs build-input` writes exactly what the app writes.
+
+```
+#p B3LYP/6-31G(d) Opt=QST2
+...
+0 1
+C   -0.700000     0.000000     0.000000
+...
+QST search — structure 2 (product)
+0 1
+C   -0.700000     0.000000     0.000000
+...
+```
+
+Gaussian's requirement is that *the order of the atoms is identical within all molecule
+specifications*. That mismatch is the classic silent failure — the interpolation pairs atom 4 of
+the product with atom 4 of the reactant and walks through a barrier that does not exist — so the
+builder refuses it and names the first mismatching index, and it never reorders atoms itself. It
+also refuses a missing product (QST2), a missing TS guess (QST3), and a structure whose atom count
+differs from the block geometry. `TS` is never combined with `QST2`/`QST3`: Gaussian documents that
+the two must not be specified together.
+
+Constraints and QST2/QST3 compose: with constraints, a `ModRedundant` section follows *every*
+molecule specification, as Gaussian requires.
+
+**Not proven:** none of this has been run under a licensed Gaussian 16 in this build. The route
+text, the section layout and the refusals follow the G16 keyword documentation quoted above, and
+they are covered by tests, but no output file has been produced or parsed. Do not treat a job that
+plans cleanly as a job that has been shown to converge.
+
 ## xTB — semi-empirical and force-field methods
 
 xTB is an open-source (LGPL) family of fast approximate methods. In this app it gives you:

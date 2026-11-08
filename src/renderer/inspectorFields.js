@@ -9,6 +9,7 @@
 
 import { isOptJob } from '../shared/tsForceConstants.js';
 import { isCompositeJobType } from '../shared/routePresets.js';
+import { qstKindFor } from '../shared/constraints.js';
 
 /**
  * Gaussian Link 0 / resource fields. xTB ignores all of them; a thread count
@@ -39,6 +40,9 @@ const GATE_FIELDS = Object.freeze([
   'gates.finalEnergy',
 ]);
 
+/** Job types whose Gaussian input reads a ModRedundant section (#93). */
+const MODREDUNDANT_JOB_TYPES = Object.freeze(['Opt', 'Opt Freq', 'Opt=TS', 'Opt=QST2', 'Opt=QST3']);
+
 /**
  * Ordered field ids rendered by the calculation inspector for an engine.
  * Conditional Gaussian route fields are included only when the job type would
@@ -55,6 +59,10 @@ export function calcInspectorFieldIds(engineId, settings = {}) {
     if (jobType === 'IRC') fields.push('job.ircDirection');
     if (isOptJob(jobType)) fields.push('job.optConvergence');
     if (jobType === 'Opt=TS') fields.push('job.forceConstants');
+    // Issue #93: a ModRedundant section needs an optimisation job and a
+    // Gaussian block; QST structures exist only for an STQN job type.
+    if (engineId === 'gaussian' && MODREDUNDANT_JOB_TYPES.includes(jobType)) fields.push('job.constraints');
+    if (engineId === 'gaussian' && qstKindFor(jobType)) fields.push('job.qst');
     fields.push('job.memory', 'job.memoryUnit', 'job.nproc', 'job.checkpoint');
     // A composite keyword carries its own method, basis and job steps (#77), and
     // the inspector replaces the whole group with a note, so none of these
