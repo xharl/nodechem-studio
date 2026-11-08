@@ -12,6 +12,29 @@ There are two reports:
 Both are built from the queue record and the per-run `run.json` files. A value a run did not report
 is printed as `not reported`; nothing is inferred.
 
+## Figures
+
+A report can carry figures, and every figure is derived from the record it describes — never a
+screenshot, never an image file. The set is built by `src/shared/figures/`, the same module the
+results panel draws from, so a spectrum in the app and the same spectrum in the report cannot
+disagree.
+
+| Figure | Built from |
+| --- | --- |
+| Flow graph | the queue's plan order and edges |
+| IR, Raman, VCD, UV-Vis, ECD, NMR | the parsed columns of `run.json`, broadened at the stated FWHM |
+| Orbital levels (α/β) | `parsed.orbitals.manifolds`, converted to eV at 27.2114 eV/Ha |
+| Convergence | `parsed.trajectory` step energies |
+| Contour slice | a `.cube` file **inside the task's run folder** (axes must be axis-aligned) |
+
+Each caption prints what a reader needs to judge the picture — FWHM, isovalue, grid, plane, units,
+number of points — plus a short content fingerprint (`figure <hash>`). A figure whose input is
+absent says so: `figure not available: no cube file in the run folder`. The whole set is capped at
+5 MB; anything dropped for the cap is named in the document.
+
+`ncs report --figures none|basic|surfaces` selects how much is drawn. `none` reproduces the
+table-only document of 0.4.0; `surfaces` adds the cube slice.
+
 ## The per-flow report
 
 A flow that iterates over a dataset groups its tasks by record. The report has:

@@ -27,7 +27,10 @@ import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
 import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
 import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
-import { overlayPolyline, scaleToSpectrum } from '../shared/overlay.js';
+import { scaleToSpectrum } from '../shared/overlay.js';
+import {
+  fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd, orbitalLevelsFigure,
+} from '../shared/figures/index.js';
 import { importSpectrumText, sameAxisUnits } from '../shared/spectrumImport.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 import { IMPORTED_BADGE_TEXT, importedBadgeHtml, importedSummary } from '../shared/importedRecord.js';
@@ -676,9 +679,28 @@ function orbitalsCard(parsed, flags) {
     + (beta ? ' The open-shell case keeps the alpha and beta manifolds apart rather than averaging them.' : '')
     + '</p>';
 
+  // The level diagram reads the manifolds when the parser kept them, and falls
+  // back to the frontier pair otherwise — never to an invented level.
+  const levelsFor = (manifold) => {
+    if (!manifold) return [];
+    const occupied = Array.isArray(manifold.occupied) ? manifold.occupied.slice(-3) : [];
+    const virtual = Array.isArray(manifold.virtual) ? manifold.virtual.slice(0, 3) : [];
+    return occupied.map((energyEh) => ({ energyEh, occupation: 2 }))
+      .concat(virtual.map((energyEh) => ({ energyEh, occupation: 0 })));
+  };
+  const alphaLevels = orbitals.manifolds?.alpha ? levelsFor(orbitals.manifolds.alpha) : [];
+  const betaLevels = orbitals.manifolds?.beta ? levelsFor(orbitals.manifolds.beta) : [];
+  const levelsFigure = (() => {
+    if (alphaLevels.length === 0) return '';
+    const drawn = orbitalLevelsFigure({ alpha: alphaLevels, beta: betaLevels });
+    return drawn ? `<figure class="results-spectrum" data-field="orbital-levels">${drawn.svg}`
+      + `<figcaption>${esc(drawn.caption)}</figcaption></figure>` : '';
+  })();
+
   return card(
     'Frontier orbitals',
     note
+    + levelsFigure
     + `<table class="results-table" data-field="orbitals"><thead>${head}</thead><tbody>${body}</tbody></table>`
     + caveatHtml(flags, 'These orbital energies'),
     'is-wide',
@@ -720,8 +742,10 @@ function excitedStatesCard(parsed, flags, record = null) {
 }
 
 /**
- * Simulated UV-Vis curve. The broadening is a stated parameter, not a hidden
- * default: the caption prints the FWHM and the number of transitions used.
+ * Simulated UV-Vis curve, drawn by the shared figure module so the panel and the
+ * workflow report cannot show different pictures of the same numbers. The
+ * broadening is a stated parameter, not a hidden default: the caption prints the
+ * FWHM and the number of transitions used.
  */
 function spectrumFigure(states) {
   let spectrum;
@@ -730,24 +754,12 @@ function spectrumFigure(states) {
   } catch {
     return '';
   }
-  if (!spectrum) return '';
-  const polyline = spectrumPolyline(spectrum);
-  if (!polyline) return '';
-  const longNm = spectrum.maxWavelengthNm.toFixed(0);
-  const shortNm = spectrum.minWavelengthNm.toFixed(0);
+  const figure = fromUvVis(spectrum);
+  if (!figure) return '';
   return '<figure class="results-spectrum" data-field="excited-spectrum">'
-    + '<svg viewBox="0 0 320 90" role="img" aria-label="Simulated UV-Vis spectrum">'
-    + '<line x1="24" y1="66" x2="296" y2="66" class="spectrum-axis"/>'
-    + '<line x1="24" y1="12" x2="24" y2="66" class="spectrum-axis"/>'
-    + `<polyline points="${polyline}" class="spectrum-curve"/>`
-    + '<text x="24" y="80" class="spectrum-label">' + esc(longNm) + ' nm</text>'
-    + '<text x="296" y="80" text-anchor="end" class="spectrum-label">' + esc(shortNm) + ' nm</text>'
-    + '<text x="8" y="14" class="spectrum-label">rel.</text>'
-    + '</svg>'
-    + '<figcaption>Simulated UV-Vis · Gaussian broadening, FWHM '
-    + esc(spectrum.fwhmEv.toFixed(2)) + ' eV · ' + esc(spectrum.states.length)
-    + ' transitions · oscillator strengths as computed, intensity relative to the strongest point. '
-    + 'This is a simulation, not a measured spectrum.</figcaption>'
+    + figure.svg
+    + `<figcaption>${esc(figure.caption)} · oscillator strengths as computed, intensity relative to the `
+    + 'strongest point. This is a simulation, not a measured spectrum.</figcaption>'
     + '</figure>';
 }
 
@@ -1029,17 +1041,16 @@ function nmrSectionHtml(nmr, { nucleus = '1H', referencePpm = null, fwhmPpm = 0.
   }
   const shifts = nmrShifts(rows, { referencePpm });
   const spectrum = nmrSpectrum({ atoms: nmr.atoms, nucleus, referencePpm, fwhmPpm });
-  const polyline = spectrum ? nmrPolyline(spectrum) : '';
-  const figure = polyline
-    ? '<figure class="results-spectrum" data-field="nmr-spectrum">'
-      + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated NMR spectrum">'
-      + `<polyline points="${polyline}" class="spectrum-curve"/>`
-      + '</svg>'
-      + `<figcaption>${esc(spectrum.units)} · ${esc(rows.length)} ${esc(element)} nuclei · `
-      + `Lorentzian broadening, FWHM ${esc(spectrum.fwhmPpm.toFixed(2))} ppm`
-      + `${spectrum.referencePpm === null ? ' · no reference set (absolute shielding)' : ` · reference σ_ref = ${esc(spectrum.referencePpm.toFixed(2))} ppm`}`
-      + '</figcaption>'
-      + '</figure>'
+  const figure = spectrum
+    ? (() => {
+      const drawn = fromNmr(spectrum);
+      if (!drawn) return '';
+      return '<figure class="results-spectrum" data-field="nmr-spectrum">'
+        + drawn.svg
+        + `<figcaption>${esc(drawn.caption)} · ${esc(rows.length)} ${esc(element)} nuclei`
+        + `${spectrum.referencePpm === null ? ' · no reference set (absolute shielding)' : ` · reference σ_ref = ${esc(spectrum.referencePpm.toFixed(2))} ppm`}</figcaption>`
+        + '</figure>';
+    })()
     : '';
   const rowsHtml = shifts.map((atom) => '<tr>'
     + `<td>${esc(atom.index)}</td>`
@@ -1081,16 +1092,20 @@ function ramanCard(parsed, flags) {
 export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '', overlayNote = '' } = {}) {
   const spectrum = ramanSpectrum(modes, { fwhmCm });
   if (!spectrum) return '<p class="results-missing">No Raman activity was printed, so there is nothing to plot.</p>';
-  const simulated = ramanPolyline(spectrum);
   const scaled = measured ? scaleToSpectrum(measured, { peakIntensity: 1 }) : null;
-  const overlay = scaled
-    ? overlayPolyline(scaled, { minX: spectrum.minCm, maxX: spectrum.maxCm, maxY: 1 })
-    : '';
+  // The measured trace is passed in data units and clipped by the figure: the
+  // old polyline was clamped to the 0…100 box, which silently pinned points
+  // outside the window to the axis.
+  const overlayPoints = scaled && Array.isArray(scaled.points)
+    ? scaled.points.map((point) => ({ x: Number(point.x), y: Number(point.y) }))
+    : [];
+  const drawn = fromRaman(spectrum, {
+    overlays: overlayPoints.length > 1
+      ? [{ points: overlayPoints, label: overlayName || 'imported' }]
+      : [],
+  });
   const figure = '<figure class="results-spectrum" data-field="raman-spectrum">'
-    + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated Raman spectrum">'
-    + (overlay ? `<polyline points="${overlay}" class="spectrum-curve is-overlay" opacity="0.45"/>` : '')
-    + `<polyline points="${simulated}" class="spectrum-curve"/>`
-    + '</svg>'
+    + (drawn ? drawn.svg : '')
     + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(modes.length)} modes · `
     + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
     + (scaled ? ` · measured series “${esc(overlayName || 'imported')}” scaled by ×${esc(scaled.scale.toPrecision(4))} to match the strongest simulated peak` : '')
@@ -1147,16 +1162,9 @@ function vcdCard(parsed, flags) {
 export function vcdSectionHtml(modes, { fwhmCm = 12 } = {}) {
   const spectrum = vcdSpectrum(modes, { fwhmCm });
   if (!spectrum) return '<p class="results-missing">No rotational strengths were printed, so there is nothing to plot.</p>';
-  const simulated = vcdPolyline(spectrum);
+  const drawn = fromVcd(spectrum);
   const figure = '<figure class="results-spectrum" data-field="vcd-spectrum">'
-    + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated VCD spectrum, signed">'
-    // The zero line is what makes a signed curve readable, so it carries its own
-    // stroke: a class alone leaves it invisible when the theme has no rule for
-    // it, and an invisible baseline turns negative bands into noise.
-    + '<line x1="0" y1="50" x2="100" y2="50" class="spectrum-zero" stroke="currentColor" '
-    + 'stroke-width="0.6" stroke-dasharray="2 2" opacity="0.5" vector-effect="non-scaling-stroke"/>'
-    + `<polyline points="${simulated}" class="spectrum-curve"/>`
-    + '</svg>'
+    + (drawn ? drawn.svg : '')
     + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(spectrum.counts.total)} modes `
     + `(${esc(spectrum.counts.positive)} positive, ${esc(spectrum.counts.negative)} negative) · `
     + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}</figcaption>`
@@ -1216,12 +1224,9 @@ export function ecdSectionHtml(parsed, { convention = 'velocity', fwhmEv = 0.2 }
   }));
   const spectrum = ecdSpectrum(combined, { convention, fwhmEv });
   if (!spectrum) return '<p class="results-missing">No rotatory strength could be matched to a state.</p>';
-  const polyline = ecdPolyline(spectrum);
+  const drawn = fromEcd(spectrum);
   const figure = '<figure class="results-spectrum" data-field="ecd-spectrum">'
-    + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated ECD spectrum">'
-    + '<line x1="0" y1="50" x2="100" y2="50" class="spectrum-axis"/>'
-    + `<polyline points="${polyline}" class="spectrum-curve"/>`
-    + '</svg>'
+    + (drawn ? drawn.svg : '')
     + `<figcaption>${esc(spectrum.conventionLabel)} · ${esc(spectrum.units)} · `
     + `Lorentzian broadening, FWHM ${esc(spectrum.fwhmEv.toFixed(2))} eV · ${esc(spectrum.normalisation)}</figcaption>`
     + '</figure>';

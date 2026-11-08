@@ -25,7 +25,7 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--timeout <seconds>]
-ncs report <out-dir> [--flow <id>] [--include-imported] [--out <file>]
+ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
 ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--json]
 ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicity <n>] [--out <file>] [--json]

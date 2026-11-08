@@ -15,6 +15,9 @@
 import { cbsExtrapolate } from './cbs.js';
 import { boltzmannWeightedObservables, formatPopulation } from './conformers.js';
 import { IMPORTED_BADGE_TEXT, importedSummary } from './importedRecord.js';
+import { contentHash } from './figures/primitives.js';
+import { flowGraphFigure } from './figures/dag.js';
+import { taskFigures } from './figures/report.js';
 
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
@@ -138,6 +141,114 @@ function taskRow(task, record, { includeImported = false } = {}) {
  * `partial`. `needs-review` counts as a failure here because the run exists but
  * its gates do not hold — the same reading the queue's `partial` verdict uses.
  */
+/**
+ * Builds the report's figures from the records.
+ *
+ * Budget: the whole figure set is capped, and the cap is enforced here rather
+ * than hoped for. Figures are added in priority order (graph, then the spectra a
+ * run printed, then levels, then a slice), and whatever does not fit is named in
+ * `dropped` so the document can say so.
+ */
+const FIGURE_BUDGET_BYTES = 5 * 1024 * 1024;
+
+function buildFigures({
+  queue = {}, tasks = [], rows = [], recordMap = {}, figureLevel = 'basic', volumes = null,
+  budgetBytes = FIGURE_BUDGET_BYTES,
+}) {
+  const level = figureLevel === 'none' ? 'none' : (figureLevel === 'surfaces' ? 'surfaces' : 'basic');
+  const result = { level, dag: null, byTask: {}, dropped: [], bytes: 0 };
+  if (level === 'none') return result;
+
+  const nodeRows = rows.map((row) => ({
+    id: row.nodeId,
+    label: row.title || row.nodeId,
+    status: row.status || null,
+  }));
+  const edges = (Array.isArray(queue.edges) ? queue.edges : [])
+    .map((edge) => ({ from: edge?.from ?? edge?.source, to: edge?.to ?? edge?.target }))
+    .filter((edge) => edge.from && edge.to);
+  const dag = flowGraphFigure({ nodes: nodeRows, edges });
+  if (dag) {
+    result.dag = {
+      svg: dag.svg, caption: dag.caption, hash: contentHash(dag.svg), bytes: dag.svg.length,
+    };
+    result.bytes += dag.svg.length;
+  }
+
+  for (const task of tasks) {
+    const nodeId = task?.nodeId;
+    if (!nodeId) continue;
+    const record = (task.runId ? recordMap[task.runId] : null) || recordMap[nodeId] || null;
+    if (!record) continue;
+    let entries;
+    try {
+      entries = taskFigures(record, { level, volume: volumes ? volumes[nodeId] || null : null });
+    } catch (error) {
+      entries = [{ key: 'figures', figure: null, reason: `figure build failed: ${error.message}` }];
+    }
+    const rendered = [];
+    for (const entry of entries) {
+      if (!entry.figure) {
+        if (entry.reason) rendered.push({ key: entry.key, svg: null, caption: null, reason: entry.reason });
+        continue;
+      }
+      if (result.bytes + entry.figure.svg.length > budgetBytes) {
+        result.dropped.push({ nodeId, key: entry.key, reason: 'figure budget exhausted' });
+        continue;
+      }
+      result.bytes += entry.figure.svg.length;
+      rendered.push({
+        key: entry.key,
+        svg: entry.figure.svg,
+        caption: entry.figure.caption,
+        hash: contentHash(entry.figure.svg),
+        bytes: entry.figure.svg.length,
+      });
+    }
+    if (rendered.length > 0) result.byTask[nodeId] = rendered;
+  }
+  return result;
+}
+
+/**
+ * Renders the figure set: the graph once, then each block's figures.
+ *
+ * A figure that could not be built is printed with its reason, in the same
+ * register the rest of the report uses for a missing value. The caption always
+ * carries the parameters and the content fingerprint, so a reader can tell two
+ * pictures of the same spectrum apart.
+ */
+function figuresHtml(figures, rows, headingTag = 'h2') {
+  if (!figures || figures.level === 'none') return '';
+  const parts = [];
+  if (figures.dag && figures.dag.svg) {
+    parts.push(`<${headingTag}>Flow graph</${headingTag}>`
+      + figureBlockHtml({ svg: figures.dag.svg, caption: figures.dag.caption, hash: figures.dag.hash, key: 'graph' }));
+  }
+  const titles = new Map(rows.map((row) => [row.nodeId, row.title || row.nodeId]));
+  const blocks = Object.entries(figures.byTask || {}).map(([nodeId, entries]) => {
+    const body = entries.map((entry) => (entry.svg
+      ? figureBlockHtml({ ...entry, key: entry.key })
+      : `<p class="fig-missing">${escapeHtml(entry.key)} figure not available: ${escapeHtml(entry.reason || 'no data')}</p>`)).join('');
+    return `<${headingTag === 'h2' ? 'h3' : 'h4'}>${escapeHtml(titles.get(nodeId) || nodeId)}</${headingTag === 'h2' ? 'h3' : 'h4'}>` + body;
+  }).join('');
+  if (blocks) parts.push(`<${headingTag}>Figures</${headingTag}>` + blocks);
+  if (Array.isArray(figures.dropped) && figures.dropped.length > 0) {
+    const named = figures.dropped
+      .map((entry) => `${entry.key} on ${titles.get(entry.nodeId) || entry.nodeId} (${entry.reason})`)
+      .join('; ');
+    parts.push(`<p class="warn">Figures omitted to keep the document within its size budget: ${escapeHtml(named)}.</p>`);
+  }
+  return parts.join('');
+}
+
+function figureBlockHtml({ svg, caption, hash, key }) {
+  return `<figure class="fig" data-figure="${escapeHtml(key)}" data-hash="${escapeHtml(hash || '')}">`
+    + svg
+    + `<figcaption>${escapeHtml(caption || '')}${hash ? ` · figure ${escapeHtml(hash)}` : ''}</figcaption>`
+    + '</figure>';
+}
+
 function recordGroup(recordId, rows, info = null) {
   const statuses = rows.map((row) => row.status);
   const passed = statuses.filter((status) => status === 'completed' || status === 'passed').length;
@@ -232,6 +343,9 @@ export function buildWorkflowReport(queue, records = {}, {
   appVersion = null,
   recordInfo = null,
   includeImported = false,
+  figureLevel = 'basic',
+  volumes = null,
+  figureBudgetBytes = FIGURE_BUDGET_BYTES,
 } = {}) {
   const source = queue && typeof queue === 'object' ? queue : {};
   const tasks = Array.isArray(source.tasks) ? source.tasks : [];
@@ -411,6 +525,18 @@ export function buildWorkflowReport(queue, records = {}, {
   const flowId = text(source.flowId) || text(tasks.find((task) => task?.flowId)?.flowId) || 'main';
   const flowTitle = text(source.flowTitle) || text(source.flow?.title) || text(source.projectName) || flowId;
 
+  // Figures are built here, from the records, so the document is regenerable:
+  // nothing is screenshotted and nothing is read from live state.
+  const figures = buildFigures({
+    queue: source,
+    tasks,
+    rows,
+    recordMap,
+    figureLevel,
+    volumes,
+    budgetBytes: figureBudgetBytes,
+  });
+
   return {
     schemaVersion: WORKFLOW_REPORT_SCHEMA_VERSION,
     kind: 'nodechem-studio.workflow-report',
@@ -431,6 +557,7 @@ export function buildWorkflowReport(queue, records = {}, {
     counts,
     verdict,
     tasks: rows,
+    figures,
     // One entry per dataset record (empty for a v1 single-run queue), with the
     // comparison numbers a reader needs between records.
     records: recordModels,
@@ -620,6 +747,9 @@ const REPORT_STYLE = 'body{font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-s
   + 'h3{font-size:14px;margin:26px 0 8px;border-bottom:1px solid #e3e6eb;padding-bottom:4px}'
   + 'h4{font-size:13px;margin:20px 0 6px;color:#2b3038}'
   + '.meta{color:#5b6472;font-size:12px}.sub{color:#6b7480;font-size:11px;font-weight:400}'
+  + '.fig{margin:14px 0 20px}.fig svg{width:100%;max-width:560px;height:auto;display:block}'
+  + '.fig figcaption{font-size:10.5px;color:#5b6373;margin-top:3px;max-width:560px}'
+  + '.fig-missing{font-size:11px;color:#7a5b00}'
   + 'table{border-collapse:collapse;width:100%;font-size:12px}th,td{padding:6px 8px;border-bottom:1px solid #eceef2;text-align:left;vertical-align:top}'
   + 'th{background:#f7f8fa;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#5b6472}'
   + '.num{text-align:right;font-variant-numeric:tabular-nums}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}'
@@ -930,6 +1060,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + ` · NodeChem Studio ${escapeHtml(model.appVersion || MISSING)}</p>`
     + fixtureNote
     + importedNote
+    + figuresHtml(model.figures, rows, sectionHeading)
     + `<${sectionHeading}>Outcome</${sectionHeading}>`
     + `<p>${counts.total || 0} task(s): ${counts.passed || 0} passed, ${counts.failed || 0} failed, `
     + `${counts.skipped || 0} skipped, ${counts.cancelled || 0} cancelled, ${counts.notRun || 0} not run. `
