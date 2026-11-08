@@ -1,0 +1,15 @@
+##TITLE= synthetic XYPOINTS spectrum
+##JCAMP-DX=5.00
+##DATA TYPE=RAMAN SPECTRUM
+##ORIGIN=synthetic fixture for the JCAMP reader tests
+##XUNITS=1/CM
+##YUNITS=ARBITRARY UNITS
+##XFACTOR=10
+##YFACTOR=0.5
+##NPOINTS=4
+##FIRSTX=100
+##LASTX=400
+##XYPOINTS= (XY..XY)
+10, 2; 20, 4;
+30, 6; 40, 8
+##END=

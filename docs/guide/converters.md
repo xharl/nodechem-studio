@@ -122,6 +122,8 @@ coefficients within 5·10⁻⁹ of the checkpoint, 70 electrons.
 
 ## Next
 
+- [Spectra: reading a JCAMP-DX file](spectra.md) — the other direction: `X++(Y..Y)`, `XYPOINTS` and
+  the compression markers an imported `.jdx` may carry.
 - [Wavefunctions: cubes, formatted checkpoints and Molden files](wavefunction.md) — what the
   wavefunction files hold.
 - [Results and analysis](results.md) — the numbers a run reports before export.
