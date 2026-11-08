@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   package:
@@ -24,6 +26,13 @@ jobs:
         env:
           GIT_COMMIT: ${{ github.sha }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - run: node scripts/release-assets.mjs release
+      - name: Generate SBOM
+        shell: bash
+        run: npm sbom --sbom-format cyclonedx --package-lock-only > sbom.cdx.json
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release/*.exe
       - uses: actions/upload-artifact@v7
         with:
           name: nodechem-studio-windows
@@ -31,4 +40,6 @@ jobs:
             release/*.exe
             release/*.blockmap
             release/latest.yml
+            release/SHA256SUMS
+            sbom.cdx.json
           if-no-files-found: error
