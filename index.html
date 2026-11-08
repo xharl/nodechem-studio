@@ -4,7 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NodeChem Studio</title>
-<link rel="stylesheet" href="/src/renderer/styles.css">
+<!-- Runs before the stylesheet: sets data-theme before first paint (issue #52). -->
+<script src="./theme-boot.js"></script>
+<link rel="stylesheet" href="./src/renderer/fonts.css">
+<link rel="stylesheet" href="./src/renderer/themes/current.css">
+<link rel="stylesheet" href="./src/renderer/themes/graphite.css">
+<link rel="stylesheet" href="./src/renderer/themes/paper.css">
+<link rel="stylesheet" href="./src/renderer/styles.css">
 </head>
 <body>
 <div class="app" id="app" data-inspector="dock">
@@ -72,6 +78,16 @@
           <button class="overflow-item" data-action="export-dataset" data-dataset-format="json">Export run dataset (JSON)…</button>
           <button class="overflow-item" data-action="copy-diagnostics">Copy diagnostics</button>
           <button class="overflow-item" data-action="save-diagnostics">Save diagnostics…</button>
+          <div class="overflow-split" aria-hidden="true"></div>
+          <label class="overflow-field">
+            <span>Theme</span>
+            <select class="select" id="theme-select" aria-label="Theme">
+              <option value="system">Match system</option>
+              <option value="current">Current</option>
+              <option value="graphite">Graphite</option>
+              <option value="paper">Paper</option>
+            </select>
+          </label>
         </div>
       </div>
       <button class="btn primary" data-action="open-run-console" title="Run the selected calculation">
@@ -108,34 +124,34 @@
           <svg class="edges" id="edges" width="1080" height="580" viewBox="0 0 1080 580" aria-label="Workflow connections">
             <defs>
               <marker id="arrow-default" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#465163"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-blue-49)"/>
               </marker>
               <marker id="arrow-passed" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#2f9e7f"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-teal-5)"/>
               </marker>
               <marker id="arrow-ready" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#6675e8"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-blue-78)"/>
               </marker>
               <marker id="arrow-blocked" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#4b5565"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-blue-51)"/>
               </marker>
               <marker id="arrow-checkpoint" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#2dd4bf"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-teal-12)"/>
               </marker>
               <marker id="arrow-review" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#fb7185"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-red-14)"/>
               </marker>
               <marker id="arrow-true" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#34d399"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-green-9)"/>
               </marker>
               <marker id="arrow-false" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#fbbf24"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-orange-14)"/>
               </marker>
               <marker id="arrow-loop" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#a78bfa"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-violet-14)"/>
               </marker>
               <marker id="arrow-selected" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
-                <path d="M0 0 10 5 0 10z" fill="#c4b5fd"/>
+                <path d="M0 0 10 5 0 10z" fill="var(--tone-violet-15)"/>
               </marker>
             </defs>
             <g id="edge-layer"></g>

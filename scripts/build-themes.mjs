@@ -1,0 +1,329 @@
+#!/usr/bin/env node
+/**
+ * Build the theme token files from the literal palette in styles.css.
+ *
+ * Every colour literal in `src/renderer/styles.css` becomes exactly one custom
+ * property, so `current.css` reproduces today's palette value-for-value and the
+ * stylesheet itself carries no literal at all. `graphite.css` and `paper.css`
+ * answer the same key set by re-basing the neutrals on their own surface ramp
+ * and rotating the accents toward their own action colour.
+ *
+ * Run once, by hand, when the palette changes:
+ *   node scripts/build-themes.mjs
+ */
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+
+const CSS = 'src/renderer/styles.css';
+const OUT = 'src/renderer/themes';
+const LITERAL = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g;
+
+const parseHex = (hex) => {
+  let value = hex.slice(1);
+  if (value.length === 3) value = value.split('').map((c) => c + c).join('');
+  return {
+    r: parseInt(value.slice(0, 2), 16),
+    g: parseInt(value.slice(2, 4), 16),
+    b: parseInt(value.slice(4, 6), 16),
+    a: value.length === 8 ? parseInt(value.slice(6, 8), 16) / 255 : 1,
+  };
+};
+
+const parseRgb = (text) => {
+  const parts = text.match(/-?[\d.]+%?/g)?.map((part) => (part.endsWith('%') ? Number(part.slice(0, -1)) * 2.55 : Number(part))) || [];
+  return { r: parts[0] || 0, g: parts[1] || 0, b: parts[2] || 0, a: parts.length > 3 ? parts[3] : 1 };
+};
+
+const toHsl = ({ r, g, b }) => {
+  const rn = r / 255; const gn = g / 255; const bn = b / 255;
+  const max = Math.max(rn, gn, bn); const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0));
+  else if (max === gn) h = (bn - rn) / d + 2;
+  else h = (rn - gn) / d + 4;
+  return { h: h * 60, s, l };
+};
+
+const hslToHex = (h, s, l) => {
+  const hue = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = l - c / 2;
+  let rgb;
+  if (hue < 60) rgb = [c, x, 0];
+  else if (hue < 120) rgb = [x, c, 0];
+  else if (hue < 180) rgb = [0, c, x];
+  else if (hue < 240) rgb = [0, x, c];
+  else if (hue < 300) rgb = [x, 0, c];
+  else rgb = [c, 0, x];
+  return '#' + rgb.map((v) => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
+};
+
+const family = (h, s) => {
+  if (s < 0.12) return 'neutral';
+  if (h < 15 || h >= 345) return 'red';
+  if (h < 45) return 'orange';
+  if (h < 70) return 'yellow';
+  if (h < 160) return 'green';
+  if (h < 200) return 'teal';
+  if (h < 250) return 'blue';
+  if (h < 290) return 'violet';
+  return 'pink';
+};
+
+// The literal list is frozen in tokens.json once styles.css has been migrated,
+// because the stylesheet then contains no literal to scan. Re-running the
+// migration is what refreshes it.
+let frozen = null;
+try {
+  frozen = JSON.parse(readFileSync(`${OUT}/tokens.json`, 'utf8')).tokens;
+} catch {
+  frozen = null;
+}
+const css = readFileSync(CSS, 'utf8');
+const counts = new Map();
+if (frozen) {
+  for (const literal of Object.keys(frozen)) counts.set(literal, 1);
+} else {
+  for (const literal of css.match(LITERAL) || []) {
+    const key = literal.toLowerCase();
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+}
+
+// Group by family, order by lightness, and name the members of each ramp.
+const groups = new Map();
+for (const literal of counts.keys()) {
+  const rgba = literal.startsWith('#') ? parseHex(literal) : parseRgb(literal);
+  const hsl = toHsl(rgba);
+  const name = family(hsl.h, hsl.s);
+  if (!groups.has(name)) groups.set(name, []);
+  groups.get(name).push({ literal, hsl, alpha: rgba.a });
+}
+
+const tokens = new Map(); // literal -> token name
+if (frozen) {
+  for (const [literal, name] of Object.entries(frozen)) tokens.set(literal, name);
+} else
+for (const [name, members] of groups) {
+  members.sort((a, b) => a.hsl.l - b.hsl.l || a.alpha - b.alpha);
+  members.forEach((member, index) => {
+    const suffix = member.alpha < 1 ? `${index + 1}a` : String(index + 1);
+    tokens.set(member.literal, `--tone-${name}-${suffix}`);
+  });
+}
+
+/** Neutrals of a light theme are dark text on a light canvas, and vice versa. */
+const rebase = (literal, target) => {
+  const rgba = literal.startsWith('#') ? parseHex(literal) : parseRgb(literal);
+  const hsl = toHsl(rgba);
+  const light = target === 'paper';
+  const lightness = light ? 1 - hsl.l : hsl.l;
+  // graphite is a neutral workshop and paper is ink on stock: both pull the
+  // long tail toward their own chroma instead of inheriting the old blue-grey.
+  const saturation = hsl.s * (light ? 0.35 : 0.28);
+  const hue = hsl.h;
+  const hex = hslToHex(hue, saturation, Math.min(0.98, Math.max(0.02, lightness)));
+  return rgba.a < 1 ? `color-mix(in srgb, ${hex} ${Math.round(rgba.a * 100)}%, transparent)` : hex;
+};
+
+const header = (name, note) => `/* ${name} — ${note}
+ *
+ * Generated by scripts/build-themes.mjs from the literal palette that used to
+ * live in styles.css. Edit the contract block by hand; re-run the script only
+ * after changing the palette. Every theme answers the same key set, which
+ * test/theme.test.js enforces.
+ */\n`;
+
+const contract = {
+  current: {
+    '--surface-canvas': '#07090d',
+    '--surface-panel': '#0c1119',
+    '--surface-raised': '#0f1520',
+    '--surface-well': '#080d14',
+    '--surface-scrim': 'rgba(0, 0, 0, .55)',
+    '--border-subtle': '#1b2432',
+    '--border-strong': '#2a3546',
+    '--text-primary': '#e9edf4',
+    '--text-secondary': '#98a3b3',
+    '--text-tertiary': '#808da3',
+    '--text-inverse': '#0b111a',
+    '--action': '#7c83ff',
+    '--action-hover': '#5b63e8',
+    '--action-press': '#4a52d8',
+    '--action-tint': 'rgba(124, 131, 255, .12)',
+    '--focus-ring': '#a5b4fc',
+    '--state-passed': '#34d399',
+    '--state-passed-tint': 'rgba(52, 211, 153, .12)',
+    '--state-review': '#fb7185',
+    '--state-review-tint': 'rgba(251, 113, 133, .12)',
+    '--state-ready': '#6ee7b7',
+    '--state-ready-tint': 'rgba(110, 231, 183, .12)',
+    '--state-blocked': '#76859e',
+    '--state-blocked-tint': 'rgba(118, 133, 158, .14)',
+    '--state-idle': '#64748b',
+    '--state-idle-tint': 'rgba(100, 116, 139, .09)',
+    '--kind-calc': '#7c83ff',
+    '--kind-condition': '#fbbf24',
+    '--kind-loop': '#c4b5fd',
+    '--kind-merge': '#60a5fa',
+    '--kind-output': '#2dd4bf',
+    '--kind-note': '#7c8799',
+    '--text-size-xs': '11px',
+    '--text-size-sm': '12px',
+    '--text-size-md': '13px',
+    '--text-size-lg': '15px',
+    '--text-size-xl': '18px',
+    '--text-size-2xl': '22px',
+    '--font-display': '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--font-ui': '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--font-mono': '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+    '--radius-sm': '6px',
+    '--radius-md': '10px',
+    '--radius-lg': '16px',
+    '--shadow-raised': '0 8px 24px rgba(0, 0, 0, .45)',
+    '--shadow-panel': '0 18px 50px rgba(0, 0, 0, .45)',
+    '--shadow-popover': '0 24px 64px rgba(0, 0, 0, .6)',
+    '--canvas-grid-image': 'none',
+    '--canvas-grid-size': '24px',
+    '--motion-fast': '120ms',
+    '--motion-ease': 'cubic-bezier(.2, .8, .2, 1)',
+  },
+  graphite: {
+    '--surface-canvas': '#0A0B0D',
+    '--surface-panel': '#101215',
+    '--surface-raised': '#15181C',
+    '--surface-well': '#0C0E11',
+    '--surface-scrim': 'rgba(0, 0, 0, .62)',
+    '--border-subtle': '#22262B',
+    '--border-strong': '#333A41',
+    '--text-primary': '#E8EBEF',
+    '--text-secondary': '#A8AFB8',
+    '--text-tertiary': '#7E868F',
+    '--text-inverse': '#0A0B0D',
+    '--action': '#E0703F',
+    '--action-hover': '#EB855A',
+    '--action-press': '#C75C2F',
+    '--action-tint': 'rgba(224, 112, 63, .14)',
+    '--focus-ring': '#F0A07A',
+    '--state-passed': '#56B98A',
+    '--state-passed-tint': 'rgba(86, 185, 138, .14)',
+    '--state-review': '#D8A33C',
+    '--state-review-tint': 'rgba(216, 163, 60, .14)',
+    '--state-ready': '#7FC7A4',
+    '--state-ready-tint': 'rgba(127, 199, 164, .14)',
+    '--state-blocked': '#9AA4AE',
+    '--state-blocked-tint': 'rgba(154, 164, 174, .14)',
+    '--state-idle': '#6F777F',
+    '--state-idle-tint': 'rgba(111, 119, 127, .12)',
+    '--kind-calc': '#C9CFD6',
+    '--kind-condition': '#C9CFD6',
+    '--kind-loop': '#C9CFD6',
+    '--kind-merge': '#C9CFD6',
+    '--kind-output': '#C9CFD6',
+    '--kind-note': '#C9CFD6',
+    '--text-size-xs': '11px',
+    '--text-size-sm': '12px',
+    '--text-size-md': '13px',
+    '--text-size-lg': '15px',
+    '--text-size-xl': '18px',
+    '--text-size-2xl': '22px',
+    '--font-display': '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--font-ui': '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--font-mono': '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+    '--radius-sm': '6px',
+    '--radius-md': '10px',
+    '--radius-lg': '16px',
+    '--shadow-raised': '0 8px 24px rgba(0, 0, 0, .5)',
+    '--shadow-panel': '0 18px 48px rgba(0, 0, 0, .6)',
+    '--shadow-popover': '0 24px 64px rgba(0, 0, 0, .65)',
+    '--canvas-grid-image': 'none',
+    '--canvas-grid-size': '24px',
+    '--motion-fast': '120ms',
+    '--motion-ease': 'cubic-bezier(.2, .8, .2, 1)',
+  },
+  paper: {
+    '--surface-canvas': '#F6F3EC',
+    '--surface-panel': '#FCFAF5',
+    '--surface-raised': '#FFFFFF',
+    '--surface-well': '#EFEBE2',
+    '--surface-scrim': 'rgba(23, 22, 20, .35)',
+    '--border-subtle': '#DED7C9',
+    '--border-strong': '#C4BAA7',
+    '--text-primary': '#171614',
+    '--text-secondary': '#4A463F',
+    '--text-tertiary': '#6B655B',
+    '--text-inverse': '#FCFAF5',
+    '--action': '#1F4E79',
+    '--action-hover': '#2A6496',
+    '--action-press': '#173D5E',
+    '--action-tint': 'rgba(31, 78, 121, .10)',
+    '--focus-ring': '#2A6496',
+    '--state-passed': '#2E6B4C',
+    '--state-passed-tint': 'rgba(46, 107, 76, .12)',
+    '--state-review': '#8E6116',
+    '--state-review-tint': 'rgba(142, 97, 22, .12)',
+    '--state-ready': '#3C7A5A',
+    '--state-ready-tint': 'rgba(60, 122, 90, .12)',
+    '--state-blocked': '#5A544B',
+    '--state-blocked-tint': 'rgba(90, 84, 75, .12)',
+    '--state-idle': '#726B60',
+    '--state-idle-tint': 'rgba(114, 107, 96, .10)',
+    '--kind-calc': '#3A3833',
+    '--kind-condition': '#3A3833',
+    '--kind-loop': '#3A3833',
+    '--kind-merge': '#3A3833',
+    '--kind-output': '#3A3833',
+    '--kind-note': '#3A3833',
+    '--text-size-xs': '11px',
+    '--text-size-sm': '12px',
+    '--text-size-md': '13px',
+    '--text-size-lg': '15px',
+    '--text-size-xl': '18px',
+    '--text-size-2xl': '22px',
+    '--font-display': '"IBM Plex Serif", Georgia, "Times New Roman", serif',
+    '--font-ui': '"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif',
+    '--font-mono': '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+    '--radius-sm': '4px',
+    '--radius-md': '8px',
+    '--radius-lg': '12px',
+    '--shadow-raised': '0 6px 18px rgba(23, 22, 20, .10)',
+    '--shadow-panel': '0 14px 36px rgba(23, 22, 20, .14)',
+    '--shadow-popover': '0 20px 50px rgba(23, 22, 20, .18)',
+    '--canvas-grid-image': 'none',
+    '--canvas-grid-size': '24px',
+    '--motion-fast': '120ms',
+    '--motion-ease': 'cubic-bezier(.2, .8, .2, 1)',
+  },
+};
+
+mkdirSync(OUT, { recursive: true });
+const toneLines = (theme) => [...tokens.entries()]
+  .sort((a, b) => a[1].localeCompare(b[1]))
+  .map(([literal, name]) => `  ${name}: ${theme === 'current' ? literal : rebase(literal, theme)};`);
+
+const selectorFor = { current: ':root, [data-theme="current"]', graphite: '[data-theme="graphite"]', paper: '[data-theme="paper"]' };
+
+for (const theme of ['current', 'graphite', 'paper']) {
+  const body = [
+    header(theme, theme === 'current' ? "today's look, value for value" : theme === 'graphite' ? 'proposal A, dark workshop' : 'proposal B, print-friendly'),
+    `${selectorFor[theme]} {`,
+    '  /* ── Contract (45 names) ───────────────────────────────── */',
+    ...Object.entries(contract[theme]).map(([key, value]) => `  ${key}: ${value};`),
+    '',
+    '  /* ── Palette long tail: one entry per legacy literal ───── */',
+    ...toneLines(theme),
+    '}',
+    '',
+  ].join('\n');
+  writeFileSync(`${OUT}/${theme}.css`, body, 'utf8');
+}
+
+// Keep entries that were added by hand (literals found in renderer code
+// rather than in the stylesheet) instead of dropping them on regeneration.
+const merged = { ...(frozen || {}), ...Object.fromEntries(tokens) };
+writeFileSync(`${OUT}/tokens.json`, JSON.stringify({ tokens: merged, contract }, null, 2), 'utf8');
+console.log(`themes written: ${tokens.size} palette tokens + 45 contract names per theme`);

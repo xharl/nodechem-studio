@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
@@ -107,6 +107,42 @@ fs.mkdirSync(USER_DATA_DIR, { recursive: true });
 app.setPath('userData', USER_DATA_DIR);
 
 let mainWindow = null;
+/**
+ * Launch cache for the theme (#52). The renderer owns the preference in
+ * localStorage; this file only lets the native window paint the right colour
+ * before the renderer exists, so a light theme never flashes black.
+ */
+const THEME_CACHE = { mode: 'current', resolved: 'current' };
+const THEME_WINDOW_COLOUR = { current: '#07090d', graphite: '#0A0B0D', paper: '#F6F3EC' };
+
+function themeCachePath() {
+  return path.join(USER_DATA_DIR, 'preferences.json');
+}
+
+function readThemeCache() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(themeCachePath(), 'utf8'));
+    if (parsed && typeof parsed.theme === 'object' && parsed.theme) {
+      if (typeof parsed.theme.mode === 'string') THEME_CACHE.mode = parsed.theme.mode;
+      if (THEME_WINDOW_COLOUR[parsed.theme.resolved]) THEME_CACHE.resolved = parsed.theme.resolved;
+    }
+  } catch {
+    // No cache yet: the defaults above match the shipped look.
+  }
+}
+
+function writeThemeCache(payload) {
+  const record = {
+    version: 1,
+    theme: { mode: String(payload?.mode || 'current'), resolved: THEME_WINDOW_COLOUR[payload?.resolved] ? payload.resolved : 'current' },
+  };
+  try {
+    fs.writeFileSync(themeCachePath(), JSON.stringify(record, null, 2));
+  } catch {
+    // A read-only profile must not break the window.
+  }
+}
+
 let runManager = null;
 let queueManager = null;
 let windowDirty = false;
@@ -142,6 +178,7 @@ function emitQueueEvent(event) {
 }
 
 function createWindow() {
+  readThemeCache();
   // Each window starts unguarded: a previous window's permission to close must
   // never carry over (macOS keeps the app alive after the last close), and the
   // stale dirty flag belongs to the window that owned it.
@@ -157,7 +194,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     show: false,
-    backgroundColor: '#07090d',
+    backgroundColor: THEME_WINDOW_COLOUR[THEME_CACHE.resolved],
     title: 'NodeChem Studio',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -656,6 +693,17 @@ app.whenReady().then(async () => {
   await queueManager.init();
 
   ipcMain.handle('app:info', () => currentAppInfo());
+  // Theme switching (#52): repaint the native chrome, record the launch cache.
+  // The window itself is not reloaded — the renderer swaps the token file.
+  ipcMain.handle('app:set-theme', (_event, payload) => {
+    const resolved = THEME_WINDOW_COLOUR[payload?.resolved] ? payload.resolved : 'current';
+    THEME_CACHE.resolved = resolved;
+    THEME_CACHE.mode = String(payload?.mode || 'current');
+    writeThemeCache(payload);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(THEME_WINDOW_COLOUR[resolved]);
+    nativeTheme.themeSource = resolved === 'paper' ? 'light' : 'dark';
+    return { mode: THEME_CACHE.mode, resolved };
+  });
   ipcMain.handle('diagnostics:collect', (_event, summary) => collectDiagnostics(summary));
   ipcMain.handle('diagnostics:save', (_event, text) => saveDiagnostics(text));
   ipcMain.handle('project:open', openProject);

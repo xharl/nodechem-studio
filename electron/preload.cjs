@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('desktop', {
   pauseQueue: (queueId) => ipcRenderer.invoke('queue:pause', queueId),
   resumeQueue: (queueId) => ipcRenderer.invoke('queue:resume', queueId),
   cancelQueue: (queueId) => ipcRenderer.invoke('queue:cancel', queueId),
+  setTheme: (payload) => ipcRenderer.invoke('app:set-theme', payload),
   listQueues: () => ipcRenderer.invoke('queue:list'),
   getQueue: (queueId) => ipcRenderer.invoke('queue:get', queueId),
   exportWorkflowReport: (queueId) => ipcRenderer.invoke('queue:report', queueId),

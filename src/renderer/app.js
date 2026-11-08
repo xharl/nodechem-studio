@@ -789,12 +789,12 @@ function renderDraftBar(draft) {
     'gap:10px',
     'max-width:min(560px, calc(100vw - 32px))',
     'padding:8px 10px 8px 13px',
-    'border:1px solid var(--line-2)',
+    'border:1px solid var(--border-strong)',
     'border-radius:9px',
-    'background:var(--panel-2)',
-    'box-shadow:var(--shadow)',
-    'color:var(--text)',
-    'font-size:11px',
+    'background:var(--surface-raised)',
+    'box-shadow:var(--shadow-panel)',
+    'color:var(--text-primary)',
+    'font-size: var(--text-size-xs)',
   ].join(';');
   bar.innerHTML = `
     <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Unsaved draft from ${esc(draftAgeLabel(draft.updatedAt, Date.now()))}</span>
@@ -3989,6 +3989,43 @@ function init() {
   wireEvents();
   installResultsView({ desktop });
   installCloseGuard();
+  installThemeSwitcher();
+}
+
+/* ── Appearance (#52) ────────────────────────────────────────────
+ * localStorage is the source of truth and is read by public/theme-boot.js
+ * before first paint; the preference file in userData is only a launch cache
+ * for the native window colour. Switching therefore never reloads the window.
+ */
+const THEME_KEY = 'ncs.theme';
+const THEME_IDS = ['current', 'graphite', 'paper'];
+const THEME_DARK = { current: true, graphite: true, paper: false };
+
+function resolveThemePreference(preference) {
+  if (THEME_IDS.includes(preference)) return preference;
+  const light = window.matchMedia?.('(prefers-color-scheme: light)')?.matches === true;
+  return light ? 'paper' : 'graphite';
+}
+
+function applyTheme(preference) {
+  const mode = preference === 'system' || THEME_IDS.includes(preference) ? preference : 'current';
+  const resolved = resolveThemePreference(mode);
+  const root = document.documentElement;
+  root.setAttribute('data-theme', resolved);
+  root.setAttribute('data-theme-mode', mode);
+  root.style.colorScheme = THEME_DARK[resolved] ? 'dark' : 'light';
+  try { window.localStorage.setItem(THEME_KEY, mode); } catch { /* private mode */ }
+  if (desktop?.setTheme) desktop.setTheme({ mode, resolved }).catch(() => {});
+  return resolved;
+}
+
+function installThemeSwitcher() {
+  const select = document.getElementById('theme-select');
+  const stored = document.documentElement.getAttribute('data-theme-mode') || 'current';
+  if (select) {
+    select.value = stored;
+    select.addEventListener('change', () => { applyTheme(select.value); });
+  }
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

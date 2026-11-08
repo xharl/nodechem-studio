@@ -1,0 +1,39 @@
+/* IBM Plex — bundled, offline (#52).
+ *
+ * Three faces, Latin subset, SIL Open Font License 1.1 (src/renderer/fonts/OFL.txt).
+ * No network request is made: the woff2 files ship inside the app, which is
+ * what keeps the offline promise in test/docs.test.js and gives Windows, macOS
+ * and Linux the same face instead of three system defaults.
+ */
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/sans-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/sans-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Serif";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/serif-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/mono-400.woff2") format("woff2");
+}

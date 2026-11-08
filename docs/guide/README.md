@@ -24,6 +24,7 @@ If you are new, read these in order:
 5. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.
 6. [Results](results.md) — the results panel, gates, validity checks, methods text, run bundles.
 7. [Projects and runs on disk](project-files.md) — the `.ncs` file and the run folder.
+8. [Appearance](appearance.md) — the three themes, what a theme may change, and the font bundle.
 
 Reference pages:
 

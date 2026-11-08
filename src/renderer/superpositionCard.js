@@ -26,7 +26,7 @@ function projectionSvg(reference, aligned, { width = 360, height = 220, padding 
     return `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${radius}" fill="${color}" fill-opacity="0.55"><title>${atom.element}</title></circle>`;
   }).join('');
   return `<svg class="overlay-figure" viewBox="0 0 ${width} ${height}" role="img" aria-label="Two structures projected on the xy plane">`
-    + dots(reference, '#7dd3fc', 4) + dots(aligned, '#fbbf24', 2.6)
+    + dots(reference, 'var(--tone-teal-14)', 4) + dots(aligned, 'var(--tone-orange-14)', 2.6)
     + `<text x="${padding}" y="${height - 4}" class="spectrum-label">projected on xy after alignment · blue reference, amber moving</text>`
     + '</svg>';
 }
