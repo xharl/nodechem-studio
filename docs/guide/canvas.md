@@ -29,9 +29,9 @@ New blocks snapshot the project's current defaults. Changing the defaults afterw
 rewrite blocks that already exist — that is deliberate, so a saved workflow keeps the route it was
 built with.
 
-Two limits matter in practice: the **Output bundle** block stops the queue with a recorded reason
-(output bundling is not implemented yet), and a **Join** with policy `any` still waits for every
-input before it is ready.
+Two limits matter in practice: an **Output** block writes its artifact (HTML, CSV, JSON or ZIP) but
+only under the output folder — a path that would escape it is refused — and a **Join** with policy
+`any` still waits for every input before it is ready.
 
 ## Connections
 

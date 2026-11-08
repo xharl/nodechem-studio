@@ -1,8 +1,10 @@
 # Workflow report — specification
 
-**Status:** proposal, not implemented. Review before PR 1.
+**Status:** implemented — `src/shared/workflowReport.js` builds the model and the self-contained HTML,
+`ncs report` and every `reports[]` entry write it, and the PDF deliverable below was **dropped by
+decision** (HTML only). Kept as the design record.
 **Trigger:** a queue reaches a terminal state (`completed`, `needs-review`, `cancelled`, `failed`).
-**Deliverable:** one self-contained `report.html`, one `report.json` model, optional `report.pdf` — a reader who never saw the app can tell **what ran, what it produced, and whether the result is defensible**.
+**Deliverable:** one self-contained `report.html` and one `report.json` model — a reader who never saw the app can tell **what ran, what it produced, and whether the result is defensible**.
 
 ---
 

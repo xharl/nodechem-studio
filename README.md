@@ -20,14 +20,19 @@ the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
-**Status: v0.3.0 — early preview.** The graph, the durable queue, the dry-run path, per-block engine
-selection, undo/redo, project templates, crash-safe drafts, three themes, the workflow report, the
-headless CLI, spectra and thermochemistry, reaction energetics, conformer and protomer ensembles,
-the structure viewer's animation and superposition, and both engines' input builders and parsers
-are implemented and covered by tests.
-What has *not* been proven is a real run: no licensed Gaussian job and no real xTB job has been
-executed by the project's automated tests. Read [Current limitations](#current-limitations) before
-you trust a result.
+**Status: v0.3.0 — early preview.** Released 2026-11-08. The graph, the durable queue, the dry-run
+path, per-block engine selection, undo/redo, project templates, crash-safe drafts, three themes, the
+workflow report, the headless CLI, spectra and thermochemistry, reaction energetics, conformer and
+protomer ensembles, the structure viewer's animation and superposition, and every engine's input
+builder and parser are implemented and covered by tests. `main` also carries the work landed since
+that tag: multi-flow projects with dataset inputs, barrier stages and artifact outputs; fan-out that
+follows a branch; constrained optimisation and QST2/QST3; Eyring kinetics, pKa and redox cycles; CBS
+and benchmark analysis; and a versioned scripting surface with a Python client.
+What has *not* been proven is a run driven by this app: no licensed Gaussian job and no real xTB job
+has been executed by the project's automated tests. On 2026-11-08 a peer run did execute 25
+app-written cases on Gaussian 16 Rev A.03 (Windows), and those logs now pin the parsers as fixtures;
+driving the same job from the app's own run console remains unverified. Read
+[Current limitations](#current-limitations) before you trust a result.
 
 ## What it does
 
@@ -40,10 +45,16 @@ you trust a result.
   with GFN0/1/2 and GFN-FF, solvation, threads and restart hand-off; ORCA 5/6 with `Opt`, `Freq`,
   CPCM/SMD and `.gbw` hand-off; Psi4 with HF, DFT, MP2, CCSD(T) and SAPT0 — each judged by the same
   validity protocol where the checks apply.
+- **Families of molecules** — a project holds several flows; a Dataset input block drives a whole
+  family of records through one designed graph, one run per record (optionally in parallel), and a
+  `barrier` connection holds a stage until every record has finished it. Output blocks write HTML,
+  CSV, JSON or ZIP artifacts with a SHA-256 manifest, and every flow gets its own HTML report plus a
+  combined one.
 - **Conformer and protomer ensembles** — a Structure block runs CREST (GFN2 or GFN-FF) or imports a
   multi-XYZ, ranks the members by energy, prunes by energy window and RMSD, and refuses to choose a
   protomer for you. A downstream block runs the member you picked, and `run.json` records which one
-  it was. CREST is not bundled.
+  it was. Fan-out follows the branch, so `conformers → opt → freq` runs once per retained member,
+  each reading its own checkpoint. CREST is not bundled.
 - **Results you can defend** — gates answer "did it run", validity checks answer "is it
   defensible", an offline signature table explains known engine failures, and any two finished runs
   can be compared without recomputing anything.
@@ -52,14 +63,16 @@ you trust a result.
   pKa cycle; RRHO at any temperature and pressure with sweeps, conformer ensembles and CSV export.
 - **Structure viewer** — normal-mode animation from real displacement blocks, optimisation
   trajectory replay, Kabsch/Horn superposition with RMSD, and SVG figure export.
-- **Reports and export** — a self-contained `report.html` plus `report.json` for a finished queue,
-  dataset CSV/JSON with a versioned envelope, and run bundles with a per-file SHA-256 manifest.
+- **Reports and export** — a self-contained `report.html` per flow and a combined document across
+  flows, `report.json`, dataset CSV/JSON with a versioned envelope, and run bundles with a per-file
+  SHA-256 manifest.
 - **Provenance** — `run.json` records the exact input hash, the parsed output, the engine's method
   block and the app version; a run bundle adds `methods.md` and a per-file SHA-256 manifest.
 - **Three themes** — *current*, *graphite*, *paper*, from one token contract; the type scale is
   fixed and not themed.
-- **Headless CLI** — `ncs validate`, `ncs build-input` and `ncs run`, plus `ncs diff` / `ncs merge`
-  for projects shared through a drive.
+- **Headless CLI** — `ncs validate`, `build-input`, `run`, `report`, `export`, `convert`, `cache`,
+  plus `ncs diff` / `ncs merge` for projects shared through a drive; `ncs run --json` carries the
+  kinetics summary and exits 5 when a family run is partial.
 - **Local only** — no account, no telemetry, and no network code beyond the update check you
   trigger yourself.
 
@@ -153,9 +166,10 @@ docs/              documentation; the user guide lives in docs/guide/
 
 ## Current limitations
 
-- **No real Gaussian run has been recorded.** Preflight and the runner are covered by unit tests
-  against fake executables, not against a licensed installation. The Windows acceptance run (GN-001)
-  is still pending.
+- **No real Gaussian run has been recorded by this app.** On 2026-11-08 a peer run executed 25
+  cases written by this builder on Gaussian 16 Rev A.03 (Windows) and their logs are now fixtures, so
+  the parsers are pinned against real output; the runner and preflight are still covered only by unit
+  tests against fake executables, and the Windows acceptance run (GN-001) is only partly met.
 - **No real xTB run has been recorded in this checkout.** The builder, parser and fixture path are
   covered by tests; the end-to-end suite only runs when `XTB_BIN` points at a real binary.
 - **CREST is driven, not bundled, and has not been run here.** The argument construction, the
@@ -166,8 +180,8 @@ docs/              documentation; the user guide lives in docs/guide/
 - **xTB validity checks are narrower than Gaussian's.** xTB has no route, basis or ECP to inspect, so
   the Gaussian-only checks are reported as *not applicable* (never as a pass). Charge/multiplicity,
   geometry sanity, imaginary modes and optimisation convergence are judged for both engines.
-- **Output bundling is not implemented.** An Output bundle block stops the queue with a recorded
-  reason; use **Export run bundle** on a finished run instead.
+- **ROA rotational strengths are not read.** VCD is; ROA needs a Gaussian 16 B.01+ log this
+  repository does not have.
 - **Join policy `any` still waits for every input.**
 - **Validity thresholds are documented choices, not calibrated against real logs.** The parser is
   now checked against a corpus of twenty real Gaussian 09/16 outputs, including truncated and

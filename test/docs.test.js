@@ -123,7 +123,10 @@ describe('public documentation — copy consistency', () => {
   it('states plainly what the release is, and is not', () => {
     const readme = read('README.md');
     expect(readme).toContain('early preview');
-    expect(readme).toContain('What has *not* been proven is a real run');
+    // The release note has to keep saying, in some form, that a real run is
+    // unproven — the exact sentence may change as evidence arrives.
+    expect(readme).toMatch(/What has \*not\* been proven is a run driven by this app|What has \*not\* been proven is a real run/);
+    expect(readme).toContain('GN-001');
   });
 
   it('ships exactly one outbound call, in the main process, on user request', () => {
@@ -208,6 +211,20 @@ describe('project-format coverage', () => {
     const missing = pages
       .filter((name) => name !== 'README.md')
       .filter((name) => !index.includes('(' + name + ')'));
+    expect(missing).toEqual([]);
+  });
+
+  it('documents every CLI command the binary dispatches', () => {
+    // `convert` and `cache` shipped without a line on the CLI page, so a reader
+    // could not discover them from the docs. The dispatch table is the source of
+    // truth; the page has to name every command it hands out.
+    const source = read('bin/ncs.js');
+    const table = source.match(/const handlers = \{([\s\S]*?)\n\};/);
+    expect(table).not.toBeNull();
+    const commands = [...table[1].matchAll(/^\s{2}'?([a-z-]+)'?:/gm)].map((match) => match[1]);
+    expect(commands.length).toBeGreaterThanOrEqual(6);
+    const page = read('docs/guide/cli.md');
+    const missing = commands.filter((name) => !page.includes('ncs ' + name));
     expect(missing).toEqual([]);
   });
 });

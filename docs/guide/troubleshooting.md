@@ -35,7 +35,7 @@ selected executable and Link 1 always come from the same directory.
 | `Error termination` in the output | The engine stopped | Read the error line in the raw output. Do not retry blindly |
 | `truncated` badge | Output exceeded the 32 MiB capture limit | Reduce output verbosity, or run a smaller job; "Output complete" stays `unknown` |
 | Queue stuck at `interrupted` | The app stopped while a task ran | **Resume**; the task is re-queued rather than assumed complete |
-| `Output bundle` task blocked | Output bundling is not implemented | Use **Export run bundle** on a finished run instead |
+| `Output` task failed | The artifact path escapes the output folder, or its extension does not match the kind | Pick a project-relative path whose extension matches `html`/`csv`/`json`/`zip` |
 | No imaginary modes but the job is a TS | The run did not reach a saddle | Check the geometry and the force-constant choice before re-running |
 
 ## Input and validation

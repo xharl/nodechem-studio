@@ -29,6 +29,9 @@ ncs report <out-dir> [--flow <id>] [--out <file>]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
+ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv] [--out <file>] [--json]
+ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
+ncs cache <file.ncsr> --inspect [--json]
 ```
 
 - `validate` prints the schema errors, warnings and the pre-run validity findings as JSON. Every
@@ -48,6 +51,14 @@ ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
   an unknown version is refused with the path of the version this build ships. One non-conforming
   record refuses the whole export instead of returning the readable subset. `--out` writes the
   envelope to a file and prints its path.
+- `convert` turns a finished log (`.log`/`.out`), a formatted checkpoint, a structure file or a saved
+  `.ncs` into a format other software reads: `extxyz`, `xyz`, `sdf`, `jcamp` or `molden`. `--spectrum`
+  picks the spectrum written from a log (`ir`, `raman` or `uv`, default `ir`); `molden` needs the basis
+  and MO coefficients, so it is only offered for a formatted checkpoint. Without `--out` the result
+  lands beside the input with the format's extension.
+- `cache <input> --out <file.ncsr>` writes a parsed run or volumetric field as typed arrays, and
+  `ncs cache <file.ncsr> --inspect` prints its header (`--precision f64|f32` picks the array width).
+  Opening a trajectory then costs what the numbers cost, not what the log's text costs.
 
 ## Exit codes
 

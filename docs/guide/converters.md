@@ -115,8 +115,8 @@ coefficients within 5·10⁻⁹ of the checkpoint, 70 electrons.
 
 ## What is not written yet
 
-- **A binary run cache.** Cube text is several times the size of the array it holds; the reader caps
-  a cube at 4 M voxels and 64 MB of text for that reason.
+- **Cube downsampling.** A `.cube` is read at full resolution; the reader caps it at 4 M voxels and
+  64 MB of text, and refuses a larger field rather than subsampling it silently.
 - **Export from the window.** The CLI writes files; the results panel has no export button yet
   beyond the structure viewer's SVG figure.
 

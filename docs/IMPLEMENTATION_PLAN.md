@@ -1,9 +1,11 @@
 # NodeChem Studio — implementation plan
 
-Status: **0.3 feature set implemented; 0.3.0 not yet tagged.** Sections 1–3 and 5 describe the
+Status: **0.3.0 released 2026-11-08; `main` carries the work since.** Sections 1–3 and 5 describe the
 architecture and the original phase plan; §4 is the v0.1 baseline kept for history, §4b lists what
-landed since, and §6b is what remains after 0.3. The only unverified gate is still **GN-001**, a real
-licensed Gaussian run (see §6).
+landed since, and §6b is what remains. **GN-001 is partly satisfied**: on 2026-11-08 a peer run
+executed 25 cases written by this builder on a licensed Gaussian 16 Rev A.03 (Windows) and its logs
+are committed as `test/fixtures/real/g16-a03-*`; what is still unproven is the app's own run console
+driving a job end to end on that machine.
 
 ## 1. Product target
 
@@ -152,8 +154,10 @@ reuses `buildWorkflowTasks` and `RunManager` so a headless run and a UI run cann
 
 ## 4b. What landed after v0.1 — the 0.2 and 0.3 lines
 
-Everything below is implemented and covered by Vitest; none of it has been exercised against a
-licensed Gaussian installation (GN-001).
+Everything below is implemented and covered by Vitest. Where a claim rests on the parser corpus
+rather than a run this project made itself, the row says so. The peer run of 2026-11-08 is the first
+real output this builder produced: 25 app-written cases on Gaussian 16 Rev A.03, whose logs are now
+fixtures (`test/fixtures/real/g16-a03-*`).
 
 | Area | What landed | Evidence |
 | --- | --- | --- |
@@ -282,9 +286,9 @@ Linux/macOS Gaussian job has been run.
 
 | Item | Status | Where |
 | --- | --- | --- |
-| Tag and publish 0.3.0 | Release prep: version bump, README/plan refresh, release notes, tag → the two package workflows build the artifacts | `package.json`, `.github/workflows/*-package.yml` |
-| GN-001 (real licensed Gaussian run) | **Open** — needs Xavier's Windows machine and licence | §6 |
-| Output bundle block | **Open** — an output node stops the queue with a recorded reason; per-run export exists instead | `electron/runner/queue.js` |
+| Tag and publish 0.3.0 | **Done** 2026-11-08 — tag `v0.3.0` → `699ae18`, prerelease with the Windows and Linux installers, milestone 3 closed | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
+| GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
+| Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |
 | Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |
 | Live queue status on the canvas | **Open** — node cards show project state; the queue panel shows task state | `src/renderer/app.js` |
 | macOS package | **Open** — runner supports macOS; there is no build to sign or test | §5 Phase 6 |
@@ -298,7 +302,13 @@ Linux/macOS Gaussian job has been run.
 | Multiscale QM/MM, MD and docking (#67) | **On hold by decision** (2026-11-08) — not scoped or scheduled; the issue stays open | GitHub issue |
 | HPC submit/monitor (#64) | **Deferred by decision** (2026-11-08) — no cluster work until the local workflow is settled; cluster export remains the supported path | GitHub issue |
 | Release verification (checksums, SBOM, provenance) and the update notice | **Shipped after 0.3** — `src/shared/updateCheck.js`, `scripts/release-assets.mjs`; the workflow steps only run on the next tag | §5 Phase 3, `docs/guide/install.md` |
-| VCD/ROA (#78) | **Blocked on data** — needs one real Gaussian `Freq=(VCD)` log to write the parser against | GitHub issue |
+| VCD/ROA (#78) | **VCD shipped, ROA open** — VCD rotational strengths parse from `Freq=VCD` / `Opt Freq=VCD` and render on their own card, pinned by a real G16 A.03 log (`test/fixtures/real/g16-propyleneoxide-vcd.out`); ROA needs a G16 B.01+ log this repository does not have | `src/shared/vcd.js`, `docs/guide/results.md` |
+| Constrained optimisation and QST2/QST3 (#93) | **Shipped** — `ModRedundant` bond/angle/dihedral/freeze lines written after the geometry that actually runs, 1-based indices validated at load time, `Opt=QST2`/`QST3` with one structure section each, same-atom-order enforced, inspector support | `src/shared/constraints.js`, `src/shared/gaussianInput.js`, `docs/PROJECT-FORMAT.md` §4 |
+| Kinetics (#94) | **Shipped** — Eyring rate with molecularity-derived units, temperature table, Arrhenius fit refused under 3 points / 10 K, scan barriers labelled as scan barriers, `kinetics` array in `ncs run --json` | `src/shared/kinetics.js`, `docs/guide/results.md` |
+| pKa and redox cycles (#95) | **Shipped** — four-species isodesmic cycle with a cited reference library (10 acids, 3 couples), E° from a cycle with n from charges, `not reported` on any missing free energy | `src/shared/pka.js`, `src/data/pkaReferences.json` |
+| Method sensitivity (#96) | **Shipped** — Helgaker two-point CBS on the correlation energy with the method's tabulated exponent, CCCBDB benchmark with per-entry provenance, Boltzmann-weighted observables over the retained ensemble, spread shown beside every derived value | `src/shared/cbs.js`, `src/shared/benchmark.js`, `docs/guide/results.md` |
+| Scripting surface (#97) | **Shipped** — `schemas/run-record.v1.schema.json` + validator, `ncs export --schema-version`, stdlib-only Python client, `registerEngine` plugin seam | `schemas/`, `clients/python/`, `docs/SCRIPTING.md`, `docs/ENGINE_PLUGIN.md` |
+| Psi4 as a first-class engine (#111, #122) | **Shipped** — Psithon builder with its own method/basis/job list, SAPT card, per-engine executable map in the queue, Gaussian-only groups hidden and cleared on switch | `src/shared/engines/psi4.js`, `docs/guide/engines.md` |
 
 ## 7. Risks and open questions
 

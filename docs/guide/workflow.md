@@ -218,8 +218,10 @@ does not depend on the app still being open.
 
 ## What stops a workflow
 
-- An **Output bundle** block stops the queue with a recorded reason: output bundling is not
-  implemented yet, so the app refuses rather than writing a half-bundle.
+- An **Output** block writes its artifact when its inputs are done: `html`, `csv`, `json` or `zip`
+  under the output folder, with a SHA-256 entry appended to the run manifest. A path that would
+  escape the output folder, or an extension that does not match the kind, is refused before the queue
+  starts.
 - A required gate that cannot be judged (`needs-review`) blocks dependents.
 - A failed task blocks dependents until you fix the cause and queue again.
 

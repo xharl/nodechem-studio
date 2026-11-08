@@ -1,6 +1,6 @@
 # Theming engine — specification
 
-**Status:** proposal, not implemented. Review before PR 1.
+**Status:** implemented (`src/renderer/themes/`, `public/theme-boot.js`, `test/theme.test.js`). Kept as the design record.
 **Scope:** `src/renderer/**`, `index.html`, `public/`, `electron/main.js`, `electron/preload.cjs`.
 **Outcome:** one token contract, three themes (`current`, `graphite`, `paper`), switchable at runtime, with the contrast and legibility floors enforced by tests instead of by discipline.
 
