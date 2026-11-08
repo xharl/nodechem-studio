@@ -108,6 +108,47 @@ describe('reaction records in a parsed output', () => {
   });
 });
 
+describe('reaction path card', () => {
+  const record = (parsed, provenance) => ({
+    id: '20261108-000000-abc123',
+    status: 'completed',
+    engine: 'gaussian',
+    title: 'IRC',
+    dryRun: false,
+    truncated: false,
+    parsed,
+    gates: { overall: 'pass', validity: { overall: 'pass' } },
+    provenance: { kind: 'calculation', method: provenance },
+  });
+
+  it('renders the path card with the level of theory and no ΔG‡ claim', async () => {
+    const { resultsPanelHtml } = await import('../src/renderer/resultsView.js');
+    const html = resultsPanelHtml(record(parseGaussianOutput(ircText), {
+      functional: 'B3LYP',
+      basis: '6-31G(d)',
+    }));
+    expect(html).toContain('data-field="reaction-path"');
+    expect(html).toContain('data-field="barrier"');
+    expect(html).toContain('Level of theory: B3LYP/6-31G(d)');
+    expect(html).toContain('not ΔG‡');
+    expect(html).toContain('reaction-profile');
+    expect(html).not.toContain('Eyring');
+  });
+
+  it('says the level of theory is unrecorded rather than omitting it', async () => {
+    const { resultsPanelHtml } = await import('../src/renderer/resultsView.js');
+    const html = resultsPanelHtml(record({ scan: parseScanSummary(relaxedText) }, null));
+    expect(html).toContain('data-field="reaction-path"');
+    expect(html).toContain('Level of theory: not recorded for this run.');
+  });
+
+  it('renders no card when the job has neither a path nor a scan', async () => {
+    const { resultsPanelHtml } = await import('../src/renderer/resultsView.js');
+    const html = resultsPanelHtml(record(parseGaussianOutput('nothing'), { functional: 'B3LYP', basis: '6-31G(d)' }));
+    expect(html).not.toContain('data-field="reaction-path"');
+  });
+});
+
 describe('helpers', () => {
   it('renders a self-contained profile figure', () => {
     const svg = profileSvg(parseScanSummary(relaxedText));

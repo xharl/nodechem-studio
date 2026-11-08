@@ -534,9 +534,18 @@ function spectrumFigure(states) {
  * potential-energy difference on the computed points, not ΔG‡, and the caption
  * says so; a rate is never derived from it.
  */
-function reactionPathCard(parsed, flags) {
+function reactionPathCard(runRecord, parsed, flags) {
   const record = parsed?.reactionPath || parsed?.scan;
   if (!record || !Array.isArray(record.points) || record.points.length === 0) return '';
+  const method = runRecord?.provenance?.method || null;
+  const level = method
+    ? (method.hamiltonian
+      ? [method.hamiltonian, method.optLevel].filter(Boolean).join(' · ')
+      : [method.functional, method.basis].filter(Boolean).join('/'))
+    : '';
+  const levelText = level
+    ? `Level of theory: ${esc(level)}.`
+    : 'Level of theory: not recorded for this run.';
   const irc = record.kind === 'irc' || Boolean(parsed?.reactionPath);
   const points = profilePoints(record);
   if (points.length === 0) return '';
@@ -559,7 +568,7 @@ function reactionPathCard(parsed, flags) {
     + (barrier
       ? `<p class="results-note" data-field="barrier">Highest point: <strong>${esc(barrier.maxKcal.toFixed(2))} kcal mol⁻¹</strong>`
         + ` at point ${esc(barrier.point)}${Number.isFinite(barrier.rxCoord) ? ` (RxCoord ${esc(barrier.rxCoord.toFixed(5))})` : ''}.`
-        + ' This is a potential-energy difference on the computed points — not ΔG‡, and no rate constant is derived from it.</p>'
+        + ` ${levelText} This is a potential-energy difference on the computed points — not ΔG‡, no thermochemical correction is applied, and no rate constant is derived from it.</p>`
       : '')
     + profileSvg(record)
     + '<table class="results-table" data-field="reaction-path">'
@@ -706,7 +715,7 @@ export function resultsPanelHtml(record) {
     methodsCard(record),
     frequenciesCard(parsed, flags),
     excitedStatesCard(parsed, flags),
-    reactionPathCard(parsed, flags),
+    reactionPathCard(record, parsed, flags),
     chargesCard(parsed, flags),
     t1Card(parsed, flags),
     resourcesCard(parsed, flags),
