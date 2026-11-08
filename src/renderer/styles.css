@@ -678,7 +678,7 @@ kbd {
   width: 100%;
   /* A generated block title is longer than the card: clip the label inside the
      button and ellipsize it, instead of letting the centred inline-flex label
-     paint over the canvas on both sides (issue #105). */
+     paint over the canvas on both sides (issue 105). */
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1263,7 +1263,7 @@ kbd {
   min-width: 0; display: flex; flex-direction: column; min-height: 0; padding: 13px 14px; gap: 8px;
   /* The console output, gate pills, thermochemistry card and recent runs add up to
      more than the first grid row at the default window size. Without a scroll
-     container the last block painted over the workflow queue below it (issue #104). */
+     container the last block painted over the workflow queue below it (issue 104). */
   overflow-y: auto;
   overflow-x: hidden;
 }
