@@ -85,8 +85,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  min-width: 0;
 }
+.project-name #project-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .project-name:hover { background: var(--tone-neutral-11a); border-color: var(--tone-blue-71a); }
 .save-pill {
   display: inline-flex; align-items: center; gap: 5px;
@@ -673,7 +674,18 @@ kbd {
 }
 .next-card h3 { margin: 4px 0 4px; font-size: var(--text-size-md); font-weight: 640; letter-spacing: -.01em; }
 .next-card p { color: var(--tone-blue-79); font-size: var(--text-size-xs); line-height: 1.55; margin-bottom: 10px; }
-.next-card .btn { width: 100%; }
+.next-card .btn {
+  width: 100%;
+  /* A generated block title is longer than the card: clip the label inside the
+     button and ellipsize it, instead of letting the centred inline-flex label
+     paint over the canvas on both sides (issue #105). */
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 28px;
+  text-align: center;
+}
 .next-meta { display: flex; align-items: center; gap: 6px; color: var(--tone-blue-93); font-size: var(--text-size-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 
 .readiness-track { display: flex; gap: 2px; height: 7px; margin: 2px 0 7px; }
@@ -1247,7 +1259,14 @@ kbd {
 .run-actions .btn { flex: 1 1 auto; justify-content: center; }
 .run-hint { margin: 0; color: var(--text-secondary); font-size: var(--text-size-xs); line-height: 1.45; }
 .run-hint.is-warn { color: var(--kind-condition); }
-.run-output-wrap { min-width: 0; display: flex; flex-direction: column; min-height: 0; padding: 13px 14px; gap: 8px; }
+.run-output-wrap {
+  min-width: 0; display: flex; flex-direction: column; min-height: 0; padding: 13px 14px; gap: 8px;
+  /* The console output, gate pills, thermochemistry card and recent runs add up to
+     more than the first grid row at the default window size. Without a scroll
+     container the last block painted over the workflow queue below it (issue #104). */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 .run-output-head { display: flex; justify-content: space-between; gap: 10px; font-size: var(--text-size-xs); letter-spacing: .09em; text-transform: uppercase; color: var(--text-secondary); }
 .run-output-head span:last-child { max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; }
 .run-output {
@@ -1288,7 +1307,7 @@ kbd {
   border-top: 1px solid var(--tone-blue-71a);
   background: color-mix(in srgb, var(--tone-blue-33) 55%, transparent);
   display: flex; flex-direction: column; gap: 7px;
-  max-height: 210px; overflow-y: auto;
+  max-height: 210px; overflow-y: auto; min-height: 0;
 }
 .run-queue-head {
   display: flex; align-items: center; gap: 9px;
