@@ -52,6 +52,72 @@ below the output shows what the parser actually reported:
 
 The panel is a pure function of one `run.json` record: it reads no disk and invents nothing.
 
+## Method sensitivity
+
+Three questions get their own evidence: how far a number moves with the method, how it compares with a cited reference, and what an ensemble average is worth.
+
+### Complete-basis-set extrapolation
+
+A method ladder that varies the **basis set** at one level of theory can be extrapolated to the complete-basis-set (CBS) limit. The form is named on the result and is the Helgaker two-point correlation extrapolation:
+
+```
+E_corr(X) = E_corr,CBS + A · X^-3
+```
+
+`X` is the cardinal number of the basis (double-zeta 2, triple-zeta 3, quadruple-zeta 4, …). The exponent is specific to the **correlation** energy, not a universal `X^-3` fitted to the total energy. The SCF component is not extrapolated — two points cannot determine the exponential SCF fit — so the SCF energy is taken from the largest rung and the result says `SCF largest rung (def2-QZVP), not extrapolated`. The pair used is printed (`def2-TZVP → def2-QZVP`, with both `X` values).
+
+The extrapolation is refused, with the missing input named, when:
+
+- fewer than two rungs are present (the message names the only rung supplied);
+- the two rungs share a cardinal number (`def2-TZVP` and `def2-TZVPP` are both `X = 3`);
+- the rungs come from different basis families (`def2` and `cc-pVXZ` are not interchangeable);
+- the rungs are at different levels of theory;
+- the method has no tabulated correlation exponent (CBS extrapolation is limited to MP2, MP3, MP4, CCSD, CCSD(T), QCISD and QCISD(T));
+- a rung in the pair has no SCF energy, so its correlation energy cannot be separated.
+
+Only `cc-pVXZ`, `aug-cc-pVXZ` and `def2-XZVP`/`def2-XZVPP` carry a cardinal number here. A Pople basis such as `6-311G(d,p)` is not assigned a made-up `X`. With more than two rungs the two highest cardinal numbers are used, and the pair is shown.
+
+A CBS estimate is still an estimate. The number is printed with the **ladder spread** it came from — for example `ladder spread 1.24 kcal/mol over 2 rungs (def2-TZVP, def2-QZVP)`. That spread is the spread of the rungs, not the uncertainty of the extrapolated limit; the report labels it as such.
+
+### Benchmark comparison
+
+`src/shared/benchmark.js` compares computed geometries with the shipped `experimental-bond-lengths` dataset: eight small molecules whose equilibrium bond lengths (`r_e`) come from the NIST Computational Chemistry Comparison and Benchmark DataBase (CCCBDB), Release 22. Every entry carries its source, CAS number, primary citation, level of theory (`experimental r_e`) and units (ångström). The provenance test walks every entry, so a value without a citation cannot ship.
+
+The summary reports, per property:
+
+- the number of computed points `n`;
+- MAE and RMSE;
+- the maximum absolute error;
+- the mean **signed** error (systematic bias) and the spread of the signed errors (maximum minus minimum).
+
+A reference entry the tool could not compute is kept in the result as `not computed` with the reason — no geometry with that composition, a different composition, or the wrong number of perceived bonds. It is never dropped, because dropping it would make the coverage look better than it is. Bond perception uses the Cordero covalent radii already shipped for the geometry check.
+
+**Scope.** This change ships the comparison module and its dataset. The `ncs benchmark --dataset <name>` subcommand named in the issue is not wired yet; the module's `benchmarkSummaryText()` is the CLI-shaped surface.
+
+### Boltzmann-weighted observables
+
+`boltzmannWeightedObservables()` in `src/shared/conformers.js` averages observables over the **retained** conformer ensemble. The observables are exactly those the parser already produces per conformer:
+
+| Observable | Unit | Source |
+| --- | --- | --- |
+| Energy | Eh | `parsed.finalEnergy.hartree` |
+| Gibbs free energy | Eh | `parsed.thermochemistry.freeEnergyHartree` |
+| HOMO–LUMO gap | eV | `parsed.orbitals.alpha.gapEv` |
+
+The result is labelled **ensemble-averaged** at the stated temperature, and the population table is printed beside it. Every member must carry the Boltzmann population the conformer search assigned, and those populations must sum to 1; a missing population is a refusal, never a silent re-normalisation. An observable a member did not report is omitted from the average (with the member named) rather than averaged over a subset.
+
+An average is marked **converged** when the largest retained population is at least 95%. When it is not, the **unweighted** mean is shown beside the weighted one, so a reader can see how much the weighting is doing. Conformer-weighted spectra remain out of scope: this is an average of per-conformer scalars, not a simulated spectrum.
+
+### Error bars
+
+A value that came from a ladder or an ensemble is shown with its spread and what the spread is over:
+
+- **Results panel** — a **Method sensitivity** card shows the ladder rungs, the spread, the CBS estimate (or `CBS not reported` and why), the population table and the ensemble-averaged observables with `spread … over N retained conformers`. A run expanded from a conformer block also shows its population and the retained-ensemble spread.
+- **Workflow report** — the ladder section prints the CBS form, pair and ladder spread; the conformer section prints the population column and the ensemble-averaged table with weighted SD and the unweighted column.
+- **Dataset export** — appended columns: `conformer_ensemble_spread_kcal`, `conformer_ensemble_temperature_k`, `ladder_spread_kcal`, `ladder_spread_over`, `ladder_cbs_hartree`, `ladder_cbs_spread_kcal`, `ladder_cbs_form`. A missing block is an empty cell; an unavailable CBS estimate never writes a number.
+
+A ladder whose rungs did not all run keeps its existing verdict `unknown`, and no mean is taken over the rungs that happened to finish.
+
 ## Gates
 
 | Gate | Required | Passes when |

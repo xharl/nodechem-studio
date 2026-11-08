@@ -1144,6 +1144,106 @@ function methodsCard(record) {
   return card('Methods paragraph', `<pre class="results-methods-text">${esc(result.markdown)}</pre>`, 'is-wide');
 }
 
+/**
+ * Method sensitivity (#96): the ladder/ensemble provenance a record may carry.
+ * Every number that came from a ladder or an ensemble is printed with the
+ * spread it came from; a refused extrapolation is printed as "not reported"
+ * with the missing input, never as a number.
+ */
+function sensitivityCard(record) {
+  const ladder = isObject(record?.ladder) ? record.ladder : null;
+  const ensemble = isObject(record?.ensemble) ? record.ensemble : null;
+  const conformer = isObject(record?.conformer) ? record.conformer : null;
+  if (!ladder && !ensemble && !conformer) return '';
+
+  const blocks = [];
+
+  if (ladder) {
+    const entries = Array.isArray(ladder.entries) ? ladder.entries : [];
+    if (entries.length > 0) {
+      const rows = entries.map((entry) => '<tr>'
+        + `<td>${esc(text(entry?.label) || text(entry?.id) || MISSING_TEXT)}</td>`
+        + `<td>${esc(text(entry?.method) || MISSING_TEXT)}</td>`
+        + `<td>${esc(text(entry?.basis) || MISSING_TEXT)}</td>`
+        + `<td class="num">${esc(finite(entry?.energyHartree) === null ? MISSING_TEXT : finite(entry.energyHartree).toFixed(8))}</td>`
+        + `<td class="num">${esc(finite(entry?.relativeKcalPerMol) === null ? MISSING_TEXT : finite(entry.relativeKcalPerMol).toFixed(2))}</td>`
+        + '</tr>').join('');
+      blocks.push('<table class="results-table" data-field="ladder-rungs"><thead><tr><th>Rung</th>'
+        + '<th>Method</th><th>Basis</th><th class="num">E / Eh</th><th class="num">ΔE / kcal mol⁻¹</th>'
+        + `</tr></thead><tbody>${rows}</tbody></table>`);
+    }
+    const spread = finite(ladder.spreadKcal);
+    const over = text(ladder.spreadOver) || `${entries.length} rung${entries.length === 1 ? '' : 's'}`;
+    blocks.push(`<p class="results-note results-spread" data-field="ladder-spread">spread `
+      + `${spread === null ? MISSING_TEXT : `${spread.toFixed(2)} kcal/mol`} over ${esc(over)}</p>`);
+
+    const cbs = isObject(ladder.cbs) ? ladder.cbs : null;
+    if (cbs?.available === true) {
+      const pair = isObject(cbs.pair) ? cbs.pair : {};
+      const lower = text(pair.lower?.basis) || MISSING_TEXT;
+      const upper = text(pair.upper?.basis) || MISSING_TEXT;
+      const energy = finite(cbs.energyHartree);
+      blocks.push('<p class="results-note" data-field="ladder-cbs">'
+        + `CBS ${esc(text(cbs.form) || 'estimate')} · `
+        + `<strong>${esc(energy === null ? MISSING_TEXT : `${energy.toFixed(8)} Eh`)}</strong> · `
+        + `pair ${esc(lower)} → ${esc(upper)}</p>`);
+    } else if (cbs) {
+      blocks.push(`<p class="results-note results-missing" data-field="ladder-cbs">CBS not reported: `
+        + `${esc(text(cbs.reason) || 'the ladder did not carry a usable basis pair')}</p>`);
+    }
+  }
+
+  if (ensemble) {
+    if (ensemble.available === true) {
+      blocks.push(`<p class="results-note" data-field="ensemble-label">${esc(text(ensemble.label) || 'ensemble-averaged')}</p>`);
+      const temperature = finite(ensemble.temperatureK);
+      blocks.push(`<p class="results-note" data-field="ensemble-temperature">at `
+        + `${temperature === null ? MISSING_TEXT : `${temperature.toFixed(2)} K`} over `
+        + `${Number.isInteger(ensemble.memberCount) ? ensemble.memberCount : 'the'} retained conformers</p>`);
+      const observables = Array.isArray(ensemble.observables) ? ensemble.observables : [];
+      if (observables.length > 0) {
+        const rows = observables.map((observable) => {
+          const unit = text(observable?.unit) || '';
+          const weighted = finite(observable?.weightedMean);
+          const unweighted = finite(observable?.unweightedMean);
+          const spread = finite(observable?.spread);
+          const over = text(observable?.over) || 'the retained conformers';
+          return '<tr>'
+            + `<td>${esc(text(observable?.label) || text(observable?.key) || MISSING_TEXT)}</td>`
+            + `<td class="num" data-field="ensemble-value">${esc(weighted === null ? MISSING_TEXT : `${weighted.toFixed(6)} ${unit}`.trim())}</td>`
+            + `<td class="num" data-field="ensemble-spread">${esc(spread === null ? MISSING_TEXT : `spread ${spread.toFixed(6).replace(/\.?0+$/, '')} ${unit} over ${over}`.trim())}</td>`
+            + `<td class="num" data-field="ensemble-unweighted">${esc(unweighted === null ? MISSING_TEXT : `${unweighted.toFixed(6)} ${unit}`.trim())}</td>`
+            + '</tr>';
+        }).join('');
+        blocks.push('<table class="results-table" data-field="ensemble-observables"><thead><tr>'
+          + '<th>Observable</th><th class="num">Ensemble-averaged</th><th class="num">Spread</th>'
+          + '<th class="num">Unweighted</th></tr></thead>'
+          + `<tbody>${rows}</tbody></table>`);
+      }
+    } else {
+      blocks.push(`<p class="results-note results-missing" data-field="ensemble-label">not ensemble-averaged: `
+        + `${esc(text(ensemble.reason) || 'the ensemble was not retained')}</p>`);
+    }
+  }
+
+  if (conformer) {
+    const population = finite(conformer.population);
+    const relative = finite(conformer.relativeKcal);
+    const spread = finite(conformer.spreadKcal);
+    const count = finite(conformer.count);
+    blocks.push(`<p class="results-note" data-field="conformer-population">`
+      + `Conformer ${esc(text(conformer.id) || '(unnamed)')} · population `
+      + `${population === null ? MISSING_TEXT : `${(population * 100).toFixed(1)}%`}`
+      + `${relative === null ? '' : ` · ΔE ${relative.toFixed(2)} kcal/mol`}</p>`);
+    if (spread !== null) {
+      blocks.push(`<p class="results-note results-spread" data-field="conformer-spread">ensemble spread `
+        + `${spread.toFixed(2)} kcal/mol over ${count === null ? 'the retained' : `${count}`} conformers</p>`);
+    }
+  }
+
+  return card('Method sensitivity', blocks.join(''));
+}
+
 function gatesCard(gates) {
   const overall = gateResult(gates?.overall);
   const list = Array.isArray(gates?.gates) ? gates.gates : [];
@@ -1314,6 +1414,7 @@ export function resultsPanelHtml(record, options = {}) {
     ramanCard(parsed, flags),
     ecdCard(parsed, flags),
     chargesCard(parsed, flags),
+    sensitivityCard(record),
     t1Card(parsed, flags),
     resourcesCard(parsed, flags),
     errorCard(record, parsed),
@@ -1898,6 +1999,8 @@ const RESULTS_VIEW_CSS = `
   border-color: color-mix(in srgb, var(--action) 55%, var(--border-subtle));
   background: color-mix(in srgb, var(--action) 12%, var(--surface-raised));
 }
+.results-spread { color: var(--kind-condition); }
+.results-card .results-table + .results-note { margin-top: 5px; }
 @media (max-width: 820px) {
   .run-console.has-results {
     right: 0; bottom: 0; width: 100%; height: 92dvh; max-height: 92dvh;
