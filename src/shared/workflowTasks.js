@@ -581,6 +581,32 @@ export function buildWorkflowPlan(project) {
     }
   }
 
+  // Issue #80 follow-up: a fanned-out branch may not feed a *single* run of an
+  // executable block. In `conformers -> opt -> freq` the frequency block would
+  // otherwise wait for every member's optimisation and then run once on the
+  // project geometry, silently discarding the ensemble — the exact mistake
+  // fan-out exists to prevent. Control-flow nodes (merge, output) are the
+  // documented exception: collecting the members is what they are for.
+  const fanInputs = new Map();
+  for (const edge of edges) {
+    const fan = fanOf.get(edge.from);
+    if (!fan || edge.type === 'checkpoint') continue;
+    const entry = fanInputs.get(edge.to) || { conformerIds: new Set(), count: 0 };
+    entry.conformerIds.add(fan.conformerId);
+    entry.count += 1;
+    fanInputs.set(edge.to, entry);
+  }
+  for (const [taskId, entry] of fanInputs) {
+    if (fanOf.has(taskId) || entry.count < 2) continue;
+    const node = nodeById(project, taskId);
+    if (!node || (node.type !== 'calc' && node.type !== 'conformers')) continue;
+    const ensemble = nodeById(project, [...entry.conformerIds][0]);
+    throw new Error(`"${node.title}" would run once but ${entry.count} fanned-out branches feed it,`
+      + ` so it could only use one member of "${ensemble?.title || 'the ensemble'}".`
+      + ' Wire it to the conformer block directly so it runs once per member,'
+      + ' or collect the branches with a merge block if one run is what you want.');
+  }
+
   // A downstream task reads the checkpoint of the *primary* rung; record that
   // explicitly so the run record cannot imply it consumed the whole ladder.
   // A fanned-out task reads the checkpoint of *its own member* instead, and the
