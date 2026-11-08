@@ -41,6 +41,16 @@ it from the dataset. For a one-off, a project file can also set the input
 block's `recordFilter` (`field` `id`, `label`, `charge` or `multiplicity`) to run
 a single member without touching the dataset.
 
+## Conformer fan-out in a chain
+
+A conformer block with **Fan out** on multiplies the whole branch, not just the block wired to it.
+`Input ─▶ Conformers ─▶ Optimise ─▶ Frequencies` runs `opt~m3~c1` and `freq~m3~c1` for every
+retained member, alongside `opt~m3~c2` and `freq~m3~c2`. Each stage keeps the member segment in its
+id, builds from that member's geometry on a dependency edge, and reads that member's own checkpoint
+on a checkpoint edge (`opt~m3~c1` writes `opt_m3_c1.chk`). A block that mixes a fanned branch with
+an unfanned one, or receives two different ensembles, is refused before queueing and names both
+branches. See [Conformers](conformers.md#fanning-the-ensemble-out).
+
 ## Stages: the barrier edge
 
 A **dependency** edge is a per-record hand-off: `freq~m3` waits for `opt~m3`
@@ -78,8 +88,8 @@ keeps its results, export rows and report section. A single-molecule flow keeps
 the old contract: any failure is a failure.
 
 The plan is capped at 5 000 tasks. The refusal names the product
-(`60 records × the blocks they feed`) and suggests disabling records or splitting
-the flow.
+(`60 records × 2 conformer members × the blocks they feed`) and suggests
+disabling records, turning fan-out off, or splitting the flow.
 
 ## What is not here yet
 

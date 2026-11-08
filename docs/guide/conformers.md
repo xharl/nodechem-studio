@@ -56,9 +56,9 @@ the shape*. Turn on **Fan out** when the question is the second one. The block t
 a single geometry:
 
 - the block becomes one task per retained member, keyed `<blockId>~<memberId>`;
-- a calculation block fed by it becomes one task per member too, and each task is built from that
-  member's atoms, not from the selected one;
-- connections between the two pair member to member, so member `c2` never waits on `c1`;
+- every calculation downstream of it — wired directly or reached through a chain — becomes one task
+  per member too, and each task is built from that member's atoms, not from the selected one;
+- connections between two fanned-out blocks pair member to member, so member `c2` never waits on `c1`;
 - a merge block after the fan-out waits for every member (there is no partial-ensemble mode yet).
 
 The search itself does not run again: the ensemble is already stored in the project, so each member
@@ -78,12 +78,18 @@ Fan-out is refused when the ensemble mixes protomers and no member is chosen: co
 states in one ΔE table is not a conformer comparison. With a member chosen, only the kept members of
 that protomer are fanned out.
 
-Fan-out covers the blocks wired **directly** to the ensemble. A chain such as
-`conformers → opt → freq` is refused at plan time with a message naming the ensemble, because the
-frequency block would run once while several optimised members feed it and could only use one — the
-silent collapse fan-out exists to prevent. Propagating the fan through a branch (one frequency per
-optimised member, each reading its own checkpoint) is issue #87. Until it lands, wire each stage to
-the conformer block itself, or collect the branches with a merge block when one run is what you want.
+The fan follows the branch, not just one edge. `conformers → opt → freq` runs one optimisation and
+one frequency per retained member (`opt~c1`, `freq~c1`, …), even though only the optimisation is
+wired to the ensemble. A record in scope adds its segment to every task id (`opt~m3~c1`). Each stage
+reads its own member's artefacts:
+
+- on a **dependency** edge the downstream input is built from that member's geometry;
+- on a **checkpoint** edge it reads that member's checkpoint — `opt~c1` writes `opt_c1.chk`, and
+  `freq~c1` reads exactly that file, never a shared `opt.chk`.
+
+A block that mixes a fanned branch with an unfanned one, or receives two different ensembles, is
+refused before queueing and names both branches: one run cannot be per-member and single-geometry at
+the same time. Collect the members with a merge block when one downstream run is what you want.
 
 The workflow report groups the fanned-out runs by member and reports ΔE at the level the runs
 actually used, with the search-level ΔE shown alongside. Populations at the target level are not
