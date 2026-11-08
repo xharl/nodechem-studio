@@ -14,6 +14,8 @@ import { isSafeRunId } from '../src/shared/runBundle.js';
 import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
 import { buildDiagnostics } from '../src/shared/diagnostics.js';
 import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js';
+import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
+import { methodsParagraphFor } from '../src/shared/methodsParagraph.js';
 import {
   PROJECT_EXTENSIONS,
   classifySavePath,
@@ -396,6 +398,72 @@ async function exportRunBundle(runId) {
 }
 
 /**
+ * Write one workflow report for a finished queue: a self-contained
+ * `report.html` plus the `report.json` model beside it. The per-task run
+ * records are read from their run folders, so the report reflects what was
+ * actually written to disk rather than live renderer state.
+ */
+async function exportWorkflowReport(queueId) {
+  const id = String(queueId || '');
+  if (!id) return { canceled: false, error: { message: 'No workflow queue is available yet.' } };
+  let queue;
+  try {
+    queue = await queueManager.get(id);
+  } catch (error) {
+    return { canceled: false, error: { message: error.message } };
+  }
+  if (!queue) return { canceled: false, error: { message: `Workflow ${id} was not found.` } };
+
+  const records = {};
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  for (const task of tasks) {
+    if (!task || typeof task !== 'object' || !task.runDir) continue;
+    try {
+      const record = JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
+      if (task.runId) records[task.runId] = record;
+      if (task.nodeId) records[task.nodeId] = record;
+    } catch {
+      // A task whose run.json is unreadable stays "not reported" in the report.
+    }
+  }
+
+  const model = buildWorkflowReport(queue, records, {
+    generatedAt: new Date().toISOString(),
+    appVersion: currentAppInfo().version,
+  });
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save workflow report',
+    defaultPath: path.join(app.getPath('documents'), `workflow-${id}.html`),
+    filters: [{ name: 'HTML report', extensions: ['html'] }],
+    buttonLabel: 'Save report',
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  try {
+    const html = workflowReportHtml(model, {
+      methodsFor: (row) => {
+        const record = records[row.runId] || records[row.nodeId] || null;
+        if (!record) return null;
+        const paragraph = methodsParagraphFor(record, { form: 'full' });
+        return paragraph && paragraph.ok ? paragraph.markdown : null;
+      },
+    });
+    await fsp.writeFile(result.filePath, html, 'utf8');
+    const jsonPath = result.filePath.replace(/\.html?$/i, '') + '.json';
+    await fsp.writeFile(jsonPath, JSON.stringify(model, null, 2), 'utf8');
+    return {
+      canceled: false,
+      path: result.filePath,
+      jsonPath,
+      taskCount: model.counts.total,
+      verdict: model.verdict,
+    };
+  } catch (error) {
+    return { canceled: false, error: { message: error.message } };
+  }
+}
+
+/**
  * Export every finished run as one dataset file. The rows come from the same
  * `run.json` records the results panel reads, so the export cannot disagree
  * with what the app shows. A dry run keeps its flag; a missing value is empty.
@@ -565,6 +633,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('queue:cancel', (_event, queueId) => queueManager.cancel(queueId));
   ipcMain.handle('queue:list', () => queueManager.list());
   ipcMain.handle('queue:get', (_event, queueId) => queueManager.get(queueId));
+  ipcMain.handle('queue:report', (_event, queueId) => exportWorkflowReport(queueId));
 
   createWindow();
 

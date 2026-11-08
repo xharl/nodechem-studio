@@ -133,6 +133,20 @@ gates. A returned error termination is never imported as a pass, and a missing o
 instead of being fabricated. The folder and manifest format is defined in
 [`docs/CLUSTER_EXPORT.md`](../CLUSTER_EXPORT.md).
 
+## Workflow report
+
+**Report…** in the queue header writes two files for the finished queue:
+
+- `report.html` — a self-contained document (no scripts, no network) with the outcome summary, one
+  row per block (status, gate and validity verdicts, engine, level of theory, final energy, free
+  energy, imaginary count, elapsed time), the methods paragraph for each block that has a run, and
+  the input/output SHA-256 prefixes.
+- `report.json` — the same model with a schema version, for a script or an archive.
+
+A value a run did not report is printed as *not reported*; a dry-run task is labelled **FIXTURE**
+wherever its numbers appear. The report is rebuilt from the queue record and the run folders, so it
+does not depend on the app still being open.
+
 ## What stops a workflow
 
 - An **Output bundle** block stops the queue with a recorded reason: output bundling is not

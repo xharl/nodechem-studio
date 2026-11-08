@@ -2892,6 +2892,7 @@ function renderQueue() {
   $('#pause-workflow')?.toggleAttribute('disabled', !running);
   $('#resume-workflow')?.toggleAttribute('disabled', !canResume);
   $('#cancel-workflow')?.toggleAttribute('disabled', !active);
+  $('#report-workflow')?.toggleAttribute('disabled', !queue.id || queue.status === 'running');
 }
 
 async function startWorkflow() {
@@ -2948,6 +2949,32 @@ async function startWorkflowUnlocked() {
   } catch (error) {
     appendRunOutput(`Queue error: ${error.message}\n`);
     toast(`Could not queue workflow: ${error.message}`);
+  }
+}
+
+/**
+ * Write the workflow report for the current queue (report.html + report.json).
+ * The main process reads the queue's run folders; the renderer only asks.
+ */
+async function exportWorkflowReportAction() {
+  if (!desktop?.exportWorkflowReport) {
+    toast('Open the desktop app to write a workflow report.');
+    return;
+  }
+  if (!state.queue.id) {
+    toast('Run a workflow first; the report describes a finished queue.');
+    return;
+  }
+  try {
+    const result = await desktop.exportWorkflowReport(state.queue.id);
+    if (!result || result.canceled) return;
+    if (result.error) {
+      toast(`Could not write the report: ${result.error.message}`);
+      return;
+    }
+    toast(`Report written · ${result.taskCount} task(s) · verdict ${result.verdict}`);
+  } catch (error) {
+    toast(`Could not write the report: ${error.message}`);
   }
 }
 
@@ -3518,6 +3545,7 @@ function handleAction(action, element) {
     case 'run-selected': startSelectedRun(); break;
     case 'run-workflow': startWorkflow(); break;
     case 'pause-workflow': pauseWorkflow(); break;
+    case 'export-workflow-report': exportWorkflowReportAction(); break;
     case 'resume-workflow': resumeWorkflow(); break;
     case 'cancel-workflow': cancelWorkflow(); break;
     case 'refresh-history': refreshHistory(); break;
