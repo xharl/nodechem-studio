@@ -519,7 +519,7 @@ function secondsOf(match) {
 function parseResources(joined) {
   const nBasis = joined.match(/\bNBasis\s*=\s*(\d+)/i);
   const basis = joined.match(/There are\s+(\d+)\s+basis functions,\s+(\d+)\s+primitive gaussians/i);
-  const processors = joined.match(/the tester use up to\s+(\d+)\s+processors/i);
+  const processors = joined.match(/Will use up to\s+(\d+)\s+processors/i);
   const memory = joined.match(/^\s*%mem\s*=\s*(\S+)/im);
   return {
     nBasis: nBasis ? Number(nBasis[1]) : null,

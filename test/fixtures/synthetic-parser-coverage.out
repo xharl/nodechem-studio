@@ -120,7 +120,7 @@
 
  There are   34 basis functions,   60 primitive gaussians,   34 cartesian basis functions
  NBasis=    34 NAE=     8 NBF=    34 NBO=    14
- the tester use up to    4 processors via shared memory.
+ Will use up to    4 processors via shared memory.
  Job cpu time:       0 days  0 hours  0 minutes  1.2 seconds.
  Elapsed time:       0 days  0 hours  0 minutes  1.5 seconds.
 
