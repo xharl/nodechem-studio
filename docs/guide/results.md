@@ -109,7 +109,29 @@ rather than implied. Where the parser finds no thermochemistry section, the pane
 xTB's free energy already uses mRRHO; the app adds no quasi-harmonic or standard-state correction on
 top of it.
 
+## Thermochemistry at another temperature or pressure
+
+Gaussian prints one table, at the temperature and pressure in the route. To ask what happens at
+350 K and 0.1 atm you cannot correct that table — you have to rebuild the partition function from
+the constants the output already carries: molecular mass, the three rotational constants, the
+symmetry number and the frequencies.
+
+`src/shared/thermoSweep.js` does exactly that (`thermoAt`, `thermoGrid`, `thermoCsv`). It is pinned
+against Gaussian's own table: on a real Gaussian 09 frequency job the recomputed translational,
+rotational and vibrational entropies reproduce the printed values to within rounding (40.502,
+28.143 and 23.205 cal/mol/K), and the enthalpy and Gibbs corrections reproduce
+`0.186976` and `0.143335` Ha exactly.
+
+Every term is itemised — zero-point, translational (3kT/2), rotational (3RT/2), vibrational thermal,
+pV = RT, and −TΔS — so a table can show each line and each can be switched off. Pressure enters
+only through the translational partition function, and the code proves it: dropping from 1 atm to
+0.1 atm changes the translational entropy by exactly `R ln 10`.
+
+When the output lacks the constants the result is `{ available: false, missing: [...] }`. There is no
+fallback to the printed table, because a table at 298.15 K is not an answer about 350 K.
+
 ## NMR shieldings
+
 
 An `NMR` job produces an **NMR** card with every atom's isotropic shielding, anisotropy and tensor
 eigenvalues, the gauge Gaussian used (GIAO), and a simulated spectrum.

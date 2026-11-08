@@ -224,7 +224,21 @@ function parseThermochemistry(joined, lines) {
     'i',
   ));
 
+  // The constants the RRHO partition function needs. `Rotational constants`
+  // appears twice in a frequency job (once before the modes, once in the
+  // thermochemistry block); the last one belongs to the parsed geometry.
+  const lastNumberTriple = (label) => {
+    const pattern = new RegExp(String.raw`${label}\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})`, 'gi');
+    let match = null;
+    for (const candidate of joined.matchAll(pattern)) match = candidate;
+    return match ? [toNumber(match[1]), toNumber(match[2]), toNumber(match[3])] : null;
+  };
+
   return {
+    molecularMassAmu: value(String.raw`Molecular mass:\s+(${NUMBER})\s+amu`),
+    symmetryNumber: value(String.raw`Rotational symmetry number\s+(${NUMBER})`),
+    rotationalConstantsGHz: lastNumberTriple('Rotational constants \\(GHZ\\):'),
+    rotationalTemperaturesK: lastNumberTriple('Rotational temperatures \\(Kelvin\\)'),
     // Kept from the first parser slice: callers and gates read this key.
     freeEnergyHartree: value(String.raw`Sum of electronic and thermal Free Energies\s*=\s*(${NUMBER})`),
     enthalpyHartree: value(String.raw`Sum of electronic and thermal Enthalpies\s*=\s*(${NUMBER})`),
