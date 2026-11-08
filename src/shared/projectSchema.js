@@ -128,7 +128,11 @@ export const MERGE_POLICIES = Object.freeze(['all', 'any']);
 export const GEOMETRY_SOURCES = Object.freeze(['demo', 'imported', 'manual']);
 /** Issue #93: where an extra QST2/QST3 structure was copied from. */
 export const QST_SOURCES = Object.freeze(['copy', 'block', 'file']);
-export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'mol2', 'pdb', 'pdbqt', 'cjson', 'gjf', 'com', 'log']);
+export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'mol2', 'pdb', 'pdbqt', 'cjson', 'gjf', 'com', 'log', 'cdxml']);
+// What the coordinates are, when the file says so. A CDXML drawing is 2D: its
+// bond lengths are page units and every atom sits at z = 0, so the claim has to
+// survive a save rather than only the session that imported it.
+export const GEOMETRY_DIMENSIONS = Object.freeze(['', '2d', '3d']);
 
 /** RFC 0001: what an output block writes. HTML is the report format; no PDF. */
 export const OUTPUT_KINDS = Object.freeze(['html', 'csv', 'json', 'zip']);
@@ -690,14 +694,15 @@ function normalizeCoords(c, raw, legacy, basePath = 'molecule.coords') {
 
 function normalizeGeometry(c, raw, legacy, coords) {
   const source = requiredObject(c, raw, 'molecule.geometry', legacy, {});
-  warnUnknown(c, source, new Set(['source', 'file', 'format']), 'molecule.geometry');
+  warnUnknown(c, source, new Set(['source', 'file', 'format', 'dimension']), 'molecule.geometry');
   const kind = readEnum(c, source.source, GEOMETRY_SOURCES, 'molecule.geometry.source', { legacy, fallback: 'demo' });
   const file = readString(c, source.file, 'molecule.geometry.file', { legacy, fallback: '', max: 260 });
   const format = readEnum(c, source.format, GEOMETRY_FORMATS, 'molecule.geometry.format', { legacy, fallback: '' });
+  const dimension = readEnum(c, source.dimension, GEOMETRY_DIMENSIONS, 'molecule.geometry.dimension', { legacy, fallback: '' });
   if ((kind === 'imported' || kind === 'manual') && coords.length === 0) {
     c.error('molecule.coords', `at least one atom is required when the geometry source is "${kind}".`);
   }
-  return { source: kind, file, format };
+  return { source: kind, file, format, ...(dimension ? { dimension } : {}) };
 }
 
 function normalizeMolecule(c, raw, legacy) {

@@ -3445,7 +3445,7 @@ function renderDrawer() {
                 <button type="button" class="btn small" data-action="import-structure">Import structure file</button>
                 ${draft.coords.length ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
               </div>
-              <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out" hidden>
+              <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out,.cdxml" hidden>
               ${(draft.records?.length || 0) > 1 ? `
                 <label class="field-label" style="margin-top:8px">Record
                   <select data-record-select>
@@ -3474,6 +3474,7 @@ function renderDrawer() {
           </div>
         </div>
       </div>
+      ${draft.geometry?.dimension === '2d' ? '<div class="callout"><strong>Imported from a 2D drawing.</strong> The coordinates are a depiction, not a structure: bond lengths and angles are page units, every atom sits at z = 0. Optimise this geometry before a frequency, a single point on it, or anything that reports an energy — the numbers would describe the drawing, not the molecule.</div>' : ''}
       <div class="callout green"><strong>Project-level structure.</strong> Every calculation block builds its input from these coordinates; each block keeps its own charge, multiplicity, method, basis and gates.</div>`;
   } else if (activeTab === 'records') {
     const records = drawerDatasets.records;
@@ -3702,11 +3703,18 @@ async function importStructureFile(file) {
       bonds: record.bonds || [],
       charge: record.charge,
       multiplicity: record.multiplicity,
+      // A CDXML record says its coordinates are a drawing; carrying the flag
+      // keeps the structure all the way to the notice below instead of
+      // silently becoming a geometry a calculation can start from.
+      dimension: record.geometry?.dimension || '',
+      warnings: record.warnings || [],
     }));
     applyImportedRecord(0, file.name, format, usable.length + skipped);
+    const drawing = usable[0].geometry?.dimension === '2d';
     toast(`Imported ${usable[0].atoms.length} atoms from ${file.name}`
       + `${records.length > 1 ? ` · ${records.length} records, showing record 1` : ''}`
-      + `${skipped ? ` · ${skipped} unreadable record${skipped === 1 ? '' : 's'} skipped` : ''}.`);
+      + `${skipped ? ` · ${skipped} unreadable record${skipped === 1 ? '' : 's'} skipped` : ''}`
+      + `${drawing ? '. 2D drawing: these coordinates are a depiction, not a structure.' : '.'}`);
   } catch (error) {
     toast(`Could not import structure: ${error.message}`);
   }
@@ -3725,6 +3733,7 @@ function applyImportedRecord(index, fileName, format, total) {
     source: 'imported',
     file: fileName || draft.geometry?.file || '',
     format: format || draft.geometry?.format || '',
+    dimension: record.dimension || '',
   };
   renderDrawer();
   if (total > 1) toast(`Loaded record ${index + 1} of ${total}: ${record.name}.`);

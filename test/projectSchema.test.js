@@ -723,3 +723,47 @@ describe('project schema v1 — engine-specific solvation models (#102)', () => 
       && error.message === 'must be one of: PCM, SMD, CPCM.')).toBe(true);
   });
 });
+
+describe('project schema — an imported drawing keeps its dimension', () => {
+  // A CDXML import (#120) yields a 2D depiction: page-unit bond lengths and
+  // z = 0 on every atom. The claim has to survive a save, or a project reopened
+  // tomorrow offers flat coordinates as a geometry to run on with no notice.
+  it('round-trips cdxml as a geometry format', () => {
+    const project = validateProject(legacyProject()).project;
+    project.molecule.coords = [
+      { element: 'O', x: 0, y: 0, z: 0 },
+      { element: 'H', x: 0.76, y: 0.59, z: 0 },
+      { element: 'H', x: -0.76, y: 0.59, z: 0 },
+    ];
+    project.molecule.geometry = { source: 'imported', file: 'rings.cdxml', format: 'cdxml', dimension: '2d' };
+    const saved = stringifyProject(project);
+    expect(saved.ok).toBe(true);
+    const reopened = parseProjectText(saved.text);
+    expect(reopened.errors).toEqual([]);
+    expect(reopened.project.molecule.geometry).toEqual({
+      source: 'imported', file: 'rings.cdxml', format: 'cdxml', dimension: '2d',
+    });
+  });
+
+  it('accepts a 3d geometry without a dimension note', () => {
+    const project = validateProject(legacyProject()).project;
+    project.molecule.coords = [
+      { element: 'O', x: 0, y: 0, z: 0 },
+      { element: 'H', x: 0.76, y: 0.59, z: 0 },
+      { element: 'H', x: -0.76, y: 0.59, z: 0 },
+    ];
+    project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
+    const saved = stringifyProject(project);
+    expect(saved.ok).toBe(true);
+    expect(parseProjectText(saved.text).project.molecule.geometry).toEqual({
+      source: 'imported', file: 'water.xyz', format: 'xyz',
+    });
+  });
+
+  it('refuses a dimension it does not understand', () => {
+    const project = legacyProject();
+    project.molecule.geometry = { source: 'imported', file: 'x.cdxml', format: 'cdxml', dimension: '2.5d' };
+    const result = validateProject(project);
+    expect(hasErrorAt(result, 'molecule.geometry.dimension')).toBe(true);
+  });
+});
