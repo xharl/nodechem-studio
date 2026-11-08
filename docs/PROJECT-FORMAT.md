@@ -212,14 +212,16 @@ A calculation block fed by a `conformers` block runs the selected member's geome
 is selected — including every protomer case — the queue refuses to build its input rather than
 falling back to the imported structure.
 
-With `fanOut` on, the block expands into one task per **retained** member (`<nodeId>~<memberId>`) and
-each calculation wired directly to it expands the same way, so the ensemble is optimised and reported
-per member instead of collapsing to one geometry. Downstream `run.json` records which member a run
-belongs to; dataset export carries `conformer_node`, `member`, `relative_kcal`, `population` and
-`protomer` columns. Two cases are refused at plan time rather than guessed: an executable block that
-would run once while several fanned-out branches feed it (the member it would use is ambiguous), and
-the same block fanned over two different ensembles. Fan-out does not yet propagate through a chain —
-`conformers → opt → freq` needs issue #87; until then it is refused, not run on the wrong geometry.
+With `fanOut` on, the block expands into one task per **retained** member (`<nodeId>~<memberId>`), and
+the fan follows the branch: every calculation that inherits its geometry or checkpoint — directly
+wired or further downstream — expands the same way, so `conformers → opt → freq` plans `opt~c1`,
+`opt~c2`, `freq~c1`, `freq~c2`. On a dependency edge the downstream input is built from that member's
+atoms; on a checkpoint edge `opt~c1` writes `opt_c1.chk` and `freq~c1` reads exactly that file.
+Downstream `run.json` records which member a run belongs to; dataset export carries `conformer_node`,
+`member`, `relative_kcal`, `population` and `protomer` columns. Two cases are refused at plan time
+rather than guessed: an executable block that mixes a fanned-out branch with an unfanned one (the
+member it would use is ambiguous), and the same block fanned over two different ensembles. The plan
+cap names the product it exceeded: records × conformer members × blocks.
 
 `edges[]` — `id`, `from`, `to`, `type` (`dependency`, `checkpoint`, `branch`,
 `loop`, `barrier`), plus `branch` (`true`/`false`) on branch edges. Self-edges,
