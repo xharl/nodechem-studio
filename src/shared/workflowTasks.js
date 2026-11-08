@@ -96,6 +96,34 @@ export function checkpointNameFor(project, node, taskId = node?.id) {
   });
 }
 
+/**
+ * Describe the emission context of a TD block, or null.
+ *
+ * Emission is *not* a property of the log: the same excitation table means
+ * absorption at the ground-state minimum and vertical emission at the excited
+ * minimum. Only the workflow knows which one it computed, so the label is
+ * derived here from the block that supplied the geometry and travels with the
+ * task.
+ */
+export function emissionContextFor(project, node, settingsOverride = null) {
+  const settings = settingsOverride || node?.settings || {};
+  const jobType = String(settings.jobType || '');
+  const states = Number(settings.tdStates || 0);
+  if (jobType === 'NMR' || jobType === 'IRC' || jobType === 'Scan') return null;
+  if (!Number.isFinite(states) || states <= 0) return null;
+  const source = checkpointSourceNode(project, node);
+  if (!source) return null;
+  const upstream = source.settings || {};
+  const upstreamStates = Number(upstream.tdStates || 0);
+  if (!Number.isFinite(upstreamStates) || upstreamStates <= 0) return null;
+  if (!/^Opt/.test(String(upstream.jobType || ''))) return null;
+  return {
+    sourceNodeId: source.id,
+    root: Number(upstream.tdRoot || 0) || null,
+    quantity: 'vertical emission from the excited-state minimum',
+  };
+}
+
 export function checkpointSourceFor(project, node) {
   const source = checkpointSourceNode(project, node);
   if (!source) return null;
@@ -304,6 +332,7 @@ export function buildWorkflowPlan(project) {
 
 function calculationTask(project, node, { taskId, settingsOverride = null, title = null, ladder = null, spin = null }) {
   const built = buildRunInput(project, node, { taskId, settingsOverride });
+  const emissionFor = emissionContextFor(project, node, settingsOverride);
   return {
     nodeId: taskId,
     type: 'calc',
@@ -321,6 +350,11 @@ function calculationTask(project, node, { taskId, settingsOverride = null, title
     validity: validityForNode(project, node),
     checkpointName: checkpointNameFor(project, node, taskId),
     checkpointFrom: checkpointSourceFor(project, node),
+    // Emission (#75): a TD block whose geometry came from a block that relaxed
+    // an excited state reports vertical emission, not a ground-state vertical
+    // excitation. The label travels with the task so no result is mislabelled
+    // after the fact.
+    emission: emissionContextFor(project, node, settingsOverride),
     // An IRC block can name the block that supplies the reactant free energy;
     // without it no ΔG‡ is computed for this path.
     ...(String((settingsOverride || settingsForNode(project, node)).jobType || '') === 'IRC'
@@ -333,5 +367,6 @@ function calculationTask(project, node, { taskId, settingsOverride = null, title
       : {}),
     ...(ladder ? { ladder } : {}),
     ...(spin ? { spin } : {}),
+    ...(emissionFor ? { emission: emissionFor } : {}),
   };
 }

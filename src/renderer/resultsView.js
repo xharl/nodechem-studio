@@ -23,6 +23,7 @@ import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
 import { mountSuperposition } from './superpositionCard.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
+import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
 import { overlayPolyline, parseMeasuredSpectrum, scaleToSpectrum } from '../shared/overlay.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 
@@ -582,7 +583,30 @@ function errorCard(record, parsed) {
   return card('Error termination', blocks.join(''), 'is-wide is-error');
 }
 
-function excitedStatesCard(parsed, flags) {
+/**
+ * Emission (#75). The same excitation table means absorption at the ground-state
+ * minimum and vertical emission at the excited minimum; only the workflow knows
+ * which one this run is, so the label comes from the task and not from the log.
+ */
+function emissionLine(record, parsed) {
+  const emission = record?.task?.emission;
+  const states = Array.isArray(parsed?.excitedStates?.states) ? parsed.excitedStates.states : [];
+  if (!emission || states.length === 0) return '';
+  const first = states[0];
+  const energy = Number(first.energyEv);
+  const nm = Number(first.wavelengthNm);
+  if (!Number.isFinite(energy) && !Number.isFinite(nm)) return '';
+  return '<p class="results-note" data-field="emission">'
+    + `<strong>${esc(emission.quantity)}</strong> from `
+    + `<code>${esc(emission.sourceNodeId)}</code>${emission.root ? ` (root ${esc(emission.root)})` : ''}: `
+    + `${Number.isFinite(energy) ? `${esc(energy.toFixed(4))} eV` : ''}`
+    + `${Number.isFinite(energy) && Number.isFinite(nm) ? ' · ' : ''}`
+    + `${Number.isFinite(nm) ? `${esc(nm.toFixed(2))} nm` : ''}. `
+    + 'This is a vertical energy at the excited minimum, not the adiabatic 0–0 energy, which '
+    + 'also needs the zero-point energy of both surfaces.</p>';
+}
+
+function excitedStatesCard(parsed, flags, record = null) {
   const block = parsed?.excitedStates;
   const states = Array.isArray(block?.states) ? block.states.filter(isObject) : [];
   if (!Number.isFinite(block?.count) || block.count === 0 || states.length === 0) return '';
@@ -604,7 +628,8 @@ function excitedStatesCard(parsed, flags) {
       + `<td class="is-left">${dominant}</td>`
       + '</tr>';
   }).join('');
-  const body = '<table class="results-table" data-field="excited-states">'
+  const body = emissionLine(record, parsed)
+    + '<table class="results-table" data-field="excited-states">'
     + '<thead><tr><th>#</th><th>State</th><th>eV</th><th>nm</th><th>f</th><th class="is-left">Dominant transitions</th></tr></thead>'
     + `<tbody>${rows}</tbody></table>`
     + (states.length > 20
@@ -838,6 +863,71 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
   return figure + table;
 }
 
+/**
+ * ECD (#75). Rotatory strength is signed, so the curve is too. The convention
+ * (velocity vs length) is chosen by the reader and printed, because the two
+ * numbers agree only in a complete basis and mixing them is meaningless.
+ */
+function ecdCard(parsed, flags) {
+  const table = parsed?.rotatoryStrengths;
+  const states = Array.isArray(parsed?.excitedStates?.states) ? parsed.excitedStates.states : [];
+  if (!table || states.length === 0) return '';
+  const velocity = table.conventions?.velocity ?? [];
+  const length = table.conventions?.length ?? [];
+  if (velocity.length === 0 && length.length === 0) return '';
+  const body = '<p class="results-note">Rotatory strengths as Gaussian printed them, in '
+    + `${esc(table.unit)}. The <strong>velocity</strong> and <strong>length</strong> forms agree only in a `
+    + 'complete basis; the panel plots the one you choose and names it. No Δε is computed: that needs a band '
+    + 'shape and an instrument calibration the log does not carry.</p>'
+    + '<div class="nmr-controls">'
+    + '<label>Convention <select data-ecd-convention>'
+    + '<option value="velocity">R(velocity)</option>'
+    + '<option value="length">R(length)</option>'
+    + '</select></label>'
+    + '<label>FWHM / eV <input type="number" step="0.01" min="0.01" data-ecd-fwhm value="0.20"></label>'
+    + '</div>'
+    + `<div data-field="ecd-figure">${ecdSectionHtml(parsed, { convention: 'velocity', fwhmEv: 0.2 })}</div>`
+    + caveatHtml(flags, 'These rotatory strengths');
+  return card('ECD', body, 'is-wide');
+}
+
+export function ecdSectionHtml(parsed, { convention = 'velocity', fwhmEv = 0.2 } = {}) {
+  const table = parsed?.rotatoryStrengths;
+  const states = Array.isArray(parsed?.excitedStates?.states) ? parsed.excitedStates.states : [];
+  const rowsByState = new Map((table?.conventions?.[convention] ?? []).map((row) => [row.state, row]));
+  const combined = states.map((state) => ({
+    index: state.index,
+    energyEv: Number(state.energyEv),
+    wavelengthNm: Number(state.wavelengthNm),
+    rotatoryStrength: rowsByState.has(state.index) ? rowsByState.get(state.index).r : null,
+  }));
+  const spectrum = ecdSpectrum(combined, { convention, fwhmEv });
+  if (!spectrum) return '<p class="results-missing">No rotatory strength could be matched to a state.</p>';
+  const polyline = ecdPolyline(spectrum);
+  const figure = '<figure class="results-spectrum" data-field="ecd-spectrum">'
+    + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated ECD spectrum">'
+    + '<line x1="0" y1="50" x2="100" y2="50" class="spectrum-axis"/>'
+    + `<polyline points="${polyline}" class="spectrum-curve"/>`
+    + '</svg>'
+    + `<figcaption>${esc(spectrum.conventionLabel)} · ${esc(spectrum.units)} · `
+    + `Lorentzian broadening, FWHM ${esc(spectrum.fwhmEv.toFixed(2))} eV · ${esc(spectrum.normalisation)}</figcaption>`
+    + '</figure>';
+  const rows = combined.map((row) => '<tr>'
+    + `<td>${esc(row.index)}</td>`
+    + `<td>${Number.isFinite(row.energyEv) ? esc(row.energyEv.toFixed(4)) : MISSING_TEXT}</td>`
+    + `<td>${Number.isFinite(row.wavelengthNm) ? esc(row.wavelengthNm.toFixed(2)) : MISSING_TEXT}</td>`
+    + `<td>${row.rotatoryStrength === null ? MISSING_TEXT : esc(row.rotatoryStrength.toFixed(4))}</td>`
+    + '</tr>').join('');
+  const tableHtml = '<table class="results-table" data-field="ecd-states">'
+    + `<thead><tr><th>#</th><th>eV</th><th>nm</th><th>R (${esc(spectrum.conventionLabel)})</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table>`;
+  const achiral = combined.every((row) => row.rotatoryStrength === null || Math.abs(row.rotatoryStrength) < 1e-6);
+  return figure + tableHtml
+    + (achiral
+      ? '<p class="results-missing">Every printed rotatory strength is zero: this molecule is achiral, so the ECD spectrum is flat by symmetry rather than by a parsing failure.</p>'
+      : '');
+}
+
 function methodsCard(record) {
   let result;
   try {
@@ -1011,11 +1101,12 @@ export function resultsPanelHtml(record) {
     thermochemistryCard(parsed, flags),
     methodsCard(record),
     frequenciesCard(parsed, flags),
-    excitedStatesCard(parsed, flags),
+    excitedStatesCard(parsed, flags, record),
     reactionPathCard(record, parsed, flags),
     trajectoryCard(parsed, flags),
     nmrCard(parsed, flags),
     ramanCard(parsed, flags),
+    ecdCard(parsed, flags),
     chargesCard(parsed, flags),
     t1Card(parsed, flags),
     resourcesCard(parsed, flags),
@@ -1137,6 +1228,15 @@ export function installResultsView({
    */
   let ramanMeasured = null;
   let ramanOverlayName = '';
+  const rerenderEcd = () => {
+    const parsed = currentRecord?.parsed;
+    const holder = container.querySelector('[data-field="ecd-figure"]');
+    if (!parsed?.rotatoryStrengths || !holder) return;
+    const convention = container.querySelector('[data-ecd-convention]')?.value === 'length' ? 'length' : 'velocity';
+    const raw = container.querySelector('[data-ecd-fwhm]')?.value ?? '';
+    holder.innerHTML = ecdSectionHtml(parsed, { convention, fwhmEv: Number(raw) > 0 ? Number(raw) : 0.2 });
+  };
+
   const rerenderRaman = () => {
     const modes = currentRecord?.parsed?.raman;
     const holder = container.querySelector('[data-field="raman-figure"]');
@@ -1209,6 +1309,7 @@ export function installResultsView({
     if (!(target instanceof Element)) return;
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
+    if (target.matches('[data-ecd-convention], [data-ecd-fwhm]')) rerenderEcd();
     if (target.matches('[data-thermo-temperature], [data-thermo-pressure], [data-thermo-term], [data-ensemble-run]')) rerenderThermo();
   });
   container.addEventListener('change', (event) => {

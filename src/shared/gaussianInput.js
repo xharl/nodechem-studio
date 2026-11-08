@@ -73,7 +73,11 @@ export function tdKeywordFor(settings = {}) {
   const states = Math.max(1, Math.min(200, Math.floor(raw)));
   const mode = String(settings.tdTriplets || '');
   const suffix = mode === 'triplets' ? ',Triplets' : mode === 'both' ? ',50-50' : '';
-  return `TD=(NStates=${states}${suffix})`;
+  // Root selects which state an accompanying Opt follows (#75). Zero means
+  // "not stated", so the keyword stays exactly as before for existing blocks.
+  const root = Math.floor(Number(settings.tdRoot ?? 0));
+  const rootSuffix = Number.isFinite(root) && root > 0 ? `,Root=${Math.min(root, states)}` : '';
+  return `TD=(NStates=${states}${suffix}${rootSuffix})`;
 }
 
 export function routeFor(settings = {}, { basisName = null } = {}) {

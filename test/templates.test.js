@@ -34,7 +34,7 @@ describe('workflow templates — schema', () => {
 
   it('lists the recipes in the promised order with honest metadata', () => {
     expect(WORKFLOW_TEMPLATES.map((template) => template.id))
-      .toEqual(['opt-freq', 'ts-search', 'single-point']);
+      .toEqual(['opt-freq', 'ts-search', 'emission', 'single-point']);
     for (const template of WORKFLOW_TEMPLATES) {
       const project = templateProject(template.id);
       expect(template.blockCount, template.id).toBe(project.nodes.length);

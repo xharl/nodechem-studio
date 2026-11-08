@@ -19,6 +19,7 @@ import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { parseShieldings } from './nmr.js';
 import { animatableModes, parseNormalModes } from './normalModes.js';
 import { attachRaman, parseRamanActivities } from './raman.js';
+import { parseRotatoryStrengths } from './ecd.js';
 import { parseTrajectory } from './trajectory.js';
 import { summarizeValidity } from './validityChecks.js';
 
@@ -1240,6 +1241,9 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     parseRamanActivities(text),
   );
   const raman = ramanModes.some((mode) => mode.ramanActivity !== null) ? ramanModes : null;
+  // ECD (#75): only a chiral TD job prints non-zero rotatory strengths, but the
+  // table is present whenever the route asks for it. Null means "not printed".
+  const rotatoryStrengths = parseRotatoryStrengths(text);
 
   return {
     status,
@@ -1254,6 +1258,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     finalGeometry: geometry.final,
     frequencies,
     raman,
+    rotatoryStrengths,
     thermochemistry,
     finalEnergy,
     spinContamination,

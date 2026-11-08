@@ -8,6 +8,7 @@ file once the desktop build is associated with `.ncs`.
 | --- | --- | --- |
 | [`opt-freq.ncs`](opt-freq.ncs) | Reactant optimization + frequency | 2 |
 | [`ts-search.ncs`](ts-search.ncs) | Transition-state search | 4 |
+| [`emission.ncs`](emission.ncs) | Emission from S1 (Opt then TD) | 3 |
 | [`single-point.ncs`](single-point.ncs) | Single-point energy + NBO charges | 1 |
 
 The transition-state example also carries a note block explaining the

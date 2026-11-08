@@ -204,6 +204,46 @@ function buildSinglePoint(name) {
   return projectObject(name, nodes, []);
 }
 
+/**
+ * Emission from the first excited state (#75).
+ *
+ * `Opt` carrying a TD keyword relaxes the state the root names; the second
+ * block then runs a TD calculation at that minimum. What the second block
+ * reports is the **vertical emission** energy from the S1 minimum, not an
+ * adiabatic 0-0 energy: the two differ by the difference in zero-point energy
+ * between the ground and excited surfaces, which this workflow never computes.
+ * The note block says so on the canvas, and the results panel labels the
+ * energy the same way.
+ */
+function buildEmission(name) {
+  const emitY = ROW_Y + ROW_GAP;
+  const nodes = [
+    calcNode('em-s1-opt', 'S1 optimisation', COLUMN_X, ROW_Y, {
+      jobType: 'Opt',
+      tdStates: 1,
+      tdRoot: 1,
+      checkpoint: 's1_min.chk',
+      gates: defaultGates({ finalEnergy: true }),
+    }),
+    calcNode('em-td', 'Emission (TD at the S1 minimum)', COLUMN_X, emitY, {
+      jobType: 'SP',
+      tdStates: 3,
+      checkpoint: 'emission.chk',
+      gates: defaultGates({ finalEnergy: true }),
+    }, 'em-s1-opt'),
+    noteNode(
+      'em-note',
+      'What this reports',
+      NOTE_X,
+      ROW_Y,
+      'The first block emits TD=(NStates=1,Root=1) Opt, which relaxes the S1 surface. '
+      + 'The second runs TD at that minimum; its lowest excitation energy is the vertical emission. '
+      + 'It is not the 0-0 (adiabatic) energy: that needs the S0 and S1 zero-point energies.',
+    ),
+  ];
+  return projectObject(name, nodes, [chainEdge('em-s1-opt', 'em-td', 'checkpoint')]);
+}
+
 const RECIPES = {
   'opt-freq': {
     name: 'Reactant optimization + frequency',
@@ -214,6 +254,11 @@ const RECIPES = {
     name: 'Transition-state search',
     description: 'Optimize the reactant, search the saddle with Opt=TS/CalcFC, then verify one imaginary mode.',
     build: buildTsSearch,
+  },
+  'emission': {
+    name: 'Emission from S1 (Opt then TD)',
+    description: 'Relax the first excited state, then run TD at that minimum to read the vertical emission energy.',
+    build: buildEmission,
   },
   'single-point': {
     name: 'Single-point energy + NBO charges',

@@ -212,6 +212,29 @@ dashed behind the simulation, scaled so its strongest point matches the simulate
 caption prints the factor that was applied — an overlay whose heights were silently rescaled would
 invite a comparison that is not available.
 
+## Emission and ECD
+
+**Emission.** Start from the **Emission from S1 (Opt then TD)** template: the first block emits
+`TD=(NStates=1,Root=1) Opt`, which relaxes the S1 surface, and the second runs TD at that minimum on a
+checkpoint edge. The results panel labels the lowest excitation of the second block as the **vertical
+emission from the excited-state minimum** and prints the block it came from. It is not the adiabatic
+0–0 energy: that also needs the zero-point energy of both surfaces, which this workflow never computes.
+
+The label is derived from the workflow, not from the log — the same excitation table means absorption
+at the ground-state minimum and emission at the excited minimum, and only the graph knows which one
+was run.
+
+**ECD.** A TD job prints rotatory strengths in two conventions, `R(velocity)` and `R(length)`. They
+agree only in a complete basis, so the ECD card asks which one to plot and prints the choice, the
+printed unit (10⁻⁴⁰ erg·esu·cm/Gauss) and the broadening. The curve is signed: a positive band and a
+negative band are the two signs of the Cotton effect. No Δε is computed — that needs a band shape and
+an instrument calibration the log does not carry.
+
+If every printed rotatory strength is zero, the card says the molecule is **achiral** rather than
+showing a flat line with no explanation.
+
+Natural transition orbitals are not implemented; they need the wavefunction analysis tracked in #59.
+
 ## Reaction paths and scans
 
 An `IRC` job and a `Scan` job produce a **Reaction path** / **Potential-energy scan** card, read from

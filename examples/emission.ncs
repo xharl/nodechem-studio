@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "name": "Emission from S1 (Opt then TD)",
+  "molecule": {
+    "smiles": "",
+    "charge": 0,
+    "multiplicity": 1,
+    "fragments": [],
+    "coords": [],
+    "geometry": {
+      "source": "demo",
+      "file": "",
+      "format": ""
+    }
+  },
+  "defaults": {
+    "engine": "gaussian",
+    "method": "B3LYP",
+    "basis": "def2-SVP",
+    "memory": "4",
+    "memoryUnit": "GB",
+    "nproc": 4
+  },
+  "nodes": [
+    {
+      "id": "em-s1-opt",
+      "type": "calc",
+      "kind": "Opt",
+      "title": "S1 optimisation",
+      "state": "ready",
+      "x": 40,
+      "y": 60,
+      "settings": {
+        "jobType": "Opt",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "s1_min.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 1,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 1,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "engine": "",
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": null
+    },
+    {
+      "id": "em-td",
+      "type": "calc",
+      "kind": "SP",
+      "title": "Emission (TD at the S1 minimum)",
+      "state": "ready",
+      "x": 40,
+      "y": 240,
+      "settings": {
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "emission.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 3,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "engine": "",
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "em-s1-opt"
+    },
+    {
+      "id": "em-note",
+      "type": "note",
+      "kind": "Note",
+      "title": "What this reports",
+      "state": "ready",
+      "x": 330,
+      "y": 60,
+      "note": {
+        "text": "The first block emits TD=(NStates=1,Root=1) Opt, which relaxes the S1 surface. The second runs TD at that minimum; its lowest excitation energy is the vertical emission. It is not the 0-0 (adiabatic) energy: that needs the S0 and S1 zero-point energies."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "em-s1-opt",
+      "to": "em-td",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    }
+  ]
+}
