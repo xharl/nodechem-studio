@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "id": "20261108-183053-3e75om",
+  "status": "completed",
+  "engine": "xtb",
+  "argv": [
+    "sp-energy.xyz",
+    "--gfn",
+    "2"
+  ],
+  "dryRun": true,
+  "title": "Single-point energy",
+  "inputName": "sp-energy.xyz",
+  "outputName": "sp-energy.out",
+  "outputFile": "sp-energy.out",
+  "outputSource": "fixture",
+  "truncated": false,
+  "outputBytes": {
+    "size": 1510,
+    "bytesRead": 1510,
+    "truncated": false,
+    "windows": [
+      {
+        "name": "fixture",
+        "start": 0,
+        "end": 1510,
+        "bytes": 1510,
+        "supplied": []
+      }
+    ]
+  },
+  "executable": null,
+  "scratchDir": "/tmp/ncs-fixture-xtb/runs/20261108-183053-3e75om/scratch",
+  "checkpointHandoff": null,
+  "inputSha256": "b6420d4ed63fe32f979e54139d4191b5b139e067dd059dfefa153e76100aa3d5",
+  "outputSha256": "68d9021e6e0839b6cc1734393cb30a7cb6512a5b719c3a6f869b293cd8ba721b",
+  "app": {
+    "version": "cli",
+    "commit": "unknown"
+  },
+  "provenance": {
+    "kind": "fixture",
+    "jobType": "SP",
+    "method": {
+      "hamiltonian": "gfn2",
+      "optLevel": null,
+      "dispersion": "D4 (built in)",
+      "solvation": null,
+      "argv": [
+        "sp-energy.xyz",
+        "--gfn",
+        "2"
+      ]
+    },
+    "solvation": null,
+    "input": {
+      "name": "sp-energy.xyz",
+      "bytes": 148
+    },
+    "output": {
+      "name": "sp-energy.out",
+      "source": "fixture",
+      "bytes": 1510,
+      "hashSource": "file",
+      "sha256": "68d9021e6e0839b6cc1734393cb30a7cb6512a5b719c3a6f869b293cd8ba721b"
+    }
+  },
+  "startedAt": "2026-11-08T18:30:53.854Z",
+  "finishedAt": "2026-11-08T18:30:54.221Z",
+  "exitCode": 0,
+  "parsed": {
+    "canonicalVersion": 1,
+    "engine": "xtb",
+    "program": {
+      "name": "xtb",
+      "version": null,
+      "revision": null
+    },
+    "status": "completed",
+    "terminationCode": "normal",
+    "termination": "normal termination of xtb",
+    "complete": true,
+    "scf": {
+      "status": "converged",
+      "energyHartree": -5.070370764545,
+      "cycles": 8,
+      "method": "GFN2-xTB",
+      "applicable": true
+    },
+    "optimization": {
+      "completed": true,
+      "stationary": true,
+      "cycles": 5,
+      "attempted": true
+    },
+    "frequencies": {
+      "count": 3,
+      "imaginaryCount": 0,
+      "imaginaryValues": [],
+      "minImaginary": null,
+      "scalingFactor": null,
+      "entropyTreatment": "mRRHO"
+    },
+    "thermochemistry": {
+      "freeEnergyHartree": -5.068048760159,
+      "enthalpyHartree": -5.046642479269,
+      "zpeHartree": 0.020120983614,
+      "entropyTreatment": "mRRHO"
+    },
+    "finalEnergy": {
+      "hartree": -5.070370764545,
+      "source": "scc"
+    },
+    "extras": {
+      "homoLumoGapEv": 14.629674472571,
+      "gradientNorm": null,
+      "optimisedGeometryFile": null,
+      "runtimeException": false,
+      "runtimeExceptionDetail": null
+    },
+    "lineCount": 37,
+    "route": "GFN2-xTB SP",
+    "finalGeometry": {
+      "source": "xtbopt.xyz",
+      "atoms": [
+        {
+          "element": "O",
+          "x": 0,
+          "y": 0,
+          "z": 0.1173
+        },
+        {
+          "element": "H",
+          "x": 0,
+          "y": 0.7572,
+          "z": -0.4692
+        },
+        {
+          "element": "H",
+          "x": 0,
+          "y": -0.7572,
+          "z": -0.4692
+        }
+      ]
+    }
+  },
+  "gates": {
+    "overall": "pass",
+    "gates": [
+      {
+        "name": "Output complete",
+        "required": true,
+        "result": "pass",
+        "detail": "full output parsed"
+      },
+      {
+        "name": "Normal termination",
+        "required": true,
+        "result": "pass",
+        "detail": "normal termination of xtb"
+      },
+      {
+        "name": "SCF record",
+        "required": true,
+        "result": "pass",
+        "detail": "-5.070370764545 Eh after 8 cycles"
+      },
+      {
+        "name": "Final energy record",
+        "required": true,
+        "result": "pass",
+        "detail": "-5.070370764545 Eh (scc)"
+      }
+    ],
+    "complete": true,
+    "validity": {
+      "overall": "pass",
+      "findings": [
+        {
+          "id": "charge-multiplicity",
+          "status": "pass",
+          "message": "10 electrons with charge 0 and multiplicity 1; the parity is consistent.",
+          "evidence": {
+            "charge": 0,
+            "multiplicity": 1,
+            "atoms": 3,
+            "electrons": 10,
+            "method": "GFN2-xTB"
+          },
+          "severity": null,
+          "title": "Charge / multiplicity",
+          "phase": "post"
+        },
+        {
+          "id": "spin-contamination",
+          "status": "skipped",
+          "message": "Spin contamination is not applicable to the xtb engine.",
+          "evidence": null,
+          "applicability": "not-applicable",
+          "title": "Spin contamination",
+          "phase": "post"
+        },
+        {
+          "id": "imaginary-frequencies",
+          "status": "skipped",
+          "message": "A SP job makes no minimum or saddle claim, so imaginary modes were not judged.",
+          "evidence": null,
+          "severity": null,
+          "title": "Stationary-point frequencies",
+          "phase": "post"
+        },
+        {
+          "id": "engine-settings",
+          "status": "pass",
+          "detail": "No Gaussian-only setting is set on this xTB block.",
+          "severity": null,
+          "title": "Engine / settings",
+          "phase": "post"
+        },
+        {
+          "id": "method-basis-compatibility",
+          "status": "skipped",
+          "message": "Method / basis compatibility is not applicable to the xtb engine.",
+          "evidence": null,
+          "applicability": "not-applicable",
+          "title": "Method / basis compatibility",
+          "phase": "post"
+        },
+        {
+          "id": "counterpoise-bsse",
+          "status": "skipped",
+          "message": "Counterpoise / BSSE is not applicable to the xtb engine.",
+          "evidence": null,
+          "applicability": "not-applicable",
+          "title": "Counterpoise / BSSE",
+          "phase": "post"
+        },
+        {
+          "id": "opt-convergence",
+          "status": "skipped",
+          "message": "A SP job makes no optimisation claim, so convergence was not judged.",
+          "evidence": null,
+          "severity": null,
+          "title": "Optimisation convergence",
+          "phase": "post"
+        },
+        {
+          "id": "conformer-spread",
+          "status": "skipped",
+          "message": "This block does not read a conformer ensemble.",
+          "evidence": null,
+          "severity": null,
+          "title": "Conformer ensemble",
+          "phase": "post"
+        }
+      ],
+      "errors": [],
+      "warnings": [],
+      "unknowns": []
+    }
+  },
+  "error": null,
+  "cache": null
+}

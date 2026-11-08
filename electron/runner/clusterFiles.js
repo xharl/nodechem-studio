@@ -220,6 +220,8 @@ export async function importClusterExport({ exportDir, runsRoot, now = new Date(
     if (hasInput) await fsp.copyFile(returnedInput, path.join(runDir, inputName));
 
     const record = {
+      // Same contract as a locally executed run (schemas/run-record.v1.schema.json).
+      schemaVersion: 1,
       id: runId,
       status,
       dryRun: false,
