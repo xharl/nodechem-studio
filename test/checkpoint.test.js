@@ -117,6 +117,41 @@ describe('stageCheckpoint', () => {
     expect(text).not.toContain('Gaussian checkpoint');
   });
 
+  it('copies an ORCA .gbw restart file', async () => {
+    const source = await tempDir();
+    const target = await tempDir();
+    await fsp.writeFile(path.join(source, 'water.gbw'), 'ORCA wavefunction data', 'utf8');
+
+    const result = await stageCheckpoint({
+      sourceRunDir: source,
+      checkpoint: 'water.gbw',
+      sourceRunId: 'upstream-run',
+      targetDir: target,
+      engine: 'orca',
+    });
+
+    expect(result).toMatchObject({ file: 'water.gbw', kind: 'copy' });
+    expect(await fsp.readFile(path.join(target, 'water.gbw'), 'utf8')).toBe('ORCA wavefunction data');
+  });
+
+  it('labels a dry-run ORCA fixture as a .gbw, not a Gaussian checkpoint', async () => {
+    const target = await tempDir();
+    const result = await stageCheckpoint({
+      sourceRunDir: '', checkpoint: 'water.gbw', targetDir: target, dryRun: true, engine: 'orca',
+    });
+    const text = await fsp.readFile(path.join(target, 'water.gbw'), 'utf8');
+    expect(result.kind).toBe('fixture');
+    expect(text).toContain('not an ORCA .gbw file');
+    expect(text).not.toContain('Gaussian checkpoint');
+  });
+
+  it('refuses a Gaussian .chk name on an ORCA edge', async () => {
+    const target = await tempDir();
+    await expect(stageCheckpoint({
+      checkpoint: 'water.chk', targetDir: target, dryRun: true, engine: 'orca',
+    })).rejects.toThrow(/safe .gbw basename/);
+  });
+
   it('still refuses an unsafe xTB artifact name', async () => {
     const target = await tempDir();
     for (const name of ['../xtbrestart', 'xtb restart', '..', '.', '']) {

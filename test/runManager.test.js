@@ -368,13 +368,14 @@ describe('RunManager large-output handling', () => {
 });
 
 describe('RunManager engine selection', () => {
-  // ORCA has an input builder and a parser since #31, but no runner. Falling back
-  // to the Gaussian runner would execute g16 on an ORCA .inp and record whatever
-  // came back; refusing is the only honest answer until the runner exists (#98).
-  it('refuses an engine with no runner instead of borrowing the Gaussian one', () => {
+  // Every registered engine gets its own runner. Borrowing the Gaussian runner
+  // for another engine would execute g16 on that engine's input and record
+  // whatever came back, so the mapping is explicit and the fallback refuses.
+  it('maps each engine to its own runner and refuses an unknown one', () => {
     const manager = new RunManager({ root: os.tmpdir() });
-    expect(() => manager.runnerFor(ENGINES.orca)).toThrow(/no runner yet/);
     expect(manager.runnerFor(ENGINES.gaussian).constructor.name).toMatch(/GaussianRunner/);
     expect(manager.runnerFor(ENGINES.xtb).constructor.name).toMatch(/XtbRunner/);
+    expect(manager.runnerFor(ENGINES.orca).constructor.name).toMatch(/OrcaRunner/);
+    expect(() => manager.runnerFor({ id: 'psi4', label: 'Psi4' })).toThrow(/has no runner/);
   });
 });

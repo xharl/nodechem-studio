@@ -152,6 +152,19 @@ describe('issue #43 — engine-aware helper copy', () => {
     expect(runEngineLabel('xtb', { dryRun: true })).toBe('dry run');
   });
 
+  it('names ORCA, not Gaussian, in the ORCA run console', () => {
+    expect(executableLabelFor('orca')).toBe('ORCA executable');
+    expect(dryRunHintFor('orca')).toContain('ORCA');
+    expect(dryRunHintFor('orca')).not.toMatch(/Gaussian/i);
+    expect(runEngineLabel('orca')).toBe('ORCA 6');
+  });
+
+  it('does not promise Gaussian checkpoint keywords to an ORCA or xTB block', () => {
+    const orca = checkpointHandoffNote('orca');
+    expect(orca).toContain('.gbw');
+    expect(orca).not.toContain('%OldChk');
+  });
+
   it('does not promise Gaussian checkpoint keywords to an xTB block', () => {
     expect(checkpointHandoffNote('gaussian')).toContain('%OldChk');
     const xtb = checkpointHandoffNote('xtb');

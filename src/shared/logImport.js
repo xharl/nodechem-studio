@@ -13,6 +13,7 @@
 
 import { parseGaussianOutput } from './gaussianOutput.js';
 import { parseXtbOutput } from './engines/xtb.js';
+import { parseOrcaOutput } from './engines/orca.js';
 
 export const BATCH_IMPORT_LIMIT = 500;
 export const BATCH_MAX_LOG_BYTES = 32 * 1024 * 1024;
@@ -57,6 +58,17 @@ export function parseRouteSummary(route) {
 
 function isXtb(textValue) {
   return /xtb version|normal termination of xtb|^\s*\*\s*xtb\s*$/im.test(textValue);
+}
+
+/**
+ * ORCA's banner, version line or either termination line. Checked before the
+ * Gaussian branch: an ORCA log is long and free-form enough that the Gaussian
+ * parser would accept parts of it and return a row full of nulls, which reads
+ * like a broken Gaussian run instead of "this is not a Gaussian log".
+ */
+function isOrca(textValue) {
+  return /\*\s*O\s{2,}R\s{2,}C\s{2,}A\s*\*|ORCA TERMINATED NORMALLY|ORCA finished by error termination|Program Version\s+\d[^\r\n]*RELEASE/i
+    .test(textValue);
 }
 
 /**
@@ -111,6 +123,36 @@ export function summarizeLog(source, { name = '', bytes = null } = {}) {
       imaginaryCount: Number.isInteger(parsed.frequencies?.imaginaryCount) ? parsed.frequencies.imaginaryCount : null,
       scfCycles: Number.isInteger(parsed.scf?.cycles) ? parsed.scf.cycles : null,
       errorCause: parsed.terminationCode === 'error' ? (parsed.termination || null) : null,
+      lineCount: Number.isInteger(parsed.lineCount) ? parsed.lineCount : content.split(/\r\n|\n|\r/).length,
+    };
+  }
+
+  if (isOrca(content)) {
+    let parsed;
+    try {
+      parsed = parseOrcaOutput(content);
+    } catch (error) {
+      row.errorCause = `ORCA output could not be parsed: ${error.message}`;
+      return row;
+    }
+    return {
+      ...row,
+      engine: 'orca',
+      status: parsed.status,
+      termination: parsed.termination,
+      program: parsed.program?.name
+        ? `${parsed.program.name} ${parsed.program.version || ''}`.trim()
+        : null,
+      method: parsed.scf?.method ?? null,
+      basis: parsed.extras?.basis ?? null,
+      jobType: parsed.extras?.jobType ?? null,
+      finalEnergyHartree: num(parsed.finalEnergy?.hartree),
+      gibbsHartree: num(parsed.thermochemistry?.freeEnergyHartree),
+      imaginaryCount: Number.isInteger(parsed.frequencies?.imaginaryCount)
+        ? parsed.frequencies.imaginaryCount : null,
+      scfCycles: Number.isInteger(parsed.scf?.cycles) ? parsed.scf.cycles : null,
+      errorCause: parsed.extras?.errorModule
+        ? `ORCA finished by error termination in ${parsed.extras.errorModule}` : null,
       lineCount: Number.isInteger(parsed.lineCount) ? parsed.lineCount : content.split(/\r\n|\n|\r/).length,
     };
   }

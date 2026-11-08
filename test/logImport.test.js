@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { makeOrcaFixtureOutput } from '../src/shared/engines/orca.js';
 import {
   BATCH_IMPORT_LIMIT,
   parseRouteSummary,
@@ -57,6 +58,16 @@ describe('single log summary', () => {
     expect(row.basis).toBeNull();
     expect(row.method).toBeTruthy();
     expect(['completed', 'error', 'incomplete']).toContain(row.status);
+  });
+
+  it('summarises an ORCA log as ORCA instead of a Gaussian file full of nulls', () => {
+    const row = summarizeLog(makeOrcaFixtureOutput(), { name: 'water.out' });
+    expect(row.engine).toBe('orca');
+    expect(row.program).toMatch(/ORCA/);
+    expect(row.method).toBe('B3LYP');
+    expect(row.finalEnergyHartree).toBeCloseTo(-76.067231252, 9);
+    expect(row.termination).toBe('ORCA TERMINATED NORMALLY');
+    expect(row.basis).toBe('def2-SVP');
   });
 
   it('keeps an empty or unreadable file as a labelled row', () => {

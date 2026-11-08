@@ -252,10 +252,10 @@ What ORCA does **not** give you through this builder:
   this builder; use `def2-TZVP`, which carries ECPs for the heavy elements it covers. `ωB97X-D` is
   also refused: ORCA's `wB97X-D3`/`wB97X-D4` are different functionals from the Gaussian keyword, so
   mapping one to the other would silently change the level of theory.
-- No Gaussian `.chk` checkpoint hand-off. ORCA's restart file is `<job>.gbw`; the builder can write
-  `%moinp "<job>.gbw"` and names the artifact `<job>.gbw`, but the queue still transfers only
-  `.chk`/`xtbrestart` artifacts, so an ORCA checkpoint edge is not usable in this build. Use a
-  geometry hand-off for now.
+- No Gaussian `.chk` checkpoint hand-off. ORCA's restart file is `<job>.gbw`: the builder writes
+  `%moinp "<job>.gbw"`, the queue transfers that file between ORCA blocks, and an ORCA edge that
+  names a `.chk` is refused rather than staged under the wrong name. A cross-engine edge still
+  hands over a geometry, not a checkpoint.
 
 ### Setting up ORCA
 
@@ -270,11 +270,22 @@ What ORCA does **not** give you through this builder:
 4. Click **Preflight**. For ORCA it checks the platform, that the executable exists and is named
    `orca`/`orca.exe`, and (on Linux/macOS) that it is executable. ORCA needs no Link 1 and no
    `share/xtb` parameter directory, so those Gaussian/xTB checks do not run.
-5. **Execution is not wired in this build.** The app builds the ORCA input, checks the executable and
-   parses an ORCA log, but it cannot launch ORCA yet (#98) — ORCA writes to stdout, which needs its
-   own runner. A queue that contains an ORCA block is refused with "no runner yet" rather than
-   handing an ORCA input to Gaussian. Until the runner lands, run the generated input in ORCA
-   yourself and keep the log beside the run folder.
+5. **Run it.** The app spawns the driver as `orca <input>.inp` in the run folder and captures
+   **stdout** as the run's output file, which is what `orca job.inp > job.out` would have given you.
+   stderr is kept out of that file and stored in the run record (`provenance.orca.stderr`), so a
+   driver that fails before ORCA starts still says why. ORCA's side files that the process actually
+   wrote — `<job>.gbw`, `<job>.xyz`, `<job>.hess`, `<job>_trj.xyz`, `<job>.property.txt` — are listed
+   in `provenance.orca.artifacts`.
+
+   Three behaviours worth knowing:
+
+   - **The exit code is not the verdict.** ORCA can exit 0 after an error banner, so the record's
+     status comes from the text (`ORCA TERMINATED NORMALLY` / `ORCA finished by error termination in
+     <module>`). A run that exits 0 with an error termination is recorded as failed.
+   - **A run that printed nothing is failed, not "needs review".** Saying nothing is not a result;
+     the record quotes stderr in that case.
+   - **Cancel and timeout stop the whole process group.** ORCA's driver spawns the real modules as
+     children; signalling the driver alone leaves them running.
 
 ### What this build proves about the ORCA parser
 
@@ -284,6 +295,10 @@ The parser was written from the output shapes documented in the **ORCA 6.0 manua
 `ORCA finished by error termination in <module>`). **No live ORCA binary was run for this build.**
 Its tests use synthetic fixtures that reproduce those line shapes, so they prove the parser reads
 the documented format — not that a particular ORCA 5/6 revision prints it identically.
+
+The same limit applies to execution: the runner is tested against a stand-in driver script that
+prints those fixtures, exits 0 after an error banner, prints nothing, sleeps and gets cancelled. It
+proves the spawning, capture, termination and cancellation paths, and nothing about ORCA itself.
 
 The first real run should be a small single point. Check the parsed `FINAL SINGLE POINT ENERGY`, the
 SCF cycle count and the termination line against the log; if a revision prints a different shape,

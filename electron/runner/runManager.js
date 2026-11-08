@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GaussianRunner } from './gaussianRunner.js';
 import { XtbRunner } from './xtbRunner.js';
+import { OrcaRunner } from './orcaRunner.js';
 import { stageCheckpoint } from './checkpoint.js';
 import { isFile, sha256File, sha256Text } from './hashing.js';
 import { evaluateGates, outputEvidence } from '../../src/shared/gaussianOutput.js';
@@ -70,11 +71,11 @@ export class RunManager {
     if (this.createRunner) return this.createRunner(engine);
     if (engine.id === 'xtb') return new XtbRunner();
     if (engine.id === 'gaussian') return new GaussianRunner();
-    // ORCA ships an input builder, a parser and preflight discovery (#31), but no
-    // runner: handing its .inp to g16 would run a different program and print a
-    // parseable-looking failure. Refuse until the runner lands (#98).
-    throw new Error(`${engine.label || engine.id} has no runner yet: its input and parser are available,`
-      + ' but execution is not wired. Run the job in ORCA and import the output, or use Gaussian/xTB.');
+    if (engine.id === 'orca') return new OrcaRunner();
+    // Any engine registered without a runner would otherwise fall through to
+    // the Gaussian runner, which would launch g16 on another program's input
+    // and print a parseable-looking failure. Refuse by name instead.
+    throw new Error(`${engine.label || engine.id} has no runner: execution is not wired for that engine.`);
   }
 
   /** Internal subscribers (the queue) receive the same events as the renderer. */
@@ -283,19 +284,35 @@ export class RunManager {
           threads: payload.settings?.xtbThreads ?? null,
           onOutput,
         })
-        : await runner.run({
-          executable: payload.executable,
-          inputName: payload.inputName,
-          outputName: payload.outputName,
-          cwd: runDir,
-          scratchDir,
-          timeoutMs,
-          onOutput,
-        });
+        : engine.id === 'orca'
+          ? await runner.run({
+            executable: payload.executable,
+            argv: Array.isArray(payload.argv) && payload.argv.length > 0 ? payload.argv : [payload.inputName],
+            cwd: runDir,
+            outputName: payload.outputName,
+            timeoutMs,
+            onOutput,
+          })
+          : await runner.run({
+            executable: payload.executable,
+            inputName: payload.inputName,
+            outputName: payload.outputName,
+            cwd: runDir,
+            scratchDir,
+            timeoutMs,
+            onOutput,
+          });
       outputText = result.outputText;
       exitCode = result.exitCode;
       context.engineId = engine.id;
       if (engine.id === 'xtb') context.parametersPath = result.parameterPath ?? null;
+      // ORCA reports to stdout and can fail with a zero exit code, so the text
+      // is the evidence. When it printed nothing, stderr is all anyone has.
+      if (engine.id === 'orca') {
+        context.stderr = result.stderr || null;
+        context.artifacts = Array.isArray(result.artifacts) ? result.artifacts : null;
+        context.driverAbsolute = result.driverAbsolute ?? null;
+      }
       context.outputPath = result.outputPath || null;
       context.outputMeta = {
         outputFile: result.outputName || null,
@@ -313,9 +330,20 @@ export class RunManager {
         });
         return;
       }
+      // A run that printed nothing has no record to read. Saying "needs review"
+      // of an empty file would suggest there is something to review.
+      if (engine.id === 'orca' && String(outputText || '').trim() === '') {
+        const detail = result.stderr && String(result.stderr).trim()
+          ? `; stderr said: ${String(result.stderr).trim().slice(0, 400)}`
+          : '; stderr was empty too';
+        throw new Error(`${engine.label} produced no output${detail}.`);
+      }
       const classified = engine.classify(outputText, result.exitCode);
       if (classified.code === 'none' && Number(result.exitCode) !== 0) {
-        throw new Error(`${engine.label} exited with code ${result.exitCode} and produced no termination record.`);
+        const detail = engine.id === 'orca' && result.stderr
+          ? ` stderr said: ${String(result.stderr).trim().slice(0, 400)}`
+          : '';
+        throw new Error(`${engine.label} exited with code ${result.exitCode} and produced no termination record.${detail}`);
       }
     }
 
@@ -455,6 +483,18 @@ export class RunManager {
         // after the installation moves, and records `null` when none was found.
         ...(context.engineId === 'xtb'
           ? { xtb: { parametersPath: context.parametersPath ?? null } }
+          : {}),
+        // ORCA's verdict lives in the text, so the record keeps the two things a
+        // reader cannot recover from the .out alone: driver chatter and which
+        // side files the process actually wrote.
+        ...(context.engineId === 'orca'
+          ? {
+            orca: {
+              stderr: context.stderr ?? null,
+              artifacts: context.artifacts ?? null,
+              driverAbsolutePath: context.driverAbsolute ?? null,
+            },
+          }
           : {}),
       },
       status,
