@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
@@ -835,6 +835,11 @@ async function checkForUpdates() {
 }
 
 app.whenReady().then(async () => {
+  // No application menu on Windows/Linux: the app's own topbar carries every
+  // command, and Electron's default File/Edit/View/Window menu is unbranded and
+  // duplicates it (it also draws a second "View" next to the app's own). macOS
+  // keeps its menu — the OS requires an app menu for Cmd+Q and the Edit roles.
+  if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
   runManager = new RunManager({
     runsRoot: path.join(app.getPath('userData'), 'runs'),
     emit: emitRunEvent,
