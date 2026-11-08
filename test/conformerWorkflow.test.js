@@ -548,6 +548,43 @@ describe('conformer queue path', () => {
     expect(conformers.ensemble.generator).toBe('import');
     expect(conformers.ensemble.count).toBe(3);
   });
+
+  // A shipped project carries the ensemble beside it and names it relatively.
+  // The GUI knows the project's file path, not its folder, so the queue derives
+  // the folder from `options.projectFile`.
+  it('resolves a project-relative ensemble path from the project file', async () => {
+    const { base, queueManager } = await stack();
+    await fsp.writeFile(path.join(base, 'ens.xyz'), xyzFrames(['conformer 1', 'conformer 2']), 'utf8');
+    await fsp.writeFile(path.join(base, 'ens.energies'), '1 -76.40000000\n2 -76.39500000\n', 'utf8');
+
+    const project = conformerProject({
+      output: selection(),
+      settings: { generator: 'import', importPath: 'ens.xyz', rmsdThreshold: 0.05 },
+    });
+    const plan = buildWorkflowPlan(project);
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      edges: [],
+      options: {
+        dryRun: true,
+        executable: null,
+        crestExecutable: '',
+        scratchDir: '',
+        projectFile: path.join(base, '24dhiiq.ncs'),
+      },
+    });
+    const done = await waitFor(async () => {
+      const list = await queueManager.list();
+      const queue = list.find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+
+    const conformers = done.tasks.find((task) => task.nodeId === 'conf');
+    expect(conformers.error).toBeNull();
+    expect(conformers.ensemble.generator).toBe('import');
+    expect(conformers.ensemble.count).toBe(2);
+  });
 });
 
 describe('imported conformer energies (#103)', () => {

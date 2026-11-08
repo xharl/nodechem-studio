@@ -5,6 +5,13 @@ actually calculate?* Two conformers of the same molecule can differ by 2–10 kc
 often more than the method difference being studied. The block searches or imports an ensemble,
 ranks it, and lets you choose the member that downstream blocks run.
 
+**"Protomer" is the source's own label, not something this app decides.** The value is copied
+from the `protomer=` token CREST writes, or from the comment of an imported frame — that is, from
+whatever the program that produced the ensemble printed. The app groups and refuses to choose
+across labels it can compare, but it does not know what the label means chemically: two members
+with different labels may be protomers, tautomers, or a mislabelled pair. Say which when you
+report the result; an ensemble that mixes labels never gets one picked automatically.
+
 ## Where it sits in a workflow
 
 ```

@@ -4230,6 +4230,8 @@ async function startSelectedConformerRun(node) {
         crestExecutable,
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
+        // A relative conformer importPath resolves against the project folder.
+        projectFile: state.projectPath || null,
       },
     });
     applyQueue(queue);
@@ -4439,6 +4441,7 @@ async function startWorkflowUnlocked() {
         crestExecutable: $('#run-crest').value.trim(),
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
+        projectFile: state.projectPath || null,
       },
     });
     applyQueue(queue);

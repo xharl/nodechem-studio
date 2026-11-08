@@ -808,6 +808,12 @@ export class QueueManager {
     }
 
     const options = payload.options || {};
+    // A queue started from the desktop app knows the project's path, not its
+    // folder; resolving it here keeps a relative `importPath` working in the
+    // GUI exactly as it does under `ncs run --out`.
+    if (!options.projectDir && options.projectFile) {
+      options.projectDir = path.dirname(path.resolve(String(options.projectFile)));
+    }
     const dryRun = Boolean(options.dryRun);
     const executable = String(options.executable || '').trim();
     // Per-engine executables (#98): one project can mix engines, and each task
@@ -870,6 +876,9 @@ export class QueueManager {
         executables: dryRun ? null : executables,
         crestExecutable: dryRun ? null : crestExecutable,
         scratchDir,
+        // A relative conformer `importPath` resolves against this folder, so it
+        // travels with the queue and a replay resolves it the same way.
+        projectDir: options.projectDir || this.projectDir || null,
       },
       maxParallel,
       edges,
