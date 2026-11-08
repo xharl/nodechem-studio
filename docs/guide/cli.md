@@ -24,7 +24,8 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ```
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
-ncs run <project.ncs> --out <dir> [--dry-run] [--executable <path>] [--crest <path>] [--timeout <seconds>]
+ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--timeout <seconds>]
+ncs report <out-dir> [--flow <id>] [--out <file>]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 ```
@@ -34,7 +35,13 @@ ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 - `build-input` prints the exact input text for one node — the same bytes the queue would write —
   without running anything. Use `--out` to write it to a file.
 - `run` queues the workflow, waits for it to finish and prints a JSON summary: the queue status and,
-  per task, the run id, the run status, the gate verdict and the run folder.
+  per task, the run id, the run status, the gate verdict and the run folder. `--flow` selects a flow
+  (the project's active flow is the default), `--record` runs one record's subgraph plus the control
+  blocks, and `--max-parallel` overrides `runner.maxParallel`. Output blocks write their artifacts
+  under `--out` (`reports/…` and `manifest.json`).
+- `report` rebuilds the HTML report from the newest queue under `<out-dir>/queues/` and writes
+  `<out-dir>/reports/index.html` unless `--out` names another file. `--flow` restricts it to one
+  flow; without it every flow that has a queue is combined into one document.
 
 ## Exit codes
 
@@ -45,7 +52,7 @@ ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 | 2 | The project does not validate, or a task could not be built. |
 | 3 | A run finished but its gates failed — the result exists and needs review. |
 | 4 | A run or the queue failed outright; nothing usable was produced. |
-| 5 | A merge found overlapping edits; nothing was written. |
+| 5 | The queue is **partial** (some records finished, some failed), or a merge found overlapping edits and wrote nothing. |
 
 The split between 3 and 4 matters in a script: 3 means "look at the numbers", 4 means "the engine
 did not produce a result".
