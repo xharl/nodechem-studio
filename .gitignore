@@ -17,3 +17,6 @@ node_modules
 # Real Gaussian outputs used as test fixtures (see test/fixtures/real/README.md)
 !test/fixtures/real/*.log
 !test/fixtures/real/*.out
+
+# Dry-run output written by `ncs run` in the working directory
+ncs-runs/
