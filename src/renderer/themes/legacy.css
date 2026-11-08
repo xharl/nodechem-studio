@@ -1,0 +1,45 @@
+/* Legacy tone aliases — compatibility layer for names still referenced by
+ * styles.css. These are deliberately semantic: the theme files remain the only
+ * place that defines colour values, and every alias resolves through a theme
+ * token so all three themes stay consistent.
+ *
+ * Do not add new component styles that consume these names. Prefer the semantic
+ * contract tokens directly; this file exists only until the remaining legacy
+ * references are migrated.
+ */
+:root {
+  /* Surfaces used by inputs, modal shells, toasts and hover states. */
+  --tone-blue-13: var(--surface-well);
+  --tone-blue-19: var(--surface-panel);
+  --tone-blue-23: var(--tone-blue-23a);
+  --tone-blue-28: var(--tone-blue-28a);
+  --tone-blue-33: var(--surface-well);
+  --tone-blue-39: var(--surface-raised);
+  --tone-blue-41: var(--surface-raised);
+  --tone-blue-12a: var(--surface-raised);
+  --tone-blue-15a: var(--surface-panel);
+  --tone-blue-21a: var(--surface-panel);
+  --tone-blue-27a: var(--surface-panel);
+  --tone-blue-31a: var(--surface-panel);
+  --tone-blue-38a: var(--surface-panel);
+  --tone-blue-40a: var(--action-tint);
+  --tone-blue-53a: var(--state-blocked-tint);
+  --tone-blue-68a: var(--border-subtle);
+  --tone-blue-80a: var(--action-tint);
+  --tone-blue-94a: var(--surface-well);
+
+  /* Control details: select chevron and switch knobs. */
+  --tone-blue-60: var(--text-secondary);
+  --tone-blue-76: var(--text-secondary);
+  --tone-neutral-15: #fff;
+
+  /* Status, branch and warning tones. */
+  --tone-blue-111: var(--tone-blue-111a);
+  --tone-orange-10: var(--tone-orange-14);
+  --tone-orange-11: var(--tone-orange-15);
+  --tone-orange-12: var(--tone-orange-15);
+  --tone-orange-13: var(--tone-orange-16);
+  --tone-red-11: var(--tone-red-16);
+  --tone-red-12: var(--tone-red-16);
+  --tone-red-13: var(--tone-red-17);
+}

@@ -98,7 +98,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .save-pill.is-dirty { color: var(--kind-condition); border-color: color-mix(in srgb, var(--kind-condition) 38%, var(--tone-blue-71a)); }
 .save-pill.is-dirty .dot { background: var(--kind-condition); }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.top-overflow-wrap { position: relative; display: none; }
+.top-overflow-wrap { position: relative; display: block; }
 .overflow-btn { display: none; font-size: var(--text-size-lg); line-height: 1; padding-bottom: 2px; }
 .top-overflow {
   position: absolute; top: 40px; right: 0; z-index: 90;
@@ -302,7 +302,7 @@ kbd {
   border-bottom-color: var(--tone-blue-75a);
   border-radius: 3px;
   background: var(--tone-blue-30);
-  color: var(--tone-blue-65);
+  color: var(--text-secondary);
   font: var(--text-size-xs) var(--font-mono);
 }
 
@@ -764,7 +764,7 @@ kbd {
 }
 .callout.green { border-color: var(--state-passed); background: var(--tone-green-2a); color: var(--tone-green-14); }
 .callout.red { border-color: var(--state-review); background: var(--tone-red-3a); color: var(--tone-red-11); }
-.callout strong { color: var(--tone-orange-14); font-weight: 600; }
+.callout strong { color: var(--tone-orange-16); font-weight: 600; }
 .callout.green strong { color: var(--tone-green-15); }
 .callout.red strong { color: var(--tone-red-14); }
 .callout .btn { margin-top: 8px; }
@@ -1079,6 +1079,15 @@ kbd {
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 5px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 /* ── Responsive ────────────────────────────────────────────── */
+@media (max-width: 1400px) {
+  /* The overflow menu carries the theme picker and the long-tail actions.
+     Keep the topbar readable by hiding the version chip, dirty pill and the
+     two actions duplicated in that menu before the project title collapses. */
+  .proto-chip { display: none; }
+  .save-pill { display: none; }
+  .top-actions [data-action="import-log"],
+  .top-actions [data-action="export"] { display: none; }
+}
 @media (max-width: 1150px) {
   .canvas-hud { right: 390px; }
   .app:has(.inspector.is-wide) .canvas-hud { right: 530px; }

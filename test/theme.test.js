@@ -127,6 +127,40 @@ describe('contrast floors (WCAG 2.1)', () => {
   }
 });
 
+describe('stylesheet token references', () => {
+  const style = read('src/renderer/styles.css');
+  const aliases = declarations(read('src/renderer/themes/legacy.css'));
+  const referenced = [...new Set([...style.matchAll(/var\((--[a-z0-9-]+)/g)].map((match) => match[1]))]
+    .filter((name) => name !== '--state' && name !== '--kind');
+
+  it('resolves every stylesheet custom property in every theme', () => {
+    for (const theme of THEMES) {
+      const defined = new Set([...themes[theme].keys(), ...aliases.keys()]);
+      const missing = referenced.filter((name) => !defined.has(name));
+      expect(missing, `${theme} has no definition for: ${missing.join(', ')}`).toEqual([]);
+    }
+  });
+
+  it('resolves every compatibility alias in every theme', () => {
+    for (const theme of THEMES) {
+      for (const [alias, value] of aliases) {
+        for (const dependency of [...value.matchAll(/var\((--[a-z0-9-]+)/g)].map((match) => match[1])) {
+          expect(themes[theme].has(dependency) || aliases.has(dependency), `${theme}: ${alias} depends on missing ${dependency}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('loads the compatibility aliases before the component stylesheet', () => {
+    const html = read('index.html');
+    const paper = html.indexOf('paper.css');
+    const legacy = html.indexOf('legacy.css');
+    const styles = html.indexOf('styles.css');
+    expect(legacy).toBeGreaterThan(paper);
+    expect(legacy).toBeLessThan(styles);
+  });
+});
+
 describe('no literals outside the theme files', () => {
   const LITERAL = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)/g;
   const files = [
