@@ -1060,16 +1060,18 @@ kbd {
 .parity.bad { color: var(--tone-red-13); background: var(--tone-red-4a); border: 1px solid var(--tone-red-7a); }
 .field-hint { margin: 6px 0 0; color: var(--text-tertiary); font-size: var(--text-size-xs); line-height: 1.5; }
 .drop-zone .run-actions {
-  /* Two columns keep nine controls inside the pane without a scrollbar that
-     cuts the last button off. */
+  /* Pinned to the bottom of the pane: the fields above may scroll, the actions
+     never disappear under the fold. */
+  position: sticky;
+  bottom: -1px;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin: 8px 0 0;
+  padding: 8px 0 4px;
+  background: linear-gradient(to bottom, transparent, var(--tone-blue-24) 35%);
 }
-.run-actions .btn { width: 100%; justify-content: center; }
-.run-actions select.btn { width: 100%; }
-.run-actions #run-hint { grid-column: 1 / -1; }
 @media (max-width: 820px) {
   .molecule-grid { grid-template-columns: 1fr; }
 }
@@ -1331,11 +1333,25 @@ kbd {
 .run-state.is-completed { color: var(--state-passed); border-color: color-mix(in srgb, var(--state-passed) 45%, var(--tone-blue-71a)); }
 .run-state.is-failed { color: var(--state-review); border-color: color-mix(in srgb, var(--state-review) 45%, var(--tone-blue-71a)); }
 .run-body { display: grid; grid-template-columns: 270px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
-.run-config { padding: 13px 14px; border-right: 1px solid var(--tone-blue-71a); overflow-y: auto; }
+.run-config {
+  padding: 12px 14px 10px;
+  border-right: 1px solid var(--tone-blue-71a);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
 .run-check { display: flex; align-items: center; gap: 7px; font-size: var(--text-size-xs); color: var(--text-primary); margin-bottom: 12px; }
 .run-check input { accent-color: var(--action); }
-.run-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
-.run-field > label { font-size: var(--text-size-xs); letter-spacing: .08em; text-transform: uppercase; color: var(--text-secondary); }
+.run-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.run-field > label {
+  font-size: var(--text-size-xs);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .run-path { display: flex; gap: 5px; }
 .run-path input { min-width: 0; flex: 1; }
 .run-field input, .run-path input {
@@ -1343,8 +1359,42 @@ kbd {
   background: var(--tone-blue-33); color: var(--text-primary); font: inherit; font-size: var(--text-size-xs);
 }
 .run-field input::placeholder { color: var(--text-secondary); }
-.run-actions { display: flex; gap: 5px; flex-wrap: wrap; margin: 13px 0 9px; }
-.run-actions .btn { flex: 1 1 auto; justify-content: center; }
+.run-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.run-actions .btn { width: 100%; justify-content: center; min-height: 26px; }
+
+/* The three actions that start or stop work stay pinned; the rest live behind
+   a disclosure so the Setup pane never scrolls to reach Run. */
+.run-primary {
+  position: sticky;
+  bottom: -1px;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: auto;
+  padding: 10px 0 4px;
+  background: linear-gradient(to bottom, transparent, var(--tone-blue-24) 30%);
+}
+.run-primary .btn { justify-content: center; min-height: 30px; }
+.run-tools { margin: 2px 0 0; }
+.run-tools > summary {
+  cursor: pointer;
+  font-size: var(--text-size-xs);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 5px 0;
+  list-style: none;
+}
+.run-tools > summary::-webkit-details-marker { display: none; }
+.run-tools > summary::before { content: '▸ '; color: var(--text-tertiary); }
+.run-tools[open] > summary::before { content: '▾ '; }
+.run-tools > summary:hover { color: var(--text-primary); }
 .run-hint { margin: 0; color: var(--text-secondary); font-size: var(--text-size-xs); line-height: 1.45; }
 .run-hint.is-warn { color: var(--kind-condition); }
 .run-output-wrap {
