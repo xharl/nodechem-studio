@@ -289,9 +289,10 @@ Linux/macOS Gaussian job has been run.
 | Live queue status on the canvas | **Open** — node cards show project state; the queue panel shows task state | `src/renderer/app.js` |
 | macOS package | **Open** — runner supports macOS; there is no build to sign or test | §5 Phase 6 |
 | Code signing | **Open** — no certificate; both installers are unsigned | §5 Phase 6 |
-| Conformer fan-out into sibling calculations (#80) | **Open** — the block chooses one member; expanding an ensemble into one task per member is backlog. The block itself shipped in 0.3 (§4b) | GitHub issue |
+| Conformer fan-out into sibling calculations (#80) | **Shipped after 0.3** — one task per retained member, member-paired edges and checkpoints, per-member `run.json`, report grouping. A single run fed by several fanned-out branches is refused (#86). Propagating the fan through a chain (#87) is open | §4b, `src/shared/workflowTasks.js` |
 | Engine abstraction + ORCA (#31) | Milestone `1.0 — reach` | GitHub issue |
 | Molecular builder (#58), wavefunction analysis (#59), HPC submit/monitor (#64), multiscale QM/MM (#67), composite methods (#77) | Backlog, no milestone yet | GitHub issues |
+| Release verification (checksums, SBOM, provenance) and the update notice | **Shipped after 0.3** — `src/shared/updateCheck.js`, `scripts/release-assets.mjs`; the workflow steps only run on the next tag | §5 Phase 3, `docs/guide/install.md` |
 | VCD/ROA (#78) | **Blocked on data** — needs one real Gaussian `Freq=(VCD)` log to write the parser against | GitHub issue |
 
 ## 7. Risks and open questions

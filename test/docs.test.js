@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { defaultSettings } from '../src/shared/projectSchema.js';
+import { DEFAULT_CONFORMER_SETTINGS } from '../src/shared/conformers.js';
 
 /**
  * Public-documentation guards.
@@ -168,5 +170,31 @@ describe('public documentation — copy consistency', () => {
     // The comparison itself is pure: no network primitive, no URL, no clock.
     const pure = read('src/shared/updateCheck.js');
     expect(pure).not.toMatch(/\bfetch\s*\(|XMLHttpRequest|https?:\/\//);
+  });
+});
+
+describe('project-format coverage', () => {
+  // A new setting that never reaches the reference page is a setting nobody can
+  // discover. `fanOut` shipped in #80 and only reached PROJECT-FORMAT later, so
+  // the key space is now checked instead of remembered.
+  const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
+
+  it('documents every calculation and conformer setting key', () => {
+    const doc = read('docs/PROJECT-FORMAT.md');
+    const keys = new Set([
+      ...Object.keys(defaultSettings()),
+      ...Object.keys(DEFAULT_CONFORMER_SETTINGS),
+    ]);
+    const missing = [...keys].filter((key) => !doc.includes('`' + key + '`'));
+    expect(missing).toEqual([]);
+  });
+
+  it('indexes every guide page it ships', () => {
+    const index = read('docs/guide/README.md');
+    const pages = fs.readdirSync(path.join(ROOT, 'docs/guide')).filter((name) => name.endsWith('.md'));
+    const missing = pages
+      .filter((name) => name !== 'README.md')
+      .filter((name) => !index.includes('(' + name + ')'));
+    expect(missing).toEqual([]);
   });
 });

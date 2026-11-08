@@ -70,6 +70,13 @@ Fan-out is refused when the ensemble mixes protomers and no member is chosen: co
 states in one ΔE table is not a conformer comparison. With a member chosen, only the kept members of
 that protomer are fanned out.
 
+Fan-out covers the blocks wired **directly** to the ensemble. A chain such as
+`conformers → opt → freq` is refused at plan time with a message naming the ensemble, because the
+frequency block would run once while several optimised members feed it and could only use one — the
+silent collapse fan-out exists to prevent. Propagating the fan through a branch (one frequency per
+optimised member, each reading its own checkpoint) is issue #87. Until it lands, wire each stage to
+the conformer block itself, or collect the branches with a merge block when one run is what you want.
+
 The workflow report groups the fanned-out runs by member and reports ΔE at the level the runs
 actually used, with the search-level ΔE shown alongside. Populations at the target level are not
 recomputed yet — that needs an explicit temperature decision for the report.
