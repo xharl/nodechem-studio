@@ -34,6 +34,12 @@ import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/sh
 import { parseCube } from '../src/shared/cubeFile.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
+import {
+  RECORD_SCHEMA_VERSION,
+  recordSchemaPath,
+  recordSchemaVersions,
+  validateRecord,
+} from '../schemas/record-schema.js';
 
 const EXIT = Object.freeze({ ok: 0, usage: 1, invalid: 2, gate: 3, engine: 4, conflict: 5, partial: 5 });
 const TERMINAL = new Set(['completed', 'failed', 'needs-review', 'partial', 'blocked', 'cancelled']);
@@ -46,6 +52,7 @@ const USAGE = `ncs — headless NodeChem Studio
       [--max-parallel N] [--executable <path>] [--crest <path>]
       [--timeout <seconds>] [--json]
   ncs report <out-dir> [--flow <id>] [--out <file>]
+  ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
   ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
@@ -488,6 +495,113 @@ async function commandReport({ positional, flags }) {
   process.exit(EXIT.ok);
 }
 
+/**
+ * `ncs export` — every run record under an output folder, in one envelope.
+ *
+ * The records are the `run.json` files themselves, byte for byte, not a
+ * reshaped table: the stable contract is the record, and `datasetExport.js`
+ * remains the flat-table view. The envelope names the schema version and the
+ * absolute path of the schema file, so a script can validate what it received
+ * instead of trusting this command. Each record is validated before anything is
+ * printed; one non-conforming record refuses the whole export rather than
+ * returning a partial list.
+ */
+async function commandExport({ positional, flags }) {
+  const [outArg] = positional;
+  if (!outArg) fail('export needs an output directory (the folder `ncs run --out` wrote).');
+
+  const rawVersion = flags['schema-version'];
+  if (rawVersion !== undefined && typeof rawVersion !== 'string') {
+    fail('--schema-version needs a version number.', EXIT.invalid);
+  }
+  const requested = rawVersion === undefined ? RECORD_SCHEMA_VERSION : Number(rawVersion);
+  const schemaPath = Number.isInteger(requested) ? recordSchemaPath(requested) : null;
+  if (!schemaPath) {
+    const versions = recordSchemaVersions().join(', ');
+    fail(`unsupported run-record schema version "${rawVersion}"; this build ships version ${versions}. The schema for version ${RECORD_SCHEMA_VERSION} is ${recordSchemaPath(RECORD_SCHEMA_VERSION)}.`, EXIT.invalid);
+  }
+
+  const outDir = path.resolve(outArg);
+  const runsDir = path.join(outDir, 'runs');
+  let entries;
+  try {
+    entries = await fs.readdir(runsDir, { withFileTypes: true });
+  } catch (error) {
+    fail(
+      `cannot read ${runsDir}: ${error.code === 'ENOENT' ? 'there is no runs folder (did "ncs run" use --out?)' : error.message}`,
+      EXIT.invalid,
+    );
+  }
+
+  const records = [];
+  const failures = [];
+  const runIds = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .sort();
+  for (const runId of runIds) {
+    const file = path.join(runsDir, runId, 'run.json');
+    let record;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      record = JSON.parse(await fs.readFile(file, 'utf8'));
+    } catch (error) {
+      failures.push({
+        runId,
+        file,
+        errors: [{
+          path: '/',
+          message: error.code === 'ENOENT' ? 'the run folder has no run.json' : `run.json is not readable JSON: ${error.message}`,
+        }],
+      });
+      continue;
+    }
+    const verdict = validateRecord(record, { version: requested });
+    if (!verdict.ok) {
+      failures.push({ runId, file, errors: verdict.errors });
+      continue;
+    }
+    records.push(record);
+  }
+
+  if (failures.length > 0) {
+    process.stderr.write(`${JSON.stringify({
+      ok: false,
+      code: 'record-invalid',
+      schemaVersion: requested,
+      schema: schemaPath,
+      recordCount: records.length,
+      failures,
+    }, null, 2)}\n`);
+    fail(
+      `${failures.length} run record(s) do not conform to schema version ${requested} (${schemaPath}); nothing was exported.`,
+      EXIT.invalid,
+    );
+  }
+
+  const envelope = {
+    kind: 'nodechem-studio.records',
+    schemaVersion: requested,
+    schema: schemaPath,
+    generatedAt: new Date().toISOString(),
+    outDir,
+    recordCount: records.length,
+    records,
+  };
+  const text = `${JSON.stringify(envelope, null, 2)}\n`;
+  // `--out` follows `ncs report`: the file is the deliverable, its path is the
+  // one line a shell script needs. Without it the envelope goes to stdout.
+  if (flags.out) {
+    const target = path.resolve(String(flags.out));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, text, 'utf8');
+    process.stdout.write(`${target}\n`);
+    process.exit(EXIT.ok);
+  }
+  process.stdout.write(text);
+  process.exit(EXIT.ok);
+}
+
 async function commandDiff({ positional, flags }) {
   const [a, b] = positional;
   if (!a || !b) fail('diff needs two project files.');
@@ -681,6 +795,7 @@ const handlers = {
   'build-input': commandBuildInput,
   run: commandRun,
   report: commandReport,
+  export: commandExport,
   diff: commandDiff,
   merge: commandMerge,
   convert: commandConvert,
