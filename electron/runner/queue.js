@@ -20,9 +20,12 @@ import {
   parseMultiXyz,
   rankEnsemble,
   withEnergies,
+  xyzText,
 } from '../../src/shared/conformers.js';
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// `~` joins a block id to the conformer member it was expanded for (#80); it
+// is not a path separator and is legal inside a file name on every target OS.
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,63}$/;
 const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
 // xTB's restart artifact is a plain filename (`xtbrestart`); it is not a
 // Gaussian checkpoint and must not be forced through the `.chk` pattern.
@@ -127,13 +130,44 @@ function conformerTaskRecord(raw, nodeId) {
   const conf = raw?.conformers && typeof raw.conformers === 'object' ? raw.conformers : {};
   const generator = conf.generator === 'import' ? 'import' : 'crest';
   const importPath = oneLine(conf.importPath, 500);
-  if (generator === 'import' && !importPath) {
+  // A fanned-out member task (#80) carries one member of an ensemble that is
+  // already stored in the project. It does not search, so it needs neither a
+  // generator nor an import path — only the member row it stands for.
+  const rawMember = conf.member && typeof conf.member === 'object' ? conf.member : null;
+  const memberId = rawMember ? String(rawMember.id || '') : '';
+  if (rawMember && !/^c\d+$/.test(memberId)) {
+    throw new Error(`Conformer task "${nodeId}" names an invalid member id.`);
+  }
+  const member = rawMember ? {
+    id: memberId,
+    rank: Number.isFinite(Number(rawMember.rank)) ? Number(rawMember.rank) : null,
+    parentId: oneLine(rawMember.parentId, 64),
+    parentTitle: oneLine(rawMember.parentTitle, 120),
+    generator: oneLine(rawMember.generator, 24),
+    method: oneLine(rawMember.method, 24),
+    energyEh: Number.isFinite(Number(rawMember.energyEh)) ? Number(rawMember.energyEh) : null,
+    relativeKcal: Number.isFinite(Number(rawMember.relativeKcal)) ? Number(rawMember.relativeKcal) : null,
+    population: Number.isFinite(Number(rawMember.population)) ? Number(rawMember.population) : null,
+    protomer: oneLine(rawMember.protomer, 40),
+    spreadKcal: Number.isFinite(Number(rawMember.spreadKcal)) ? Number(rawMember.spreadKcal) : null,
+    temperature: Number.isFinite(Number(rawMember.temperature)) ? Number(rawMember.temperature) : null,
+  } : null;
+  if (generator === 'import' && !importPath && !member) {
     throw new Error(`Conformer task "${nodeId}" has no ensemble file to import.`);
   }
   const number = (value, fallback, min, max) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
   };
+  const rawFanOut = raw?.fanOut && typeof raw.fanOut === 'object' ? raw.fanOut : null;
+  const fanOut = rawFanOut && SAFE_ID.test(String(rawFanOut.conformerId || ''))
+    ? {
+      conformerId: String(rawFanOut.conformerId),
+      memberId: /^c\d+$/.test(String(rawFanOut.memberId || '')) ? String(rawFanOut.memberId) : null,
+      count: Number.isInteger(Number(rawFanOut.count)) ? Number(rawFanOut.count) : null,
+      spreadKcal: Number.isFinite(Number(rawFanOut.spreadKcal)) ? Number(rawFanOut.spreadKcal) : null,
+    }
+    : null;
   return {
     nodeId,
     type: 'conformers',
@@ -148,7 +182,7 @@ function conformerTaskRecord(raw, nodeId) {
     runId: null,
     runDir: null,
     inputName,
-    outputName: 'crest.out',
+    outputName: /^[A-Za-z0-9._-]+\.xyz$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out',
     settings: null,
     gates: {},
     validity: null,
@@ -160,6 +194,8 @@ function conformerTaskRecord(raw, nodeId) {
     ladder: null,
     spin: null,
     reaction: null,
+    conformer: null,
+    fanOut,
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -187,6 +223,7 @@ function conformerTaskRecord(raw, nodeId) {
       charge: Math.round(number(conf.charge, 0, -10, 10)),
       multiplicity: Math.round(number(conf.multiplicity, 1, 1, 10)),
       argv: Array.isArray(conf.argv) ? conf.argv.map(String).slice(0, 32) : [],
+      member,
     },
   };
 }
@@ -292,6 +329,15 @@ function taskRecord(raw, index) {
       toleranceKcal: Number.isFinite(Number(rawLadder.toleranceKcal)) ? Number(rawLadder.toleranceKcal) : 3,
     }
     : null;
+  const rawFanOut = raw?.fanOut && typeof raw.fanOut === 'object' ? raw.fanOut : null;
+  const fanOut = rawFanOut && SAFE_ID.test(String(rawFanOut.conformerId || ''))
+    ? {
+      conformerId: String(rawFanOut.conformerId),
+      memberId: /^c\d+$/.test(String(rawFanOut.memberId || '')) ? String(rawFanOut.memberId) : null,
+      count: Number.isInteger(Number(rawFanOut.count)) ? Number(rawFanOut.count) : null,
+      spreadKcal: Number.isFinite(Number(rawFanOut.spreadKcal)) ? Number(rawFanOut.spreadKcal) : null,
+    }
+    : null;
   return {
     nodeId,
     type,
@@ -321,6 +367,7 @@ function taskRecord(raw, index) {
     spin,
     reaction,
     conformer,
+    fanOut,
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -544,7 +591,11 @@ export class QueueManager {
     const crestExecutable = String(options.crestExecutable || '').trim();
     const scratchDir = String(options.scratchDir || '').trim();
     const needsCalcEngine = tasks.some((task) => task.executable && task.type === 'calc');
-    const needsCrest = tasks.some((task) => task.type === 'conformers' && task.conformers?.generator === 'crest');
+    // A fanned-out member task carries an ensemble that is already stored in the
+    // project; no CREST binary is needed to materialise it (#80).
+    const needsCrest = tasks.some((task) => task.type === 'conformers'
+      && task.conformers?.generator === 'crest'
+      && !task.conformers?.member);
     if (!dryRun) {
       if (needsCalcEngine) {
         if (!executable) throw new Error('Choose the calculation executable before running the workflow.');
@@ -827,6 +878,12 @@ export class QueueManager {
     this.publish(queue);
 
     try {
+      // Issue #80: a fanned-out member is not a search. The ensemble is already
+      // in the project, so this task only materialises its member.
+      if (conf.member) {
+        await this.carryConformerMember(queue, task, dir, conf.member);
+        return;
+      }
       let ensembleText = '';
       let energies = [];
       let source = conf.generator;
@@ -913,6 +970,92 @@ export class QueueManager {
       task.finishedAt = new Date().toISOString();
       this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Conformer search failed: ${task.error}` });
     }
+    await this.persist(queue);
+    this.publish(queue);
+  }
+
+  /**
+   * Materialise one fanned-out member (#80).
+   *
+   * No search is repeated: the stored geometry and its ranking row are written
+   * into the member's own folder so every branch has an artifact and a run
+   * record, and `run.json` for the branch's calculation names the member.
+   */
+  async carryConformerMember(queue, task, dir, member) {
+    const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+    const parsed = parseMultiXyz(inputText);
+    if (parsed.errors.length > 0 || parsed.frames.length !== 1) {
+      throw new Error(`The fanned-out member geometry could not be read: ${
+        parsed.errors[0]?.message || `${parsed.frames.length} frames in the input`}.`);
+    }
+    const atoms = parsed.frames[0].atoms;
+    await fsp.writeFile(path.join(dir, 'member.xyz'), xyzText(atoms, `${member.parentTitle || member.parentId} · ${member.id} · fanned out`), 'utf8');
+    const summary = {
+      generator: String(member.generator || ''),
+      method: String(member.method || ''),
+      count: 1,
+      total: 1,
+      spreadKcal: Number.isFinite(member.spreadKcal) ? member.spreadKcal : null,
+      generatedAt: new Date().toISOString(),
+      selectedId: member.id,
+      requiresSelection: false,
+      autoSelected: false,
+      protomers: member.protomer ? [member.protomer] : [],
+      pruned: { energy: 0, rmsd: 0, count: 0 },
+      warnings: [],
+      fanOut: {
+        parentId: member.parentId,
+        parentTitle: member.parentTitle,
+        memberId: member.id,
+        rank: member.rank,
+        relativeKcal: member.relativeKcal,
+        population: member.population,
+        temperature: member.temperature,
+      },
+      members: [{
+        id: member.id,
+        rank: Number.isInteger(member.rank) ? member.rank : 1,
+        energyEh: member.energyEh,
+        relativeKcal: member.relativeKcal,
+        population: member.population,
+        rmsdToLowest: 0,
+        protomer: member.protomer,
+        kept: true,
+        dropped: null,
+        atoms,
+      }],
+      selected: {
+        id: member.id,
+        energyEh: member.energyEh,
+        relativeKcal: member.relativeKcal,
+        population: member.population,
+        protomer: member.protomer,
+        atoms,
+      },
+    };
+    await writeJsonAtomic(path.join(dir, 'conformers.json'), summary);
+    task.status = 'completed';
+    task.ensemble = summary;
+    task.ensembleFile = 'conformers.json';
+    task.runDir = dir;
+    task.finishedAt = new Date().toISOString();
+    task.summary = `member ${member.id} of ${member.parentTitle || member.parentId} carried forward from the stored ensemble`;
+    task.conformer = {
+      nodeId: member.parentId,
+      title: member.parentTitle,
+      generator: member.generator,
+      id: member.id,
+      relativeKcal: member.relativeKcal,
+      population: member.population,
+      protomer: member.protomer,
+      spreadKcal: member.spreadKcal,
+    };
+    this.emit({
+      type: 'queue-output',
+      queueId: queue.id,
+      nodeId: task.nodeId,
+      text: `Fanned-out member ${member.id}: geometry carried forward, no search re-run.`,
+    });
     await this.persist(queue);
     this.publish(queue);
   }

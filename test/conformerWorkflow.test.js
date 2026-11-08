@@ -64,8 +64,8 @@ const selection = (atoms = coords, overrides = {}) => ({
   pruned: { energy: 2, rmsd: 0, count: 0 },
   warnings: [],
   members: [
-    { id: 'c1', rank: 1, energyEh: -76.4, relativeKcal: 0, population: 0.94, rmsdToLowest: 0, protomer: '', kept: true, dropped: null },
-    { id: 'c2', rank: 2, energyEh: -76.3946, relativeKcal: 3.4, population: 0.06, rmsdToLowest: 1.1, protomer: '', kept: true, dropped: null },
+    { id: 'c1', rank: 1, energyEh: -76.4, relativeKcal: 0, population: 0.94, rmsdToLowest: 0, protomer: '', kept: true, dropped: null, atoms },
+    { id: 'c2', rank: 2, energyEh: -76.3946, relativeKcal: 3.4, population: 0.06, rmsdToLowest: 1.1, protomer: '', kept: true, dropped: null, atoms: coords.map((atom, index) => (index === 1 ? { ...atom, x: 1.9 } : atom)) },
   ],
   selected: { id: 'c1', energyEh: -76.4, relativeKcal: 0, population: 0.94, protomer: '', atoms },
   ...overrides,
@@ -153,6 +153,89 @@ describe('conformer workflow wiring', () => {
   });
 });
 
+describe('conformer fan-out (#80)', () => {
+  const fanOutProject = (output = selection(), settings = { fanOut: true }) => conformerProject({ output, settings });
+
+  it('expands the block and its calculation into one task per retained member', () => {
+    const plan = buildWorkflowPlan(fanOutProject());
+    expect(plan.tasks.map((task) => task.nodeId)).toEqual(['conf~c1', 'conf~c2', 'opt~c1', 'opt~c2']);
+    expect(plan.tasks.every((task) => task.executable)).toBe(true);
+    expect(plan.edges.map((edge) => [edge.from, edge.to, edge.type])).toEqual([
+      ['conf~c1', 'opt~c1', 'dependency'],
+      ['conf~c2', 'opt~c2', 'dependency'],
+    ]);
+  });
+
+  it('builds each fanned-out calculation from that member’s geometry', () => {
+    const plan = buildWorkflowPlan(fanOutProject());
+    const opt1 = plan.tasks.find((task) => task.nodeId === 'opt~c1');
+    const opt2 = plan.tasks.find((task) => task.nodeId === 'opt~c2');
+    expect(opt1.inputText).toMatch(/H\s+0\.960000/);
+    expect(opt2.inputText).toMatch(/H\s+1\.900000/);
+    expect(opt1.conformer).toMatchObject({ nodeId: 'conf', id: 'c1' });
+    expect(opt2.conformer).toMatchObject({ nodeId: 'conf', id: 'c2' });
+    expect(opt2.conformer.relativeKcal).toBeCloseTo(3.4, 6);
+    expect(opt2.validity.conformer.memberId).toBe('c2');
+    expect(opt1.validity.conformer.memberId).toBe('c1');
+    const conf2 = plan.tasks.find((task) => task.nodeId === 'conf~c2');
+    expect(conf2.type).toBe('conformers');
+    expect(conf2.conformers.argv).toEqual([]);
+    expect(conf2.conformers.member).toMatchObject({ id: 'c2', parentId: 'conf', relativeKcal: 3.4 });
+    expect(conf2.inputText.split('\n')[0]).toBe('3');
+    expect(conf2.inputText).toMatch(/H\s+1\.900000/);
+  });
+
+  it('refuses to fan out a multi-protomer ensemble with nothing selected', () => {
+    const output = selection(coords, {
+      requiresSelection: true,
+      selectedId: '',
+      selected: null,
+      protomers: ['A', 'B'],
+      members: [
+        { id: 'c1', rank: 1, energyEh: -76.4, relativeKcal: 0, population: 0.5, rmsdToLowest: 0, protomer: 'A', kept: true, dropped: null, atoms: coords },
+        { id: 'c2', rank: 2, energyEh: -76.3946, relativeKcal: 3.4, population: 0.5, rmsdToLowest: 1.1, protomer: 'B', kept: true, dropped: null, atoms: coords },
+      ],
+    });
+    expect(() => buildWorkflowPlan(fanOutProject(output))).toThrow(/protomer/i);
+  });
+
+  it('pairs a checkpoint hand-off member to member', () => {
+    const base = conformerProject({ settings: { fanOut: true }, output: selection() });
+    const validated = validateProject({
+      ...base,
+      nodes: [
+        ...base.nodes,
+        {
+          id: 'freq', type: 'calc', title: 'Frequency', state: 'ready', x: 400, y: 0,
+          settings: defaultSettings({ jobType: 'Freq' }), output: null, checkpointFrom: 'opt',
+        },
+      ],
+      edges: [
+        ...base.edges,
+        { id: 'e2', from: 'conf', to: 'freq', type: 'dependency' },
+        { id: 'e3', from: 'opt', to: 'freq', type: 'checkpoint' },
+      ],
+    });
+    expect(validated.ok).toBe(true);
+    const plan = buildWorkflowPlan(validated.project);
+    const freq2 = plan.tasks.find((task) => task.nodeId === 'freq~c2');
+    expect(freq2.checkpointFrom).toMatchObject({ nodeId: 'opt~c2', checkpoint: 'opt_c2.chk', fanOutMember: 'c2' });
+    expect(plan.edges.filter((edge) => edge.type === 'checkpoint').map((edge) => [edge.from, edge.to])).toEqual([
+      ['opt~c1', 'freq~c1'],
+      ['opt~c2', 'freq~c2'],
+    ]);
+  });
+
+  it('keeps today’s single-member plan byte-identical when fan-out is off or absent', () => {
+    const off = buildWorkflowPlan(conformerProject({ settings: { fanOut: false }, output: selection() }));
+    const absent = buildWorkflowPlan(conformerProject({ settings: {}, output: selection() }));
+    expect(JSON.stringify(off)).toBe(JSON.stringify(absent));
+    expect(off.tasks.map((task) => task.nodeId)).toEqual(['conf', 'opt']);
+    expect(off.tasks.find((task) => task.nodeId === 'opt').conformer).toMatchObject({ id: 'c1' });
+    expect(off.tasks.find((task) => task.nodeId === 'opt').inputText).not.toMatch(/H\s+1\.900000/);
+  });
+});
+
 describe('conformer queue path', () => {
   afterEach(async () => {
     await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
@@ -231,6 +314,47 @@ describe('conformer queue path', () => {
     const record = JSON.parse(await fsp.readFile(path.join(runsRoot, calc.runId, 'run.json'), 'utf8'));
     expect(record.conformer).toMatchObject({ nodeId: 'conf', id: 'c1' });
     expect(record.conformer.spreadKcal).toBeCloseTo(3.4, 6);
+  });
+
+  it('runs one branch per fanned-out member and records the member on each run', async () => {
+    const project = conformerProject({ settings: { fanOut: true }, output: selection() });
+    const plan = buildWorkflowPlan(project);
+    const { queueManager, runsRoot } = await stack();
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { dryRun: true, executable: null, crestExecutable: null, scratchDir: '' },
+    });
+
+    const done = await waitFor(async () => {
+      const list = await queueManager.list();
+      const queue = list.find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+    expect(done.status).toBe('completed');
+    const conformers = done.tasks.filter((task) => task.type === 'conformers');
+    expect(conformers.map((task) => task.nodeId).sort()).toEqual(['conf~c1', 'conf~c2']);
+    for (const task of conformers) {
+      expect(task.status).toBe('completed');
+      expect(task.ensemble.count).toBe(1);
+      expect(task.ensemble.selectedId).toBe(task.conformers.member.id);
+      // Each member has its own folder with its own geometry.
+      const memberText = await fsp.readFile(path.join(task.runDir, 'member.xyz'), 'utf8');
+      expect(memberText.split('\n')[0]).toBe('3');
+      expect(memberText).toMatch(task.conformers.member.id === 'c2' ? /H\s+1\.900000/ : /H\s+0\.960000/);
+    }
+
+    const calcs = done.tasks.filter((task) => task.type === 'calc');
+    expect(calcs).toHaveLength(2);
+    const members = [];
+    for (const task of calcs) {
+      const record = JSON.parse(await fsp.readFile(path.join(runsRoot, task.runId, 'run.json'), 'utf8'));
+      expect(record.conformer.nodeId).toBe('conf');
+      expect(record.conformer.id).toBe(task.conformer.id);
+      members.push(record.conformer.id);
+    }
+    expect(members.sort()).toEqual(['c1', 'c2']);
   });
 
   it('fails the block with a clear reason when CREST is not configured', async () => {

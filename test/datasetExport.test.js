@@ -75,6 +75,20 @@ describe('dataset rows', () => {
     expect(runRows(null)).toEqual([]);
     expect(runRows([record(), null]).length).toBe(2);
   });
+
+  it('keeps the conformer member grouping on every fanned-out row', () => {
+    const rows = runRows([
+      record({ id: 'run-c1', conformer: { nodeId: 'conf', id: 'c1', relativeKcal: 0, population: 0.94, protomer: '' } }),
+      record({ id: 'run-c2', conformer: { nodeId: 'conf', id: 'c2', relativeKcal: 3.4, population: 0.06, protomer: 'A' } }),
+      record({ id: 'run-plain' }),
+    ]);
+    expect(rows[0]).toMatchObject({ conformerNode: 'conf', conformerMember: 'c1', conformerRelativeKcal: 0, conformerPopulation: 0.94 });
+    expect(rows[1]).toMatchObject({ conformerMember: 'c2', conformerRelativeKcal: 3.4, conformerProtomer: 'A' });
+    expect(rows[2].conformerMember).toBeNull();
+    const header = datasetCsv(rows).split('\n')[0];
+    expect(header).toContain('conformer_member');
+    expect(header).toContain('conformer_relative_kcal');
+  });
 });
 
 describe('dataset CSV', () => {

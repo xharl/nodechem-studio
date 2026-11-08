@@ -16,6 +16,9 @@ export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
 const MISSING = 'not reported';
 
+/** Hartree → kcal/mol, the same constant the conformer module uses. */
+const HARTREE_KCAL = 627.5094740631;
+
 function text(value) {
   return value === null || value === undefined || value === '' ? null : String(value);
 }
@@ -75,6 +78,25 @@ function taskRow(task, record) {
     jobType: text(record?.provenance?.jobType || method.jobType),
     method: text(method.functional || method.hamiltonian),
     basis: text(method.basis),
+    // Issue #80: a fanned-out run names its member, and the report keeps that
+    // label so N rows from one block can be grouped and compared at the level
+    // they were actually run at.
+    conformer: (() => {
+      const source = (task.conformer && typeof task.conformer === 'object' ? task.conformer : null)
+        || (record?.conformer && typeof record.conformer === 'object' ? record.conformer : null);
+      if (!source) return null;
+      return {
+        nodeId: text(source.nodeId),
+        title: text(source.title),
+        memberId: text(source.id),
+        relativeKcal: num(source.relativeKcal),
+        population: num(source.population),
+        protomer: text(source.protomer),
+      };
+    })(),
+    fanOut: task.fanOut && typeof task.fanOut === 'object'
+      ? { conformerId: text(task.fanOut.conformerId), memberId: text(task.fanOut.memberId) }
+      : null,
     finalEnergyHartree: num(parsed.finalEnergy?.hartree),
     gibbsHartree: num(parsed.thermochemistry?.freeEnergyHartree),
     imaginaryCount: Number.isInteger(parsed.frequencies?.imaginaryCount)
@@ -114,6 +136,49 @@ export function buildWorkflowReport(queue, records = {}, { generatedAt = null, a
     : gated.some((row) => row.gates === 'fail') ? 'fail'
       : gated.length < rows.length ? 'partial' : 'pass';
 
+  // Issue #80: fanned-out branches are one row per member. Group them by the
+  // conformer block and compare final energies at the level they were run at —
+  // the search-level ΔE is kept beside it, never substituted for it.
+  const conformerGroups = new Map();
+  for (const row of rows) {
+    if (!row.conformer?.nodeId) continue;
+    if (!conformerGroups.has(row.conformer.nodeId)) conformerGroups.set(row.conformer.nodeId, []);
+    conformerGroups.get(row.conformer.nodeId).push(row);
+  }
+  const conformers = [...conformerGroups.entries()]
+    .filter(([, group]) => group.length > 1 && group.some((row) => row.fanOut))
+    .map(([id, group]) => {
+      // Only a one-run-per-member group is comparable: a second fanned block
+      // (say Opt and Freq on every member) puts two different levels in one
+      // table, and silently picking one would invent an ordering.
+      const memberIds = group.map((row) => row.conformer.memberId);
+      const uniqueMembers = new Set(memberIds);
+      const comparable = uniqueMembers.size === memberIds.length && uniqueMembers.size > 1
+        && group.every((row) => row.fanOut);
+      const energies = comparable
+        ? group.map((row) => row.finalEnergyHartree).filter((value) => Number.isFinite(value))
+        : [];
+      const lowest = energies.length === group.length && energies.length > 0 ? Math.min(...energies) : null;
+      const members = group.map((row) => ({
+        nodeId: row.nodeId,
+        memberId: row.conformer.memberId,
+        protomer: row.conformer.protomer,
+        status: row.status,
+        energyHartree: row.finalEnergyHartree,
+        relativeKcalSearch: row.conformer.relativeKcal,
+        relativeKcalTarget: lowest !== null && Number.isFinite(row.finalEnergyHartree)
+          ? (row.finalEnergyHartree - lowest) * HARTREE_KCAL
+          : null,
+      }));
+      return {
+        id,
+        title: group[0].conformer.title || id,
+        comparable,
+        members,
+        spreadKcalTarget: lowest !== null ? (Math.max(...energies) - lowest) * HARTREE_KCAL : null,
+      };
+    });
+
   return {
     schemaVersion: WORKFLOW_REPORT_SCHEMA_VERSION,
     kind: 'nodechem-studio.workflow-report',
@@ -130,6 +195,9 @@ export function buildWorkflowReport(queue, records = {}, { generatedAt = null, a
     counts,
     verdict,
     tasks: rows,
+    // One entry per conformer block whose branches were fanned out, with the
+    // target-level ΔE the run energies actually support.
+    conformers,
     // One entry per method ladder, with the per-rung energies that produced the
     // verdict. Absent ladders are omitted rather than reported as passed.
     ladders: Object.entries(source.ladders && typeof source.ladders === 'object' ? source.ladders : {})
@@ -208,8 +276,11 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
     const gateClass = gates === 'pass' || gates === 'fail' ? gates : 'unknown';
     const level = row.jobType || row.type || '';
     const kindSuffix = row.kind && row.kind !== level ? ` · ${row.kind}` : '';
+    const member = row.conformer?.memberId
+      ? ` <span class="mono">· member ${escapeHtml(row.conformer.memberId)}${row.conformer.protomer ? ` (${escapeHtml(row.conformer.protomer)})` : ''}</span>`
+      : '';
     return '<tr data-node="' + escapeHtml(row.nodeId || '') + '" data-status="' + escapeHtml(row.status) + '">'
-      + `<td><strong>${escapeHtml(row.title)}</strong>${fixture}<div class="sub">`
+      + `<td><strong>${escapeHtml(row.title)}</strong>${member}${fixture}<div class="sub">`
       + `${escapeHtml(level)}${escapeHtml(kindSuffix)}</div></td>`
       + `<td>${escapeHtml(row.status)}</td>`
       + `<td class="gates-${gateClass}">${escapeHtml(gates)}</td>`
@@ -310,6 +381,27 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
       : '')
   )).join('');
 
+  // Conformer ensembles at the target level (#80): one table per fanned-out
+  // block. The search ΔE is shown beside the target ΔE so the two levels are
+  // never confused, and a member that did not report an energy stays blank.
+  const conformerBlocks = (Array.isArray(model.conformers) ? model.conformers : []).map((ensemble) => {
+    const body = ensemble.members.map((member) => '<tr>'
+      + `<td>${escapeHtml(member.memberId || MISSING)}${member.protomer ? ` · ${escapeHtml(member.protomer)}` : ''}</td>`
+      + `<td>${escapeHtml(member.status || MISSING)}</td>`
+      + `<td class="num">${escapeHtml(value(member.energyHartree, 8))}</td>`
+      + `<td class="num">${escapeHtml(value(member.relativeKcalSearch, 2))}</td>`
+      + `<td class="num">${escapeHtml(value(member.relativeKcalTarget, 2))}</td>`
+      + '</tr>').join('');
+    return '<h2>Conformer ensemble at the target level — ' + escapeHtml(ensemble.title || ensemble.id) + '</h2>'
+      + (ensemble.comparable
+        ? `<p>Spread at the target level: <strong>${escapeHtml(value(ensemble.spreadKcalTarget, 2))} kcal/mol</strong>.`
+          + ' ΔE is recomputed from the runs\' final energies; the search-level ΔE is shown for comparison only.</p>'
+        : '<p class="warn">Not compared: this block fed more than one task per member (or several levels), so a single target-level ΔE would mix different calculations. The rows are listed without one.</p>')
+      + '<table><thead><tr><th>Member</th><th>Status</th><th class="num">E / Eh</th>'
+      + '<th class="num">ΔE search / kcal mol⁻¹</th><th class="num">ΔE target / kcal mol⁻¹</th></tr></thead>'
+      + `<tbody>${body}</tbody></table>`;
+  }).join('');
+
   const fixtureNote = model.fixtures > 0
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
@@ -347,6 +439,7 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
     + '<th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th>'
     + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
     + ladderBlocks
+    + conformerBlocks
     + spinBlocks
     + reactionBlocks
     + (methodsBlocks ? '<h2>Methods</h2>' + methodsBlocks : '')
