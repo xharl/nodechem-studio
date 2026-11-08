@@ -35,6 +35,7 @@ queue refuses to start and says so; it does not fabricate an ensemble.
 | Keep at most | 20 | Hard cap after sorting by energy; the rest are labelled `count`. |
 | Temperature | 298.15 K | Boltzmann populations in the table. They describe the ensemble, not a free energy. |
 | Spread warning | 2 kcal/mol | If the retained ensemble spans more than this, the downstream calculation's validity report carries a warning. |
+| Fan out | off | When on, every retained member becomes its own task downstream instead of one chosen geometry. See below. |
 
 Charge and multiplicity are sent to CREST (`--chrg`, `--uhf` as 2S) and travel with the summary.
 
@@ -47,6 +48,31 @@ reason they were dropped — hiding them would make the ensemble look cleaner th
 Press **use** on any kept row to make that member the geometry downstream blocks run. The choice is
 stored in the project with the member's atoms, so it survives a restart and does not depend on the
 queue folder still existing.
+
+## Fanning the ensemble out
+
+Choosing one member answers *which shape ran*; it does not answer *how much the answer moves with
+the shape*. Turn on **Fan out** when the question is the second one. The block then stops carrying
+a single geometry:
+
+- the block becomes one task per retained member, keyed `<blockId>~<memberId>`;
+- a calculation block fed by it becomes one task per member too, and each task is built from that
+  member's atoms, not from the selected one;
+- connections between the two pair member to member, so member `c2` never waits on `c1`;
+- a merge block after the fan-out waits for every member (there is no partial-ensemble mode yet).
+
+The search itself does not run again: the ensemble is already stored in the project, so each member
+task writes its geometry into its own folder (`member.xyz`, `conformers.json`) and the downstream
+run's `run.json` names the member it ran. Fan-out needs a stored ensemble, so run the block once
+with fan-out off (or on, with the ensemble absent) before expanding it.
+
+Fan-out is refused when the ensemble mixes protomers and no member is chosen: comparing protonation
+states in one ΔE table is not a conformer comparison. With a member chosen, only the kept members of
+that protomer are fanned out.
+
+The workflow report groups the fanned-out runs by member and reports ΔE at the level the runs
+actually used, with the search-level ΔE shown alongside. Populations at the target level are not
+recomputed yet — that needs an explicit temperature decision for the report.
 
 ## Protomers
 

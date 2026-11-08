@@ -147,4 +147,29 @@ describe('conformers node schema', () => {
     expect(result.ok).toBe(true);
     expect(result.warnings.some((warning) => /crsestFlags/.test(warning.path))).toBe(true);
   });
+
+  it('defaults fan-out off, so a project written before the switch keeps loading', () => {
+    const result = validateProject(project([conformersNode()]));
+    expect(result.ok).toBe(true);
+    expect(result.project.nodes[0].settings.fanOut).toBe(false);
+    const text = stringifyProject(result.project).text;
+    const reloaded = parseProjectText(text);
+    expect(reloaded.ok).toBe(true);
+    expect(reloaded.project.nodes[0].settings.fanOut).toBe(false);
+  });
+
+  it('keeps an explicit fan-out switch through a save and reload', () => {
+    const result = validateProject(project([conformersNode({ settings: { fanOut: true } })]));
+    expect(result.ok).toBe(true);
+    expect(result.project.nodes[0].settings.fanOut).toBe(true);
+    const text = stringifyProject(result.project).text;
+    const reloaded = parseProjectText(text);
+    expect(reloaded.project.nodes[0].settings.fanOut).toBe(true);
+  });
+
+  it('rejects a fan-out value that is not a boolean', () => {
+    const result = validateProject(project([conformersNode({ settings: { fanOut: 'yes' } })]));
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => /fanOut/.test(error.path))).toBe(true);
+  });
 });

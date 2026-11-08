@@ -104,6 +104,52 @@ describe('workflow report model', () => {
   });
 });
 
+describe('conformer fan-out in the report (#80)', () => {
+  const queue = {
+    id: 'q-fanout',
+    projectName: 'Fan-out',
+    status: 'completed',
+    tasks: [
+      {
+        nodeId: 'opt~c1', title: 'Optimise — c1', type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c1',
+        conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c1', relativeKcal: 0, population: 0.94, protomer: '' },
+        fanOut: { conformerId: 'conf', memberId: 'c1' },
+      },
+      {
+        nodeId: 'opt~c2', title: 'Optimise — c2', type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c2',
+        conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c2', relativeKcal: 3.4, population: 0.06, protomer: '' },
+        fanOut: { conformerId: 'conf', memberId: 'c2' },
+      },
+    ],
+  };
+  const records = {
+    'run-c1': { parsed: { finalEnergy: { hartree: -76.4 } } },
+    'run-c2': { parsed: { finalEnergy: { hartree: -76.3946 } } },
+  };
+
+  it('groups the members and recomputes ΔE at the target level', () => {
+    const model = buildWorkflowReport(queue, records);
+    expect(model.conformers).toHaveLength(1);
+    const ensemble = model.conformers[0];
+    expect(ensemble.id).toBe('conf');
+    expect(ensemble.members.map((member) => member.memberId)).toEqual(['c1', 'c2']);
+    expect(ensemble.members[0].relativeKcalTarget).toBeCloseTo(0, 6);
+    // Search level said 3.40; the target level says what the runs actually found.
+    expect(ensemble.members[1].relativeKcalSearch).toBeCloseTo(3.4, 6);
+    expect(ensemble.members[1].relativeKcalTarget).toBeCloseTo(3.3886, 3);
+    expect(ensemble.spreadKcalTarget).toBeCloseTo(3.3886, 3);
+  });
+
+  it('names the member in the task table and prints the target-level table', () => {
+    const html = workflowReportHtml(buildWorkflowReport(queue, records));
+    expect(html).toContain('member c1');
+    expect(html).toContain('member c2');
+    expect(html).toContain('Conformer ensemble at the target level');
+    expect(html).toContain('ΔE search');
+    expect(html).toContain('3.39');
+  });
+});
+
 describe('workflow report HTML', () => {
   const model = buildWorkflowReport(QUEUE, RECORDS, { appVersion: '0.2.1' });
   const html = workflowReportHtml(model);

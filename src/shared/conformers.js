@@ -30,6 +30,10 @@ export const DEFAULT_CONFORMER_SETTINGS = Object.freeze({
   spreadThresholdKcal: 2,
   selectedConformerId: '',
   importPath: '',
+  // Issue #80: fan the retained ensemble out into one task per member instead
+  // of carrying a single chosen geometry downstream. Off by default, so a file
+  // written before the switch existed runs exactly as it did.
+  fanOut: false,
 });
 
 const PROTROMER_TOKEN = /(?:protomer|tautomer)\s*[=:]\s*([A-Za-z0-9_.-]+)/i;

@@ -385,7 +385,7 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   warnUnknown(c, provided, new Set([
     'generator', 'method', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
     'temperature', 'spreadThresholdKcal', 'selectedConformerId', 'importPath',
-    'charge', 'multiplicity',
+    'fanOut', 'charge', 'multiplicity',
   ]), path);
   // A conformer block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
@@ -423,6 +423,9 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     }),
     selectedConformerId: selected,
     importPath,
+    fanOut: readBoolean(c, source.fanOut, `${path}.fanOut`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.fanOut,
+    }),
     charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, source.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
   };

@@ -1528,6 +1528,8 @@ function conformersInspector(node) {
       `<div class="field"><label>Spread warning (kcal/mol)</label><input class="input" type="number" min="0" max="50" step="0.5" data-conformer-field="spreadThresholdKcal" value="${esc(s.spreadThresholdKcal)}"></div>`,
       `<div class="field"><label>Charge</label><input class="input" type="number" min="-10" max="10" data-conformer-field="charge" value="${esc(s.charge)}"></div>`,
       `<div class="field"><label>Multiplicity</label><input class="input" type="number" min="1" max="10" data-conformer-field="multiplicity" value="${esc(s.multiplicity)}"></div>`,
+      // Issue #80: one task per retained member instead of one chosen geometry.
+      switchRow('Fan out the ensemble', 'one task per retained member downstream', 'fanOut', s.fanOut === true, { attr: 'data-conformer-field="fanOut"' }),
     ].join(''))}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="validate">Validate project</button>
@@ -2857,7 +2859,11 @@ async function preflightRun({ quiet = false } = {}) {
     let needsCrest = false;
     try {
       const tasks = shared.buildWorkflowPlan(state.project).tasks;
-      needsCrest = tasks.some((task) => task.type === 'conformers' && task.conformers?.generator === 'crest');
+      // A fanned-out member task carries a stored ensemble, so it does not need
+      // the CREST binary (#80).
+      needsCrest = tasks.some((task) => task.type === 'conformers'
+        && task.conformers?.generator === 'crest'
+        && !task.conformers?.member);
     } catch {
       // An unbuildable plan is reported by the queue's own error; nothing to add.
     }
@@ -4093,7 +4099,8 @@ function applyConformerField(target) {
     if (!Number.isFinite(value)) return;
     node.settings[key] = clamp(value, bounds[0], bounds[1]);
   } else {
-    node.settings[key] = target.value;
+    // A switch writes its checked state, not the string "on".
+    node.settings[key] = target.type === 'checkbox' ? target.checked : target.value;
     if (key === 'generator' && node.output && node.output.generator !== target.value) {
       // An imported table is not what CREST would produce, and a CREST run is
       // not the file that was imported: switching the source voids the choice.

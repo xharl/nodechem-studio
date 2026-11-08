@@ -30,6 +30,14 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'scfCycles', label: 'scf_cycles' },
   { key: 'elapsedSeconds', label: 'elapsed_seconds' },
   { key: 'dryRun', label: 'dry_run' },
+  // Issue #80: fanned-out runs are one row per member. The conformer columns
+  // keep the member grouping visible in a spreadsheet instead of collapsing N
+  // runs into N rows that differ only by title.
+  { key: 'conformerNode', label: 'conformer_node' },
+  { key: 'conformerMember', label: 'conformer_member' },
+  { key: 'conformerRelativeKcal', label: 'conformer_relative_kcal' },
+  { key: 'conformerPopulation', label: 'conformer_population' },
+  { key: 'conformerProtomer', label: 'conformer_protomer' },
   { key: 'inputSha256', label: 'input_sha256' },
   { key: 'outputSha256', label: 'output_sha256' },
 ]);
@@ -59,6 +67,7 @@ export function runRow(record) {
   const parsed = run.parsed && typeof run.parsed === 'object' ? run.parsed : {};
   const provenance = run.provenance && typeof run.provenance === 'object' ? run.provenance : {};
   const method = provenance.method && typeof provenance.method === 'object' ? provenance.method : {};
+  const conformer = run.conformer && typeof run.conformer === 'object' ? run.conformer : {};
   return {
     id: text(run.id),
     finishedAt: text(run.finishedAt || run.startedAt),
@@ -78,6 +87,11 @@ export function runRow(record) {
     scfCycles: integer(parsed.scf?.cycles),
     elapsedSeconds: num(run.elapsedSeconds ?? parsed.resources?.elapsedSeconds),
     dryRun: run.dryRun === true,
+    conformerNode: text(conformer.nodeId),
+    conformerMember: text(conformer.id),
+    conformerRelativeKcal: num(conformer.relativeKcal),
+    conformerPopulation: num(conformer.population),
+    conformerProtomer: text(conformer.protomer),
     inputSha256: text(run.inputSha256),
     outputSha256: text(run.outputSha256),
   };

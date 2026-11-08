@@ -38,14 +38,15 @@ export function settingsForNode(project, node) {
   return runSettingsFor(engine.id, { ...node.settings });
 }
 
-export function moleculeForNode(project, node) {
+export function moleculeForNode(project, node, conformerMember = null) {
   const settings = node?.settings && typeof node.settings === 'object' ? node.settings : {};
   const molecule = project?.molecule || {};
   const charge = Number.isInteger(settings.charge) ? settings.charge : molecule.charge;
   const multiplicity = Number.isInteger(settings.multiplicity) ? settings.multiplicity : molecule.multiplicity;
   // Issue #30: a calculation downstream of a conformer block runs on the
   // conformer that was *chosen*, not on the project's single imported geometry.
-  const conformer = conformerForNode(project, node);
+  // Issue #80: a fanned-out block names the member per task instead.
+  const conformer = conformerForNode(project, node, conformerMember);
   const chosen = conformer?.atoms;
   const coords = Array.isArray(chosen) && chosen.length > 0
     ? chosen
@@ -67,6 +68,7 @@ export function conformerSettingsFor(node) {
     spreadThresholdKcal: Number(pick('spreadThresholdKcal')),
     selectedConformerId: String(source.selectedConformerId || ''),
     importPath: String(source.importPath || ''),
+    fanOut: pick('fanOut') === true,
   };
 }
 
@@ -86,14 +88,21 @@ export function conformerSourceFor(project, node) {
 /**
  * The chosen conformer of the upstream block: the geometry and the numbers a
  * downstream run must cite, or null when no conformer block feeds this node.
+ *
+ * `conformerMember` is the member a fanned-out task was planned for (#80); it
+ * takes the place of the block's single selection without changing the shape
+ * of what the caller sees.
  */
-export function conformerForNode(project, node) {
+export function conformerForNode(project, node, conformerMember = null) {
   const source = conformerSourceFor(project, node);
   if (!source) return null;
   const output = source.output && typeof source.output === 'object' ? source.output : null;
-  const selected = output?.selected && Array.isArray(output.selected.atoms) && output.selected.atoms.length > 0
-    ? output.selected
+  const member = conformerMember && Array.isArray(conformerMember.atoms) && conformerMember.atoms.length > 0
+    ? conformerMember
     : null;
+  const selected = member || (output?.selected && Array.isArray(output.selected.atoms) && output.selected.atoms.length > 0
+    ? output.selected
+    : null);
   return {
     nodeId: source.id,
     title: source.title,
@@ -110,6 +119,70 @@ export function conformerForNode(project, node) {
       population: Number(selected.population ?? 0),
       protomer: String(selected.protomer || ''),
     } : null,
+  };
+}
+
+/**
+ * The members a fanned-out conformer block runs, in rank order.
+ *
+ * Returns null when fan-out is off, when the block has not produced an
+ * ensemble yet (the search itself still has to run once), or when nothing
+ * survived pruning. Throws when the ensemble mixes protomers and no member was
+ * chosen: fanning out would put different protonation states into one ΔE
+ * table, which is the mistake the single-selection refusal exists to stop.
+ */
+export function fanOutMembersFor(node) {
+  if (!node || node.type !== 'conformers') return null;
+  const settings = conformerSettingsFor(node);
+  if (!settings.fanOut) return null;
+  const output = node.output && typeof node.output === 'object' ? node.output : null;
+  if (!output) return null;
+  const kept = (Array.isArray(output.members) ? output.members : [])
+    .filter((member) => member && member.kept === true
+      && /^c\d+$/.test(String(member.id || ''))
+      && Array.isArray(member.atoms) && member.atoms.length > 0);
+  if (kept.length === 0) return null;
+  const protomers = (Array.isArray(output.protomers) ? output.protomers : [])
+    .map((item) => String(item || ''))
+    .filter(Boolean);
+  const selectedId = String(output.selectedId || '');
+  if (output.requiresSelection === true || (protomers.length > 1 && !selectedId)) {
+    throw new Error(`"${node.title}" holds ${protomers.length > 1 ? protomers.length : 'several'} protomers`
+      + `${protomers.length > 0 ? ` (${protomers.join(', ')})` : ''}; choose the member to fan out instead of comparing protonation states.`);
+  }
+  // A chosen protomer bounds the fan-out: the other protonation states are not
+  // conformers of this one and must not share its ΔE table.
+  const selected = kept.find((member) => member.id === selectedId) || null;
+  const scope = selected && protomers.length > 1
+    ? kept.filter((member) => String(member.protomer || '') === String(selected.protomer || ''))
+    : kept;
+  const members = [];
+  const seen = new Set();
+  for (const member of scope) {
+    const id = String(member.id);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    members.push({
+      id,
+      rank: Number.isInteger(member.rank) ? member.rank : members.length + 1,
+      energyEh: Number.isFinite(member.energyEh) ? member.energyEh : null,
+      relativeKcal: Number.isFinite(member.relativeKcal) ? member.relativeKcal : 0,
+      population: Number.isFinite(member.population) ? member.population : 0,
+      protomer: String(member.protomer || ''),
+      atoms: member.atoms,
+    });
+  }
+  if (members.length === 0) return null;
+  return {
+    nodeId: node.id,
+    title: node.title,
+    generator: String(output.generator || ''),
+    method: String(output.method || ''),
+    spreadKcal: Number.isFinite(output.spreadKcal) ? output.spreadKcal : null,
+    count: members.length,
+    total: Number.isFinite(output.total) ? output.total : members.length,
+    temperature: settings.temperature,
+    members,
   };
 }
 
@@ -225,9 +298,9 @@ export function optConvergenceIssues(project, node) {
   ];
 }
 
-export function blockingValidityFinding(project, node, settings, molecule) {
+export function blockingValidityFinding(project, node, settings, molecule, conformerMember = null) {
   const engine = engineForNode(project, node);
-  const conformer = conformerForNode(project, node);
+  const conformer = conformerForNode(project, node, conformerMember);
   const result = runValidityChecks({
     settings,
     molecule,
@@ -249,9 +322,9 @@ export function blockingValidityFinding(project, node, settings, molecule) {
   return result.findings.find((finding) => finding.status === CHECK_STATUS.FAIL && blocking.has(finding.id)) || null;
 }
 
-export function validityForNode(project, node) {
-  const molecule = moleculeForNode(project, node);
-  const conformer = conformerForNode(project, node);
+export function validityForNode(project, node, conformerMember = null) {
+  const molecule = moleculeForNode(project, node, conformerMember);
+  const conformer = conformerForNode(project, node, conformerMember);
   return {
     settings: {
       jobType: node.settings.jobType,
@@ -277,7 +350,7 @@ export function validityForNode(project, node) {
 }
 
 /** The engine's input for one calculation node, exactly as it will be written. */
-export function buildRunInput(project, node, { taskId = node?.id, settingsOverride = null } = {}) {
+export function buildRunInput(project, node, { taskId = node?.id, settingsOverride = null, conformerMember = null } = {}) {
   const engine = engineForNode(project, node);
   // A ReadFC TS block without a usable checkpoint hand-off has nothing to read.
   const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node);
@@ -285,16 +358,16 @@ export function buildRunInput(project, node, { taskId = node?.id, settingsOverri
   const settings = settingsOverride || settingsForNode(project, node);
   // A spin-state sweep varies the multiplicity per task, and the multiplicity
   // is printed in the molecule block; an override has to reach it.
-  const baseMolecule = moleculeForNode(project, node);
+  const baseMolecule = moleculeForNode(project, node, conformerMember);
   const molecule = Number.isInteger(Number(settings.multiplicity)) && Number(settings.multiplicity) > 0
     ? { ...baseMolecule, multiplicity: Number(settings.multiplicity) }
     : baseMolecule;
-  const blocking = blockingValidityFinding(project, node, settings, molecule);
+  const blocking = blockingValidityFinding(project, node, settings, molecule, conformerMember);
   if (blocking) throw new Error(blocking.message || blocking.detail || `The ${blocking.id} check failed.`);
   // Issue #30: a block fed by a conformer ensemble may not run until a member
   // is chosen. Falling back to the project geometry would silently discard the
   // entire conformer stage, which is the error this feature exists to stop.
-  const conformer = conformerForNode(project, node);
+  const conformer = conformerForNode(project, node, conformerMember);
   if (conformer && !conformer.selected) {
     throw new Error(`"${conformer.title}" has no selected conformer. Run the ensemble and choose a member before running "${node.title}".`);
   }
@@ -342,14 +415,35 @@ export function buildWorkflowTasks(project) {
  * Dependencies expand to every rung; a checkpoint hand-off leaves only the
  * primary rung (the first one), because a downstream block reads one file and
  * picking a rung silently is exactly what a ladder must not do.
+ *
+ * A conformer block with `fanOut` on (#80) expands the other way: its stored
+ * ensemble's kept members each become one task (`<nodeId>~<memberId>`), and a
+ * calculation fed by that block becomes one task per member too. Edges between
+ * two blocks fanned out over the same ensemble pair member to member, so a
+ * member's branch never waits on a different member; an edge into a block that
+ * is not fanned (a merge, say) keeps every member as an input.
  */
 export function buildWorkflowPlan(project) {
   const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
   const tasks = [];
   const idsFor = new Map();
+  // Task id -> the fan-out it belongs to. Kept beside `idsFor` because the
+  // member is a property of the task, not of the block.
+  const fanOf = new Map();
+  const registerFan = (taskId, conformerId, memberId) => fanOf.set(taskId, { conformerId, memberId });
 
   for (const node of nodes) {
     if (node.type === 'conformers') {
+      const fanOut = fanOutMembersFor(node);
+      if (fanOut) {
+        const ids = fanOut.members.map((member) => `${node.id}~${member.id}`);
+        fanOut.members.forEach((member, index) => {
+          tasks.push(conformerMemberTask(project, node, { taskId: ids[index], member, ensemble: fanOut }));
+          registerFan(ids[index], node.id, member.id);
+        });
+        idsFor.set(node.id, ids);
+        continue;
+      }
       tasks.push(conformerTask(project, node));
       idsFor.set(node.id, [node.id]);
       continue;
@@ -375,8 +469,33 @@ export function buildWorkflowPlan(project) {
 
     const ladder = ladderRungs(node.settings);
     const spin = spinSweepFor(node.settings);
+    const conformerSource = conformerSourceFor(project, node);
+    const fanOut = conformerSource ? fanOutMembersFor(conformerSource) : null;
     if (ladder && spin) {
       throw new Error(`Block "${node.title}" has both a method ladder and a spin-state sweep; run one at a time.`);
+    }
+    if (fanOut && (ladder || spin)) {
+      throw new Error(`Block "${node.title}" has a method ladder${spin ? ' and a spin-state sweep' : ''} and a fanned-out conformer ensemble;`
+        + ' run the levels on a separate block instead of multiplying both expansions.');
+    }
+    if (fanOut) {
+      const ids = fanOut.members.map((member) => `${node.id}~${member.id}`);
+      fanOut.members.forEach((member, index) => {
+        tasks.push(calculationTask(project, node, {
+          taskId: ids[index],
+          conformerMember: member,
+          title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`,
+          fanOut: {
+            conformerId: fanOut.nodeId,
+            memberId: member.id,
+            count: fanOut.members.length,
+            spreadKcal: fanOut.spreadKcal,
+          },
+        }));
+        registerFan(ids[index], fanOut.nodeId, member.id);
+      });
+      idsFor.set(node.id, ids);
+      continue;
     }
     if (spin) {
       const spinIds = spin.multiplicities.map((multiplicity) => `${node.id}.m${multiplicity}`);
@@ -427,18 +546,78 @@ export function buildWorkflowPlan(project) {
   for (const edge of Array.isArray(project?.edges) ? project.edges : []) {
     const fromIds = idsFor.get(edge.from) || [];
     const toIds = idsFor.get(edge.to) || [];
-    const sources = edge.type === 'checkpoint' ? fromIds.slice(0, 1) : fromIds;
-    for (const from of sources) {
-      for (const to of toIds) edges.push({ ...edge, from, to });
+    if (edge.type === 'checkpoint') {
+      const fromFan = fanOf.get(fromIds[0]) || null;
+      const toFan = fanOf.get(toIds[0]) || null;
+      if (fromFan) {
+        // One checkpoint x N fanned-out runs has no honest reading: either the
+        // consumer is fanned out over the same ensemble and pairs by member, or
+        // the workflow is ambiguous and must say so before queueing.
+        if (!toFan || toFan.conformerId !== fromFan.conformerId) {
+          throw new Error(`The checkpoint hand-off from "${nodeById(project, edge.from)?.title || edge.from}" is fanned out over`
+            + ` ${fromIds.length} members, but "${nodeById(project, edge.to)?.title || edge.to}" would read one checkpoint.`
+            + ' Give the consumer its own dependency on the conformer block, or join the branches with a merge first.');
+        }
+        for (const from of fromIds) {
+          const memberId = fanOf.get(from)?.memberId;
+          const to = toIds.find((id) => fanOf.get(id)?.memberId === memberId);
+          if (to) edges.push({ ...edge, from, to });
+        }
+        continue;
+      }
+      for (const from of fromIds.slice(0, 1)) {
+        for (const to of toIds) edges.push({ ...edge, from, to });
+      }
+      continue;
+    }
+    for (const from of fromIds) {
+      for (const to of toIds) {
+        const a = fanOf.get(from) || null;
+        const b = fanOf.get(to) || null;
+        // Same ensemble on both ends: member c1 feeds member c1, never c2.
+        if (a && b && a.conformerId === b.conformerId && a.memberId !== b.memberId) continue;
+        edges.push({ ...edge, from, to });
+      }
     }
   }
 
   // A downstream task reads the checkpoint of the *primary* rung; record that
   // explicitly so the run record cannot imply it consumed the whole ladder.
+  // A fanned-out task reads the checkpoint of *its own member* instead, and the
+  // name has to be rebuilt because the member's task id is what the upstream
+  // run actually wrote.
   for (const task of tasks) {
     if (!task.checkpointFrom) continue;
-    const sourceIds = idsFor.get(task.checkpointFrom.nodeId) || [];
-    if (sourceIds.length > 0 && sourceIds[0] !== task.checkpointFrom.nodeId) {
+    const sourceBlockId = task.checkpointFrom.nodeId;
+    const sourceIds = idsFor.get(sourceBlockId) || [];
+    if (sourceIds.length === 0) continue;
+    const targetFan = fanOf.get(task.nodeId) || null;
+    const sourceFan = fanOf.get(sourceIds[0]) || null;
+    if (sourceFan && !targetFan) {
+      throw new Error(`"${task.title}" builds one run but its checkpoint source is fanned out over ${sourceIds.length} members.`
+        + ' Give the consumer its own dependency on the conformer block, or join the branches with a merge first.');
+    }
+    if (targetFan && sourceFan) {
+      if (sourceFan.conformerId !== targetFan.conformerId) {
+        throw new Error(`"${task.title}" is fanned out over one conformer ensemble but reads a checkpoint fanned out over another.`
+          + ' Connect both blocks to the same conformer block.');
+      }
+      const paired = sourceIds.find((id) => fanOf.get(id)?.memberId === targetFan.memberId);
+      if (!paired) {
+        throw new Error(`"${task.title}" has a member ${targetFan.memberId} with no matching checkpoint source task.`);
+      }
+      const sourceNode = nodeById(project, sourceBlockId);
+      task.checkpointFrom = {
+        ...task.checkpointFrom,
+        nodeId: paired,
+        ...(task.checkpointFrom.geometryOnly ? {} : {
+          checkpoint: checkpointNameFor(project, sourceNode, paired),
+        }),
+        fanOutMember: targetFan.memberId,
+      };
+      continue;
+    }
+    if (sourceIds[0] !== sourceBlockId) {
       task.checkpointFrom = { ...task.checkpointFrom, nodeId: sourceIds[0], ladderPrimary: true };
     }
   }
@@ -447,8 +626,16 @@ export function buildWorkflowPlan(project) {
   return { tasks, edges };
 }
 
-function calculationTask(project, node, { taskId, settingsOverride = null, title = null, ladder = null, spin = null }) {
-  const built = buildRunInput(project, node, { taskId, settingsOverride });
+function calculationTask(project, node, {
+  taskId,
+  settingsOverride = null,
+  title = null,
+  ladder = null,
+  spin = null,
+  conformerMember = null,
+  fanOut = null,
+}) {
+  const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember });
   const emissionFor = emissionContextFor(project, node, settingsOverride);
   return {
     nodeId: taskId,
@@ -464,7 +651,7 @@ function calculationTask(project, node, { taskId, settingsOverride = null, title
     inputText: built.inputText,
     settings: settingsOverride || settingsForNode(project, node),
     gates: gatesForNode(node),
-    validity: validityForNode(project, node),
+    validity: validityForNode(project, node, conformerMember),
     checkpointName: checkpointNameFor(project, node, taskId),
     checkpointFrom: checkpointSourceFor(project, node),
     // Emission (#75): a TD block whose geometry came from a block that relaxed
@@ -484,8 +671,66 @@ function calculationTask(project, node, { taskId, settingsOverride = null, title
       : {}),
     ...(ladder ? { ladder } : {}),
     ...(spin ? { spin } : {}),
+    ...(fanOut ? { fanOut } : {}),
     ...(emissionFor ? { emission: emissionFor } : {}),
     ...(built.conformer ? { conformer: built.conformer } : {}),
+  };
+}
+
+/**
+ * One retained member of a fanned-out conformer block (#80).
+ *
+ * The ensemble has already been searched and ranked — it is stored in the
+ * project — so this task does not search again. It exists so every member has
+ * its own branch, its own task id and its own folder: the queue materialises
+ * the member geometry into it and a downstream calculation reads that member
+ * explicitly.
+ */
+function conformerMemberTask(project, node, { taskId, member, ensemble }) {
+  const settings = conformerSettingsFor(node);
+  const molecule = project?.molecule || {};
+  const charge = Number.isInteger(node?.settings?.charge) ? node.settings.charge : Number(molecule.charge ?? 0);
+  const multiplicity = Number.isInteger(node?.settings?.multiplicity) ? node.settings.multiplicity : Number(molecule.multiplicity ?? 1);
+  const inputName = `${safeBase(taskId)}.xyz`;
+  return {
+    nodeId: taskId,
+    type: 'conformers',
+    title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`,
+    kind: node.kind || 'Conformers',
+    executable: true,
+    engine: null,
+    inputName,
+    outputName: 'member.xyz',
+    inputText: xyzText(member.atoms, `${node.title} · member ${member.id} · fan-out · charge ${charge} · multiplicity ${multiplicity}`),
+    gates: null,
+    validity: null,
+    checkpointFrom: null,
+    fanOut: {
+      conformerId: node.id,
+      memberId: member.id,
+      count: ensemble.members.length,
+      spreadKcal: ensemble.spreadKcal,
+    },
+    conformers: {
+      ...settings,
+      charge,
+      multiplicity,
+      argv: [],
+      member: {
+        id: member.id,
+        rank: member.rank,
+        parentId: node.id,
+        parentTitle: node.title,
+        generator: ensemble.generator,
+        method: ensemble.method,
+        energyEh: member.energyEh,
+        relativeKcal: member.relativeKcal,
+        population: member.population,
+        protomer: member.protomer,
+        spreadKcal: ensemble.spreadKcal,
+        temperature: ensemble.temperature,
+      },
+    },
   };
 }
 
