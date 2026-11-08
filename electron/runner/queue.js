@@ -668,8 +668,11 @@ export class QueueManager {
         queue.status = status;
         queue.finishedAt = new Date().toISOString();
         queue.currentTaskId = null;
-        await this.persist(queue);
+        // Emit before persisting: a poller that sees the finished status must
+        // already have been told the queue is done, otherwise the two views
+        // disagree for a moment and a listener can miss the last event.
         this.publish(queue, 'queue-done');
+        await this.persist(queue);
       } else if (!nextReadyTask(queue.tasks, queue.edges)) {
         this.stall(queue, new Error('The scheduler could not find a runnable task.'));
       }
@@ -1008,7 +1011,8 @@ export class QueueManager {
   stall(queue, error) {
     queue.status = 'needs-review';
     queue.reason = error instanceof Error ? error.message : String(error);
-    this.persist(queue).then(() => this.publish(queue, 'queue-done')).catch(() => {});
+    this.publish(queue, 'queue-done');
+    this.persist(queue).catch(() => {});
   }
 
   /* ── Control ───────────────────────────────────────────── */
