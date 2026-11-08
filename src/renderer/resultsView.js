@@ -23,6 +23,7 @@ import { buildKinetics, kineticsSummaryLine } from '../shared/kinetics.js';
 import { pkaCycle, pkaCycleLine, redoxCycle, redoxCycleLine } from '../shared/pka.js';
 import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
 import { mountSuperposition } from './superpositionCard.js';
+import { mountWavefunctionViewport } from './wavefunctionViewport.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
 import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
@@ -1610,6 +1611,7 @@ export function installResultsView({
 
   const consoleEl = container.closest('.run-console');
   let currentRecord = null;
+  let wavefunctionViewport = null;
   installStyles(doc);
 
   // The queue that produced the run is kept so a reaction path can be rendered
@@ -1641,6 +1643,8 @@ export function installResultsView({
       currentRecord = null;
       container.hidden = true;
       container.innerHTML = '';
+      wavefunctionViewport?.destroy();
+      wavefunctionViewport = null;
       consoleEl?.classList.remove('has-results');
       return;
     }
@@ -1651,6 +1655,11 @@ export function installResultsView({
     mountCompareBar(record);
     mountThermoEnsemble();
     mountSuperposition({ container, currentRecord: record, desktop, doc });
+    // The wavefunction viewport evaluates the basis this record carries (or a
+    // cube the user opens) into a slice or an isosurface. It mounts last so it
+    // can append its own wide card after the generated ones.
+    wavefunctionViewport?.destroy();
+    wavefunctionViewport = mountWavefunctionViewport({ container, record, desktop, doc });
   };
 
   /**

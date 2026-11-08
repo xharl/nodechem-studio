@@ -474,9 +474,11 @@ voxel each occurs at. From those it derives a HOMO/LUMO gap, the spin state impl
 alpha/beta counts, and a charge-sum check against the total charge.
 
 The numbers are summarised in the run record next to the file digests, and the dataset export gains
-a column group for them. Nothing is drawn from a cube yet — there is no isosurface, no ESP map and
-no QTAIM analysis. [Wavefunctions](wavefunction.md) describes the format, the units rule (a
-negative grid count means Å) and exactly what is deferred.
+a column group for them. The **Wavefunction view** card at the bottom of the results surface draws
+the field: a plane slice or an isosurface, evaluated from the basis the record carries, or from a
+`.cube` you open from the card. There is still no ESP colour map and no QTAIM analysis.
+[Wavefunctions](wavefunction.md) describes the format, the units rule (a negative grid count means
+Å), the angular conventions the renderer uses and exactly what is deferred.
 
 ## Methods text
 
