@@ -3786,13 +3786,6 @@ async function exportSelectedInput() {
 
 /* ── Event wiring ─────────────────────────────────────────── */
 
-function closeOverflow() {
-  const menu = $('#top-overflow');
-  const button = $('.overflow-btn');
-  if (menu) menu.hidden = true;
-  button?.setAttribute('aria-expanded', 'false');
-}
-
 /**
  * Bug-report helpers. The renderer contributes only the current project's
  * shape and engine defaults; the main process owns build, platform and run
@@ -4051,7 +4044,6 @@ function toggleAppMenu() {
   const menu = $('#app-menu');
   if (!menu) return;
   const opening = menu.hidden;
-  closeOverflow();
   closeExportMenu();
   if (!opening) {
     closeAppMenu();
@@ -4117,7 +4109,6 @@ async function toggleExportMenu() {
   const menu = $('#export-menu');
   if (!menu) return;
   const opening = menu.hidden;
-  closeOverflow();
   closeAppMenu();
   if (!opening) {
     closeExportMenu();
@@ -4136,20 +4127,8 @@ async function toggleExportMenu() {
   menu.querySelector('.overflow-item')?.focus();
 }
 
-function toggleOverflow() {
-  const menu = $('#top-overflow');
-  const button = $('.overflow-btn');
-  if (!menu || !button) return;
-  closeAppMenu();
-  closeExportMenu();
-  menu.hidden = !menu.hidden;
-  button.setAttribute('aria-expanded', String(!menu.hidden));
-  if (!menu.hidden) menu.querySelector('button')?.focus();
-}
-
 function handleAction(action, element) {
   switch (action) {
-    case 'toggle-overflow': toggleOverflow(); break;
     case 'toggle-app-menu': toggleAppMenu(); break;
     case 'toggle-export-menu': toggleExportMenu(); break;
     case 'quit': window.close(); break;
@@ -4250,26 +4229,18 @@ function handleAction(action, element) {
 }
 
 function onDocumentClick(event) {
-  const overflow = $('#top-overflow');
-  if (overflow && !overflow.hidden && !event.target.closest('.top-overflow-wrap')) {
-    closeOverflow();
-  }
-
   const actionEl = event.target.closest('[data-action]');
   if (actionEl) handleAction(actionEl.dataset.action, actionEl);
 
   // A command chosen from one of the dropdowns closes it; a click anywhere
   // outside closes the dropdown that owns the click target.
-  if (actionEl?.closest('#app-menu, #export-menu, #top-overflow')) {
+  if (actionEl?.closest('#app-menu, #export-menu')) {
     closeAppMenu();
     closeExportMenu();
-    closeOverflow();
   } else {
     if (!event.target.closest('.brand-wrap')) closeAppMenu();
     if (!event.target.closest('.export-wrap')) closeExportMenu();
   }
-
-  if (event.target.closest('#top-overflow')) closeOverflow();
 
   const nodeButton = event.target.closest('[data-select-node]');
   if (nodeButton) selectNode(nodeButton.dataset.selectNode);
@@ -4555,7 +4526,6 @@ function wireEvents() {
       if (state.drawer) { closeDrawer(); return; }
       if (!$('#app-menu')?.hidden) { closeAppMenu(); return; }
       if (!$('#export-menu')?.hidden) { closeExportMenu(); return; }
-      if (!$('#top-overflow')?.hidden) { closeOverflow(); return; }
       if (state.paletteOpen) { togglePalette(false); return; }
       if (!$('#run-console')?.hidden) { closeRunConsole(); return; }
       if (state.keyboardConnect) { cancelKeyboardConnect(); return; }

@@ -107,8 +107,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .save-pill.is-dirty { color: var(--kind-condition); border-color: color-mix(in srgb, var(--kind-condition) 38%, var(--tone-blue-71a)); }
 .save-pill.is-dirty .dot { background: var(--kind-condition); }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.top-overflow-wrap { position: relative; display: block; }
-.overflow-btn { display: none; font-size: var(--text-size-lg); line-height: 1; padding-bottom: 2px; }
 .top-overflow {
   position: absolute; top: 40px; right: 0; z-index: 90;
   min-width: 210px; padding: 5px;
@@ -118,7 +116,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: flex; flex-direction: column; gap: 2px;
 }
 .top-overflow[hidden] { display: none; }
-.app-menu { top: 42px; left: 0; right: auto; min-width: 220px; }
+.app-menu { top: 42px; left: 0; right: auto; min-width: 220px; max-height: calc(100vh - 70px); overflow-y: auto; }
 .export-wrap { position: relative; display: block; }
 .export-menu { top: 38px; right: 0; left: auto; min-width: 268px; }
 .overflow-note { padding: 8px 9px; color: var(--text-tertiary); font-size: var(--text-size-xs); line-height: 1.5; }
@@ -128,6 +126,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   background: transparent; color: var(--text-primary); font: inherit; font-size: var(--text-size-xs); cursor: pointer;
 }
 .overflow-item:hover, .overflow-item:focus-visible { background: var(--tone-blue-101a); outline: none; }
+.overflow-split { height: 1px; margin: 4px 6px; background: var(--tone-blue-71a); }
+.overflow-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 9px; color: var(--text-secondary); font-size: var(--text-size-xs); white-space: nowrap; }
+.overflow-field .select { width: auto; min-width: 132px; height: 26px; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -1310,7 +1311,6 @@ kbd {
   .run-output { max-height: 180px; }
 }
 @media (max-width: 820px) {
-  .top-overflow-wrap, .overflow-btn { display: block; }
   .top-actions .btn.ghost { display: none; }
 }
 

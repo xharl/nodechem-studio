@@ -36,9 +36,21 @@
         <button class="overflow-item" data-action="redo" id="app-menu-redo">Redo</button>
         <div class="overflow-split" aria-hidden="true"></div>
         <button class="overflow-item" data-open-modal="molecule">Molecule &amp; defaults</button>
+        <button class="overflow-item" data-action="import-log-directory">Batch import logs…</button>
+        <button class="overflow-item" data-action="cluster" data-cluster-op="import">Import cluster results</button>
         <button class="overflow-item" data-action="copy-diagnostics">Copy diagnostics</button>
         <button class="overflow-item" data-action="save-diagnostics">Save diagnostics…</button>
         <button class="overflow-item" data-action="check-updates">Check for updates…</button>
+        <div class="overflow-split" aria-hidden="true"></div>
+        <label class="overflow-field">
+          <span>Theme</span>
+          <select class="select" id="theme-select" aria-label="Theme">
+            <option value="system">Match system</option>
+            <option value="current">Current</option>
+            <option value="graphite">Graphite</option>
+            <option value="paper">Paper</option>
+          </select>
+        </label>
         <div class="overflow-split" aria-hidden="true"></div>
         <button class="overflow-item" data-action="about">About NodeChem Studio</button>
         <button class="overflow-item" data-action="quit">Quit</button>
@@ -64,12 +76,6 @@
       <button class="btn ghost" data-action="new-project" title="Start a new project from a workflow template">
         New
       </button>
-      <button class="btn ghost" data-action="open-project" title="Open a .ncs project">
-        Open
-      </button>
-      <button class="btn ghost" data-action="save-project" title="Save this project">
-        Save
-      </button>
       <button class="btn ghost" data-open-modal="molecule">
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="12" cy="12" r="2"/><path d="m5.8 7.2 4.4-2.4M5.8 8.8l4.4 2.4"/></svg>
         Molecule
@@ -84,29 +90,6 @@
           <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
         </button>
         <div class="top-overflow export-menu" id="export-menu" hidden role="menu" aria-labelledby="export-menu-btn"></div>
-      </div>
-      <div class="top-overflow-wrap">
-        <button class="icon-btn overflow-btn" data-action="toggle-overflow" aria-haspopup="true" aria-expanded="false" aria-controls="top-overflow" title="More actions" aria-label="More actions">⋯</button>
-        <div class="top-overflow" id="top-overflow" hidden>
-          <button class="overflow-item" data-action="open-project">Open project…</button>
-          <button class="overflow-item" data-action="save-project">Save project</button>
-          <button class="overflow-item" data-open-modal="molecule">Molecule &amp; defaults</button>
-          <button class="overflow-item" data-action="import-log-directory">Batch import logs…</button>
-          <button class="overflow-item" data-action="cluster" data-cluster-op="import">Import cluster results</button>
-          <button class="overflow-item" data-action="copy-diagnostics">Copy diagnostics</button>
-          <button class="overflow-item" data-action="save-diagnostics">Save diagnostics…</button>
-          <button class="overflow-item" data-action="check-updates">Check for updates…</button>
-          <div class="overflow-split" aria-hidden="true"></div>
-          <label class="overflow-field">
-            <span>Theme</span>
-            <select class="select" id="theme-select" aria-label="Theme">
-              <option value="system">Match system</option>
-              <option value="current">Current</option>
-              <option value="graphite">Graphite</option>
-              <option value="paper">Paper</option>
-            </select>
-          </label>
-        </div>
       </div>
       <button class="btn primary" data-action="open-run-console" title="Run the selected calculation">
         Run
