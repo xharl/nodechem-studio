@@ -27,9 +27,17 @@ function integer(value) {
   return Number.isInteger(number) ? number : null;
 }
 
+const SUPPORTED_EXTENSIONS = Object.freeze(['xyz', 'mol', 'sdf', 'gjf', 'com']);
+const PENDING_EXTENSIONS = Object.freeze(['mol2', 'pdb', 'ent', 'pdbqt', 'cjson']);
+
 function formatFor(filename, text) {
   const extension = String(filename).toLowerCase().split('.').pop();
-  if (['xyz', 'mol', 'sdf', 'gjf', 'com'].includes(extension)) return extension;
+  if (SUPPORTED_EXTENSIONS.includes(extension)) return extension;
+  // Sniff before the Gaussian heuristic: a MOL2 begins with `#` comment lines,
+  // which used to make it look like a .gjf route section.
+  if (/@<TRIPOS>MOLECULE/i.test(text)) return 'mol2';
+  if (/^(ATOM  |HETATM)/m.test(text)) return 'pdb';
+  if (PENDING_EXTENSIONS.includes(extension)) return extension;
   if (/^\s*\d+\s*\r?\n/.test(text) && /\b\d+\s*\r?\n/.test(text)) return 'xyz';
   if (/V2000|V3000|\$\$\$\$/i.test(text)) return 'mol';
   if (/^\s*%|^\s*#/m.test(text)) return 'gjf';
@@ -336,6 +344,17 @@ export function parseStructureRecords(text, { filename = '' } = {}) {
   return { format: single.format, records: [single] };
 }
 
+/**
+ * Formats the reader does not implement yet. Naming the format and the tracking
+ * issue is more useful than "Unrecognised structure format", which suggests the
+ * file is broken rather than the reader being incomplete.
+ */
+function pendingFormatError(format) {
+  const names = { mol2: 'MOL2', pdb: 'PDB', ent: 'PDB', pdbqt: 'PDBQT', cjson: 'cJSON' };
+  return new StructureError(`${names[format] || format.toUpperCase()} import is not implemented yet (#79). `
+    + 'Convert the file to .xyz, .mol or .sdf for now — the coordinates are Cartesian in all of them.');
+}
+
 function periodicError(filename, periodic) {
   return new StructureError(`Periodic systems are not supported: ${filename || `this .${periodic} file`} describes a unit cell, not a molecule. `
     + 'NodeChem Studio drives molecular Gaussian and xTB jobs — there is no unit cell, k-point sampling '
@@ -362,6 +381,7 @@ export function parseStructure(text, { filename = '' } = {}) {
       parsed.warnings = [...(parsed.warnings || []), `The file contains ${recordCount} records; record 1 is loaded. Use the record picker to choose another.`];
     }
   } else if (format === 'gjf' || format === 'com') parsed = parseGjf(lines);
+  else if (PENDING_EXTENSIONS.includes(format)) throw pendingFormatError(format);
   else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com.');
 
   return finalize({ ...parsed, format });
