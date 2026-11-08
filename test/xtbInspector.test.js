@@ -10,7 +10,7 @@ import {
   buildXtbInput,
   xtbSolvationFromArgv,
 } from '../src/shared/engines/xtb.js';
-import { calcInspectorFieldIds, runSettingsFor } from '../src/renderer/inspectorFields.js';
+import { calcInspectorFieldIds, runSettingsFor, showsCheckpointHandoff } from '../src/renderer/inspectorFields.js';
 import { XtbRunner } from '../electron/runner/xtbRunner.js';
 import { RunManager } from '../electron/runner/runManager.js';
 
@@ -471,5 +471,25 @@ describe('rendered constraint and QST editors (#93)', () => {
       expect(html).toContain('Structure 3 · initial TS');
       expect(html).toContain('needs 2 extra structures');
     });
+  });
+});
+
+
+describe('Psi4 inspector contract', () => {
+  it('offers its own method and basis, and none of the Gaussian route fields', () => {
+    const fields = calcInspectorFieldIds('psi4', { jobType: 'SP' });
+    expect(fields).toContain('method.method');
+    expect(fields).toContain('method.basis');
+    expect(fields).toContain('job.reference');
+    for (const gaussianOnly of ['method.dispersion', 'method.grid', 'method.population', 'solvation.enabled',
+      'job.checkpoint', 'dependencies.checkpointFrom', 'keywords.custom', 'method.tdStates']) {
+      expect(fields).not.toContain(gaussianOnly);
+    }
+  });
+
+  it('never offers solvation or a checkpoint hand-off to a Psi4 block', () => {
+    expect(showsCheckpointHandoff('psi4')).toBe(false);
+    expect(showsCheckpointHandoff('orca')).toBe(true);
+    expect(showsCheckpointHandoff('gaussian')).toBe(true);
   });
 });

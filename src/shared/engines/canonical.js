@@ -79,6 +79,9 @@ export function canonicalResult({
   frequencies = {},
   thermochemistry = {},
   finalEnergy = {},
+  // SAPT's interaction-energy table, when the engine produced one. Kept out of
+  // `finalEnergy` on purpose: it is not a total energy for the complex.
+  sapt = null,
   extras = {},
   lineCount = 0,
 } = {}) {
@@ -142,6 +145,7 @@ export function canonicalResult({
       hartree: finiteOrNull(finalEnergy.hartree),
       source: finalEnergy.source ? String(finalEnergy.source) : null,
     },
+    ...(sapt && typeof sapt === 'object' ? { sapt } : {}),
     extras: extras && typeof extras === 'object' ? extras : {},
     lineCount: Number.isFinite(lineCount) ? lineCount : 0,
   };

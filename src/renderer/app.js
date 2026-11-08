@@ -58,6 +58,7 @@ import {
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import { buildOrcaInput } from '../shared/engines/orca.js';
+import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../shared/engines/psi4.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
@@ -1539,6 +1540,7 @@ function calcInspector(node) {
   const checkpointSource = node.checkpointFrom ? nodeById(node.checkpointFrom) : null;
   const engine = engineForNode(state.project, node);
   const isXtb = engine.id === 'xtb';
+  const isPsi4 = engine.id === 'psi4';
   const gaussianResources = showsGaussianResources(engine.id);
   const checkpointHandoff = showsCheckpointHandoff(engine.id);
   const routeLines = [];
@@ -1567,12 +1569,28 @@ function calcInspector(node) {
     } catch (error) {
       routeLines.push(`ORCA cannot run this block: ${esc(error.message)}`);
     }
+  } else if (engine.id === 'psi4') {
+    // Psi4 reads Psithon code, not a Gaussian route. Show the script the
+    // builder would actually write, or the reason it refuses to write one.
+    try {
+      const built = buildPsi4Input({
+        title: node.title,
+        settings: s,
+        molecule: moleculeForNode(node),
+        inputName: `${node.id}.dat`,
+      });
+      routeLines.push(...built.inputText.split('\n')
+        .filter((line) => line.startsWith('set ') || /^(energy|optimize|frequencies)\(/.test(line))
+        .slice(0, 6)
+        .map(esc));
+    } catch (error) {
+      routeLines.push(`Psi4 cannot run this block: ${esc(error.message)}`);
+    }
   } else {
     routeLines.push(`%Chk=${esc(s.checkpoint || chkName(node.id))}`);
     if (checkpointSource) routeLines.push(`%OldChk=${esc(chkName(checkpointSource.id))}`);
     routeLines.push(routeFull(s));
   }
-
   let callout = '';
   if (node.state === 'blocked') {
     const waiting = ins.map((edge) => nodeById(edge.from)).find((item) => item && item.state !== 'passed');
@@ -1622,9 +1640,9 @@ function calcInspector(node) {
       ['', `Project default (${engineOrDefault(state.project?.defaults?.engine).label})`],
       ...Object.values(ENGINES).map((entry) => [entry.id, entry.label]),
     ], s.engine ?? ''),
-    selectField('Job type', 'jobType', JOB_TYPES, s.jobType),
-    !isXtb && s.jobType === 'IRC' ? selectField('IRC direction', 'ircDirection', IRC_DIRECTIONS, s.ircDirection) : '',
-    !isXtb && isOptJob(s.jobType)
+    selectField('Job type', 'jobType', isPsi4 ? PSI4_JOB_TYPES.map((id) => [id, id === 'Freq' ? 'Frequency' : id === 'Opt' ? 'Optimization' : id === 'SP' ? 'Single point' : id]) : JOB_TYPES, s.jobType),
+    !isXtb && !isPsi4 && s.jobType === 'IRC' ? selectField('IRC direction', 'ircDirection', IRC_DIRECTIONS, s.ircDirection) : '',
+    !isXtb && !isPsi4 && isOptJob(s.jobType)
       ? selectField(
         'Optimization convergence',
         'optConvergence',
@@ -1632,13 +1650,14 @@ function calcInspector(node) {
         optConvergenceFor(s),
       )
       : '',
-    !isXtb ? tsForceField : '',
+    !isXtb && !isPsi4 ? tsForceField : '',
+    isPsi4 ? selectField('SCF reference', 'reference', [['', 'Auto (from multiplicity)'], ['rhf', 'RHF'], ['uhf', 'UHF'], ['rohf', 'ROHF']], s.reference || '') : '',
     gaussianResources ? `<div class="field"><label>Memory</label><div class="field-row">
       <input class="input" type="number" min="1" max="512" aria-label="Memory" data-node-field="memory" value="${esc(s.memory)}">
       <select class="select" aria-label="Memory unit" data-node-field="memoryUnit">${MEMORY_UNITS.map(([value, label]) => `<option value="${value}"${s.memoryUnit === value ? ' selected' : ''}>${label}</option>`).join('')}</select>
     </div></div>` : '',
     gaussianResources ? inputField('Cores (nproc)', 'nproc', s.nproc, { type: 'number', min: 1, max: 256 }) : '',
-    gaussianResources ? inputField('Checkpoint file', 'checkpoint', s.checkpoint || chkName(node.id), { full: true }) : '',
+    !isPsi4 && gaussianResources ? inputField('Checkpoint file', 'checkpoint', s.checkpoint || chkName(node.id), { full: true }) : '',
     !gaussianResources
       ? '<div class="field full"><span class="inspector-note">xTB writes <code>xtbrestart</code> in the run folder; a checkpoint hand-off copies that file.</span></div>'
       : '',
@@ -1678,6 +1697,29 @@ function calcInspector(node) {
         : 'Prints the orbital eigenvalues, so the results panel can report HOMO, LUMO, gap, IP, EA, hardness, softness and electrophilicity.')
       + '</span></div>',
     selectField('Output verbosity', 'verbosity', VERBOSITY, s.verbosity),
+  ].join(''));
+
+  // Psi4 is the second code engine: its methods, bases and job list are its
+  // own, and every Gaussian route field is refused by name. The group below
+  // shows only what the Psithon builder actually writes.
+  const psi4MethodEntry = PSI4_METHODS.find((entry) => entry.key === String(s.method || '').toLowerCase())
+    || PSI4_METHODS.find((entry) => entry.key === 'b3lyp');
+  const psi4BasisEntry = PSI4_BASES.find((entry) => entry.key === String(s.basis || '').toLowerCase())
+    || PSI4_BASES[0];
+  const psi4MethodGroup = group('Method & basis', `${psi4MethodEntry.label}/${psi4BasisEntry.label}`, true, [
+    selectField('Method', 'method', PSI4_METHODS.map((entry) => [entry.key, entry.label]), psi4MethodEntry.key),
+    selectField('Basis set', 'basis', PSI4_BASES.map((entry) => [entry.key, entry.label]), psi4BasisEntry.key),
+    '<div class="field full"><span class="inspector-note">Psi4 reads Psithon code. Every input writes <code>set basis</code>, '
+      + '<code>set reference</code> and <code>set scf_type df</code>; dispersion comes from the functional name '
+      + '(ωB97X-D, B97-D), never from a keyword.</span></div>',
+    psi4MethodEntry.kind === 'sapt'
+      ? '<div class="field full"><span class="inspector-note"><strong>SAPT0 is a single-point energy</strong> and reports an '
+        + 'interaction energy for the fragments, not a total energy for the complex. The molecule must carry at least two fragments.</span></div>'
+      : '',
+    (psi4MethodEntry.key === 'ccsd' || psi4MethodEntry.key === 'ccsd(t)')
+      ? '<div class="field full"><span class="inspector-note">CCSD and CCSD(T) have no analytic Hessian in Psi4: '
+        + 'Freq and Opt Freq are refused for these methods.</span></div>'
+      : '',
   ].join(''));
 
   // Issue #60: TD-DFT is a route keyword on a wavefunction job. The group is
@@ -1821,16 +1863,16 @@ function calcInspector(node) {
     ${jobGroup}
     ${constraintGroup}
     ${qstEditor}
-    ${isXtb ? xtbGroup : compositeJob ? compositeNote : methodGroup}
-    ${isXtb || compositeJob ? '' : excitedGroup}
-    ${isXtb || compositeJob ? '' : ramanGroup}
-    ${isXtb ? xtbSolvationGroup : compositeJob ? '' : gaussianSolvationGroup}
+    ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : compositeJob ? compositeNote : methodGroup}
+    ${isXtb || isPsi4 || compositeJob ? '' : excitedGroup}
+    ${isXtb || isPsi4 || compositeJob ? '' : ramanGroup}
+    ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : gaussianSolvationGroup}
     ${moleculeGroup}
     ${gatesGroup}
     ${isXtb ? '' : validityGroup}
     ${dependencyGroup}
     ${outputGroup}
-    ${isXtb ? '' : extraGroup}
+    ${isXtb || isPsi4 ? '' : extraGroup}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
       <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
@@ -2676,6 +2718,40 @@ function updateNodeField(node, key, value) {
       // A QST search is a saddle search: the gate that judges it must expect one
       // imaginary mode, exactly as a TS block does.
       if (qstKindFor(value) && !node.settings.gates?.imaginary) node.settings.gates.imaginary = 1;
+    } else if (key === 'engine') {
+      node.settings.engine = value;
+      const resolved = value || state.project?.defaults?.engine || 'gaussian';
+      if (resolved === 'psi4') {
+        // Psi4 is a code engine with its own closed method, basis and job list.
+        // Carry no Gaussian route field into it: the builder refuses each one by
+        // name and the inspector hides them, so a stale value would be unfixable.
+        if (!PSI4_JOB_TYPES.includes(node.settings.jobType)) node.settings.jobType = 'SP';
+        if (!PSI4_METHODS.some((entry) => entry.key === String(node.settings.method || '').toLowerCase())) {
+          node.settings.method = 'b3lyp';
+        }
+        if (!PSI4_BASES.some((entry) => entry.key === String(node.settings.basis || '').toLowerCase())) {
+          node.settings.basis = 'def2-svp';
+        }
+        node.settings.dispersion = '';
+        node.settings.solvation = false;
+        node.settings.checkpoint = '';
+        node.settings.population = '';
+        node.settings.orbitals = false;
+        node.settings.raman = false;
+        node.settings.grid = '';
+        node.settings.scf = '';
+        node.settings.tdStates = 0;
+        node.settings.tdTriplets = '';
+        node.settings.customKeywords = '';
+        node.settings.stableOpt = false;
+        node.kind = kindForJob(node.settings.jobType);
+      } else if (resolved === 'gaussian' && node.settings.method
+        && !METHODS.some(([id]) => String(id).toLowerCase() === String(node.settings.method).toLowerCase())) {
+        // Coming back from Psi4, a lowercase Psi4 method is not a Gaussian route.
+        node.settings.method = state.project?.defaults?.method || MODERN_ROUTE_PRESET.method;
+        node.settings.basis = state.project?.defaults?.basis || MODERN_ROUTE_PRESET.basis;
+        node.settings.dispersion = defaultDispersionFor(node.settings.method);
+      }
     } else if (key === 'method') {
       node.settings.method = value;
       node.settings.dispersion = dispersionForMethodChange(value, node.settings.dispersion);
@@ -3246,7 +3322,20 @@ function renderDrawer() {
         ${draft.fragments.map((fragment, index) => `<div class="fragment-row"><span class="frag-label">Fragment ${index + 1}</span><input class="input" data-drawer-fragment="${index}" aria-label="Fragment ${index + 1}" value="${esc(fragment)}"></div>`).join('')}
         <button type="button" class="btn small" data-action="add-fragment">Add fragment</button>
       </div>
-      <div class="callout"><strong>Fragment order</strong> maps to <code>Fragment=N</code> in the exported route. Fragment labels are metadata; the atom partition comes from the geometry.</div>`;
+      <div class="form-section" style="margin-top:14px">
+        <div class="section-label">Atom partition <span class="group-meta">read by Psi4 SAPT</span></div>
+        ${draft.coords.length
+    ? draft.coords.map((atom, index) => `<div class="fragment-row">
+          <span class="frag-label">${index + 1}. ${esc(atom.element)}</span>
+          <select class="select" data-atom-fragment="${index}" aria-label="Fragment for atom ${index + 1}">
+            <option value="0"${Number(atom.fragment) > 0 ? '' : ' selected'}>unlabelled</option>
+            ${draft.fragments.map((_, fragmentIndex) => `<option value="${fragmentIndex + 1}"${Number(atom.fragment) === fragmentIndex + 1 ? ' selected' : ''}>fragment ${fragmentIndex + 1}</option>`).join('')}
+          </select>
+        </div>`).join('')
+    : '<p class="field-hint">Import a geometry first: the partition lists one row per atom.</p>'}
+        <p class="field-hint">Psi4 SAPT0 splits the complex at these labels. Other engines ignore them; a complex without labels cannot run SAPT.</p>
+      </div>
+      <div class="callout"><strong>Fragment order</strong> maps to <code>Fragment=N</code> in the exported route; the atom partition below is what splits the geometry.</div>`;
   } else {
     const engineId = engineOrDefault(draft.engine).id;
     const isXtb = engineId === 'xtb';
@@ -3327,6 +3416,9 @@ function saveMolecule() {
     x: atom.x,
     y: atom.y,
     z: atom.z,
+    // A fragment label is part of the molecule, not a view detail: Psi4's SAPT
+    // builder splits the complex on it, so saving the geometry must keep it.
+    ...(Number(atom.fragment) > 0 ? { fragment: Number(atom.fragment) } : {}),
   }));
   // Topology stated by the imported file rides with the molecule; an empty
   // list is omitted so nothing implies "no bonds".
@@ -3625,13 +3717,20 @@ function buildInputForNode(node) {
   return buildRunInput(node).inputText;
 }
 
-/** Point the run-console copy at the engine the project will actually use. */
+/** Point the run-console copy at the engine the selected block will run. */
 function updateRunConsoleCopy() {
-  const engineId = engineOrDefault(state.project?.defaults?.engine).id;
+  const engineId = activeRunEngineId();
   const label = $('#run-exe-label');
   if (label) label.textContent = executableLabelFor(engineId);
   const executable = $('#run-exe');
-  if (executable) executable.placeholder = executablePlaceholderFor(engineId);
+  if (executable) {
+    executable.placeholder = executablePlaceholderFor(engineId);
+    // Follow the selected block's engine, but never overwrite a path the user
+    // is typing into the field right now.
+    if (document.activeElement !== executable) {
+      executable.value = storedExecutables()[engineId] || '';
+    }
+  }
   const hint = $('#run-hint');
   if (hint && desktop) {
     hint.textContent = dryRunHintFor(engineId);
@@ -3733,22 +3832,62 @@ function renderRunGates(gates = [], validity = null) {
 // Persisted preference key for the run console.
 const RUN_CONFIG_STORAGE_KEY = 'nodechem-studio.run-config';
 
-function readRunConfig() {
+/**
+ * One executable per engine, not one per app (#98 follow-up).
+ *
+ * A project can mix engines — an xTB optimisation feeding a Psi4 single point —
+ * and each task must be launched with its own binary. The field under the run
+ * console therefore shows the engine of the selected block (or the project
+ * default), and every path is stored per engine so a mixed flow has them all.
+ */
+function storedRunConfig() {
   try {
-    const saved = JSON.parse(localStorage.getItem(RUN_CONFIG_STORAGE_KEY) || '{}');
-    if (saved.executable) $('#run-exe').value = saved.executable;
-    if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
-    if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
-    if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
+    return JSON.parse(localStorage.getItem(RUN_CONFIG_STORAGE_KEY) || '{}');
   } catch {
-    // A corrupt preference must not block the app.
+    return {};
   }
+}
+
+function storedExecutables() {
+  const saved = storedRunConfig();
+  const map = saved.executables && typeof saved.executables === 'object' ? { ...saved.executables } : {};
+  // Migrate the single-path shape written by earlier builds.
+  if (!saved.executables && saved.executable) map[engineOrDefault(state.project?.defaults?.engine).id] = saved.executable;
+  return map;
+}
+
+/** The engine whose executable the console's single field is editing. */
+function activeRunEngineId() {
+  const selected = state.selected?.type === 'node' ? nodeById(state.selected.id) : null;
+  if (selected && selected.type === 'calc') return engineForNode(state.project, selected).id;
+  return engineOrDefault(state.project?.defaults?.engine).id;
+}
+
+function runExecutables() {
+  const map = storedExecutables();
+  const engineId = activeRunEngineId();
+  const field = $('#run-exe');
+  if (field) {
+    const typed = field.value.trim();
+    if (typed) map[engineId] = typed;
+    else delete map[engineId];
+  }
+  return map;
+}
+
+function readRunConfig() {
+  const saved = storedRunConfig();
+  if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
+  if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
+  if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
+  const field = $('#run-exe');
+  if (field) field.value = storedExecutables()[activeRunEngineId()] || '';
 }
 
 function saveRunConfig() {
   try {
     localStorage.setItem(RUN_CONFIG_STORAGE_KEY, JSON.stringify({
-      executable: $('#run-exe').value.trim(),
+      executables: runExecutables(),
       crestExecutable: $('#run-crest').value.trim(),
       scratchDir: $('#run-scratch').value.trim(),
       dryRun: $('#run-dry').checked,
@@ -3761,7 +3900,7 @@ function saveRunConfig() {
 async function pickGaussian() {
   if (!desktop) { toast('Open the Electron app to choose an executable.'); return; }
   try {
-    const engine = engineOrDefault(state.project?.defaults?.engine);
+    const engine = engineOrDefault(activeRunEngineId());
     const selected = await desktop.pickExecutable({ engine: engine.id });
     if (selected) {
       $('#run-exe').value = selected;
@@ -3849,8 +3988,10 @@ async function preflightRun({ quiet = false } = {}) {
   }
   saveRunConfig();
   const config = {
-    engine: engineOrDefault(state.project?.defaults?.engine).id,
-    executable: $('#run-exe').value.trim(),
+    // Preflight names the engine the selected block will run, not the project
+    // default: a Psi4 block in an xTB-default project must not be checked as xTB.
+    engine: engineOrDefault(activeRunEngineId()).id,
+    executable: runExecutables()[activeRunEngineId()] || '',
     scratchDir: $('#run-scratch').value.trim(),
     dryRun: $('#run-dry').checked,
   };
@@ -3893,6 +4034,41 @@ async function preflightRun({ quiet = false } = {}) {
           },
         ],
       };
+    }
+  }
+  // A mixed flow launches one binary per engine, so preflight every engine the
+  // plan needs, not only the selected block's. The queue enforces this too; the
+  // point here is to say it before the user presses Run.
+  if (!config.dryRun) {
+    try {
+      const plan = shared.buildWorkflowPlan(state.project);
+      const others = [...new Set(plan.tasks
+        .filter((task) => task.executable && task.type === 'calc')
+        .map((task) => String(task.engine || 'gaussian')))]
+        .filter((engineId) => engineId !== config.engine);
+      const map = runExecutables();
+      for (const engineId of others) {
+        const engine = engineOrDefault(engineId);
+        const path = String(map[engineId] || '').trim();
+        let ok = Boolean(path);
+        let detail = path || 'not chosen — this flow has a block on this engine';
+        if (path) {
+          const probe = await desktop.preflight({ ...config, engine: engineId, executable: path });
+          const found = (Array.isArray(probe.checks) ? probe.checks : []).find((check) => check.id === 'executable');
+          ok = found ? found.ok : Boolean(probe.ok);
+          detail = found ? found.detail : path;
+        }
+        result = {
+          ...result,
+          ok: result.ok && ok,
+          checks: [
+            ...(Array.isArray(result.checks) ? result.checks : []),
+            { id: `engine-${engineId}`, label: `${engine.label} executable`, ok, detail },
+          ],
+        };
+      }
+    } catch {
+      // An unbuildable plan is reported by the queue; nothing to add here.
     }
   }
   appendRunOutput(formatPreflightReport(result));
@@ -3949,7 +4125,7 @@ async function startSelectedRun() {
       inputName: built.inputName,
       outputName: built.outputName,
       settings: settingsForNode(node),
-      executable: $('#run-exe').value.trim(),
+      executable: runExecutables()[built.engine] || '',
       crestExecutable: $('#run-crest').value.trim(),
       scratchDir: $('#run-scratch').value.trim(),
       dryRun,
@@ -4016,7 +4192,7 @@ async function startSelectedConformerRun(node) {
       edges: [],
       options: {
         dryRun,
-        executable: $('#run-exe').value.trim(),
+        executable: runExecutables()[engineForNode(state.project, node).id] || '',
         crestExecutable,
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
@@ -4225,7 +4401,7 @@ async function startWorkflowUnlocked() {
       edges,
       options: {
         dryRun,
-        executable: $('#run-exe').value.trim(),
+        executables: runExecutables(),
         crestExecutable: $('#run-crest').value.trim(),
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
@@ -5494,6 +5670,15 @@ function onDocumentChange(event) {
   }
   if (target.dataset.drawerFragment !== undefined && state.drawer) {
     state.drawer.draft.fragments[Number(target.dataset.drawerFragment)] = target.value;
+  }
+  if (target.dataset.atomFragment !== undefined && state.drawer) {
+    const index = Number(target.dataset.atomFragment);
+    const value = Number(target.value);
+    const atom = state.drawer.draft.coords[index];
+    if (atom) {
+      if (Number.isInteger(value) && value > 0) atom.fragment = value;
+      else delete atom.fragment;
+    }
   }
 }
 

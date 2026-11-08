@@ -173,10 +173,38 @@ export function psi4SettingsOffenders(settings = {}) {
   const offenders = [];
   const text = (value) => oneLine(value);
 
-  if (text(settings.solvation) || text(settings.solvent)) {
+  // `solvation` is a boolean in the schema, so the guard has to test the value:
+  // `String(false)` is "false", which is truthy, and a solvent name is a field
+  // the schema always fills ('Water') whether or not solvation was asked for.
+  // Testing their text refused every Psi4 block, including the default ones.
+  // A legacy file that stored a model name ('PCM') still counts as a request.
+  const solvationRaw = settings.solvation;
+  const solvationOn = solvationRaw === true
+    || (typeof solvationRaw === 'string'
+      && solvationRaw.trim() !== ''
+      && !['false', '0', 'off', 'no'].includes(solvationRaw.trim().toLowerCase()));
+  if (solvationOn) {
     offenders.push({
       field: 'solvation',
       message: 'Psi4 core has no implicit solvation model; this builder cannot write PCM/SMD.',
+    });
+  }
+  if (settings.raman === true) {
+    offenders.push({
+      field: 'raman',
+      message: 'Raman intensities are a Gaussian keyword and this builder writes no Psi4 Raman step.',
+    });
+  }
+  if (settings.orbitals === true) {
+    offenders.push({
+      field: 'orbitals',
+      message: 'Frontier-orbital descriptors are Gaussian Pop=Full; this build parses no Psi4 orbital block.',
+    });
+  }
+  if (text(settings.verbosity)) {
+    offenders.push({
+      field: 'verbosity',
+      message: 'Output verbosity is a Gaussian Print keyword; Psi4 prints its own fixed banner.',
     });
   }
   if (settings.tddft === true || settings.excitedStates || text(settings.td)) {
@@ -269,7 +297,8 @@ function moleculeBlock(molecule = {}, { fragments = false } = {}) {
   });
   const ordered = [...groups.keys()].sort((a, b) => a - b);
   if (ordered.length < 2) {
-    throw new Error('SAPT0 needs at least two fragments; this molecule states only one.');
+    throw new Error('SAPT0 needs at least two fragments, but no atom carries a fragment label. '
+      + 'Label each atom with its fragment number in the molecule editor (Fragment column).');
   }
   ordered.forEach((index, position) => {
     if (position > 0) lines.push('--');
@@ -711,6 +740,10 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
       entropyTreatment: null,
     },
     finalEnergy: { hartree: finalEnergy, source: finalSource },
+    // SAPT's interaction energy is the result of a SAPT job, so it is a
+    // first-class field rather than something only `extras` knows about. It is
+    // deliberately not copied into `finalEnergy`: that number is not a total.
+    ...(sapt ? { sapt } : {}),
     extras: {
       method: echo.method?.label ?? null,
       methodKey: echo.method?.key ?? null,

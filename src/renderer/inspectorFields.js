@@ -52,6 +52,17 @@ export function calcInspectorFieldIds(engineId, settings = {}) {
   const jobType = String(settings?.jobType || 'Opt');
   const fields = ['job.title', 'job.jobType'];
 
+  if (engineId === 'psi4') {
+    // Psi4 has its own method, basis and job list, no checkpoint, no solvation,
+    // no Gaussian route keywords. What the builder writes is what is offered.
+    fields.push('job.reference', 'job.memory', 'job.memoryUnit', 'job.nproc');
+    fields.push('method.method', 'method.basis');
+    fields.push('molecule.charge', 'molecule.multiplicity');
+    fields.push(...GATE_FIELDS);
+    fields.push('validity.checks', 'dependencies.inputs', 'output.view');
+    return fields;
+  }
+
   if (engineId === 'xtb') {
     fields.push('xtb.hamiltonian', 'xtb.optLevel');
     if (showsXtbThreads(engineId)) fields.push('xtb.threads');
