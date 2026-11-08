@@ -513,6 +513,41 @@ describe('conformer queue path', () => {
     expect(conformers.ensemble.spreadKcal).toBeCloseTo(0.005 * 627.5094740631, 2);
     expect(conformers.ensemble.members.find((member) => member.rank === 2).energyEh).toBeCloseTo(-76.395, 9);
   });
+
+  // Will, modelling the Spartan set: a dry run replaced an imported ensemble
+  // with the three-member fixture, so it could never show the real data and the
+  // downstream task then failed on "no selected conformer".
+  it('keeps a real imported ensemble in a dry run', async () => {
+    const { base, queueManager } = await stack();
+    const ensemblePath = path.join(base, 'crest_conformers.xyz');
+    await fsp.writeFile(ensemblePath, xyzFrames(['conformer 1', 'conformer 2', 'conformer 3']), 'utf8');
+    await fsp.writeFile(path.join(base, 'crest.energies'), '1 -76.40000000\n2 -76.39600000\n3 -76.39000000\n', 'utf8');
+
+    const project = conformerProject({
+      output: selection(),
+      settings: { generator: 'import', importPath: ensemblePath, rmsdThreshold: 0.05 },
+    });
+    const plan = buildWorkflowPlan(project);
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      edges: [],
+      options: { dryRun: true, executable: null, crestExecutable: '', scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const list = await queueManager.list();
+      const queue = list.find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+
+    const conformers = done.tasks.find((task) => task.nodeId === 'conf');
+    expect(conformers.error).toBeNull();
+    expect(conformers.status).toBe('completed');
+    // The fixture is labelled `fixture`; the imported ensemble keeps its own
+    // generator and its own member count.
+    expect(conformers.ensemble.generator).toBe('import');
+    expect(conformers.ensemble.count).toBe(3);
+  });
 });
 
 describe('imported conformer energies (#103)', () => {

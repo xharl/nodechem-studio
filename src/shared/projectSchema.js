@@ -32,7 +32,7 @@ import {
   isPlainObject as isPlainObjectValue,
   nodesOfFlow,
 } from './flows.js';
-import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
+import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, clearCompositeConflicts, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import {
@@ -279,11 +279,11 @@ export function defaultSettings(overrides = {}) {
     // Issue #25: validity checks are on by default; a node opts out by id.
     disabledChecks: [],
   };
-  const settings = {
+  const settings = clearCompositeConflicts({
     ...base,
     ...overrides,
     gates: defaultGates({ ...base.gates, ...(overrides.gates || {}) }),
-  };
+  });
   // An explicit dispersion override wins; otherwise follow the resolved method
   // so a functional with built-in dispersion is not double-corrected.
   if (!Object.prototype.hasOwnProperty.call(overrides, 'dispersion')) {

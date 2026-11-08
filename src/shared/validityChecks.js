@@ -63,6 +63,7 @@
 
 import { atomicNumber } from './elements.js';
 import { ecpMissingMessage, ecpRequirement } from './ecp.js';
+import { GAUSSIAN_A03_UNKNOWN_METHODS, gaussianMethodKeyword } from './gaussianInput.js';
 import {
   HARTREE_TO_KCAL_PER_MOL,
   compositeSettingConflicts,
@@ -1078,6 +1079,16 @@ function checkEngineSettings({ settings, engine }) {
   // The schema fills xTB fields with their defaults on every block, so their
   // presence says nothing; only the xTB side can distinguish a deliberate
   // Gaussian-only setting from a default.
+  const functional = gaussianMethodKeyword(source.method);
+  if (GAUSSIAN_A03_UNKNOWN_METHODS.includes(functional)) {
+    return {
+      id,
+      status: CHECK_STATUS.WARNING,
+      detail: `Gaussian 16 A.03 rejects ${functional} in the route section (QPErr, verified on a real run) — `
+        + `only a build that knows this functional will run it. ${functional} is also a different functional from `
+        + 'wB97XD, so its energies are not comparable with a wB97XD job.',
+    };
+  }
   return { id, status: CHECK_STATUS.PASS, detail: 'This block runs on Gaussian; no xTB-only setting is in use.' };
 }
 
@@ -1167,6 +1178,11 @@ export function runValidityChecks(context = {}, { phase = 'post', disabled = nul
     }
     findings.push({
       ...result,
+      // `checkEngineSettings` returns `detail` while every other check returns
+      // `message`. Every consumer (inspector, run output, schema warnings)
+      // reads `message`, so a fail from that check used to render as an empty
+      // line. Normalise here rather than teaching four call sites two names.
+      message: result.message ?? result.detail ?? '',
       ...(result.status === CHECK_STATUS.UNKNOWN ? { applicability: 'not-evaluated' } : {}),
       severity: severityOf(result.status),
       title: meta.title,

@@ -193,7 +193,43 @@ export function isCompositeJobType(jobType) {
  * conflict: emitting it would change or invalidate the recipe, and dropping it
  * would silently run a job the user did not ask for. Shared by the input
  * builder (which throws) and the method/basis validity check (which fails).
+ *
+ * The settings a composite keyword owns, with the value that means "unset".
+ * Kept beside `compositeSettingConflicts` so the two cannot drift: whatever the
+ * validator reports is exactly what `clearCompositeConflicts` clears.
  */
+const COMPOSITE_CLEARED = Object.freeze({
+  method: '',
+  basis: '',
+  dispersion: '',
+  population: '',
+  customKeywords: '',
+  solvation: false,
+  orbitals: false,
+  raman: false,
+  stableOpt: false,
+  tdStates: 0,
+  optConvergence: '',
+  counterpoise: 0,
+  counterpoiseChargeStates: [],
+});
+
+/**
+ * B13: choosing a composite job type must not leave the block in a state this
+ * app's own validator rejects. It used to — a block created from the template
+ * carried `EmpiricalDispersion=GD3BJ` and `Pop=NBO`, so picking `CBS-QB3` always
+ * failed until the user cleared two unrelated fields by hand. The factory and
+ * the renderer both call this, so neither can produce a conflicting block.
+ */
+export function clearCompositeConflicts(settings = {}) {
+  if (!isCompositeJobType(settings.jobType)) return { ...settings };
+  const next = { ...settings };
+  for (const [key, value] of Object.entries(COMPOSITE_CLEARED)) {
+    if (key in next) next[key] = Array.isArray(value) ? [...value] : value;
+  }
+  return next;
+}
+
 export function compositeSettingConflicts(settings = {}) {
   const text = (value) => String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim();
   const conflicts = [];

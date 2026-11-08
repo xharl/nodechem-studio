@@ -66,6 +66,7 @@ import {
   MODERN_ROUTE_PRESET,
   ROUTE_PRESETS,
   applyRoutePreset,
+  clearCompositeConflicts,
   defaultDispersionFor,
   dispersionForMethodChange,
   isCompositeJobType,
@@ -367,11 +368,9 @@ function routeShort(settings) {
   // A composite keyword is the whole route: Gaussian supplies method, basis and
   // job steps, so a "method/basis" prefix would describe a route it refuses.
   if (isCompositeJobType(settings?.jobType)) return `#p ${settings.jobType}`;
-  // The preview must show the route that will be written: a heavy element with
-  // an ECP basis becomes GenECP and carries a basis/ECP block after the atoms.
-  const coords = state.project?.molecule?.coords || [];
-  const ecp = ecpRequirement({ basis: settings.basis, elements: coords.map((atom) => atom.element) });
-  return `${settings.method}/${basisNameFor(settings.basis, ecp)} ${jobKeywordFor(settings)}`;
+  // Not a second implementation: this label once showed `ωB97X-D` while the
+  // written input carried `wB97XD`, the spelling Gaussian actually reads.
+  return routeFull(settings).split('\n')[0].replace(/^#p\s+/, '');
 }
 
 /**
@@ -2716,14 +2715,7 @@ function updateNodeField(node, key, value) {
       // so the user could not clear them. Clear on the way in, restore the
       // project default on the way out.
       if (nowComposite && !wasComposite) {
-        node.settings.method = '';
-        node.settings.basis = '';
-        node.settings.dispersion = '';
-        node.settings.solvation = false;
-        node.settings.population = '';
-        node.settings.orbitals = false;
-        node.settings.tdStates = 0;
-        node.settings.customKeywords = '';
+        Object.assign(node.settings, clearCompositeConflicts(node.settings));
       } else if (wasComposite && !nowComposite) {
         node.settings.method = state.project?.defaults?.method || MODERN_ROUTE_PRESET.method;
         node.settings.basis = state.project?.defaults?.basis || MODERN_ROUTE_PRESET.basis;
@@ -3358,7 +3350,7 @@ function renderDrawer() {
     const engineId = engineOrDefault(draft.engine).id;
     const isXtb = engineId === 'xtb';
     const defaultDispersion = defaultDispersionFor(draft.method);
-    const gaussianRoute = `#p ${draft.method}/${draft.basis} Opt${defaultDispersion ? ` EmpiricalDispersion=${defaultDispersion}` : ''}`;
+    const gaussianRoute = routeFull({ method: draft.method, basis: draft.basis, jobType: 'Opt', dispersion: defaultDispersion });
     const xtbMethod = draft.xtbMethod || 'gfn2';
     const gfnFlag = xtbMethod === 'gfnff' ? '--gfnff' : `--gfn ${xtbMethod.replace('gfn', '')}`;
     const xtbRoute = `xtb task.xyz ${gfnFlag} --opt ${draft.xtbOptLevel || 'normal'}`;
@@ -3978,6 +3970,26 @@ function selectConformer(id) {
   toast(`Using conformer ${id}${Number.isFinite(member.relativeKcal) ? ` (ΔE ${member.relativeKcal.toFixed(2)} kcal/mol)` : ''}.`);
 }
 
+/**
+ * A path the project can carry: relative to the project file when the ensemble
+ * sits inside its folder, absolute otherwise. The renderer has no `node:path`,
+ * so this is textual and conservative — on a different root (another drive, a
+ * UNC share) it keeps the absolute path rather than inventing a relative one
+ * that cannot resolve.
+ */
+function portableImportPath(file, projectPath) {
+  if (!projectPath || typeof file !== 'string' || typeof projectPath !== 'string') return file;
+  const normalise = (value) => value.replace(/\\/g, '/');
+  const target = normalise(file);
+  const dir = normalise(projectPath).replace(/[^/]*$/, '').replace(/\/+$/, '');
+  if (!dir) return file;
+  // Windows paths are case-insensitive and the two strings come from different
+  // dialogs, so compare the prefix without case.
+  if (!target.toLowerCase().startsWith(`${dir.toLowerCase()}/`)) return file;
+  const relative = target.slice(dir.length + 1);
+  return relative && !relative.startsWith('..') ? relative : file;
+}
+
 async function pickEnsembleFile() {
   if (!desktop?.pickEnsembleFile) { toast('Open the Electron app to choose an ensemble file.'); return; }
   if (state.selected.type !== 'node') return;
@@ -3986,7 +3998,11 @@ async function pickEnsembleFile() {
   try {
     const file = await desktop.pickEnsembleFile();
     if (!file) return;
-    node.settings.importPath = file;
+    // Store the ensemble path relative to the project file when it lives beside
+    // it: a project that ships with its data must not be pinned to the machine
+    // that wrote the absolute path. Outside the project folder the absolute
+    // path stays, because there is nothing to anchor it to.
+    node.settings.importPath = portableImportPath(file, state.projectPath);
     node.settings.generator = 'import';
     node.output = null;
     node.state = 'ready';

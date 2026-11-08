@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildGaussianInput, DEMO_WATER, methodBlockFor, routeFor, outputNameFor } from '../src/shared/gaussianInput.js';
 import { defaultSettings } from '../src/shared/projectSchema.js';
+import { compositeSettingConflicts } from '../src/shared/routePresets.js';
 
 const baseSettings = {
   jobType: 'Opt',
@@ -325,6 +326,40 @@ describe('issue #77 — composite method routes', () => {
     expect(settings.method).toBe('');
     expect(settings.basis).toBe('');
     expect(settings.dispersion).toBe('');
+  });
+
+  // B13: the block arrives from the template with `EmpiricalDispersion=GD3BJ`
+  // and `Pop=NBO`, and picking a composite job type used to leave both in
+  // place — every CBS-QB3 block failed validation until two unrelated fields
+  // were cleared by hand.
+  it('drops the route ingredients a composite keyword owns', () => {
+    const settings = defaultSettings({
+      jobType: 'CBS-QB3',
+      method: 'B3LYP',
+      basis: 'def2-SVP',
+      dispersion: 'GD3BJ',
+      population: 'NBO',
+      customKeywords: 'Int=UltraFine',
+      orbitals: true,
+      raman: true,
+      stableOpt: true,
+      counterpoise: 3,
+      solvation: true,
+      tdStates: 2,
+    });
+    expect(compositeSettingConflicts(settings)).toEqual([]);
+    expect(settings.population).toBe('');
+    expect(settings.customKeywords).toBe('');
+    expect(settings.raman).toBe(false);
+    expect(settings.counterpoise).toBe(0);
+    expect(settings.solvation).toBe(false);
+    expect(routeFor(settings)).toBe('#p CBS-QB3');
+  });
+
+  it('leaves a normal block untouched', () => {
+    const settings = defaultSettings({ jobType: 'Opt', dispersion: 'GD3BJ', population: 'NBO' });
+    expect(settings.dispersion).toBe('GD3BJ');
+    expect(settings.population).toBe('NBO');
   });
 
   it('allows ordinary SCF and grid options on the composite route', () => {

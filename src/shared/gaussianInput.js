@@ -224,6 +224,37 @@ const GAUSSIAN_BASIS_KEYWORD = Object.freeze({
   'def2-qzvpp': 'def2QZVPP',
 });
 
+// Gaussian spells a few functionals without the hyphen chemists write, and it has no
+// Greek omega: `ωB97X-D` in a route is a QPErr. The app's ids stay readable; the
+// route gets the keyword Gaussian actually accepts (verified against G16 A.03).
+const GAUSSIAN_METHOD_KEYWORD = Object.freeze({
+  'ωb97x-d': 'wB97XD',
+  'wb97x-d': 'wB97XD',
+  'ωb97x-d3': 'wB97XD3',
+  'wb97x-d3': 'wB97XD3',
+  'ωb97x-v': 'wB97XV',
+  'wb97x-v': 'wB97XV',
+  'ωb97m-v': 'wB97MV',
+  'wb97m-v': 'wB97MV',
+  'b97-d': 'B97D',
+  'b97-d3': 'B97D3',
+});
+
+/**
+ * Functionals Gaussian 16 **A.03** rejects outright, verified on a real route
+ * (`wB97XD3/def2TZVP` → QPErr, Link 1). A build that knows the functional is a
+ * separate fact this app cannot observe, so the check warns rather than refuses:
+ * the route is spelled correctly, the program is what may not understand it.
+ */
+export const GAUSSIAN_A03_UNKNOWN_METHODS = Object.freeze(['wB97XD3']);
+
+/** The functional as Gaussian must read it: ASCII, official spelling. */
+export function gaussianMethodKeyword(method) {
+  const name = String(method ?? '').trim();
+  if (!name) return name;
+  return GAUSSIAN_METHOD_KEYWORD[name.toLowerCase()] || name;
+}
+
 export function gaussianBasisKeyword(basis) {
   const name = String(basis ?? '').trim();
   if (!name) return name;
@@ -250,7 +281,8 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
       + ' it cannot be written as an ordinary method/basis route.');
   }
   const basis = gaussianBasisKeyword(basisName || values.basis);
-  const tokens = [`#p ${values.functional}/${basis} ${values.job}`];
+  const functional = gaussianMethodKeyword(values.functional);
+  const tokens = [`#p ${functional}/${basis} ${values.job}`];
   const counterpoise = counterpoiseCount(settings);
   if (counterpoise === null) throw new Error('Counterpoise must be an integer between 2 and 10, or off.');
   if (counterpoise > 0) tokens.push(`Counterpoise=${counterpoise}`);

@@ -79,7 +79,9 @@ describe('issue #17 — modern default route', () => {
   it('does not double-correct a functional that already has dispersion', () => {
     expect(hasBuiltinDispersion('ωB97X-D')).toBe(true);
     expect(defaultSettings({ method: 'ωB97X-D' }).dispersion).toBe('');
-    expect(routeFor(defaultSettings({ method: 'ωB97X-D' }))).toBe('#p ωB97X-D/def2SVP Opt');
+    // The route carries Gaussian's spelling, not the UI label: `ω` is not a
+    // character Gaussian accepts and `wB97XD` is the keyword it reads.
+    expect(routeFor(defaultSettings({ method: 'ωB97X-D' }))).toBe('#p wB97XD/def2SVP Opt');
     expect(dispersionForMethodChange('PBE0', '')).toBe('GD3BJ');
     expect(dispersionForMethodChange('ωB97X-D', 'GD3BJ')).toBe('');
     expect(dispersionForMethodChange('PBE0', 'GD3')).toBe('GD3');

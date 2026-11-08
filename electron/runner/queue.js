@@ -57,7 +57,23 @@ function queueIdFor(date = new Date()) {
 async function writeJsonAtomic(filePath, value) {
   const temp = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
   await fsp.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await fsp.rename(temp, filePath);
+  // Windows refuses the rename while anything holds the target open — an
+  // indexer, a virus scanner, or a test that is about to delete the directory.
+  // `fs.rm` retries for the same reason; the write has to as well, otherwise a
+  // transient EPERM/EBUSY loses the snapshot instead of waiting it out.
+  const retryable = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY']);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fsp.rename(temp, filePath);
+      return;
+    } catch (error) {
+      if (!retryable.has(error?.code) || attempt >= 5) {
+        await fsp.rm(temp, { force: true }).catch(() => {});
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
 }
 
 function oneLine(value, max = 200) {
@@ -550,9 +566,15 @@ function publicQueue(queue) {
 }
 
 export class QueueManager {
-  constructor({ queuesRoot, runManager, emit, artifactsRoot = null }) {
+  constructor({ queuesRoot, runManager, emit, artifactsRoot = null, projectDir = '' }) {
     this.queuesRoot = queuesRoot;
     this.runManager = runManager;
+    // A relative `importPath` in a conformer block is resolved against this,
+    // so a project that ships beside its ensemble file can be moved to another
+    // machine. Absolute paths keep working exactly as written.
+    this.projectDir = typeof projectDir === 'string' && projectDir.trim()
+      ? path.resolve(projectDir)
+      : '';
     // RFC 0001: the CLI points this at the folder the user named (`--out`), so
     // `reports/…` and `manifest.json` land beside `queues/`. The desktop app
     // omits it and keeps artifacts inside the queue folder.
@@ -621,6 +643,19 @@ export class QueueManager {
 
   conformerInputPath(queueId, nodeId) {
     return path.join(this.queueDir(queueId), 'inputs', `${nodeId}.xyz`);
+  }
+
+  /**
+   * An imported ensemble path: absolute stays as written, relative resolves
+   * against the project directory. Without this a project that imports an
+   * ensemble is pinned to the machine that wrote the absolute path, even when
+   * the file sits next to the `.ncs`.
+   */
+  resolveImportPath(queue, importPath) {
+    const raw = String(importPath || '');
+    if (!raw || path.isAbsolute(raw)) return raw;
+    const base = queue?.options?.projectDir || this.projectDir;
+    return base ? path.resolve(base, raw) : raw;
   }
 
   async persist(queue) {
@@ -1251,7 +1286,21 @@ export class QueueManager {
       let energies = [];
       let source = conf.generator;
 
-      if (queue.options.dryRun) {
+      if (conf.generator === 'import') {
+        // Reading an ensemble is a file operation, not an engine call, so a dry
+        // run must use the real ensemble. It used to drop straight to the
+        // three-member fixture and then fail downstream on "no selected
+        // conformer": the dry run hid the data it exists to check.
+        const imported = await CrestRunner.readImport(this.resolveImportPath(queue, conf.importPath));
+        ensembleText = imported.ensembleText;
+        energies = imported.energies;
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: `Imported ensemble ${imported.ensemblePath}`,
+        });
+      } else if (queue.options.dryRun) {
         const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
         const parsedInput = parseMultiXyz(inputText);
         if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
@@ -1266,16 +1315,6 @@ export class QueueManager {
           queueId: queue.id,
           nodeId: task.nodeId,
           text: 'Dry run: a labelled three-member fixture, not a conformer search.',
-        });
-      } else if (conf.generator === 'import') {
-        const imported = await CrestRunner.readImport(conf.importPath);
-        ensembleText = imported.ensembleText;
-        energies = imported.energies;
-        this.emit({
-          type: 'queue-output',
-          queueId: queue.id,
-          nodeId: task.nodeId,
-          text: `Imported ensemble ${imported.ensemblePath}`,
         });
       } else {
         const argv = await this.stageConformerSearchInput(queue, task, dir);
@@ -2088,6 +2127,21 @@ export class QueueManager {
   async get(queueId) {
     const queue = this.queues.get(queueId);
     return queue ? publicQueue(queue) : null;
+  }
+
+  /**
+   * Wait for every queued `queue.json` write to land.
+   *
+   * The writes are chained, not awaited at the call site: a run event fires
+   * `persist()` and moves on. A caller that is about to delete the directory —
+   * a test teardown, or the app removing a scratch tree — must not race a
+   * rename that is still in flight, which is exactly what produced the Windows
+   * `EBUSY` flakes.
+   */
+  async flush() {
+    const pending = [...this.writeChains.values()];
+    if (pending.length === 0) return;
+    await Promise.allSettled(pending);
   }
 
   dispose() {

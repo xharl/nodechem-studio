@@ -551,6 +551,29 @@ describe('optimisation convergence', () => {
     const result = checkOptimizationConvergence({ settings: { jobType: 'Opt' }, parsed: parsedSynthetic() });
     expect(result.status).toBe('skipped');
   });
+
+  // B14: Gaussian 16 A.03 rejects `wB97XD3` in the route section (QPErr at Link
+  // 1, verified on a real run). The route is spelled correctly; the program is
+  // what may not know the functional, so this warns instead of refusing.
+  it('warns about a functional Gaussian 16 A.03 rejects', () => {
+    const result = runValidityChecks({
+      settings: { jobType: 'Opt', method: 'ωB97X-D3', basis: 'def2-TZVP' },
+      molecule: water(),
+    }, { phase: 'pre' });
+    const engine = result.findings.find((finding) => finding.id === 'engine-settings');
+    expect(engine.status).toBe(CHECK_STATUS.WARNING);
+    expect(engine.message).toMatch(/wB97XD3/);
+    expect(engine.message).toMatch(/A\.03/);
+  });
+
+  it('does not warn about ωB97X-D, which A.03 runs as wB97XD', () => {
+    const result = runValidityChecks({
+      settings: { jobType: 'Opt', method: 'ωB97X-D', basis: 'def2-TZVP' },
+      molecule: water(),
+    }, { phase: 'pre' });
+    const engine = result.findings.find((finding) => finding.id === 'engine-settings');
+    expect(engine.status).toBe(CHECK_STATUS.PASS);
+  });
 });
 
 /* ── Runner, phases and disabling ─────────────────────────── */

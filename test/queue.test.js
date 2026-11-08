@@ -8,6 +8,7 @@ import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 import { makeXtbFixtureOutput } from '../src/shared/engines/xtb.js';
 
 const roots = [];
+const managers = [];
 const INPUT = '#p B3LYP/6-31G(d) SP\n\ntest\n\n0 1\nO 0.000000 0.000000 0.117300\n';
 const XTB_INPUT = '3\nxTB task\nO 0.000000 0.000000 0.117300\nH 0.000000 0.757200 -0.469200\nH 0.000000 -0.757200 -0.469200\n';
 
@@ -95,6 +96,7 @@ async function makeStack({ behaviour, root, withExecutable = true } = {}) {
     emit: (event) => events.push(event),
   });
   await queueManager.init();
+  managers.push(queueManager);
   return { base, runsRoot, queuesRoot, exe, events, runManager, queueManager };
 }
 
@@ -117,6 +119,12 @@ async function waitFor(check, { timeout = 20000, label = 'condition' } = {}) {
 const queueOptions = (exe, extra = {}) => ({ dryRun: false, executable: exe, scratchDir: '', ...extra });
 
 afterEach(async () => {
+  // A chained `queue.json` write can still be in flight when the test ends;
+  // deleting the directory under it is what produced the Windows flakes
+  // (EBUSY on rmdir, then a "durability timeout" because the snapshot never
+  // landed). Flush first, then delete.
+  await Promise.allSettled(managers.map((manager) => manager.flush()));
+  managers.length = 0;
   // Windows keeps a handle on a directory for a moment after the queue stops
   // (the runner's child process and its log stream), so a plain rmdir fails
   // with EBUSY. maxRetries is Node's own Windows answer to that.
@@ -798,5 +806,46 @@ describe('QueueManager — durability', () => {
     const list = await queueManager.list();
     expect(list.map((queue) => queue.projectName)).toEqual(['two', 'one']);
     expect(list[0].tasks[0].inputText).toBeUndefined();
+  });
+});
+
+describe('QueueManager — imported ensemble paths', () => {
+  it('resolves a relative path against the project directory', async () => {
+    const { base, queueManager } = await makeStack();
+    const qm = new QueueManager({
+      queuesRoot: path.join(base, 'queues-relative'),
+      runManager: queueManager.runManager,
+      emit: () => {},
+      projectDir: base,
+    });
+    managers.push(qm);
+    expect(qm.resolveImportPath({ options: {} }, 'data/ensemble.xyz'))
+      .toBe(path.join(base, 'data', 'ensemble.xyz'));
+  });
+
+  it('leaves an absolute path exactly as written', async () => {
+    const { base, queueManager } = await makeStack();
+    const qm = new QueueManager({
+      queuesRoot: path.join(base, 'queues-absolute'),
+      runManager: queueManager.runManager,
+      emit: () => {},
+      projectDir: base,
+    });
+    managers.push(qm);
+    const absolute = path.join(base, 'elsewhere', 'ensemble.xyz');
+    expect(qm.resolveImportPath({ options: {} }, absolute)).toBe(absolute);
+  });
+
+  it('lets the queue options override the project directory', async () => {
+    const { base, queueManager } = await makeStack();
+    const qm = new QueueManager({
+      queuesRoot: path.join(base, 'queues-override'),
+      runManager: queueManager.runManager,
+      emit: () => {},
+      projectDir: base,
+    });
+    managers.push(qm);
+    expect(qm.resolveImportPath({ options: { projectDir: path.join(base, 'other') } }, 'ensemble.xyz'))
+      .toBe(path.join(base, 'other', 'ensemble.xyz'));
   });
 });

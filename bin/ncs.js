@@ -261,6 +261,9 @@ async function commandRun({ positional, flags }) {
     // `--out` is the folder the user named: output blocks write `reports/…`
     // and `manifest.json` beside `queues/`, not inside the queue folder.
     artifactsRoot: outDir,
+    // A relative conformer `importPath` resolves against the project file's
+    // folder, so a project that ships beside its ensemble can be moved.
+    projectDir: path.dirname(path.resolve(file)),
   });
   await queueManager.init();
 
