@@ -66,7 +66,8 @@
           ]
         }
       ],
-      "artifactName": "${name}-${version}-${arch}.${ext}"
+      "artifactName": "${name}-${version}-${arch}.${ext}",
+      "icon": "build/icon.ico"
     },
     "linux": {
       "target": [
@@ -79,7 +80,14 @@
       ],
       "category": "Science",
       "artifactName": "${name}-${version}-${arch}.${ext}",
-      "executableArgs": []
+      "executableArgs": [],
+      "icon": "build/icon.png",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "nodechem-studio"
+        }
+      },
+      "syncDesktopName": true
     },
     "nsis": {
       "oneClick": false,
@@ -106,5 +114,6 @@
     "electron",
     "workflow",
     "molecular-dynamics"
-  ]
+  ],
+  "desktopName": "nodechem-studio"
 }
