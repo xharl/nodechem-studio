@@ -16,15 +16,33 @@
 <body>
 <div class="app" id="app" data-inspector="dock">
   <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6">
-          <circle cx="5.5" cy="12" r="2.1"/><circle cx="18" cy="6" r="2.1"/><circle cx="18" cy="18" r="2.1"/>
-          <path d="M7.4 11.2 15.8 6.8M7.4 12.8l8.4 4.4"/>
-        </svg>
-      </span>
-      <span class="brand-name">NodeChem<span>Studio</span></span>
+    <div class="brand-wrap">
+      <button class="brand" id="app-menu-btn" data-action="toggle-app-menu" aria-haspopup="true" aria-expanded="false" aria-controls="app-menu" title="Application menu">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="5.5" cy="12" r="2.1"/><circle cx="18" cy="6" r="2.1"/><circle cx="18" cy="18" r="2.1"/>
+            <path d="M7.4 11.2 15.8 6.8M7.4 12.8l8.4 4.4"/>
+          </svg>
+        </span>
+        <span class="brand-name">NodeChem<span>Studio</span></span>
+      </button>
       <span class="proto-chip" id="app-version-chip">desktop preview</span>
+      <div class="top-overflow app-menu" id="app-menu" hidden role="menu" aria-labelledby="app-menu-btn">
+        <button class="overflow-item" data-action="new-project">New project</button>
+        <button class="overflow-item" data-action="open-project">Open project…</button>
+        <button class="overflow-item" data-action="save-project">Save project</button>
+        <div class="overflow-split" aria-hidden="true"></div>
+        <button class="overflow-item" data-action="undo" id="app-menu-undo">Undo</button>
+        <button class="overflow-item" data-action="redo" id="app-menu-redo">Redo</button>
+        <div class="overflow-split" aria-hidden="true"></div>
+        <button class="overflow-item" data-open-modal="molecule">Molecule &amp; defaults</button>
+        <button class="overflow-item" data-action="copy-diagnostics">Copy diagnostics</button>
+        <button class="overflow-item" data-action="save-diagnostics">Save diagnostics…</button>
+        <button class="overflow-item" data-action="check-updates">Check for updates…</button>
+        <div class="overflow-split" aria-hidden="true"></div>
+        <button class="overflow-item" data-action="about">About NodeChem Studio</button>
+        <button class="overflow-item" data-action="quit">Quit</button>
+      </div>
     </div>
 
     <div class="project-block">
@@ -60,10 +78,13 @@
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M8 2v7m0 0 2.5-2.5M8 9 5.5 6.5M3 11v2h10v-2"/></svg>
         Import log
       </button>
-      <button class="btn" data-action="export">
-        Export
-        <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-      </button>
+      <div class="export-wrap">
+        <button class="btn" id="export-menu-btn" data-action="toggle-export-menu" aria-haspopup="true" aria-expanded="false" aria-controls="export-menu">
+          Export
+          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+        <div class="top-overflow export-menu" id="export-menu" hidden role="menu" aria-labelledby="export-menu-btn"></div>
+      </div>
       <div class="top-overflow-wrap">
         <button class="icon-btn overflow-btn" data-action="toggle-overflow" aria-haspopup="true" aria-expanded="false" aria-controls="top-overflow" title="More actions" aria-label="More actions">⋯</button>
         <div class="top-overflow" id="top-overflow" hidden>
@@ -71,12 +92,7 @@
           <button class="overflow-item" data-action="save-project">Save project</button>
           <button class="overflow-item" data-open-modal="molecule">Molecule &amp; defaults</button>
           <button class="overflow-item" data-action="import-log-directory">Batch import logs…</button>
-          <button class="overflow-item" data-action="export">Export selected .gjf</button>
-          <button class="overflow-item" data-action="cluster" data-cluster-op="export" data-cluster-format="slurm">Export SLURM script set</button>
-          <button class="overflow-item" data-action="cluster" data-cluster-op="export" data-cluster-format="pbs">Export PBS script set</button>
           <button class="overflow-item" data-action="cluster" data-cluster-op="import">Import cluster results</button>
-          <button class="overflow-item" data-action="export-dataset" data-dataset-format="csv">Export run dataset (CSV)…</button>
-          <button class="overflow-item" data-action="export-dataset" data-dataset-format="json">Export run dataset (JSON)…</button>
           <button class="overflow-item" data-action="copy-diagnostics">Copy diagnostics</button>
           <button class="overflow-item" data-action="save-diagnostics">Save diagnostics…</button>
           <button class="overflow-item" data-action="check-updates">Check for updates…</button>

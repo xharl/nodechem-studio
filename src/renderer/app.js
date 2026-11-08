@@ -4023,10 +4023,125 @@ function dismissUpdateBanner() {
   banner.textContent = '';
 }
 
+function syncMenuButton(selector, open) {
+  const button = $(selector);
+  if (button) button.setAttribute('aria-expanded', String(open));
+}
+
+function closeAppMenu() {
+  const menu = $('#app-menu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  syncMenuButton('#app-menu-btn', false);
+}
+
+function closeExportMenu() {
+  const menu = $('#export-menu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  syncMenuButton('#export-menu-btn', false);
+}
+
+/**
+ * The application menu (File/Edit/Help equivalents) hangs off the brand mark.
+ * Undo/redo are mirrored from the toolbar state so a disabled command does not
+ * look available; everything else is the same action the topbar already uses.
+ */
+function toggleAppMenu() {
+  const menu = $('#app-menu');
+  if (!menu) return;
+  const opening = menu.hidden;
+  closeOverflow();
+  closeExportMenu();
+  if (!opening) {
+    closeAppMenu();
+    return;
+  }
+  const undo = $('#app-menu-undo');
+  const redo = $('#app-menu-redo');
+  if (undo) undo.disabled = !canUndo(state.history);
+  if (redo) redo.disabled = !canRedo(state.history);
+  menu.hidden = false;
+  syncMenuButton('#app-menu-btn', true);
+  menu.querySelector('.overflow-item:not(:disabled)')?.focus();
+}
+
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'interrupted']);
+const TERMINAL_QUEUE_STATUSES = new Set(['completed', 'failed', 'needs-review', 'blocked', 'cancelled', 'interrupted', 'skipped']);
+
+/**
+ * Only the exports that make sense for the current selection, grouped so the
+ * menu never offers "export a run" when no run exists. Each entry is the same
+ * data-action the old overflow menu used, so nothing here re-implements a flow.
+ */
+async function exportMenuGroups() {
+  const groups = [];
+  const node = selectedCalcNode();
+  if (node) {
+    groups.push([{
+      label: `Input file — ${node.title} (.gjf)`,
+      attrs: 'data-action="export"',
+    }]);
+  }
+  const hasCalc = (state.project?.nodes || []).some((item) => item.type === 'calc');
+  if (hasCalc) {
+    groups.push([
+      { label: 'SLURM script set…', attrs: 'data-action="cluster" data-cluster-op="export" data-cluster-format="slurm"' },
+      { label: 'PBS script set…', attrs: 'data-action="cluster" data-cluster-op="export" data-cluster-format="pbs"' },
+    ]);
+  }
+  const results = [];
+  if (state.run.id && TERMINAL_RUN_STATUSES.has(state.run.status)) {
+    results.push({ label: 'Run bundle (methods.md, manifest, files)…', attrs: 'data-action="export-run-bundle"' });
+  }
+  if (state.queue.id && TERMINAL_QUEUE_STATUSES.has(state.queue.status)) {
+    results.push({ label: 'Workflow report (report.html)…', attrs: 'data-action="export-workflow-report"' });
+  }
+  if (results.length) groups.push(results);
+
+  let runs = [];
+  if (desktop?.listRuns) {
+    try { runs = (await desktop.listRuns()) || []; } catch { runs = []; }
+  }
+  if (Array.isArray(runs) && runs.length > 0) {
+    const count = runs.length;
+    groups.push([
+      { label: `Run dataset (CSV) — ${count} run${count === 1 ? '' : 's'}…`, attrs: 'data-action="export-dataset" data-dataset-format="csv"' },
+      { label: 'Run dataset (JSON)…', attrs: 'data-action="export-dataset" data-dataset-format="json"' },
+    ]);
+  }
+  return groups;
+}
+
+async function toggleExportMenu() {
+  const menu = $('#export-menu');
+  if (!menu) return;
+  const opening = menu.hidden;
+  closeOverflow();
+  closeAppMenu();
+  if (!opening) {
+    closeExportMenu();
+    return;
+  }
+  const groups = await exportMenuGroups();
+  menu.innerHTML = groups.length
+    ? groups
+      .map((group) => group
+        .map((entry) => `<button class="overflow-item" role="menuitem" ${entry.attrs}>${esc(entry.label)}</button>`)
+        .join(''))
+      .join('<div class="overflow-split" aria-hidden="true"></div>')
+    : '<div class="overflow-note">Nothing selected can be exported. Pick a calculation block, run one, or finish a queue first.</div>';
+  menu.hidden = false;
+  syncMenuButton('#export-menu-btn', true);
+  menu.querySelector('.overflow-item')?.focus();
+}
+
 function toggleOverflow() {
   const menu = $('#top-overflow');
   const button = $('.overflow-btn');
   if (!menu || !button) return;
+  closeAppMenu();
+  closeExportMenu();
   menu.hidden = !menu.hidden;
   button.setAttribute('aria-expanded', String(!menu.hidden));
   if (!menu.hidden) menu.querySelector('button')?.focus();
@@ -4035,6 +4150,9 @@ function toggleOverflow() {
 function handleAction(action, element) {
   switch (action) {
     case 'toggle-overflow': toggleOverflow(); break;
+    case 'toggle-app-menu': toggleAppMenu(); break;
+    case 'toggle-export-menu': toggleExportMenu(); break;
+    case 'quit': window.close(); break;
     case 'toggle-palette': togglePalette(); break;
     case 'validate': validateGraph(); break;
     case 'zoom-in': setZoom(state.zoom + 0.05); break;
@@ -4139,6 +4257,17 @@ function onDocumentClick(event) {
 
   const actionEl = event.target.closest('[data-action]');
   if (actionEl) handleAction(actionEl.dataset.action, actionEl);
+
+  // A command chosen from one of the dropdowns closes it; a click anywhere
+  // outside closes the dropdown that owns the click target.
+  if (actionEl?.closest('#app-menu, #export-menu, #top-overflow')) {
+    closeAppMenu();
+    closeExportMenu();
+    closeOverflow();
+  } else {
+    if (!event.target.closest('.brand-wrap')) closeAppMenu();
+    if (!event.target.closest('.export-wrap')) closeExportMenu();
+  }
 
   if (event.target.closest('#top-overflow')) closeOverflow();
 
@@ -4424,6 +4553,8 @@ function wireEvents() {
     }
     if (event.key === 'Escape') {
       if (state.drawer) { closeDrawer(); return; }
+      if (!$('#app-menu')?.hidden) { closeAppMenu(); return; }
+      if (!$('#export-menu')?.hidden) { closeExportMenu(); return; }
       if (!$('#top-overflow')?.hidden) { closeOverflow(); return; }
       if (state.paletteOpen) { togglePalette(false); return; }
       if (!$('#run-console')?.hidden) { closeRunConsole(); return; }

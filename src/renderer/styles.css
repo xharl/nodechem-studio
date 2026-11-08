@@ -48,7 +48,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   border-bottom: 1px solid var(--tone-blue-71a);
   z-index: 50;
 }
-.brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.brand-wrap { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; }
+.brand {
+  display: flex; align-items: center; gap: 9px; min-width: 0;
+  padding: 2px 5px; margin-left: -5px;
+  border: 0; border-radius: 8px;
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.brand:hover { background: var(--tone-blue-101a); }
+.brand:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .brand-mark {
   width: 29px; height: 29px; flex: 0 0 auto;
   display: grid; place-items: center;
@@ -110,6 +118,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   display: flex; flex-direction: column; gap: 2px;
 }
 .top-overflow[hidden] { display: none; }
+.app-menu { top: 42px; left: 0; right: auto; min-width: 220px; }
+.export-wrap { position: relative; display: block; }
+.export-menu { top: 38px; right: 0; left: auto; min-width: 268px; }
+.overflow-note { padding: 8px 9px; color: var(--text-tertiary); font-size: var(--text-size-xs); line-height: 1.5; }
+.overflow-item:disabled { opacity: .45; cursor: not-allowed; }
 .overflow-item {
   text-align: left; padding: 8px 9px; border: 0; border-radius: 6px;
   background: transparent; color: var(--text-primary); font: inherit; font-size: var(--text-size-xs); cursor: pointer;
