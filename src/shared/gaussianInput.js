@@ -10,6 +10,14 @@ import {
   isTsJob,
   jobKeywordFor,
 } from './tsForceConstants.js';
+import {
+  hasConstraints,
+  modRedundantSection,
+  qstKindFor,
+  qstStructuresFor,
+  validateConstraints,
+  validateQst,
+} from './constraints.js';
 import { basisNameFor, ecpMissingMessage, ecpRequirement } from './ecp.js';
 import {
   compositeMethodFor,
@@ -40,6 +48,64 @@ function finiteNumber(value, label, { min = -Infinity, max = Infinity } = {}) {
 }
 
 /**
+ * Split an `Opt` job keyword into its base, its parenthesised flags and any
+ * trailing tokens (`Freq`, `Freq=Raman`), so a flag can be added without ever
+ * emitting a second `Opt` keyword.
+ */
+function splitOptKeyword(keyword) {
+  const [head, ...rest] = String(keyword).split(' ');
+  const equals = head.indexOf('=');
+  const base = equals === -1 ? head : head.slice(0, equals);
+  let flags = [];
+  if (equals !== -1) {
+    const value = head.slice(equals + 1);
+    if (value.startsWith('(') && value.endsWith(')')) {
+      flags = value.slice(1, -1).split(',').map((flag) => flag.trim()).filter(Boolean);
+    } else if (value) {
+      flags = [value];
+    }
+  }
+  return { base, flags, rest };
+}
+
+/** Add flags to an existing Opt keyword, preserving its own flags and order. */
+function withOptFlags(keyword, flags) {
+  const { base, flags: existing, rest } = splitOptKeyword(keyword);
+  const merged = [...existing];
+  flags.forEach((flag) => { if (!merged.includes(flag)) merged.push(flag); });
+  const opt = merged.length === 1 ? `${base}=${merged[0]}` : `${base}=(${merged.join(',')})`;
+  return [opt, ...rest].join(' ');
+}
+
+/**
+ * The route's job keyword including constraint and QST requirements (#93).
+ *
+ * `ModRedundant` is what makes Gaussian read the section written after the
+ * geometry: without it the constraint lines are ignored, which is the failure
+ * mode this keyword prevents. A constrained Berny optimisation also computes a
+ * Hessian when CalcFC/CalcAll/ReadFC is chosen, which is what makes the block a
+ * legitimate force-constant source for a downstream `Opt=TS ReadFC` (#93).
+ *
+ * QST2/QST3 carry only their own flag: STQN starts from its own empirical
+ * Hessian, and Gaussian documents that `TS` must not be combined with them.
+ */
+export function jobKeywordWithConstraints(settings = {}) {
+  const base = jobKeywordFor(settings);
+  const jobType = oneLine(settings.jobType, 'Opt');
+  const flags = [];
+  const constrainedOpt = hasConstraints(settings) && (jobType === 'Opt' || jobType === 'Opt Freq');
+  if (constrainedOpt) {
+    const choice = forceConstantsFor(settings);
+    if (choice === 'CalcFC' || choice === 'CalcAll' || choice === 'ReadFC') flags.push(choice);
+  }
+  // Only a job that reads a ModRedundant section may ask for one; the builder
+  // refuses the other job types before the route is written.
+  const readsModRedundant = jobType === 'Opt=TS' || qstKindFor(jobType) !== null || constrainedOpt;
+  if (hasConstraints(settings) && readsModRedundant) flags.push('ModRedundant');
+  return flags.length > 0 ? withOptFlags(base, flags) : base;
+}
+
+/**
  * Normalise the route settings once. `routeFor` renders from this object and
  * `methodBlockFor` reports from it, so the provenance manifest and the input
  * file can never disagree about method, basis, dispersion, solvation, grid or
@@ -50,7 +116,7 @@ function routeValues(settings = {}) {
   return {
     // One job keyword, composed in one place: a TS job and its force constants
     // must never produce a second `Opt`.
-    job: jobKeywordFor(settings),
+    job: jobKeywordWithConstraints(settings),
     functional: oneLine(settings.method, 'B3LYP'),
     basis: oneLine(settings.basis, '6-31G(d)'),
     dispersion: settings.dispersion ? oneLine(settings.dispersion) : null,
@@ -320,30 +386,65 @@ export function buildGaussianInput({
 
   const coords = Array.isArray(molecule.coords) ? molecule.coords : [];
   if (coords.length === 0) throw new Error('A molecule with Cartesian coordinates is required.');
+
+  // Issue #93: constraints and QST structures are checked against the geometry
+  // this input actually writes — a dataset record's coordinates replace the
+  // project geometry (RFC 0001), so their indices must be 1..N of *this* list.
+  const qstKind = qstKindFor(settings.jobType);
+  if (counterpoise > 0 && qstKind) {
+    throw new Error('Counterpoise and QST2/QST3 cannot share a route: fragment labels belong to one molecule '
+      + 'specification, and QST reads two or three. Run them as separate blocks.');
+  }
+  if (qstKind && oldCheckpoint) {
+    throw new Error(`${settings.jobType} reads its reactant and product from the input file, but this block has a `
+      + 'checkpoint hand-off, which adds Geom=Check and would replace the first structure. Remove the hand-off '
+      + 'or use Opt=TS.');
+  }
+  const constraintCheck = validateConstraints({
+    constraints: settings.constraints,
+    atoms: coords,
+    jobType: settings.jobType || 'Opt',
+    forceConstants: forceConstantsFor(settings),
+  });
+  if (constraintCheck.errors.length > 0) throw new Error(constraintCheck.errors.join(' '));
+  const qstCheck = validateQst({ qst: settings.qst, atoms: coords, jobType: settings.jobType || 'Opt' });
+  if (qstCheck.errors.length > 0) throw new Error(qstCheck.errors.join(' '));
+
   const ecp = ecpRequirement({ basis: settings.basis, elements: coords.map((atom) => atom.element) });
   if (ecp.missing.length > 0) throw new Error(ecpMissingMessage(ecp));
-  const coordinateLines = coords.map((atom, index) => {
-    const element = oneLine(atom.element);
-    if (!/^[A-Z][a-z]?$/.test(element)) throw new Error(`Atom ${index + 1} has an invalid element symbol.`);
-    const x = finiteNumber(atom.x, `Atom ${index + 1} x`);
-    const y = finiteNumber(atom.y, `Atom ${index + 1} y`);
-    const z = finiteNumber(atom.z, `Atom ${index + 1} z`);
-    // Counterpoise fragment membership is Gaussian's documented atom-label
-    // parameter: O(Fragment=1). It is written only when counterpoise is on;
-    // every other input keeps its byte-identical two-character element column.
+
+  /**
+   * Atom rows for one molecule specification. Counterpoise fragment membership
+   * is Gaussian's documented atom label, `O(Fragment=1)`; every other input
+   * keeps its byte-identical two-character element column.
+   */
+  const coordinateLinesFor = (atoms, prefix = 'Atom') => atoms.map((atom, index) => {
+    const element = oneLine(atom?.element);
+    if (!/^[A-Z][a-z]?$/.test(element)) throw new Error(`${prefix} ${index + 1} has an invalid element symbol.`);
+    const x = finiteNumber(atom.x, `${prefix} ${index + 1} x`);
+    const y = finiteNumber(atom.y, `${prefix} ${index + 1} y`);
+    const z = finiteNumber(atom.z, `${prefix} ${index + 1} z`);
     const label = counterpoise > 0
       ? `${element}(Fragment=${Number(atom.fragment)})`
       : element.padEnd(2);
     return `${label} ${x.toFixed(6).padStart(12)} ${y.toFixed(6).padStart(12)} ${z.toFixed(6).padStart(12)}`;
   });
+  const coordinateLines = coordinateLinesFor(coords);
+  // One ModRedundant line per constraint, in the order the inspector lists
+  // them. Gaussian freezes each coordinate at its value in the geometry.
+  const constraintLines = modRedundantSection(settings.constraints);
 
   const checkpoint = oneLine(settings.checkpoint || inputName.replace(/\.(gjf|com)$/i, '.chk'));
   if (!SAFE_NAME.test(checkpoint) || !/\.chk$/i.test(checkpoint)) {
     throw new Error('Checkpoint name must be a safe .chk basename.');
   }
   // ReadFC has nothing to read without an explicit hand-off; emitting it would
-  // build a route that can only fail at run time.
-  if (isTsJob(settings.jobType) && forceConstantsFor(settings) === 'ReadFC' && !oldCheckpoint) {
+  // build a route that can only fail at run time. A constrained optimisation
+  // that computes force constants is a legitimate ReadFC source (#93), so the
+  // same rule applies to it as to a saddle search.
+  const readsForceConstants = isTsJob(settings.jobType)
+    || (hasConstraints(settings) && (settings.jobType === 'Opt' || settings.jobType === 'Opt Freq'));
+  if (readsForceConstants && forceConstantsFor(settings) === 'ReadFC' && !oldCheckpoint) {
     throw new Error('ReadFC needs a checkpoint hand-off; connect a Freq or Opt=CalcFC block as the checkpoint source, or choose CalcFC.');
   }
 
@@ -366,7 +467,8 @@ export function buildGaussianInput({
   }
   lines.push(route);
   lines.push('');
-  lines.push(oneLine(title, 'NodeChem Studio task'));
+  const titleLine = oneLine(title, 'NodeChem Studio task');
+  lines.push(titleLine);
   lines.push('');
   const fragmentStates = counterpoise > 0 && Array.isArray(settings.counterpoiseChargeStates)
     ? settings.counterpoiseChargeStates
@@ -383,9 +485,34 @@ export function buildGaussianInput({
     lines.push(`${charge} ${multiplicity}`);
   }
   lines.push(...coordinateLines);
+  if (constraintLines.length > 0) {
+    // The molecule specification ends at a blank line; the ModRedundant section
+    // follows it and is terminated by another blank line.
+    lines.push('');
+    lines.push(...constraintLines);
+  }
+  // QST2/QST3: each further structure is its own title + molecule specification
+  // (and, with constraints, its own ModRedundant section), in Gaussian's
+  // reactant, product, TS-guess order. The atom order is checked above and is
+  // never rewritten here.
+  qstStructuresFor(settings).forEach((structure, index) => {
+    const label = oneLine(structure?.label) || (index === 0 ? 'product' : 'TS guess');
+    lines.push('');
+    lines.push(`${titleLine} — structure ${index + 2} (${label})`);
+    lines.push('');
+    lines.push(`${charge} ${multiplicity}`);
+    lines.push(...coordinateLinesFor(
+      Array.isArray(structure?.atoms) ? structure.atoms : [],
+      `Structure ${index + 2} atom`,
+    ));
+    if (constraintLines.length > 0) {
+      lines.push('');
+      lines.push(...constraintLines);
+    }
+  });
   lines.push('');
   lines.push('');
-  // The basis and ECP blocks follow the molecule specification, in the
+  // The basis and ECP blocks follow the last molecule specification, in the
   // Gaussian94 layout the Basis Set Exchange exports.
   if (ecp.needed) {
     lines.push(ecp.blocks);

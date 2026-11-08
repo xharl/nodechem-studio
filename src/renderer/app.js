@@ -93,6 +93,15 @@ import {
   optConvergenceWarnings,
   requiresUltraFineGrid,
 } from '../shared/tsForceConstants.js';
+import {
+  CONSTRAINT_KINDS,
+  constraintAtomCount,
+  constraintFindings,
+  describeConstraint,
+  qstKindFor,
+  qstRequiredStructures,
+  qstStructuresFor,
+} from '../shared/constraints.js';
 import { runClusterAction } from './clusterExport.js';
 import { exportRunBundleAction } from './runBundle.js';
 import { exportRunFormatAction } from './runConverter.js';
@@ -157,6 +166,8 @@ const JOB_TYPE_LABELS = {
   Opt: 'Optimization',
   'Opt Freq': 'Optimization + frequency',
   'Opt=TS': 'Transition state',
+  'Opt=QST2': 'Transition state · QST2',
+  'Opt=QST3': 'Transition state · QST3',
   Freq: 'Frequency',
   IRC: 'IRC path',
   SP: 'Single point',
@@ -1365,6 +1376,161 @@ function gridDefaultNote(settings) {
     + 'as Gaussian recommends with <code>Opt=Tight</code>. Choose a grid to override it.</span></div>';
 }
 
+/* ── Issue #93: constraints and QST structures ─────────────── */
+
+const CONSTRAINT_KIND_OPTIONS = [
+  ['bond', 'Bond length'],
+  ['angle', 'Bond angle'],
+  ['dihedral', 'Dihedral'],
+  ['freeze', 'Frozen atom'],
+];
+
+const CONSTRAINT_DEFAULT_ATOMS = { bond: [1, 2], angle: [1, 2, 3], dihedral: [1, 2, 3, 4], freeze: [1] };
+
+function constraintAtomInputs(constraint, index) {
+  const count = constraintAtomCount(constraint.kind);
+  return Array.from({ length: count }, (_, slot) => `
+    <input class="input constraint-atom" type="number" min="1" step="1"
+      aria-label="${esc(constraint.kind)} atom ${slot + 1}"
+      data-constraint-index="${index}" data-constraint-part="atom" data-atom-slot="${slot}"
+      value="${esc(constraint.atoms?.[slot] ?? 1)}">`).join('');
+}
+
+function constraintRow(constraint, index, atoms) {
+  return `<div class="constraint-row">
+    <div class="constraint-row-head">
+      <span class="constraint-desc">${esc(describeConstraint(constraint, atoms))}</span>
+      <button type="button" class="icon-btn" data-action="remove-constraint" data-constraint-index="${index}"
+        title="Remove constraint" aria-label="Remove constraint">×</button>
+    </div>
+    <div class="constraint-row-controls">
+      <select class="select" aria-label="Constraint type" data-constraint-index="${index}" data-constraint-part="kind">
+        ${CONSTRAINT_KIND_OPTIONS.map(([value, label]) => `<option value="${value}"${value === constraint.kind ? ' selected' : ''}>${label}</option>`).join('')}
+      </select>
+      ${constraintAtomInputs(constraint, index)}
+      ${constraint.kind === 'freeze' ? '' : `<input class="input" type="number" step="0.001" placeholder="value"
+        aria-label="Constraint value" data-constraint-index="${index}" data-constraint-part="value"
+        value="${constraint.value ?? ''}">`}
+    </div>
+  </div>`;
+}
+
+/**
+ * The constrained-coordinate editor. Every row is labelled in chemical terms
+ * ("C3–O7 distance, 1.400 Å") and the index is the 1-based atom number in the
+ * geometry that will be written.
+ */
+function constraintsGroup(node, s) {
+  const atoms = moleculeForNode(node)?.coords || [];
+  const list = Array.isArray(s.constraints) ? s.constraints : [];
+  const report = constraintFindings({
+    constraints: list,
+    atoms,
+    jobType: s.jobType,
+    forceConstants: s.forceConstants,
+  });
+  return group('Constraints', list.length ? `${list.length} frozen` : 'none', list.length > 0, [
+    list.length
+      ? `<div class="full constraint-list">${list.map((constraint, index) => constraintRow(constraint, index, atoms)).join('')}</div>`
+      : '<div class="full"><span class="inspector-note">No constrained coordinates. Freezing a bond, angle, dihedral or atom and relaxing everything else is how a transition-state guess is built before an <code>Opt=TS</code> search.</span></div>',
+    `<div class="full constraint-add">
+      <select class="select" id="constraint-new-kind" aria-label="New constraint type">
+        ${CONSTRAINT_KIND_OPTIONS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}
+      </select>
+      <button type="button" class="btn small" data-action="add-constraint">Add constraint</button>
+    </div>`,
+    report.errors.length
+      ? `<div class="full"><div class="callout"><strong>Cannot export.</strong> ${esc(report.errors[0].message)}</div></div>`
+      : '',
+    report.warnings.map((message) => `<div class="full"><div class="callout"><strong>Warning.</strong> This block ${esc(message)}</div></div>`).join(''),
+    '<div class="full"><span class="inspector-note">Written as a Gaussian <code>ModRedundant</code> section after the geometry, one line per coordinate (<code>B 3 7 F</code>). Gaussian freezes each coordinate at the value in the geometry, so a declared value has to match it.</span></div>',
+  ].join(''));
+}
+
+/** How a stored QST structure compares with the geometry the block writes. */
+function qstStructureStatus(structure, atoms) {
+  const coords = Array.isArray(structure?.atoms) ? structure.atoms : [];
+  if (coords.length === 0) return { ok: false, text: 'no geometry set' };
+  if (!Array.isArray(atoms) || atoms.length === 0) return { ok: true, text: `${coords.length} atoms` };
+  if (coords.length !== atoms.length) {
+    return { ok: false, text: `${coords.length} atoms · the block geometry has ${atoms.length}` };
+  }
+  const mismatch = coords.findIndex((atom, index) => String(atom?.element) !== String(atoms[index]?.element));
+  if (mismatch !== -1) {
+    return {
+      ok: false,
+      text: `atom ${mismatch + 1} is ${coords[mismatch]?.element || '?'} · the geometry has ${atoms[mismatch]?.element || '?'}`,
+    };
+  }
+  return { ok: true, text: `${coords.length} atoms · atom order matches` };
+}
+
+function qstStructureRow(node, s, index) {
+  const structure = qstStructuresFor(s)[index] || { label: '', source: 'copy', nodeId: '', path: '', atoms: [] };
+  const atoms = moleculeForNode(node)?.coords || [];
+  const status = qstStructureStatus(structure, atoms);
+  const blocks = state.project.nodes.filter((entry) => entry.type === 'calc'
+    && Array.isArray(entry.parsed?.geometry?.final?.atoms)
+    && entry.parsed.geometry.final.atoms.length > 0);
+  const position = index + 2;
+  const label = index === 0 ? 'Structure 2 · product' : 'Structure 3 · initial TS';
+  return `<div class="qst-row">
+    <div class="qst-row-head">
+      <strong>${esc(label)}</strong>
+      <span class="qst-status${status.ok ? '' : ' bad'}">${esc(status.text)}</span>
+    </div>
+    <div class="qst-row-controls">
+      <input class="input" type="text" maxlength="60" placeholder="label" aria-label="Structure ${position} label"
+        data-qst-index="${index}" data-qst-part="label" value="${esc(structure.label || '')}">
+      <select class="select" aria-label="Structure ${position} source" data-qst-index="${index}" data-qst-part="source">
+        <option value="copy"${structure.source === 'copy' ? ' selected' : ''}>Copy of the block geometry</option>
+        <option value="block"${structure.source === 'block' ? ' selected' : ''}>From a finished block</option>
+        <option value="file"${structure.source === 'file' ? ' selected' : ''}>From a structure file</option>
+      </select>
+      ${structure.source === 'block' ? `<select class="select" aria-label="Structure ${position} source block"
+        data-qst-index="${index}" data-qst-part="node">
+        <option value="">Choose a block with parsed output</option>
+        ${blocks.map((entry) => `<option value="${entry.id}"${structure.nodeId === entry.id ? ' selected' : ''}>${esc(entry.title)}</option>`).join('')}
+      </select>` : ''}
+      ${structure.source === 'file' ? `<input class="input" type="text" maxlength="260" placeholder="reactant.gjf"
+        aria-label="Structure ${position} file name" data-qst-index="${index}" data-qst-part="path"
+        value="${esc(structure.path || '')}">
+        <input type="file" id="qst-file-${index}" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out" hidden>
+        <button type="button" class="btn small" data-action="qst-pick-file" data-qst-index="${index}">Choose file</button>` : ''}
+      <button type="button" class="btn small" data-action="qst-fill" data-qst-index="${index}">Load geometry</button>
+    </div>
+  </div>`;
+}
+
+/**
+ * The QST2/QST3 editor (#93). Gaussian reads the block's geometry as the
+ * reactant and these structures after it, so a QST2 block names one product and
+ * a QST3 block a product plus an initial TS.
+ */
+function qstGroup(node, s) {
+  const kind = qstKindFor(s.jobType);
+  const required = qstRequiredStructures(s.jobType);
+  const structures = qstStructuresFor(s);
+  const atoms = moleculeForNode(node)?.coords || [];
+  const missing = required - structures.length;
+  return group(`QST2 / QST3 · ${kind}`, `${structures.length}/${required} structures`, true, [
+    `<div class="full"><span class="inspector-note">Gaussian interpolates from the block geometry (reactant) through ${required === 1 ? 'the product' : 'the product to the initial TS'}. All structures must have the same atoms in the same order; nothing is re-sorted.</span></div>`,
+    `<div class="full qst-list">${Array.from({ length: required }, (_, index) => qstStructureRow(node, s, index)).join('')}</div>`,
+    missing > 0
+      ? `<div class="full"><div class="callout"><strong>Cannot export.</strong> This ${kind} block needs ${required} extra structure${required === 1 ? '' : 's'}; ${missing === required ? 'none is' : `${missing} ${missing === 1 ? 'is' : 'are'}`} set.</div></div>`
+      : '',
+    structures.length > 0
+      ? `<div class="full"><span class="inspector-note">The stored structure is a complete molecule specification: ${esc(structureSummary(structures))}. It travels in the .ncs file, so <code>ncs build-input</code> writes the same text the app does.</span></div>`
+      : '',
+  ].join(''));
+}
+
+function structureSummary(structures) {
+  return structures
+    .map((structure, index) => `${index + 2}${structure.label ? ` (${structure.label})` : ''}: ${(structure.atoms || []).length} atoms`)
+    .join(' · ') || 'no structures';
+}
+
 function calcInspector(node) {
   const s = node.settings;
   const ins = incoming(node.id);
@@ -1482,6 +1648,10 @@ function calcInspector(node) {
   // run `G4/6-31G(d)`, so offering the pair here would invite a route the builder
   // refuses. Show what the keyword actually runs instead.
   const compositeJob = isCompositeJobType(s.jobType);
+  // Issue #93: constraints read ModRedundant; QST structures exist only for an
+  // STQN job. Both are Gaussian-only, so an xTB block shows neither.
+  const constraintGroup = isXtb ? '' : constraintsGroup(node, s);
+  const qstEditor = isXtb || !qstKindFor(s.jobType) ? '' : qstGroup(node, s);
   const compositeNote = '<div class="field full"><span class="inspector-note">'
     + '<strong>' + esc(s.jobType) + '</strong> is a composite method: Gaussian runs its own fixed '
     + 'sequence and reports one 0 K energy. Method, basis, dispersion, solvation and excited-state '
@@ -1649,6 +1819,8 @@ function calcInspector(node) {
     ${callout}
     <div class="code-block" style="margin-bottom:10px">${routeLines.map((line) => `<div>${line}</div>`).join('')}</div>
     ${jobGroup}
+    ${constraintGroup}
+    ${qstEditor}
     ${isXtb ? xtbGroup : compositeJob ? compositeNote : methodGroup}
     ${isXtb || compositeJob ? '' : excitedGroup}
     ${isXtb || compositeJob ? '' : ramanGroup}
@@ -2265,6 +2437,170 @@ function addBlock(type) {
 
 /* ── Node and edge editing ────────────────────────────────── */
 
+/* ── Issue #93: constraint and QST editing ────────────────── */
+
+function inspectorCalcNode() {
+  if (state.selected.type !== 'node') return null;
+  const node = nodeById(state.selected.id);
+  return node && node.type === 'calc' ? node : null;
+}
+
+function addConstraint() {
+  const node = inspectorCalcNode();
+  if (!node) return;
+  const kind = $('#constraint-new-kind')?.value;
+  const chosen = CONSTRAINT_KINDS.includes(kind) ? kind : 'bond';
+  const list = Array.isArray(node.settings.constraints) ? node.settings.constraints : [];
+  node.settings.constraints = [...list, { kind: chosen, atoms: [...CONSTRAINT_DEFAULT_ATOMS[chosen]], value: null }];
+  renderInspector();
+}
+
+function removeConstraint(index) {
+  const node = inspectorCalcNode();
+  if (!node || !Array.isArray(node.settings.constraints)) return;
+  node.settings.constraints = node.settings.constraints.filter((_, position) => position !== index);
+  renderInspector();
+}
+
+/** A change to one constraint row. Called on `change`, not `input`, so typing keeps focus. */
+function updateConstraintField(target) {
+  const node = inspectorCalcNode();
+  if (!node) return;
+  const index = Number(target.dataset.constraintIndex);
+  const list = Array.isArray(node.settings.constraints) ? node.settings.constraints : [];
+  const constraint = list[index];
+  if (!constraint) return;
+  const part = target.dataset.constraintPart;
+  if (part === 'kind') {
+    const kind = target.value;
+    if (!CONSTRAINT_KINDS.includes(kind)) return;
+    const count = constraintAtomCount(kind);
+    const atoms = Array.from({ length: count }, (_, slot) => Number(constraint.atoms?.[slot]) || slot + 1);
+    node.settings.constraints[index] = {
+      kind,
+      atoms,
+      value: kind === 'freeze' ? null : (constraint.value ?? null),
+    };
+  } else if (part === 'atom') {
+    const slot = Number(target.dataset.atomSlot);
+    const value = Number(target.value);
+    if (!Number.isInteger(value) || value < 1) return;
+    constraint.atoms[slot] = value;
+  } else if (part === 'value') {
+    constraint.value = target.value === '' ? null : Number(target.value);
+  } else {
+    return;
+  }
+  renderGraph();
+  renderInspector();
+}
+
+/** Grow the stored structure list to `index + 1` empty structures. */
+function qstStructuresForEdit(node, index) {
+  const structures = qstStructuresFor(node.settings).map((structure) => ({
+    label: structure.label || '',
+    source: structure.source || 'copy',
+    nodeId: structure.nodeId || '',
+    path: structure.path || '',
+    atoms: Array.isArray(structure.atoms) ? structure.atoms.map((atom) => ({ ...atom })) : [],
+  }));
+  while (structures.length <= index) {
+    structures.push({ label: '', source: 'copy', nodeId: '', path: '', atoms: [] });
+  }
+  return structures;
+}
+
+function updateQstField(target) {
+  const node = inspectorCalcNode();
+  if (!node || !qstKindFor(node.settings.jobType)) return;
+  const index = Number(target.dataset.qstIndex);
+  const required = qstRequiredStructures(node.settings.jobType);
+  if (!Number.isInteger(index) || index < 0 || index >= required) return;
+  const structures = qstStructuresForEdit(node, index);
+  const structure = structures[index];
+  const part = target.dataset.qstPart;
+  if (part === 'label') {
+    structure.label = String(target.value).slice(0, 60);
+  } else if (part === 'source') {
+    structure.source = target.value;
+    if (structure.source !== 'block') structure.nodeId = '';
+    if (structure.source !== 'file') structure.path = '';
+  } else if (part === 'node') {
+    structure.nodeId = target.value;
+  } else if (part === 'path') {
+    structure.path = String(target.value).slice(0, 260);
+  } else {
+    return;
+  }
+  node.settings.qst = { structures };
+  renderInspector();
+}
+
+function geometryAtomsOf(parsed) {
+  const atoms = parsed?.geometry?.final?.atoms;
+  if (!Array.isArray(atoms)) return null;
+  return atoms
+    .map((atom) => ({
+      element: atom.element || atom.symbol || atom.label,
+      x: Number(atom.x),
+      y: Number(atom.y),
+      z: Number(atom.z),
+    }))
+    .filter((atom) => atom.element && [atom.x, atom.y, atom.z].every(Number.isFinite));
+}
+
+/** Copy the chosen source's geometry into a QST structure. */
+function fillQstStructure(index) {
+  const node = inspectorCalcNode();
+  if (!node || !qstKindFor(node.settings.jobType)) return;
+  const structures = qstStructuresForEdit(node, index);
+  const structure = structures[index];
+  let atoms = null;
+  if (structure.source === 'block') {
+    const block = structure.nodeId ? nodeById(structure.nodeId) : null;
+    if (!block) { toast('Choose the block this structure comes from first.'); return; }
+    atoms = geometryAtomsOf(block.parsed);
+    if (!atoms) { toast(`"${block.title}" has no parsed final geometry yet.`); return; }
+  } else if (structure.source === 'file') {
+    $('#qst-file-' + index)?.click();
+    return;
+  } else {
+    const coords = moleculeForNode(node)?.coords || [];
+    atoms = coords.map((atom) => ({ element: atom.element, x: atom.x, y: atom.y, z: atom.z }));
+  }
+  if (!atoms || atoms.length === 0) { toast('There is no geometry to copy.'); return; }
+  structure.atoms = atoms;
+  if (!structure.label) structure.label = index === 0 ? 'product' : 'TS guess';
+  node.settings.qst = { structures };
+  renderInspector();
+  toast(`Structure ${index + 2} loaded · ${atoms.length} atoms`);
+}
+
+/** Read a structure file the user picked into a QST structure (renderer-side). */
+async function importQstStructureFile(index, file) {
+  const node = inspectorCalcNode();
+  if (!node || !qstKindFor(node.settings.jobType)) return;
+  try {
+    const text = await file.text();
+    const { records } = parseStructureRecords(text, { filename: file.name });
+    const record = records.find((entry) => !entry.error);
+    if (!record) throw new Error(records[0]?.error || 'No record in this file could be read.');
+    const structures = qstStructuresForEdit(node, index);
+    structures[index] = {
+      ...structures[index],
+      source: 'file',
+      path: file.name,
+      label: structures[index].label || (index === 0 ? 'product' : 'TS guess'),
+      atoms: record.atoms.map((atom) => ({ element: atom.element, x: atom.x, y: atom.y, z: atom.z })),
+    };
+    node.settings.qst = { structures };
+    renderInspector();
+    toast(`Structure ${index + 2} · ${record.atoms.length} atoms from ${file.name}`);
+  } catch (error) {
+    toast(`Could not import structure: ${error.message}`);
+  }
+}
+
 function updateNodeField(node, key, value) {
   const isXtb = engineForNode(state.project, node).id === 'xtb';
   if (key === 'title') {
@@ -2334,6 +2670,12 @@ function updateNodeField(node, key, value) {
         node.settings.basis = state.project?.defaults?.basis || MODERN_ROUTE_PRESET.basis;
         node.settings.dispersion = defaultDispersionFor(node.settings.method);
       }
+      // Issue #93: the extra QST structures belong to an STQN job. Leaving one
+      // drops them instead of leaving a block the builder must refuse.
+      if (!qstKindFor(value)) node.settings.qst = null;
+      // A QST search is a saddle search: the gate that judges it must expect one
+      // imaginary mode, exactly as a TS block does.
+      if (qstKindFor(value) && !node.settings.gates?.imaginary) node.settings.gates.imaginary = 1;
     } else if (key === 'method') {
       node.settings.method = value;
       node.settings.dispersion = dispersionForMethodChange(value, node.settings.dispersion);
@@ -4830,6 +5172,10 @@ function handleAction(action, element) {
       else toast('No FALSE branch is connected yet.');
       break;
     }
+    case 'add-constraint': addConstraint(); break;
+    case 'remove-constraint': removeConstraint(Number(element.dataset.constraintIndex)); break;
+    case 'qst-fill': fillQstStructure(Number(element.dataset.qstIndex)); break;
+    case 'qst-pick-file': $('#qst-file-' + Number(element.dataset.qstIndex))?.click(); break;
     case 'add-fragment':
       if (state.drawer) { state.drawer.draft.fragments.push(''); renderDrawer(); }
       break;
@@ -4997,6 +5343,21 @@ function onDocumentChange(event) {
     record.enabled = target.checked;
     renderGraph();
     renderInspector();
+    return;
+  }
+  if (target.dataset.constraintIndex !== undefined) {
+    updateConstraintField(target);
+    return;
+  }
+  if (target.dataset.qstIndex !== undefined) {
+    updateQstField(target);
+    return;
+  }
+  if (typeof target.id === 'string' && target.id.startsWith('qst-file-')) {
+    const index = Number(target.id.slice('qst-file-'.length));
+    const file = target.files?.[0];
+    target.value = '';
+    if (file && Number.isInteger(index)) importQstStructureFile(index, file);
     return;
   }
   if (target.dataset.nodeField) {

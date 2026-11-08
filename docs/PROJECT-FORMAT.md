@@ -117,7 +117,7 @@ Type-specific payloads:
 `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
 `optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
 `raman`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
-`counterpoiseChargeStates`, `disabledChecks`, `gates`,
+`counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`.
 
 `settings.engine` is a per-block override (`gaussian`, `xtb`, `orca` or `psi4`); an empty string means "use
@@ -159,6 +159,36 @@ fields — an older build drops them with a warning on save.
 
 `settings.gates`: `termination`, `scf`, `imaginary`, `minMagnitude`, `thermo`,
 `finalEnergy`.
+
+`constraints[]` (additive, schema v2) lists frozen coordinates for a Gaussian optimisation:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `kind` | enum | `bond`, `angle`, `dihedral` or `freeze` |
+| `atoms` | integer[] | 1-based atom indices in the geometry that is actually written (2, 3, 4 or 1 values); a dataset record's `coords` replace the project geometry |
+| `value` | number or null | optional declared target in Å (bond) or degrees (angle/dihedral); it must match the geometry within 0.02 Å / 0.5°, because Gaussian 16 freezes at the geometry value and ignores a value on the line |
+
+They are written as a Gaussian `ModRedundant` section after the molecule specification
+(`B 3 7 F`, `A 3 7 9 F`, `D 3 7 9 11 F`, `X 7 F`) and named on the route. An empty array is the
+default and changes no input byte. Out-of-range indices, duplicate coordinates, a set that leaves
+no internal degree of freedom, and a frozen coordinate on a `Scan` job are validation errors.
+
+`qst` (additive, schema v2) is `null` or `{ structures[] }`: the extra molecule specifications an
+`Opt=QST2` or `Opt=QST3` job reads after the block's own geometry.
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `label` | string | ≤ 60 chars, used in the section title (`… — structure 2 (product)`) |
+| `source` | enum | `copy`, `block` or `file` — where the coordinates were copied from |
+| `nodeId` | string | the block the geometry came from, when `source` is `block` |
+| `path` | string | the file name the geometry came from, when `source` is `file` |
+| `atoms[]` | object[] | `{ element, x, y, z }`, same shape as `molecule.coords` |
+
+The coordinates are stored on the block, not referenced, so a saved project and
+`ncs build-input` produce byte-identical text. `Opt=QST2` needs one structure (the product),
+`Opt=QST3` two (product, initial TS guess); the block's `molecule` is the reactant. The structures
+must have the same atoms in the same order as the block geometry — a mismatch is a validation error
+naming the first differing index, and nothing is reordered automatically.
 
 `conformers.settings` is a separate key space — route keys cannot leak into a conformer search:
 `generator` (`crest` or `import`), `method` (`gfn2` or `gfnff`), `energyWindowKcal`,

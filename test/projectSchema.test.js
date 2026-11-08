@@ -406,7 +406,7 @@ describe('project schema v1 — settings and gates', () => {
     ['memory', '0', 'must be a number between 1 and 1048576'],
     ['memoryUnit', 'TB', 'must be one of'],
     ['checkpoint', 'ts opt.chk', 'must be a safe file name ending in .chk'],
-    ['jobType', 'Opt=QST2', 'must be one of'],
+    ['jobType', 'Opt=QST9', 'must be one of'],
     ['charge', 11, 'must be an integer between -10 and 10'],
     ['multiplicity', 0, 'must be an integer between 1 and 10'],
     ['solvationModel', 'COSMO', 'must be one of'],

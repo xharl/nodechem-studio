@@ -197,14 +197,24 @@ export function jobKeywordFor(settings = {}) {
 
 /**
  * True when a job is known to write force constants to its checkpoint:
- * a `Freq` job, or an `Opt=TS` job that computes them with `CalcFC`.
- * Deliberately an allow-list — reading a checkpoint that never received a
- * Hessian fails at run time, after the user has paid for the job.
+ * a `Freq` job, an `Opt=TS` job that computes them with `CalcFC`, or — issue
+ * #93 — a constrained optimisation that asks for them with `CalcFC`. The
+ * constrained path is how a saddle search gets a legitimate Hessian guess from
+ * a relaxed scan instead of from an estimated one.
+ * Deliberately an allow-list of the choices this build can point at: reading a
+ * checkpoint that never received a Hessian fails at run time, after the user
+ * has paid for the job.
  */
 export function upstreamProvidesForceConstants(settings = {}) {
   const jobType = oneLine(settings.jobType);
   if (jobType === 'Freq') return true;
-  return jobType === TS_JOB_TYPE && forceConstantsFor(settings) === 'CalcFC';
+  if (forceConstantsFor(settings) !== 'CalcFC') return false;
+  if (jobType === TS_JOB_TYPE) return true;
+  // A plain optimisation only computes a Hessian when it carries constraints
+  // and an explicit CalcFC choice; without constraints the route keeps the bare
+  // `Opt` it always had, so it writes no force constants.
+  const constrained = Array.isArray(settings.constraints) && settings.constraints.length > 0;
+  return isOptJob(jobType) && constrained;
 }
 
 /**
