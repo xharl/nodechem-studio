@@ -21,7 +21,7 @@ project geometry.
 | `generator` | What happens |
 | --- | --- |
 | `crest` | The app runs the CREST executable you chose in the run console, with `--gfn2` (or `--gfnff`) and `--nci`, plus `--chrg`/`--uhf` when charge or multiplicity are non-default. Each search runs in its own folder under the queue directory: the starting geometry is staged there as `ensemble.xyz`, so `crest_conformers.xyz`, `crest.energies` and `crest.out` land beside the file CREST was given. |
-| `import` | The app reads a multi-XYZ file you point it at. Use this when CREST ran elsewhere, or when a collaborator sent the ensemble. |
+| `import` | The app reads a multi-XYZ file you point it at. Use this when CREST ran elsewhere, or when a collaborator sent the ensemble. A `crest.energies` file beside it (or `<stem>.energies`) supplies the energies for frames whose comment does not carry one. |
 
 The app never bundles CREST. If the generator is `crest` and no executable is configured, the
 queue refuses to start and says so; it does not fabricate an ensemble.
@@ -109,7 +109,8 @@ come from the imported geometry.
   construction and the failure paths are tested, and a missing executable fails loudly.
 - The search uses CREST's gas-phase defaults for its level; solvation is not passed to CREST.
 - Imported files must carry an energy in each frame comment (a bare negative Hartree value is
-  accepted) or be accompanied by nothing else — an ensemble without energies cannot be ranked.
+  accepted) or come with a sibling `crest.energies`/`<stem>.energies` — an ensemble with neither
+  cannot be ranked.
 
 ## Next
 
