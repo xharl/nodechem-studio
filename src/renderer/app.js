@@ -141,7 +141,9 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
 }[char]));
 
 const W = 216;
-const H = 112;
+// Cards carry a result line now (energy / SAPT / ensemble), so the height has
+// room for it between the route and the footer.
+const H = 132;
 const STAGE_W = 1080;
 const STAGE_H = 580;
 const LOOP_LANE = 548;
@@ -419,10 +421,17 @@ function inputRecordCounts(node) {
 
 function nodeDetail(node) {
   if (node.type === 'calc') {
-    // The card must describe the engine the project actually runs.
-    if (engineOrDefault(state.project?.defaults?.engine).id === 'xtb') {
+    // The card must describe the engine this block actually runs: with a mixed
+    // project the project default is not the block's engine.
+    const engine = engineForNode(state.project, node);
+    if (engine.id === 'xtb') {
       const label = (XTB_METHODS.find((item) => item.id === (node.settings.xtbMethod || 'gfn2')) || {}).label || 'xTB';
       return `${label} ${node.settings.jobType}`;
+    }
+    if (engine.id === 'psi4') {
+      const method = PSI4_METHODS.find((item) => item.key === String(node.settings.method || '').toLowerCase());
+      const basis = PSI4_BASES.find((item) => item.key === String(node.settings.basis || '').toLowerCase());
+      return `${method ? method.label : 'Psi4'}${basis ? `/${basis.label}` : ''} ${node.settings.jobType}`;
     }
     return routeShort(node.settings);
   }
@@ -451,7 +460,8 @@ function nodeDetail(node) {
 
 function nodeFoot(node) {
   if (node.type === 'calc') {
-    const output = node.output ? 'parsed' : node.state === 'ready' ? 'ready to run' : 'no output';
+    const familyDone = (state.queue?.tasks || []).some((task) => String(task.nodeId || '').startsWith(`${node.id}~`) && task.status === 'completed');
+    const output = node.parsed || familyDone ? 'parsed' : node.state === 'ready' ? 'ready to run' : 'no output';
     return { left: gateChips(node).join(' · '), right: output };
   }
   if (node.type === 'condition') return { left: `unknown → ${node.condition.unknown.replace('-', ' ')}`, right: '2 branches' };
@@ -546,19 +556,121 @@ function portHtml(node) {
   return html;
 }
 
+/**
+ * The numbers a finished block actually produced, for the card itself.
+ *
+ * The workbench used to say only "parsed"; the value the user came for was one
+ * click away in the run console. A card now carries its own result — energy or
+ * SAPT total, plus the quantity that decides its gate — while the inspector and
+ * the results panel keep the full table. Nothing is invented: a field the
+ * parser did not report is simply absent.
+ */
+function resultFacts(node) {
+  if (node.type === 'calc') {
+    // A block downstream of a dataset runs once per record: there is no single
+    // energy to show, so the card reports how many records finished and passed.
+    const family = (state.queue?.tasks || []).filter((task) => String(task.nodeId || '').startsWith(`${node.id}~`));
+    if (family.length > 0) {
+      const done = family.filter((task) => task.status === 'completed').length;
+      const passed = family.filter((task) => String(task.gateVerdict || '') === 'pass').length;
+      const running = family.some((task) => task.status === 'running');
+      return {
+        main: `${done}/${family.length} records${running ? ' · running' : ''}`,
+        sub: `${passed}/${family.length} gates pass`,
+        tone: done === family.length ? (passed === family.length ? 'ok' : 'warn') : '',
+      };
+    }
+    const parsed = node.parsed && typeof node.parsed === 'object' ? node.parsed : null;
+    if (!parsed) return null;
+    const gateVerdict = latestTaskFor(node.id)?.gateVerdict || null;
+    const tone = gateVerdict === 'pass' ? 'ok' : gateVerdict === 'fail' ? 'bad' : gateVerdict === 'unknown' ? 'warn' : '';
+    const sapt = parsed.sapt && typeof parsed.sapt === 'object' ? parsed.sapt : null;
+    if (sapt && Number.isFinite(sapt.totalKj)) {
+      const sign = sapt.totalKj > 0 ? '+' : '';
+      return {
+        main: `${sign}${sapt.totalKj.toFixed(2)} kJ/mol`,
+        sub: `SAPT0 · ${sapt.totalKcal.toFixed(2)} kcal/mol`,
+        tone,
+      };
+    }
+    const energy = Number.isFinite(parsed.finalEnergy?.hartree) ? parsed.finalEnergy.hartree : null;
+    const gibbs = Number.isFinite(parsed.thermochemistry?.freeEnergyHartree) ? parsed.thermochemistry.freeEnergyHartree : null;
+    const imaginary = Number.isInteger(parsed.frequencies?.imaginaryCount) ? parsed.frequencies.imaginaryCount : null;
+    const extras = [];
+    if (Number.isFinite(gibbs)) extras.push(`ΔG ${gibbs.toFixed(5)}`);
+    if (imaginary !== null) extras.push(imaginary === 0 ? '0 imaginary' : `${imaginary} imaginary`);
+    if (energy === null && extras.length === 0) return null;
+    return {
+      main: energy === null ? extras.shift() : `E ${energy.toFixed(5)} Eh`,
+      sub: extras.join(' · '),
+      tone,
+    };
+  }
+  if (node.type === 'conformers') {
+    const output = node.output && typeof node.output === 'object' ? node.output : null;
+    if (!output || !Number.isFinite(output.count)) return null;
+    const spread = Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(2)}` : '';
+    const top = Array.isArray(output.members) && output.members.length
+      ? Math.max(...output.members.map((member) => Number(member.population) || 0))
+      : null;
+    return {
+      main: `${output.count} of ${output.total} kept${spread}`,
+      sub: top ? `top population ${(top * 100).toFixed(1)}%` : '',
+      tone: 'ok',
+    };
+  }
+  if (node.type === 'output') {
+    const written = latestTaskFor(node.id);
+    if (!written || written.status !== 'completed' || !written.reason) return null;
+    if (!/^wrote /.test(String(written.reason))) return null;
+    // `path · bytes · sha256 …` is too long for a card: keep path and a short
+    // size, the hash stays in the queue record and the run folder.
+    const detail = String(written.reason).replace(/^wrote /, '').replace(/ · sha256 .*$/, '');
+    // `screen/results.csv · 4105 bytes` is wider than the card; a short size
+    // keeps the path readable without clipping the unit mid-word.
+    const short = detail.replace(/(\d+) bytes$/, (_m, n) => {
+      const bytes = Number(n);
+      return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+        : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
+    });
+    return { main: short, sub: '', tone: 'ok' };
+  }
+  return null;
+}
+
+/** The queue task for a block, including the `node~record` family members. */
+function latestTaskFor(nodeId) {
+  const tasks = Array.isArray(state.queue?.tasks) ? state.queue.tasks : [];
+  const own = tasks.filter((task) => task.nodeId === nodeId || String(task.nodeId || '').startsWith(`${nodeId}~`));
+  if (own.length === 0) return null;
+  return own.find((task) => task.status === 'running') || own[own.length - 1];
+}
+
+/** Running/queued state of a block, for the card's live indicator. */
+function runStateOf(node) {
+  const task = latestTaskFor(node.id);
+  if (!task) return null;
+  if (task.status === 'running') return 'running';
+  if (task.status === 'queued') return 'queued';
+  return null;
+}
+
 function renderNodeCard(node) {
   const selected = state.selected.type === 'node' && state.selected.id === node.id;
   const chips = nodeFoot(node);
   const status = statusFor(node);
   const showStatus = node.type !== 'note';
+  const facts = resultFacts(node);
+  const runState = runStateOf(node);
   const checkpointBadge = node.type === 'calc' && node.checkpointFrom
     ? '<span class="chk-badge">chk</span>'
     : '';
   return `
-    <article class="node node-${node.type} state-${node.state}${selected ? ' is-selected' : ''}"
-      data-node-id="${node.id}" tabindex="0" role="group" aria-label="${esc(node.title)}, ${showStatus ? status.label : 'note'}"
+    <article class="node node-${node.type} state-${node.state}${selected ? ' is-selected' : ''}${runState ? ` is-${runState}` : ''}"
+      data-node-id="${node.id}" data-run="${runState || 'idle'}" tabindex="0" role="group" aria-label="${esc(node.title)}, ${showStatus ? status.label : 'note'}"
       style="left:${node.x}px;top:${node.y}px">
       ${checkpointBadge}
+      ${runState === 'running' ? '<span class="node-progress" aria-hidden="true"></span>' : ''}
       <div class="node-head">
         <span class="node-icon">${esc(kindCode(node))}</span>
         <span class="node-kind">${kindLabel(node)}</span>
@@ -566,6 +678,10 @@ function renderNodeCard(node) {
       </div>
       <div class="node-title">${esc(node.title)}</div>
       <div class="node-route">${esc(nodeDetail(node))}</div>
+      ${facts ? `<div class="node-result${facts.tone ? ` is-${facts.tone}` : ''}">
+        <span class="node-result-main">${esc(facts.main)}</span>
+        ${facts.sub ? `<span class="node-result-sub">${esc(facts.sub)}</span>` : ''}
+      </div>` : ''}
       <div class="node-foot">
         <span class="gate">${esc(chips.left)}</span>
         <span class="out${chips.right ? '' : ' empty'}">${esc(chips.right)}</span>
@@ -726,11 +842,27 @@ function renderFlowTabs() {
     if (state.renamingFlowId === tab.id) {
       return `<span class="flow-tab is-editing"><input class="flow-rename" data-flow-rename="${esc(tab.id)}" value="${esc(tab.title)}" aria-label="Flow title" spellcheck="false" autocomplete="off"></span>`;
     }
-    const meta = tab.recordCount > 0 ? `${tab.recordCount} rec` : `${tab.nodeCount} blk`;
+    // A tab is a status surface, not just a label: it says how much of the flow
+    // has actually passed, and whether this is the flow currently draining.
+    const flow = flowById(state.project, tab.id);
+    const flowNodes = Array.isArray(flow?.nodes) ? flow.nodes : [];
+    const workable = flowNodes.filter((item) => item.type !== 'note');
+    const passed = workable.filter((item) => item.state === 'passed').length;
+    const review = workable.filter((item) => item.state === 'review').length;
+    const blocked = workable.filter((item) => item.state === 'blocked').length;
+    const running = state.queue?.flowId === tab.id && /^(running|queued)$/.test(String(state.queue?.status || ''));
+    const tone = running ? 'running'
+      : review > 0 ? 'review'
+        : blocked > 0 ? 'blocked'
+          : passed > 0 && passed === workable.length ? 'passed' : 'ready';
+    const meta = running ? 'running'
+      : passed > 0 ? `${passed}/${workable.length}`
+        : tab.recordCount > 0 ? `${tab.recordCount} rec` : `${tab.nodeCount} blk`;
     const title = `${tab.title} · ${countLabel(tab.nodeCount, 'block')}`
-      + `${tab.recordCount > 0 ? ` · ${countLabel(tab.recordCount, 'record')}` : ''}`;
-    return `<button type="button" role="tab" class="flow-tab${tab.active ? ' is-active' : ''}" data-flow-id="${esc(tab.id)}" aria-selected="${tab.active}" title="${esc(title)}">
-      <span class="flow-tab-title">${esc(tab.title)}</span><span class="flow-tab-meta">${esc(meta)}</span>
+      + `${tab.recordCount > 0 ? ` · ${countLabel(tab.recordCount, 'record')}` : ''}`
+      + `${passed > 0 ? ` · ${passed} of ${workable.length} passed` : ''}`;
+    return `<button type="button" role="tab" class="flow-tab${tab.active ? ' is-active' : ''} is-${tone}" data-flow-id="${esc(tab.id)}" aria-selected="${tab.active}" title="${esc(title)}">
+      <i class="flow-dot" aria-hidden="true"></i><span class="flow-tab-title">${esc(tab.title)}</span><span class="flow-tab-meta">${esc(meta)}</span>
     </button>`;
   }).join('');
   const pendingDelete = state.confirmDeleteFlowId ? flowById(state.project, state.confirmDeleteFlowId) : null;
@@ -946,6 +1078,7 @@ function applyHistorySnapshot(snapshot) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
+  refreshEngineChips();
   syncMaxParallelInput();
 }
 
@@ -3746,6 +3879,30 @@ function updateRunConsoleCopy() {
     hint.textContent = dryRunHintFor(engineId);
     hint.classList.remove('is-warn');
   }
+  const engineChip = $('#run-engine');
+  if (engineChip) engineChip.textContent = engineOrDefault(engineId).label;
+  const modeChip = $('#run-mode');
+  const dry = $('#run-dry');
+  if (modeChip && dry) {
+    const isDry = dry.checked === true;
+    modeChip.textContent = isDry ? 'dry run · fixture' : 'real run';
+    modeChip.classList.toggle('is-dry', isDry);
+    modeChip.title = isDry
+      ? 'Dry run writes synthetic fixture output. Uncheck to run the engine.'
+      : 'A real engine binary will be launched.';
+  }
+}
+
+/** Queue progress for the console header, e.g. `7/16`. */
+function updateRunProgressChip() {
+  const chip = $('#run-progress');
+  if (!chip) return;
+  const tasks = Array.isArray(state.queue?.tasks) ? state.queue.tasks : [];
+  const total = tasks.length;
+  const done = tasks.filter((task) => ['completed', 'failed', 'skipped', 'blocked', 'cancelled'].includes(task.status)).length;
+  chip.hidden = total === 0;
+  chip.textContent = `${done}/${total}`;
+  chip.classList.toggle('is-live', /^(running|queued)$/.test(String(state.queue?.status || '')));
 }
 
 function syncMaxParallelInput() {
@@ -3753,6 +3910,12 @@ function syncMaxParallelInput() {
   if (!input) return;
   const value = Math.max(1, Math.min(Number(state.project?.runner?.maxParallel) || 1, LIMITS.maxParallel));
   input.value = String(value);
+  const empty = document.querySelector('#queue-list .queue-empty');
+  if (empty) {
+    empty.textContent = value > 1
+      ? `Queue the workflow to run calculation blocks in dependency order, up to ${value} at a time.`
+      : 'Queue the workflow to run calculation blocks in dependency order, one at a time.';
+  }
 }
 
 /**
@@ -4308,15 +4471,77 @@ function buildWorkflowTasks() {
   return shared.buildWorkflowTasks(state.project);
 }
 
+/**
+ * Make each block's state follow the queue's verdict.
+ *
+ * A completed, gate-passing block is `passed`; a failed or gate-failed one is
+ * `review`. Family tasks (`node~record`) collapse onto their parent: the parent
+ * passes only when every record does. Without this the cards, the flow tabs and
+ * the status bar kept saying "ready" after a run had already finished.
+ */
+function syncNodeStatesFromQueue(queue) {
+  const tasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
+  if (tasks.length === 0) return;
+  const byParent = new Map();
+  for (const task of tasks) {
+    const parentId = String(task?.nodeId || '').split('~')[0];
+    if (!parentId) continue;
+    if (!byParent.has(parentId)) byParent.set(parentId, []);
+    byParent.get(parentId).push(task);
+  }
+  let changed = false;
+  for (const [parentId, family] of byParent) {
+    const node = nodeById(parentId);
+    // Control and output blocks complete in the same queue, so their state has
+    // to follow it too — otherwise a finished flow never reads as finished.
+    if (!node) continue;
+    const statuses = family.map((task) => String(task.status || ''));
+    if (statuses.some((status) => status === 'running' || status === 'queued')) continue;
+    const completed = family.filter((task) => task.status === 'completed');
+    const everyCompletedPassed = statuses.every((status) => status === 'completed')
+      // A control/output task carries no gates; completed is its pass.
+      && completed.every((task) => !task.gateVerdict || task.gateVerdict === 'pass');
+    let next = null;
+    // A branch that was not taken is a decision, not pending work: the loop or
+    // condition block has done its job, so it reads as passed rather than ready.
+    if (statuses.every((status) => status === 'skipped')
+      && (node.type === 'loop' || node.type === 'condition')) next = 'passed';
+    else if (statuses.some((status) => status === 'failed')) next = 'review';
+    else if (completed.length > 0 && !everyCompletedPassed) next = 'review';
+    else if (everyCompletedPassed) next = 'passed';
+    else if (statuses.some((status) => status === 'blocked')) next = 'blocked';
+    if (next && node.state !== next) {
+      node.state = next;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function applyQueue(queue) {
   if (!queue) return;
   state.queue = {
     id: queue.id || null,
     status: queue.status || 'idle',
+    flowId: queue.flowId || null,
     tasks: Array.isArray(queue.tasks) ? queue.tasks : [],
     reason: queue.reason || null,
   };
+  syncNodeStatesFromQueue(queue);
   renderQueue();
+  updateRunProgressChip();
+  // While a queue owns the console, the header shows the queue's state: a
+  // finished single run must not read 'COMPLETED' over a draining workflow.
+  const queueStatus = String(queue.status || '');
+  if (['running', 'queued', 'paused', 'completed', 'failed', 'cancelled', 'partial'].includes(queueStatus)) {
+    // A finished queue must release the header too, or it reads 'running' for
+    // ever after the last task is done.
+    setRunState(queueStatus, queueStatus);
+  }
+  // Live cards: the running block gets its progress rail, a finished one its
+  // numbers. Cheap enough at canvas scale and it keeps the workbench honest
+  // while a queue drains.
+  renderGraph();
 }
 
 function renderQueue() {
@@ -4433,6 +4658,8 @@ async function startWorkflowUnlocked() {
   try {
     const queue = await desktop.startQueue({
       projectName: state.project.name,
+      flowId: activeFlowId(state.project),
+      flowTitle: activeFlow(state.project)?.title || '',
       tasks,
       edges,
       options: {
@@ -4505,6 +4732,8 @@ function attachParsedRun(record, nodeId) {
   const node = nodeById(nodeId);
   if (!node || node.type !== 'calc') return;
   node.parsed = record.parsed;
+  // The card carries the result now, so it has to be redrawn when one arrives.
+  renderGraph();
   if (state.selected.type === 'node' && state.selected.id === node.id) renderInspector();
 }
 
@@ -4522,7 +4751,10 @@ async function attachQueueParsed(queue) {
     node.parsed = record.parsed;
     changed = true;
   }
-  if (changed && state.selected.type === 'node') renderInspector();
+  if (changed) {
+    renderGraph();
+    if (state.selected.type === 'node') renderInspector();
+  }
 }
 
 /**
@@ -4549,6 +4781,19 @@ function attachQueueEnsembles(queue) {
   }
 }
 
+/**
+ * Attach each finished task's parsed result to its block while the queue is
+ * still draining, so a card shows its energy the moment that record is done.
+ * Debounced: a burst of task updates must not read every run folder per event.
+ */
+function scheduleAttachParsed(queue) {
+  if (!queue) return;
+  clearTimeout(state.attachParsedTimer);
+  state.attachParsedTimer = setTimeout(() => {
+    attachQueueParsed(queue).catch(() => {});
+  }, 400);
+}
+
 function handleQueueEvent(event) {
   if (!event) return;
   if (event.type === 'queue-output') {
@@ -4566,6 +4811,7 @@ function handleQueueEvent(event) {
     const recordCopy = records.hasRecords ? ` · ${countLabel(records.total, 'record')}` : '';
     setStatusMessage(`Workflow running · ${countLabel(event.queue.tasks.length, 'block')}${recordCopy} · ${runEngineLabel(queuedEngine, { dryRun: event.queue.options?.dryRun })}`);
   }
+  if (event.type !== 'queue-done') scheduleAttachParsed(event.queue);
   if (event.type === 'queue-done') {
     const verdict = event.queue.status;
     appendRunOutput(`\nWorkflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
@@ -4574,6 +4820,36 @@ function handleQueueEvent(event) {
     toast(`Workflow ${verdict}.`);
     refreshHistory();
   }
+}
+
+/**
+ * Status-bar engine chips: which binaries this machine can launch right now.
+ *
+ * The academic failure mode this prevents is discovering a missing engine when
+ * a queue is already half drained. Presence only — the console's preflight is
+ * still the authority before a run.
+ */
+async function refreshEngineChips() {
+  const el = $('#engine-chips');
+  if (!el || !desktop?.engineStatus) return;
+  let status = null;
+  try {
+    status = await desktop.engineStatus();
+  } catch {
+    return;
+  }
+  if (!status || typeof status !== 'object') return;
+  const order = ['xtb', 'psi4', 'gaussian'];
+  const labels = { xtb: 'xTB', psi4: 'Psi4', gaussian: 'Gaussian' };
+  el.innerHTML = order
+    .filter((id) => status[id])
+    .map((id) => {
+      const entry = status[id] || {};
+      const label = labels[id] || id;
+      const title = entry.ok ? `${label}: ${entry.path}` : `${label} not found on PATH`;
+      return `<span class="engine-chip${entry.ok ? ' is-ok' : ' is-missing'}" title="${esc(title)}"><i></i>${esc(label)}</span>`;
+    })
+    .join('');
 }
 
 async function refreshHistory() {
@@ -5533,6 +5809,8 @@ function onDocumentChange(event) {
   }
   if (target.id === 'run-dry' || target.id === 'run-exe' || target.id === 'run-scratch') {
     saveRunConfig();
+    // The header chips name the engine and the run mode; both can change here.
+    updateRunConsoleCopy();
     return;
   }
   if (target.id === 'run-max-parallel') {
@@ -5934,7 +6212,7 @@ function wireEvents() {
 
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
-export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, simpleInspector, state };
+export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, resultFacts, runStateOf, simpleInspector, state, syncNodeStatesFromQueue };
 
 function applyAppInfo() {
   const chip = $('#app-version-chip');
@@ -5962,6 +6240,7 @@ function init() {
   if (window.innerWidth <= 820) state.inspectorHidden = true;
   readRunConfig();
   updateRunConsoleCopy();
+  refreshEngineChips();
   syncMaxParallelInput();
   if (desktop?.onRunEvent) desktop.onRunEvent(handleRunEvent);
   if (desktop?.onQueueEvent) desktop.onQueueEvent(handleQueueEvent);

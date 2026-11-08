@@ -52,6 +52,44 @@ const APP_COMMIT = String(process.env.GIT_COMMIT || '').trim() || packagedCommit
  * must agree; deriving both from one function prevents the About chip and a
  * bug report from disagreeing about which build produced the problem.
  */
+/**
+ * Which engine binaries this machine can actually launch, for the status bar.
+ *
+ * Presence on PATH only — a version probe would spawn every engine at startup.
+ * The run console still does the real preflight (architecture, parameter files,
+ * executable name) before anything is queued.
+ */
+const ENGINE_BINARIES = Object.freeze({
+  xtb: ['xtb'],
+  psi4: ['psi4'],
+  gaussian: ['g16', 'g09'],
+  orca: ['orca'],
+});
+
+function engineStatus() {
+  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const findOnPath = (names) => {
+    for (const dir of dirs) {
+      for (const name of names) {
+        const candidate = path.join(dir, name);
+        try {
+          fs.accessSync(candidate, fs.constants.X_OK);
+          if (fs.statSync(candidate).isFile()) return candidate;
+        } catch {
+          // not here; keep looking
+        }
+      }
+    }
+    return null;
+  };
+  const status = {};
+  for (const [engine, names] of Object.entries(ENGINE_BINARIES)) {
+    const found = findOnPath(names);
+    status[engine] = { ok: Boolean(found), path: found };
+  }
+  return status;
+}
+
 function currentAppInfo() {
   return {
     version: app.getVersion(),
@@ -878,6 +916,7 @@ app.whenReady().then(async () => {
   await queueManager.init();
 
   ipcMain.handle('app:info', () => currentAppInfo());
+  ipcMain.handle('engines:status', () => engineStatus());
   // Issue #82: one user-triggered request. Nothing else in the app calls out.
   ipcMain.handle('updates:check', () => checkForUpdates());
   // Theme switching (#52): repaint the native chrome, record the launch cache.

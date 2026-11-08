@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
   getInfo: () => ipcRenderer.invoke('app:info'),
+  // Presence of each engine binary on PATH, for the status bar.
+  engineStatus: () => ipcRenderer.invoke('engines:status'),
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
   collectDiagnostics: (payload) => ipcRenderer.invoke('diagnostics:collect', payload),
   saveDiagnostics: (text) => ipcRenderer.invoke('diagnostics:save', text),

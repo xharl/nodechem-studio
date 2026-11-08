@@ -152,7 +152,7 @@ describe('dataset and output inspectors', () => {
     }
     expect(element.innerHTML).toContain('data-flow-id="main"');
     expect(element.innerHTML).toContain('data-flow-id="barrier"');
-    expect(element.innerHTML).toMatch(/class="flow-tab is-active"[^>]*data-flow-id="barrier"/);
+    expect(element.innerHTML).toMatch(/class="flow-tab is-active[^>]*data-flow-id="barrier"/);
     expect(element.innerHTML).toContain('data-action="add-flow"');
     expect(element.innerHTML).toContain('data-action="duplicate-flow"');
   });
