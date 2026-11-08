@@ -134,7 +134,7 @@ describe('plan expansion', () => {
     const rungs = plan.tasks.filter((task) => task.ladder);
     expect(new Set(rungs.map((task) => task.inputName)).size).toBe(3);
     const routes = rungs.map((task) => task.inputText.split('\n').find((line) => line.startsWith('#')).split(' ')[1]);
-    expect(routes).toEqual(['B3LYP/def2-SVP', 'PBE0/def2-SVP', 'M06-2X/def2-SVP']);
+    expect(routes).toEqual(['B3LYP/def2SVP', 'PBE0/def2SVP', 'M06-2X/def2SVP']);
   });
 
   it('expands dependencies to every rung and keeps checkpoints on the primary', () => {

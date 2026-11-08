@@ -38,7 +38,9 @@ function rowNumbers(line) {
 function modeBlockStarts(lines) {
   const starts = [];
   for (let index = 0; index < lines.length; index += 1) {
-    if (/^\s*Frequencies\s*---/.test(lines[index])) starts.push(index);
+    // G09 prints `Frequencies ---`, G16 A.03 `Frequencies --`: the dash count
+    // is not a stable marker, the label is.
+    if (/^\s*Frequencies\s*--+/.test(lines[index])) starts.push(index);
   }
   return starts;
 }
@@ -62,6 +64,23 @@ export function parseNormalModes(text, { maxAtoms = 2000 } = {}) {
   const starts = modeBlockStarts(lines);
   if (starts.length === 0) return null;
 
+  // A log can print the same mode table twice, once per layout (an Opt Freq
+  // prints it again after the optimisation, and a converted/merged log can
+  // carry both). When a G16-shaped block exists, its vectors are the ones the
+  // job printed last; reading both would double the mode list.
+  const shapeOf = (start) => {
+    for (let index = start + 1; index < Math.min(lines.length, start + 60); index += 1) {
+      if (/^\s*Coord\s+Atom\s+Element/i.test(lines[index])) return 'components';
+      if (/^\s*Atom\s+AN\b/i.test(lines[index])) return 'atoms';
+      if (/^\s*Frequencies\s*--/.test(lines[index])) break;
+    }
+    return null;
+  };
+  const shapes = starts.map(shapeOf);
+  // Only filter when a G16-shaped block is actually present; otherwise every
+  // block is read with the legacy reader, including one whose header is missing.
+  const preferAtoms = shapes.includes('atoms');
+
   const frequencies = [];
   const reducedMasses = [];
   const forceConstants = [];
@@ -70,25 +89,32 @@ export function parseNormalModes(text, { maxAtoms = 2000 } = {}) {
   let atomCount = 0;
   let incomplete = 0;
 
-  for (const start of starts) {
+  for (const [position, start] of starts.entries()) {
+    if (preferAtoms && shapes[position] !== 'atoms') continue;
     const blockFrequencies = numbersIn(lines[start]);
     if (blockFrequencies.length === 0) continue;
     const blockCount = blockFrequencies.length;
     const masses = valueLine(lines, start, /^\s*Reduced masses\s*---/);
     const constants = valueLine(lines, start, /^\s*Force constants\s*---/);
-    const intensities = valueLine(lines, start, /^\s*IR Intensities\s*---/);
+    // `IR Intensities ---` (G09) vs `IR Inten    --` (G16 A.03).
+    const intensities = valueLine(lines, start, /^\s*IR\s+Inten(?:sities)?\s*--+/);
 
-    // Find the coordinate header that belongs to this block.
+    // Two displacement layouts exist in the wild, and they disagree about what
+    // the columns mean:
+    //
+    //   G09  `Coord Atom Element:`  component atom Z   v1 v2 v3 …   (3 rows/atom)
+    //   G16  `Atom  AN      X Y Z`  atom Z  x1 y1 z1  x2 y2 z2 …   (1 row/atom)
+    //
+    // Reading one as the other silently transposes the mode vectors, so the
+    // header decides which reader runs.
     let header = -1;
+    let shape = null;
     for (let index = start + 1; index < Math.min(lines.length, start + 60); index += 1) {
-      if (/^\s*Coord Atom Element/.test(lines[index])) { header = index; break; }
-      if (/^\s*Frequencies\s*---/.test(lines[index])) break;
+      if (/^\s*Coord\s+Atom\s+Element/i.test(lines[index])) { header = index; shape = 'components'; break; }
+      if (/^\s*Atom\s+AN\b/i.test(lines[index])) { header = index; shape = 'atoms'; break; }
+      if (/^\s*Frequencies\s*--/.test(lines[index])) break;
     }
 
-    // Gaussian prints one line per (component, atom): the first column is the
-    // component (1 = x, 2 = y, 3 = z), the second the atom index, and the
-    // numbers after the element column are that component for every mode in the
-    // block. Three lines per atom, in component order.
     const blockVectors = Array.from({ length: blockCount }, () => []);
     if (header !== -1) {
       const byAtom = new Map();
@@ -97,18 +123,35 @@ export function parseNormalModes(text, { maxAtoms = 2000 } = {}) {
         if (line.trim() === '') break;
         if (/^\s*[A-Za-z]/.test(line)) break;
         const values = rowNumbers(line);
-        if (values.length < 4) break;
-        const component = Math.round(values[0]);
-        const atom = Math.round(values[1]);
-        const modeValues = values.slice(3);
-        if (component < 1 || component > 3 || atom < 1) break;
-        // A block lists one number per mode; anything else is not this format.
-        if (modeValues.length !== blockCount) break;
-        if (!byAtom.has(atom)) byAtom.set(atom, {});
-        const entry = byAtom.get(atom);
-        if (entry[component]) break;
-        entry[component] = modeValues;
-        if (atom > atomCount) atomCount = atom;
+        if (values.length < 3) break;
+
+        if (shape === 'components') {
+          const component = Math.round(values[0]);
+          const atom = Math.round(values[1]);
+          const modeValues = values.slice(3);
+          if (component < 1 || component > 3 || atom < 1) break;
+          if (modeValues.length !== blockCount) break;
+          if (!byAtom.has(atom)) byAtom.set(atom, {});
+          const entry = byAtom.get(atom);
+          if (entry[component]) break;
+          entry[component] = modeValues;
+          if (atom > atomCount) atomCount = atom;
+        } else {
+          const atom = Math.round(values[0]);
+          const flat = values.slice(2);
+          if (atom < 1) break;
+          if (flat.length !== blockCount * 3) break;
+          // Same key convention as the component shape (1 = x, 2 = y, 3 = z),
+          // so the assembly below has one reader rather than two.
+          const entry = { 1: [], 2: [], 3: [] };
+          for (let mode = 0; mode < blockCount; mode += 1) {
+            entry[1].push(flat[mode * 3]);
+            entry[2].push(flat[mode * 3 + 1]);
+            entry[3].push(flat[mode * 3 + 2]);
+          }
+          byAtom.set(atom, entry);
+          if (atom > atomCount) atomCount = atom;
+        }
       }
       for (const [atom, entry] of byAtom) {
         if (!entry[1] || !entry[2] || !entry[3]) continue;

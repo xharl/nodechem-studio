@@ -116,10 +116,10 @@ describe('issue #15 — transition-state force constants', () => {
 
   it('gives a new TS block Opt=(TS,CalcFC,NoEigenTest)', () => {
     const settings = defaultSettings({ jobType: 'Opt=TS', checkpoint: 'ts_opt.chk' });
-    expect(routeFor(settings)).toBe('#p B3LYP/def2-SVP Opt=(TS,CalcFC,NoEigenTest) EmpiricalDispersion=GD3BJ');
+    expect(routeFor(settings)).toBe('#p B3LYP/def2SVP Opt=(TS,CalcFC,NoEigenTest) EmpiricalDispersion=GD3BJ');
 
     const text = buildGaussianInput({ settings, molecule, inputName: 'ts_opt.gjf' });
-    expect(text.split('\n')).toContain('#p B3LYP/def2-SVP Opt=(TS,CalcFC,NoEigenTest) EmpiricalDispersion=GD3BJ');
+    expect(text.split('\n')).toContain('#p B3LYP/def2SVP Opt=(TS,CalcFC,NoEigenTest) EmpiricalDispersion=GD3BJ');
   });
 
   it('covers all four force-constant choices', () => {

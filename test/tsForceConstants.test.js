@@ -322,7 +322,7 @@ describe('issue #15 — seeded Diels–Alder project', () => {
       jobType: 'Opt=TS', forceConstants: 'CalcFC', checkpoint: 'ts_opt.chk',
     });
     expect(routeFor(seeded))
-      .toBe('#p B3LYP/def2-SVP Opt=(TS,CalcFC,NoEigenTest) EmpiricalDispersion=GD3BJ');
+      .toBe('#p B3LYP/def2SVP Opt=(TS,CalcFC,NoEigenTest) EmpiricalDispersion=GD3BJ');
   });
 });
 
@@ -411,7 +411,7 @@ describe('issue #16 — UltraFine grid for DFT at tight convergence', () => {
   it('writes Integral=UltraFine into the route without a second keyword', () => {
     expect(gridFor(dftOpt())).toBe('UltraFine');
     expect(routeFor(dftOpt()))
-      .toBe('#p B3LYP/def2-SVP Opt=Tight EmpiricalDispersion=GD3BJ Integral=UltraFine');
+      .toBe('#p B3LYP/def2SVP Opt=Tight EmpiricalDispersion=GD3BJ Integral=UltraFine');
     expect(routeFor(dftOpt()).match(/Integral=/g)).toHaveLength(1);
   });
 
@@ -574,7 +574,7 @@ describe('issue #16 — project validation', () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
     expect(routeFor(result.project.nodes[0].settings))
-      .toBe('#p B3LYP/def2-SVP Opt=Tight EmpiricalDispersion=GD3BJ Integral=UltraFine');
+      .toBe('#p B3LYP/def2SVP Opt=Tight EmpiricalDispersion=GD3BJ Integral=UltraFine');
   });
 });
 

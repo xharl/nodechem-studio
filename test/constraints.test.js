@@ -137,7 +137,7 @@ describe('ModRedundant section in the input', () => {
       jobType: 'Opt=TS',
       constraints: [{ kind: 'bond', atoms: [1, 2] }],
     }).split('\n').find((line) => line.startsWith('#p'));
-    expect(route).toBe('#p B3LYP/def2-SVP Opt=(TS,CalcFC,NoEigenTest,ModRedundant)');
+    expect(route).toBe('#p B3LYP/def2SVP Opt=(TS,CalcFC,NoEigenTest,ModRedundant)');
   });
 
   it('refuses a constraint on a job type that has no ModRedundant section', () => {

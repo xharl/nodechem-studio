@@ -48,7 +48,7 @@ describe('extxyz — trajectory interchange', () => {
 
   it('writes every frame the log printed', () => {
     expect(frames).toHaveLength(6);
-    expect(frames.every((frame) => frame.atoms.length === 18)).toBe(true);
+    expect(frames.every((frame) => frame.atoms.length === 20)).toBe(true);
   });
 
   it('declares its columns so a reader does not guess', () => {
@@ -82,12 +82,12 @@ describe('plain xyz', () => {
 
   it('writes one block per frame with the atom count first', () => {
     const lines = text.split('\n');
-    expect(lines[0]).toBe('18');
+    expect(lines[0]).toBe('20');
     expect(lines[1]).toBe('DVB optimisation | step 1');
   });
 
   it('writes the same number of geometries as frames', () => {
-    expect(text.trimEnd().split('\n').filter((line) => line === '18')).toHaveLength(6);
+    expect(text.trimEnd().split('\n').filter((line) => line === '20')).toHaveLength(6);
   });
 
   it('carries the energy in the comment, where a reader may ignore it', () => {

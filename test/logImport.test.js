@@ -18,16 +18,16 @@ const xtb = read('xtb/water-sp.out');
 
 describe('route summary', () => {
   it('reads method, basis and the job keyword', () => {
-    expect(parseRouteSummary('#p B3LYP/def2-SVP Opt EmpiricalDispersion=GD3BJ')).toEqual({
+    expect(parseRouteSummary('#p B3LYP/def2SVP Opt EmpiricalDispersion=GD3BJ')).toEqual({
       method: 'B3LYP',
-      basis: 'def2-SVP',
+      basis: 'def2SVP',
       jobType: 'Opt',
     });
   });
 
   it('prefers the more specific job keyword', () => {
     expect(parseRouteSummary('#p M06-2X/6-31G(d) Opt=TS CalcFC').jobType).toBe('Opt=TS');
-    expect(parseRouteSummary('#p wB97X-D/def2-TZVP Opt Freq').jobType).toBe('Opt Freq');
+    expect(parseRouteSummary('#p wB97X-D/def2TZVP Opt Freq').jobType).toBe('Opt Freq');
   });
 
   it('returns nulls when there is no route', () => {

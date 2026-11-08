@@ -142,12 +142,12 @@ describe('Gaussian log as a geometry source', () => {
   it('offers every optimisation frame', () => {
     const { records } = parseStructureRecords(readFileSync('test/fixtures/real/g16-dvb-gopt.out', 'utf8'), { filename: 'opt.out' });
     expect(records).toHaveLength(6);
-    expect(records[0].atoms).toHaveLength(18);
+    expect(records[0].atoms).toHaveLength(20);
   });
 
   it('returns the last frame for a single-structure read, which is the optimised geometry', () => {
     const structure = parseStructure(readFileSync('test/fixtures/real/g16-dvb-gopt.out', 'utf8'), { filename: 'opt.out' });
-    expect(structure.atoms).toHaveLength(18);
+    expect(structure.atoms).toHaveLength(20);
     expect(structure.format).toBe('log');
   });
 });

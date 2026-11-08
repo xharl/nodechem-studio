@@ -600,7 +600,11 @@ function methodFromEcho(text) {
  * still prints the tail of the log after it.
  */
 export function parsePsi4Output(text, { truncated = false, argv = null, route = null } = {}) {
-  const body = String(text || '');
+  // Psi4 on Windows writes CRLF, and several blocks here are matched with
+  // whole-text regular expressions that assume `\n`. Parsing a real Windows log
+  // without normalising first lost the method and basis (the input-echo regex
+  // never matched) while the energies still parsed — a silent half-parse.
+  const body = String(text || '').replace(/\r\n?/g, '\n');
   const lines = body.split(/\r\n|\n|\r/);
   const looksOrca = /ORCA TERMINATED NORMALLY|O\s{2,}R\s{2,}C\s{2,}A/i.test(body);
   const banner = /Psi4:\s*An Open-Source Ab Initio Electronic Structure Package|Psi4\s+\d+\.\d+/i.test(body);

@@ -11,37 +11,37 @@
         "id": "apn-freq",
         "type": "calc",
         "executable": true,
-        "inputHash": "7367e9be0c49ae66"
+        "inputHash": "fe9304d110ff8758"
       },
       {
         "id": "apn-td-toluene",
         "type": "calc",
         "executable": true,
-        "inputHash": "503cad99086bc96f"
+        "inputHash": "6dc3e93ea36bd484"
       },
       {
         "id": "apn-td-thf",
         "type": "calc",
         "executable": true,
-        "inputHash": "f998832ce58f5cc5"
+        "inputHash": "f1d3ba6836581836"
       },
       {
         "id": "apn-td-dcm",
         "type": "calc",
         "executable": true,
-        "inputHash": "441668de30d01955"
+        "inputHash": "c96f864b062717f5"
       },
       {
         "id": "apn-td-dmso",
         "type": "calc",
         "executable": true,
-        "inputHash": "84f5f00bfc8c9412"
+        "inputHash": "9511dd71e0794efe"
       },
       {
         "id": "apn-td-meoh",
         "type": "calc",
         "executable": true,
-        "inputHash": "14c79fb075108d0b"
+        "inputHash": "2c4e5ca4ae6f303c"
       },
       {
         "id": "apn-note",
@@ -65,13 +65,13 @@
         "id": "em-s1-opt",
         "type": "calc",
         "executable": true,
-        "inputHash": "eba3fdcc222561b2"
+        "inputHash": "5f2ff95a504e103c"
       },
       {
         "id": "em-td",
         "type": "calc",
         "executable": true,
-        "inputHash": "1890885f576e05d7"
+        "inputHash": "c652cf0d1224e49b"
       },
       {
         "id": "em-note",
@@ -90,13 +90,13 @@
         "id": "of-opt",
         "type": "calc",
         "executable": true,
-        "inputHash": "975de74d4caa728f"
+        "inputHash": "619000a46cae8ce7"
       },
       {
         "id": "of-freq",
         "type": "calc",
         "executable": true,
-        "inputHash": "c49b9a1bd2cd6b88"
+        "inputHash": "f2f0b1e048a3c791"
       }
     ],
     "edges": [
@@ -109,7 +109,7 @@
         "id": "sp-energy",
         "type": "calc",
         "executable": true,
-        "inputHash": "ebc2eb3671619741"
+        "inputHash": "51a4291c2a5afc75"
       }
     ],
     "edges": []
@@ -120,19 +120,19 @@
         "id": "ts-react-opt",
         "type": "calc",
         "executable": true,
-        "inputHash": "975de74d4caa728f"
+        "inputHash": "619000a46cae8ce7"
       },
       {
         "id": "ts-opt",
         "type": "calc",
         "executable": true,
-        "inputHash": "c24ebe8bf7cc3f43"
+        "inputHash": "c604816e356a1f9c"
       },
       {
         "id": "ts-freq",
         "type": "calc",
         "executable": true,
-        "inputHash": "06fd160e39f5e958"
+        "inputHash": "1bf6a09f79f8f2a9"
       },
       {
         "id": "ts-route-note",

@@ -127,7 +127,7 @@ describe('QST input text', () => {
       qst: { structures: [structure('product', PRODUCT)] },
     });
     const route = text.split('\n').find((line) => line.startsWith('#p'));
-    expect(route).toBe('#p B3LYP/def2-SVP Opt=(QST2,ModRedundant)');
+    expect(route).toBe('#p B3LYP/def2SVP Opt=(QST2,ModRedundant)');
     expect(text.split('\n').filter((line) => line === 'B 1 2 F')).toHaveLength(2);
   });
 

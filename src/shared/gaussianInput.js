@@ -197,6 +197,29 @@ function compositeRouteFor(settings, method) {
   return tokens.join(' ');
 }
 
+/**
+ * The app's basis ids are written the way chemists write them (`def2-SVP`), but
+ * Gaussian route keywords have no hyphen: a real G16 A.03 run rejects
+ * `B3LYP/def2-SVP` with `QPErr --- A syntax error was detected in the input
+ * line` while `B3LYP/def2SVP` runs normally. The mapping belongs to the Gaussian
+ * route only — ORCA and Psi4 keep the hyphenated spelling.
+ */
+const GAUSSIAN_BASIS_KEYWORD = Object.freeze({
+  'def2-svp': 'def2SVP',
+  'def2-tzvp': 'def2TZVP',
+  'def2-qzvp': 'def2QZVP',
+  'def2-tzvpp': 'def2TZVPP',
+  'def2-qzvpp': 'def2QZVPP',
+});
+
+export function gaussianBasisKeyword(basis) {
+  const name = String(basis ?? '').trim();
+  if (!name) return name;
+  // `Gen`/`GenECP` name a user-supplied block, not a basis in the route.
+  if (/^gen(?:ecp)?$/i.test(name)) return name;
+  return GAUSSIAN_BASIS_KEYWORD[name.toLowerCase()] || name;
+}
+
 export function routeFor(settings = {}, { basisName = null } = {}) {
   const composite = compositeMethodFor(settings.jobType);
   if (composite) return compositeRouteFor(settings, composite);
@@ -214,7 +237,7 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
     throw new Error(`${values.functional} is a composite method this build does not support yet;`
       + ' it cannot be written as an ordinary method/basis route.');
   }
-  const basis = basisName || values.basis;
+  const basis = gaussianBasisKeyword(basisName || values.basis);
   const tokens = [`#p ${values.functional}/${basis} ${values.job}`];
   const counterpoise = counterpoiseCount(settings);
   if (counterpoise === null) throw new Error('Counterpoise must be an integer between 2 and 10, or off.');
@@ -484,7 +507,13 @@ export function buildGaussianInput({
   } else {
     lines.push(`${charge} ${multiplicity}`);
   }
-  lines.push(...coordinateLines);
+  // `Geom=Check` tells Gaussian to take the geometry from the checkpoint, so a
+  // molecule specification after the charge line is rejected outright
+  // (`Atom specifications unexpectedly found in input stream`, l101). The
+  // charge/multiplicity line stays: a real run with it and no atom lines was
+  // accepted and reproduced the optimised geometry exactly.
+  const geometryFromCheckpoint = /\bGeom\s*=\s*Check\b/i.test(route);
+  if (!geometryFromCheckpoint) lines.push(...coordinateLines);
   if (constraintLines.length > 0) {
     // The molecule specification ends at a blank line; the ModRedundant section
     // follows it and is terminated by another blank line.

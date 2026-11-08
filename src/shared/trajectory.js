@@ -44,7 +44,9 @@ export function parseTrajectory(text) {
       if (DASHES.test(lines[cursor])) dashes += 1;
       cursor += 1;
     }
-    cursor += 2; // "Center Atomic Atomic …" and its units line
+    // The second dashed rule is the last line of the header, so the cursor is
+    // already on the first atom row. Skipping two more rows dropped the first
+    // two atoms of every frame — a water trajectory parsed as one atom.
     const atoms = [];
     let malformed = false;
     while (cursor < lines.length && !DASHES.test(lines[cursor])) {

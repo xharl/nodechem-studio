@@ -26,7 +26,7 @@ const INPUT_TEXT = [
   '%Mem=4GB',
   '%NProcShared=4',
   '%Chk=job.chk',
-  '#p PBE0/def2-TZVP Opt Freq EmpiricalDispersion=GD3BJ Integral=UltraFine',
+  '#p PBE0/def2TZVP Opt Freq EmpiricalDispersion=GD3BJ Integral=UltraFine',
   '',
   'Synthetic bundle fixture',
   '',
@@ -71,7 +71,7 @@ function baseRecord() {
     },
     parsed: {
       program: { name: 'Gaussian', version: '16', revision: 'C.01' },
-      route: '#p PBE0/def2-TZVP Opt Freq EmpiricalDispersion=GD3BJ Integral=UltraFine',
+      route: '#p PBE0/def2TZVP Opt Freq EmpiricalDispersion=GD3BJ Integral=UltraFine',
       scf: { cycles: 8 },
       thermochemistry: { freeEnergyHartree: -76.02, temperatureK: 298.15, pressureAtm: 1 },
     },

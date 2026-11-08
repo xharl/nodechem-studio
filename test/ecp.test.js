@@ -94,7 +94,7 @@ describe('input file', () => {
       molecule: { charge: 0, multiplicity: 1, coords: [{ element: 'O', x: 0, y: 0, z: 0 }] },
       inputName: 'o.gjf',
     });
-    expect(text).toMatch(/^#p B3LYP\/def2-SVP SP/m);
+    expect(text).toMatch(/^#p B3LYP\/def2SVP SP/m);
     expect(text).not.toMatch(/ECP|\*\*\*\*/);
     expect(text.endsWith('\n\n')).toBe(true);
   });
@@ -118,7 +118,7 @@ describe('input file', () => {
   });
 
   it('lets routeFor take the emitted basis name without changing the rest', () => {
-    expect(routeFor(settings)).toBe('#p B3LYP/def2-SVP SP EmpiricalDispersion=GD3BJ');
+    expect(routeFor(settings)).toBe('#p B3LYP/def2SVP SP EmpiricalDispersion=GD3BJ');
     expect(routeFor(settings, { basisName: 'GenECP' })).toBe('#p B3LYP/GenECP SP EmpiricalDispersion=GD3BJ');
   });
 });

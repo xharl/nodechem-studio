@@ -116,7 +116,9 @@ describe('a trajectory cache', () => {
   const cache = readCache(buffer);
 
   it('keeps the frame and atom counts in the meta', () => {
-    expect(cache.meta).toMatchObject({ kind: 'trajectory', frames: 6, atoms: 18 });
+    // 20 atoms: the fixture is C10H10. The old parser dropped the first two atom
+    // rows of every frame and the expectation had been pinned to that bug.
+    expect(cache.meta).toMatchObject({ kind: 'trajectory', frames: 6, atoms: 20 });
     expect(cache.meta.symbols).toContain('C');
   });
 

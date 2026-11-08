@@ -13,7 +13,7 @@ describe('optimisation trajectory on a real log', () => {
   it('reads every printed geometry with its atoms', () => {
     expect(trajectory).not.toBeNull();
     expect(trajectory.steps).toHaveLength(6);
-    expect(trajectory.steps[0].atoms).toHaveLength(18);
+    expect(trajectory.steps[0].atoms).toHaveLength(20);
     expect(trajectory.steps[0].atoms[0].element).toBe('C');
   });
 

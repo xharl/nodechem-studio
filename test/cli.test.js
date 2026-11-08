@@ -82,7 +82,7 @@ describe('ncs build-input', () => {
     const result = await ncs(['build-input', example('single-point.ncs'), '--node', nodeId]);
     expect(result.code).toBe(0);
     expect(result.stdout).toMatch(/^%Mem=/);
-    expect(result.stdout).toMatch(/^#p B3LYP\/def2-SVP SP/m);
+    expect(result.stdout).toMatch(/^#p B3LYP\/def2SVP SP/m);
     expect(result.stdout).toContain('O      0.000000');
   });
 });

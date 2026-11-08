@@ -32,6 +32,20 @@ parser testing only. Gaussian itself is licensed separately by Gaussian, Inc.
 | `g16-dvb-td.out` | `cclib/cclib` (`data/Gaussian/basicGaussian16/dvb_td.out`), G16 TD-DFT on divinylbenzene | Rotatory-strength block in both conventions (velocity and length); **achiral**, so every value is printed as zero — it proves the column layout, not the signs |
 
 
+## Gaussian 16 A.03 (Windows) — runs produced by this app
+
+| File | Route the app wrote | Result |
+|---|---|---|
+| `g16-a03-water-sp.out` | `#p B3LYP/6-31G(d) SP EmpiricalDispersion=GD3BJ Pop=NBO` | −76.4093047918 Eh, 9 SCF cycles, normal termination |
+| `g16-a03-water-optfreq.out` | `#p B3LYP/6-31G(d) Opt Freq EmpiricalDispersion=GD3BJ` | 5 optimisation frames, 3 modes, ZPE 0.021164 Eh |
+
+Both were produced by Gaussian 16 **Rev A.03** (`EM64W-G16RevA.03 17-Dec-2016`) on a licensed
+Windows machine, from inputs written by `buildGaussianInput`, and returned by the peer run of
+2026-11-08. They matter because they are the first logs that came out of *this* builder, and because
+G16 A.03 prints a displacement table (`Atom AN  X Y Z`) and an `IR Inten --` line that the older
+`g16-dvb-ir.out` fixture does not — that fixture carries a G09-shaped block, so a parser tuned to it
+passes the suite and fails on every real G16 frequency job.
+
 ## Psi4
 
 Verbatim Psi4 outputs from the Psi4 project's own test suite and two public

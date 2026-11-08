@@ -62,15 +62,23 @@ describe('honest absence', () => {
   });
 
   it('drops a block whose rows do not cover every mode', () => {
-    const complete = fixture('g16-dvb-ir.out');
+    // A real Gaussian 16 A.03 log prints `Atom AN  X Y Z`, not the G09
+    // `Coord Atom Element:` table, so the break has to happen in that shape.
+    const complete = fixture('g16-a03-water-optfreq.out');
     const lines = complete.split('\n');
-    const header = lines.findIndex((line) => /Coord Atom Element/.test(line));
+    const header = lines.findIndex((line) => /^\s*Atom\s+AN\b/.test(line));
     // Remove the displacement rows of the first block, leaving its frequencies.
     const broken = [...lines.slice(0, header + 1), ...lines.slice(header + 4)].join('\n');
     const parsed = parseNormalModes(broken);
     expect(parsed).not.toBeNull();
     expect(parsed.incomplete).toBeGreaterThan(0);
+    // A log with one block loses every vector when that block is cut, so the
+    // honest outcome is either "fewer animatable modes" or "none at all".
     const animatable = animatableModes(parsed);
-    expect(animatable.frequencies.length).toBeLessThan(parsed.modeCount);
+    if (animatable) {
+      expect(animatable.frequencies.length).toBeLessThan(parsed.modeCount);
+    } else {
+      expect(parsed.incomplete).toBe(parsed.modeCount);
+    }
   });
 });

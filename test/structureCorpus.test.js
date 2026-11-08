@@ -61,7 +61,7 @@ describe('multi-frame XYZ — derived from a real Gaussian optimisation', () => 
 
   it('offers every frame, not just the first', () => {
     expect(frames.records).toHaveLength(6);
-    for (const record of frames.records) expect(record.atoms).toHaveLength(18);
+    for (const record of frames.records) expect(record.atoms).toHaveLength(20);
   });
 
   it('matches the geometry the Gaussian log contains, frame for frame', () => {

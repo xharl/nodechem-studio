@@ -35,7 +35,7 @@ function gaussianRecord(overrides = {}) {
     },
     parsed: {
       program: { name: 'Gaussian', version: '16', revision: 'C.01' },
-      route: '#p PBE0/def2-TZVP Opt Freq EmpiricalDispersion=GD3BJ SCF=VeryTight Integral=UltraFine SCRF=(SMD,Solvent=THF)',
+      route: '#p PBE0/def2TZVP Opt Freq EmpiricalDispersion=GD3BJ SCF=VeryTight Integral=UltraFine SCRF=(SMD,Solvent=THF)',
       scf: { cycles: 8, status: 'converged' },
       thermochemistry: {
         freeEnergyHartree: -76.02,
@@ -142,7 +142,7 @@ describe('methods paragraph — Gaussian', () => {
   ])('names the job type %s', (jobType, phrase) => {
     const record = gaussianRecord();
     record.provenance.jobType = jobType;
-    record.parsed.route = `#p PBE0/def2-TZVP ${jobType}`;
+    record.parsed.route = `#p PBE0/def2TZVP ${jobType}`;
     const result = methodsParagraphFor(record);
     expect(result.ok).toBe(true);
     expect(result.plain).toContain(phrase);
@@ -151,7 +151,7 @@ describe('methods paragraph — Gaussian', () => {
   it('derives a missing job type from the route but labels it as derived', () => {
     const record = gaussianRecord();
     delete record.provenance.jobType;
-    record.parsed.route = '#p PBE0/def2-TZVP Opt=TS CalcFC';
+    record.parsed.route = '#p PBE0/def2TZVP Opt=TS CalcFC';
 
     const result = methodsParagraphFor(record);
     expect(result.plain).toContain('a transition-state search');

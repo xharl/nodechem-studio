@@ -134,7 +134,7 @@ describe('method block', () => {
       td: null,
     });
     expect(routeFor(settings)).toBe(
-      '#p PBE0/def2-TZVP Opt EmpiricalDispersion=GD3BJ SCF=VeryTight Integral=UltraFine SCRF=(SMD,Solvent=THF)',
+      '#p PBE0/def2TZVP Opt EmpiricalDispersion=GD3BJ SCF=VeryTight Integral=UltraFine SCRF=(SMD,Solvent=THF)',
     );
   });
 
@@ -149,7 +149,7 @@ describe('method block', () => {
       scf: null,
       td: null,
     });
-    expect(routeFor(settings)).toBe('#p B3LYP/def2-SVP Opt EmpiricalDispersion=GD3BJ');
+    expect(routeFor(settings)).toBe('#p B3LYP/def2SVP Opt EmpiricalDispersion=GD3BJ');
   });
 });
 

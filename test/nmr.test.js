@@ -111,7 +111,7 @@ describe('NMR job type and route', () => {
       molecule: { charge: 0, multiplicity: 1, coords: [{ element: 'C', x: 0, y: 0, z: 0 }] },
       inputName: 'nmr.gjf',
     });
-    expect(text).toMatch(/^#p B3LYP\/def2-SVP NMR$/m);
+    expect(text).toMatch(/^#p B3LYP\/def2SVP NMR$/m);
   });
 
   it('parses the NMR block into the run summary', () => {

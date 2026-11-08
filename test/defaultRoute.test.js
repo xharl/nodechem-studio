@@ -43,7 +43,7 @@ describe('issue #17 — modern default route', () => {
     expect(settings.method).toBe(MODERN_ROUTE_PRESET.method);
     expect(settings.basis).toBe(MODERN_ROUTE_PRESET.basis);
     expect(settings.dispersion).toBe('GD3BJ');
-    expect(routeFor(settings)).toBe('#p B3LYP/def2-SVP Opt EmpiricalDispersion=GD3BJ');
+    expect(routeFor(settings)).toBe('#p B3LYP/def2SVP Opt EmpiricalDispersion=GD3BJ');
 
     const text = buildGaussianInput({
       title: 'New project',
@@ -51,7 +51,7 @@ describe('issue #17 — modern default route', () => {
       molecule,
       inputName: 'first.gjf',
     });
-    expect(text).toContain('#p B3LYP/def2-SVP Opt EmpiricalDispersion=GD3BJ');
+    expect(text).toContain('#p B3LYP/def2SVP Opt EmpiricalDispersion=GD3BJ');
 
     // The add-block path copies the project's method/basis into defaultSettings.
     const added = defaultSettings({
@@ -79,7 +79,7 @@ describe('issue #17 — modern default route', () => {
   it('does not double-correct a functional that already has dispersion', () => {
     expect(hasBuiltinDispersion('ωB97X-D')).toBe(true);
     expect(defaultSettings({ method: 'ωB97X-D' }).dispersion).toBe('');
-    expect(routeFor(defaultSettings({ method: 'ωB97X-D' }))).toBe('#p ωB97X-D/def2-SVP Opt');
+    expect(routeFor(defaultSettings({ method: 'ωB97X-D' }))).toBe('#p ωB97X-D/def2SVP Opt');
     expect(dispersionForMethodChange('PBE0', '')).toBe('GD3BJ');
     expect(dispersionForMethodChange('ωB97X-D', 'GD3BJ')).toBe('');
     expect(dispersionForMethodChange('PBE0', 'GD3')).toBe('GD3');
