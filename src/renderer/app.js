@@ -53,11 +53,14 @@ import {
 import {
   DEFAULT_CONFORMER_SETTINGS,
   conformerEnergyLabel,
+  conformerGroupLabel,
+  conformerGroups,
   conformerOriginLabel,
   conformerOriginShort,
   conformerTableCaption,
   formatPopulation,
   formatRelativeKcal,
+  isConformerGroupId,
 } from '../shared/conformers.js';
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
@@ -464,6 +467,17 @@ function nodeDetail(node) {
   return '';
 }
 
+/**
+ * Issue 132: how many conformer blocks in the current flow share a group id.
+ * Counted live from the flow and never stored — the id alone is the claim.
+ */
+function conformerGroupCount(group) {
+  const id = String(group || '');
+  if (!id) return 0;
+  return state.project.nodes.filter((item) => item.type === 'conformers'
+    && String(item.settings?.group || '') === id).length;
+}
+
 function nodeFoot(node) {
   if (node.type === 'calc') {
     const familyDone = (state.queue?.tasks || []).some((task) => String(task.nodeId || '').startsWith(`${node.id}~`) && task.status === 'completed');
@@ -479,8 +493,12 @@ function nodeFoot(node) {
       : (node.settings.generator === 'crest'
         ? `CREST ${node.settings.method === 'gfnff' ? 'GFN-FF' : 'GFN2'}`
         : 'imported ensemble');
+    // Issue 132: a grouped block says so, and how many blocks in this flow
+    // share the id. An ungrouped block adds nothing — no "group null".
+    const groupId = node.settings.group || '';
+    const groupText = conformerGroupLabel(groupId, { blocks: conformerGroupCount(groupId), compact: true });
     const chosen = node.output?.selectedId || '';
-    return { left: origin, right: chosen ? `using ${chosen}` : 'no choice' };
+    return { left: [origin, groupText].filter(Boolean).join(' · '), right: chosen ? `using ${chosen}` : 'no choice' };
   }
   if (node.type === 'loop') return { left: `until ${node.loop.until}`, right: `×${node.loop.maxAttempts}` };
   if (node.type === 'merge') return { left: `policy: ${node.merge.policy}`, right: 'join' };
@@ -1445,6 +1463,17 @@ function renderProjectInspector() {
     .join('');
   const loopCount = state.project.edges.filter((edge) => edge.type === 'loop').length;
   const condCount = nodes.filter((node) => node.type === 'condition').length;
+  // Issue 132: the groups this flow can see, with the blocks that share each
+  // id and each block's own protomer label. An ungrouped block is absent — it
+  // is not listed under a null group.
+  const conformerGroupList = conformerGroups(nodes
+    .filter((node) => node.type === 'conformers')
+    .map((node) => ({
+      id: node.id,
+      title: node.title,
+      group: node.settings?.group || '',
+      protomers: Array.isArray(node.output?.protomers) ? node.output.protomers : [],
+    })));
 
   return `${inspectorHead(
     'Project',
@@ -1485,6 +1514,15 @@ function renderProjectInspector() {
         <button type="button" class="btn" data-open-modal="molecule">Edit molecule</button>
       </div>
     </section>
+
+    ${conformerGroupList.length === 0 ? '' : `<section class="section" data-conformer-groups>
+      <div class="section-label">Conformer groups <span class="spacer"></span><span>${countLabel(conformerGroupList.length, 'group')}</span></div>
+      ${conformerGroupList.map((entry) => `<div class="card">
+        <div class="kv"><span>group ${esc(entry.id)}</span><code>${countLabel(entry.blocks.length, 'block')}</code></div>
+        ${entry.blocks.map((block) => `<div class="kv"><span>${esc(block.title)}</span><code>${esc(block.protomers.length ? block.protomers.join(', ') : 'protomer label not recorded')}</code></div>`).join('')}
+      </div>`).join('')}
+      <p class="inspector-note" style="margin-top:8px">A group is a study label set by hand on each block. It does not claim the ensembles are the same molecule, and it does not make energies across protonation states comparable.</p>
+    </section>`}
 
     <section class="section">
       <div class="section-label">Project defaults</div>
@@ -2159,6 +2197,22 @@ function conformersInspector(node) {
   // method, and the provenance line names what produced the ensemble.
   const caption = output ? conformerTableCaption(output) : '';
   const provenanceLine = output ? conformerOriginLabel(output) : '';
+  // Issue 132: a block may belong to a study with other blocks. The id is
+  // typed by hand; the count is read from the flow, and nothing here claims the
+  // ensembles are the same molecule or that their energies are comparable.
+  const groupId = s.group || '';
+  const groupCount = conformerGroupCount(groupId);
+  const groupLine = groupId
+    ? conformerGroupLabel(groupId, { blocks: groupCount })
+    : 'no group — this block stands alone';
+  const groupInvalid = Boolean(groupId) && !isConformerGroupId(groupId);
+  const groupBlock = group('Study group', groupId ? groupLine : 'optional', true, [
+    `<div class="field full"><label>Group id</label><input class="input" data-conformer-field="group" value="${esc(groupId)}" placeholder="e.g. tautomer-study" maxlength="32"></div>`,
+    groupInvalid
+      ? `<div class="field full"><span class="inspector-note" data-conformer-group-error>Not a plain group id. Use 1–32 letters, digits, "." "_" or "-", starting with a letter or digit — or leave it empty.</span></div>`
+      : '',
+    `<div class="field full"><span class="inspector-note">Blocks that share an id belong to the same study. A group is not a protomer or tautomer judgement, and energies across protonation states are not comparable without a proton reference.</span></div>`,
+  ].join(''));
   const rows = members.length
     ? `<table class="batch-table">
         <thead><tr><th>Member</th><th>ΔE (kcal/mol)</th><th>Pop.</th><th>RMSD</th><th></th></tr></thead>
@@ -2182,8 +2236,10 @@ function conformersInspector(node) {
       ? `using ${esc(selected.id)} · ${formatRelativeKcal(selected.relativeKcal)} kcal/mol · ${formatPopulation(selected.population)}`
       : 'no member chosen'}</span></div>
     ${provenanceLine ? `<div class="inspector-note" data-conformer-provenance>${esc(provenanceLine)}</div>` : ''}
+    ${groupId ? `<div class="inspector-note" data-conformer-group>${esc(groupLine)}</div>` : ''}
     ${warningBlock}
     ${group('Ensemble', output ? caption : summaryLine, true, [rows])}
+    ${groupBlock}
     ${group('Search', s.generator === 'crest' ? 'CREST' : 'imported file', true, [
       `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
         <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>

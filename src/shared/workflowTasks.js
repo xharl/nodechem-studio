@@ -111,6 +111,9 @@ export function conformerSettingsFor(node) {
     selectedConformerId: String(source.selectedConformerId || ''),
     importPath: String(source.importPath || ''),
     fanOut: pick('fanOut') === true,
+    // Issue #132: the study id the block carries. Passed through, never derived:
+    // the app does not decide which blocks belong together.
+    group: String(source.group || ''),
     // Issues #129/#130: what an imported file is, and what its energies are.
     // Passed through as declared — the queue records it, it does not guess it.
     energyUnit: pick('energyUnit') === 'kcal/mol' ? 'kcal/mol' : 'hartree',

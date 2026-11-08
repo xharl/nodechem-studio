@@ -38,8 +38,10 @@ import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb
 import {
   CONFORMER_ENERGY_UNITS,
   CONFORMER_GENERATORS,
+  CONFORMER_GROUP_MAX,
   CONFORMER_METHODS,
   DEFAULT_CONFORMER_SETTINGS,
+  isConformerGroupId,
 } from './conformers.js';
 import {
   DEFAULT_OPT_CONVERGENCE,
@@ -526,6 +528,22 @@ function normalizeConformerOrigin(c, raw, path, legacy) {
 }
 
 /**
+ * Issue #132: the study a conformer block belongs to. Empty is a valid answer
+ * ("no group") and is what every file written before the field existed means;
+ * anything that is not a plain bounded token is refused by name rather than
+ * trimmed, because trimming `two words` to `two` would claim a different study.
+ */
+function readConformerGroup(c, value, path) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string' || !isConformerGroupId(value)) {
+    c.error(path, `must be a plain group id of 1-${CONFORMER_GROUP_MAX} characters `
+      + '(letters, digits, ".", "_" or "-"), or empty for no group.');
+    return '';
+  }
+  return value;
+}
+
+/**
  * Settings for a conformer block. Deliberately separate from the calculation
  * settings: CREST has no route, basis or SCF, and a shared key space would let
  * a route value leak into a conformer search.
@@ -540,6 +558,8 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     'generator', 'method', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
     'temperature', 'spreadThresholdKcal', 'selectedConformerId', 'importPath',
     'fanOut', 'charge', 'multiplicity', 'energyUnit', 'energyMethod', 'origin',
+    // Issue #132: a study id shared by blocks that belong together.
+    'group',
   ]), path);
   // A conformer block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
@@ -595,6 +615,8 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // Issue #129: what the user declares produced the file. The hash is not
     // part of the declaration — the queue records the digest of the bytes read.
     origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
+    // Issue #132: the study this block belongs to, or '' for "stands alone".
+    group: readConformerGroup(c, source.group, `${path}.group`),
   };
 }
 
@@ -700,6 +722,9 @@ function normalizeConformerOutput(c, raw, path, legacy) {
     // Issue #129: where the ensemble came from. Empty fields mean "not
     // recorded", which is not the same claim as "computed here".
     origin: normalizeConformerOrigin(c, raw.origin, `${path}.origin`, true),
+    // Issue #132: the study id the summary was written with, copied from the
+    // block. A legacy summary has none, which reads as "no group".
+    group: readConformerGroup(c, raw.group, `${path}.group`),
     count: readInteger(c, raw.count, `${path}.count`, { legacy: true, fallback: members.filter((member) => member.kept).length, min: 0, max: 200 }),
     total: readInteger(c, raw.total, `${path}.total`, { legacy: true, fallback: members.length, min: 0, max: 5000 }),
     spreadKcal: raw.spreadKcal === null || raw.spreadKcal === undefined
