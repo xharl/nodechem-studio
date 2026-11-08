@@ -207,9 +207,30 @@ function parseGjf(lines) {
 
 /* ── Public API ───────────────────────────────────────────── */
 
+/**
+ * Formats that describe a periodic solid. They are refused by name: a CIF is
+ * a unit cell with symmetry operations, not a molecule, and silently parsing
+ * the asymmetric unit as if it were a cluster would be a wrong answer rather
+ * than a missing feature.
+ */
+const PERIODIC_EXTENSIONS = Object.freeze(['cif', 'mcif', 'mmcif', 'p1', 'poscar', 'vasp', 'cell']);
+
+function periodicFormatFor(filename, text) {
+  const extension = String(filename).toLowerCase().split('.').pop();
+  if (PERIODIC_EXTENSIONS.includes(extension)) return extension;
+  if (/^\s*_cell_length_a\b/m.test(text) || /^\s*_symmetry_space_group_name_H-M\b/m.test(text)) return 'cif';
+  return '';
+}
+
 export function parseStructure(text, { filename = '' } = {}) {
   if (typeof text !== 'string' || !text.trim()) throw new StructureError('The structure file is empty.');
   const normalized = text.replace(/^\uFEFF/, '');
+  const periodic = periodicFormatFor(filename, normalized);
+  if (periodic) {
+    throw new StructureError(`Periodic systems are not supported: ${filename || `this .${periodic} file`} describes a unit cell, not a molecule. `
+      + 'NodeChem Studio drives molecular Gaussian and xTB jobs — there is no unit cell, k-point sampling '
+      + 'or band structure. Convert the system to a molecular cluster (.xyz, .gjf, .mol) first.');
+  }
   const format = formatFor(filename, normalized);
   const lines = normalized.split(/\r\n|\n|\r/);
 

@@ -156,3 +156,34 @@ describe('structure validation', () => {
     expect(() => parseStructure('hello', { filename: 'notes.txt' })).toThrow(/Unrecognised structure format/);
   });
 });
+
+describe('periodic structures are out of scope, not unparsed', () => {
+  const cif = `data_silicon
+_cell_length_a 5.431
+_cell_length_b 5.431
+_cell_length_c 5.431
+_cell_angle_alpha 90
+loop_
+_atom_site_label
+_atom_site_fract_x
+Si1 0.0 0.0 0.0
+Si2 0.25 0.25 0.25
+`;
+
+  it('refuses a .cif by extension with a specific message', () => {
+    expect(() => parseStructure(cif, { filename: 'silicon.cif' }))
+      .toThrow(/Periodic systems are not supported/);
+    expect(() => parseStructure(cif, { filename: 'silicon.cif' }))
+      .toThrow(/unit cell, not a molecule/);
+  });
+
+  it('refuses a CIF body even when the extension lies', () => {
+    expect(() => parseStructure(cif, { filename: 'silicon.xyz' }))
+      .toThrow(/Periodic systems are not supported/);
+  });
+
+  it('still parses the molecular formats it supports', () => {
+    const xyz = '3\nwater\nO 0 0 0\nH 0 0 0.96\nH 0 0.93 -0.24\n';
+    expect(parseStructure(xyz, { filename: 'water.xyz' }).atoms).toHaveLength(3);
+  });
+});

@@ -19,6 +19,12 @@ Success at v1:
 6. Stop, resume, and recover after a crash without losing run history.
 7. Work offline. No remote execution, no cloud dependency, no telemetry.
 
+## 1b. Scope decisions
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| Periodic systems (CIF/PBC, k-points, bands/DOS, plane-wave engines) | **Out of scope** for the 0.2–0.3 line, decided 2026-11-08 | The product is a graph over molecular Gaussian and xTB jobs. A unit cell needs a different engine, a different result model (k-points, band paths) and a different parser; half-supporting it would produce wrong answers. A `.cif` (or POSCAR/VASP/cell) import is refused by name with a specific message, and the limitation is listed in the README. |
+
 ## 2. Hard constraints
 
 | Constraint | Consequence |

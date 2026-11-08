@@ -136,6 +136,10 @@ docs/              documentation; the user guide lives in docs/guide/
   parsing and geometry heuristics need a real-log check.
 - **The structure viewer is static.** The parser does not extract normal-mode displacements, so
   animation is unavailable rather than faked.
+- **Periodic systems are out of scope.** No unit cells, k-points, band structures or plane-wave
+  engines. A `.cif`, `.poscar`/`.vasp` or `.cell` file is refused with a message saying so, rather
+  than being parsed as if its asymmetric unit were a molecule. Revisit only alongside a periodic
+  engine backend (see [#66](https://github.com/xharl/nodechem-studio/issues/66)).
 - **One engine process at a time.** No concurrent local scheduler; cluster execution happens by
   exporting scripts, not by submitting them.
 - **Unsigned builds.** No auto-update, no crash reporting, no code signing.
