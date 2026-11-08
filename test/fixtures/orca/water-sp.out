@@ -1,0 +1,32 @@
+
+                                 *****************
+                                 * O   R   C   A *
+                                 *****************
+
+                         Program Version 6.0.0  -   RELEASE  -
+
+|  1> ! B3LYP def2-SVP D3BJ TightSCF CPCM(WATER)
+
+----------------
+TOTAL SCF ENERGY
+----------------
+
+Total Energy       :         -76.02664842298829 Eh          -2068.79268 eV
+
+Components:
+Nuclear Repulsion  :          9.16879638500718 Eh           249.49550 eV
+Electronic Energy  :        -85.19544480799547 Eh          -2318.28818 eV
+
+                **** Energy Check signals convergence ****
+
+               *****************************************************
+               *                     SUCCESS                       *
+               *           SCF CONVERGED AFTER  12 CYCLES          *
+               *****************************************************
+
+-------------------------   --------------------
+FINAL SINGLE POINT ENERGY      -76.067231549516
+-------------------------   --------------------
+
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 0 hours 0 minutes 42 seconds 916 msec

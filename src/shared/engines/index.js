@@ -26,6 +26,18 @@ import {
   parseXtbOutput,
   xtbMethodBlock,
 } from './xtb.js';
+import {
+  ORCA_CAPABILITIES,
+  ORCA_ENGINE_ID,
+  buildOrcaInput,
+  classifyOrcaTermination,
+  isSafeOrcaInputName,
+  isSafeOrcaOutputName,
+  makeOrcaFixtureOutput,
+  orcaCheckpointArtifact,
+  orcaMethodBlock,
+  parseOrcaOutput,
+} from './orca.js';
 
 const GAUSSIAN_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 const GAUSSIAN_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
@@ -124,9 +136,36 @@ export const XTB_ENGINE = Object.freeze({
   classify: classifyXtbTermination,
 });
 
+export const ORCA_ENGINE = Object.freeze({
+  id: ORCA_ENGINE_ID,
+  label: ORCA_CAPABILITIES.label,
+  capabilities: ORCA_CAPABILITIES,
+
+  acceptsInputName: isSafeOrcaInputName,
+  acceptsOutputName: isSafeOrcaOutputName,
+
+  buildInput: buildOrcaInput,
+  methodBlock: orcaMethodBlock,
+  parse: parseOrcaOutput,
+
+  /**
+   * ORCA restart data is the `<job>.gbw` file, not a Gaussian checkpoint. A
+   * `.chk` name configured on the block is mapped to its `.gbw` sibling so the
+   * checkpoint edge has something ORCA can actually name.
+   */
+  checkpointArtifact: orcaCheckpointArtifact,
+
+  makeFixture({ imaginary = 0 } = {}) {
+    return makeOrcaFixtureOutput({ imaginary });
+  },
+
+  classify: classifyOrcaTermination,
+});
+
 export const ENGINES = Object.freeze({
   gaussian: GAUSSIAN_ENGINE,
   xtb: XTB_ENGINE,
+  orca: ORCA_ENGINE,
 });
 
 export const ENGINE_IDS = Object.freeze(Object.keys(ENGINES));

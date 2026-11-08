@@ -76,7 +76,7 @@ Top level, all six keys required after normalization:
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `engine` | enum | `gaussian`, `xtb` |
+| `engine` | enum | `gaussian`, `xtb`, `orca` |
 | `method` | string | Gaussian functional / xTB method default |
 | `basis` | string | Gaussian basis |
 | `memory`, `memoryUnit` | string, enum | Gaussian-only |
@@ -105,7 +105,7 @@ Type-specific payloads:
 `counterpoiseChargeStates`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`.
 
-`settings.engine` is a per-block override (`gaussian` or `xtb`); an empty string means "use
+`settings.engine` is a per-block override (`gaussian`, `xtb` or `orca`); an empty string means "use
 `defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
 edge between them is a geometry hand-off the queue either accepts or refuses with a recorded reason.
 `ladder` declares method-ladder groups, `referenceNodeId` names the block a barrier or ΔG‡ is

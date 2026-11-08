@@ -1,0 +1,87 @@
+
+                                 *****************
+                                 * O   R   C   A *
+                                 *****************
+
+                         Program Version 6.0.0  -   RELEASE  -
+
+|  1> ! B3LYP def2-SVP Opt Freq D3BJ
+
+                       *****************************
+                       * Geometry Optimization Run *
+                       *****************************
+
+                                .--------------------.
+          ----------------------|Geometry convergence|-------------------------
+          Item                value                   Tolerance       Converged
+          ---------------------------------------------------------------------
+          Energy change      -0.0000017309            0.0000050000      YES
+          RMS gradient        0.0000411287            0.0001000000      YES
+          MAX gradient        0.0001226561            0.0003000000      YES
+          RMS step            0.0004552473            0.0020000000      YES
+          MAX step            0.0014707390            0.0040000000      YES
+          ---------------------------------------------------------------------
+
+                    ***********************HURRAY********************
+                    ***        THE OPTIMIZATION HAS CONVERGED     ***
+                    *************************************************
+
+                  *** FINAL ENERGY EVALUATION AT THE STATIONARY POINT ***
+                  ***               (AFTER    8 CYCLES)               ***
+
+-------------------------   --------------------
+FINAL SINGLE POINT ENERGY      -76.067231549516
+-------------------------   --------------------
+
+----------------
+TOTAL SCF ENERGY
+----------------
+
+Total Energy       :         -76.02664842298829 Eh          -2068.79268 eV
+
+               *****************************************************
+               *                     SUCCESS                       *
+               *           SCF CONVERGED AFTER  12 CYCLES          *
+               *****************************************************
+
+-----------------------   --------------------
+FINAL SINGLE POINT ENERGY      -76.067231549516
+-----------------------   --------------------
+
+----------------------- 
+VIBRATIONAL FREQUENCIES
+-----------------------
+
+Scaling factor for frequencies =  1.000000000  (already applied!)
+
+     0:       0.00 cm**-1
+     1:       0.00 cm**-1
+     2:       0.00 cm**-1
+     3:       0.00 cm**-1
+     4:       0.00 cm**-1
+     5:       0.00 cm**-1
+     6:    1608.24 cm**-1
+     7:    3812.53 cm**-1
+     8:    3919.12 cm**-1
+
+--------------------------
+THERMOCHEMISTRY AT 298.15K
+--------------------------
+
+Temperature         ... 298.15 K
+Pressure            ... 1.00 atm
+
+Zero point energy                ...      0.02100000 Eh      13.18 kcal/mol
+Total Enthalpy                    ...    -76.04500000 Eh
+
+-------------------
+GIBBS FREE ENERGY
+-------------------
+
+Total enthalpy                    ...    -76.04500000 Eh
+Final Gibbs free energy         ...    -76.06700000 Eh
+
+Vibrational entropy computed according to the QRRHO of S. Grimme
+
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 0 hours 2 minutes 12 seconds 345 msec

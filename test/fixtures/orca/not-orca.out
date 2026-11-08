@@ -1,0 +1,10 @@
+ Entering Gaussian System, Link 0=g16
+ ******************************************
+ Gaussian 16:  ES64L-G16RevC.01
+ ******************************************
+
+ #p B3LYP/def2-SVP EmpiricalDispersion=GD3BJ SP
+
+ SCF Done:  E(RB3LYP) =  -76.026648124651     A.U. after   10 cycles
+
+ Normal termination of Gaussian 16 at Mon Nov  9 10:00:00 2026.

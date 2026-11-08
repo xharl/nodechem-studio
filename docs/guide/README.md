@@ -4,14 +4,15 @@ NodeChem Studio is a desktop app for building and running computational-chemistr
 graph. You place calculation blocks on a canvas, connect them, and run either the whole workflow or
 a single block. Each run writes a folder you can inspect, hash and hand to someone else.
 
-It drives two engines:
+It drives three engines:
 
 | Engine | Licence | What it is |
 | --- | --- | --- |
 | **Gaussian 16** | Commercial, licensed separately by Gaussian, Inc. | DFT and wavefunction calculations with explicit basis sets |
 | **xTB** (GFN0/GFN1/GFN2/GFN-FF) | Open source, LGPL | Fast semi-empirical and force-field calculations |
+| **ORCA** 5/6 | Free for academic use, licensed separately by FACCTs | DFT and wavefunction calculations from a simple `.inp` |
 
-The app never bundles either engine. It drives an installation you already have.
+The app never bundles any engine. It drives an installation you already have.
 
 ## Reading order
 

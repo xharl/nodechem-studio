@@ -1,6 +1,6 @@
 # Engines
 
-NodeChem Studio drives two calculation engines. The engine is resolved per block: a calculation
+NodeChem Studio drives three calculation engines. The engine is resolved per block: a calculation
 block that names its own engine (inspector → **Engine**) runs on that engine, and a block that leaves
 the field at **Project default** follows **Molecule → Defaults**. A saved project keeps whatever it
 saved; the app never switches an engine behind your back, and a block that never set the field keeps
@@ -11,6 +11,8 @@ This is what makes a mixed workflow possible in one project:
 - a **GFN2-xTB pre-optimisation** block (cheap, no licence) followed by
 - a **Gaussian single point** or optimisation block (B3LYP-D3BJ/def2-TZVP) that starts from the
   pre-optimised geometry.
+- an **ORCA** block for the same job on a machine without a Gaussian licence — ORCA 6 is free for
+  academic use and reads a simple `.inp` instead of a Gaussian route.
 
 The step that crosses an engine boundary hands over a **geometry**, not a checkpoint: xTB writes its
 result to `xtbopt.xyz` instead of printing it, so the downstream Gaussian block reads the parsed
@@ -196,22 +198,118 @@ workflow needs a Gaussian level of theory, it needs a licensed Gaussian installa
 xTB's exit status is `0` on success and `128` on any error stop. The optimised `xtbopt.xyz` is
 written to the run folder; it is not automatically loaded back as the project geometry.
 
+## ORCA 6 — free for academic use
+
+ORCA is a general-purpose electronic-structure program from FACCTs (MPI für Kohlenstoffforschung).
+It is free of charge for academic use but is **not** Apache-2.0: the repository ships no ORCA binary,
+no licence file and no ORCA source. Install ORCA yourself and follow its licence terms.
+
+In this app ORCA gives you:
+
+- **Methods** `B3LYP`, `PBE0`, `M06-2X`, `MP2`, `CCSD(T)` and `HF`, with **basis sets** `def2-SVP`,
+  `def2-TZVP`, `cc-pVTZ`, `6-31G(d)` (written as ORCA's `6-31G*`) and `6-311+G(d,p)`.
+- **Job types** `SP`, `Opt`, `Freq` and `Opt Freq`. `Opt Freq` is ORCA's compound job: optimise,
+  then compute the Hessian at the minimum.
+- **Dispersion** `D3(BJ)` → `D3BJ`, `D3` → `D3ZERO` and `D4` → `D4`.
+- **SCF** `Tight` → `TightSCF` / `VeryTight` → `VeryTightSCF`; **grid** `Fine` → `DEFGRID2` /
+  `UltraFine` → `DEFGRID3`; optimisation convergence `Tight` → `TightOpt` /
+  `VeryTight` → `VeryTightOpt`.
+- **Implicit solvation** `CPCM` and `SMD` with Water, Dichloromethane, THF, Toluene or
+  Acetonitrile. CPCM is written as `CPCM(SOLVENT)`; SMD is switched on in the documented
+  `%cpcm` block with `smdsolvent "SOLVENT"`.
+- **Resources**: `Cores (nproc)` becomes `%pal nprocs N end`, and the block's total memory is
+  divided by the core count into ORCA's per-process `%maxcore` (MB).
+
+The builder writes ORCA's **simple input** — a `!` keyword line, optional `%pal`/`%maxcore`/
+`%cpcm`/`%moinp` blocks, and a `* xyz charge multiplicity` coordinate block:
+
+```
+! B3LYP def2-SVP Opt Freq D3BJ TightSCF CPCM(WATER)
+%pal nprocs 4 end
+%maxcore 1024
+* xyz 0 1
+O     0.000000    0.000000    0.117300
+H     0.000000    0.757200   -0.469200
+H     0.000000   -0.757200   -0.469200
+*
+```
+
+What ORCA does **not** give you through this builder:
+
+- No transition-state search, IRC, relaxed PES scan or NMR job. Those need `%geom`, `%irc` or
+  `%elprop` blocks, so the input builder refuses them instead of writing a keyword that runs a
+  different job.
+- No TD-DFT excited states, population analysis (NBO/ESP), Raman activities, `Stable=Opt` or custom
+  route keywords. Those are Gaussian-only form fields in this app; a block that carries one is
+  refused with a message naming the field.
+- No Gaussian `PCM` keyword: ORCA implements CPCM and SMD. `SDD` has no simple-input keyword in
+  this builder; use `def2-TZVP`, which carries ECPs for the heavy elements it covers. `ωB97X-D` is
+  also refused: ORCA's `wB97X-D3`/`wB97X-D4` are different functionals from the Gaussian keyword, so
+  mapping one to the other would silently change the level of theory.
+- No Gaussian `.chk` checkpoint hand-off. ORCA's restart file is `<job>.gbw`; the builder can write
+  `%moinp "<job>.gbw"` and names the artifact `<job>.gbw`, but the queue still transfers only
+  `.chk`/`xtbrestart` artifacts, so an ORCA checkpoint edge is not usable in this build. Use a
+  geometry hand-off for now.
+
+### Setting up ORCA
+
+1. Install ORCA 6 (or ORCA 5) so the `orca` driver (`orca.exe` on Windows) and its module binaries
+   are in one directory. No licence file is needed for academic use, but you must accept ORCA's
+   licence yourself.
+2. Open **Molecule → Defaults**, set **Engine** to `ORCA 6`, then choose the method and basis. The
+   geometry comes from the **Structure** tab.
+3. Open **Run** and click **Browse** next to the executable field; select the `orca` driver by its
+   **full path** (`/opt/orca/orca`, `C:\ORCA\orca.exe`). ORCA's parallel driver must be called by
+   full pathname — preflight warns when it is not.
+4. Click **Preflight**. For ORCA it checks the platform, that the executable exists and is named
+   `orca`/`orca.exe`, and (on Linux/macOS) that it is executable. ORCA needs no Link 1 and no
+   `share/xtb` parameter directory, so those Gaussian/xTB checks do not run.
+5. Uncheck **Dry run** and run the job. ORCA writes its log to **stdout**; the run folder keeps the
+   captured stream as `<input>.out`, and ORCA also leaves `<job>.gbw` (and `<job>.xyz` after an
+   optimisation) beside it.
+
+### What this build proves about the ORCA parser
+
+The parser was written from the output shapes documented in the **ORCA 6.0 manual and tutorials**
+(`SCF CONVERGED AFTER … CYCLES`, `FINAL SINGLE POINT ENERGY`, the `HURRAY` convergence banner,
+`VIBRATIONAL FREQUENCIES`, `THERMOCHEMISTRY AT 298.15K`, `ORCA TERMINATED NORMALLY` and
+`ORCA finished by error termination in <module>`). **No live ORCA binary was run for this build.**
+Its tests use synthetic fixtures that reproduce those line shapes, so they prove the parser reads
+the documented format — not that a particular ORCA 5/6 revision prints it identically.
+
+The first real run should be a small single point. Check the parsed `FINAL SINGLE POINT ENERGY`, the
+SCF cycle count and the termination line against the log; if a revision prints a different shape,
+the parser reports the value as `unknown` rather than guessing. Please report the log.
+
+Two parser choices are deliberate:
+
+- ORCA prints **all 3N** harmonic modes, including the five or six near-zero translations and
+  rotations. The result's frequency count is therefore 3N, and the imaginary count only counts modes
+  below −0.001 cm⁻¹ (or marked `***imaginary mode***`).
+- ORCA's default thermochemistry uses the quasi-harmonic **QRRHO** entropy treatment, which the
+  result records as `entropyTreatment: QRRHO`. The app adds no extra quasi-harmonic or
+  standard-state correction on top of it, exactly as for xTB.
+
+If **Dispersion** is set to `None`, the builder writes no dispersion keyword. ORCA 6 may then apply
+its own default (D4 for many functionals), so record the `Dispersion correction` line in the log
+before comparing energies across engines; the manifest records only the keyword the builder wrote.
+
 ## Which settings belong to which engine
 
-| Setting | Gaussian 16 | xTB |
-| --- | --- | --- |
-| Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` |
-| Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload |
-| Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile |
-| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq |
-| Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` |
-| Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` |
-| Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder |
-| Validity checks | Six checks, pre and post run | Four applicable checks; Gaussian-only ones reported *not applicable* |
-| Dry run | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture |
+| Setting | Gaussian 16 | xTB | ORCA 6 |
+| --- | --- | --- | --- |
+| Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` | `! method basis` |
+| Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload | Mapped to ORCA keywords; population refused |
+| Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile | CPCM / SMD, Water…Acetonitrile |
+| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq |
+| Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` | `TightOpt` / `VeryTightOpt`, `DEFGRID2/3` |
+| Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` | `%maxcore` (MB per core), `%pal nprocs` |
+| Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; queue transfer not implemented |
+| Validity checks | Six checks, pre and post run | Four applicable checks; Gaussian-only ones reported *not applicable* | Canonical gates on the parsed result; Gaussian-route checks do not apply |
+| Dry run | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture |
 
 A dry run is a fixture for both engines: it writes a synthetic file headed `FIXTURE OUTPUT`, starts
-no process, and is never a calculation.
+no process, and is never a calculation. ORCA uses the same fixture path.
 
 ## Next
 

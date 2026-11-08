@@ -27,11 +27,11 @@ const WATER = [
 const molecule = (overrides = {}) => ({ charge: 0, multiplicity: 1, coords: WATER, ...overrides });
 
 describe('xTB engine registry', () => {
-  it('registers both engines and falls back to Gaussian', () => {
-    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb']);
+  it('registers every engine and falls back to Gaussian for an unknown id', () => {
+    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb', 'orca']);
     expect(isEngineId('xtb')).toBe(true);
-    expect(engineOrDefault('orca').id).toBe('gaussian');
-    expect(() => engineFor('orca')).toThrow(/Unknown engine/);
+    expect(engineOrDefault('pyscf').id).toBe('gaussian');
+    expect(() => engineFor('pyscf')).toThrow(/Unknown engine/);
   });
 
   it('exposes the verified xTB capabilities', () => {
