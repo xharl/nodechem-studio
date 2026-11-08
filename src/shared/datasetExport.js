@@ -46,9 +46,26 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'hardnessEv', label: 'hardness_ev' },
   { key: 'inputSha256', label: 'input_sha256' },
   { key: 'outputSha256', label: 'output_sha256' },
+  // Issue #59: a run that carries a `.fchk` and/or a `.cube` records what was
+  // read from them. The columns are appended rather than inserted so an
+  // existing spreadsheet template keeps its column positions, and every one of
+  // them is empty when the run had no wavefunction attachment — an empty cell
+  // is "not measured", not zero.
+  { key: 'fchkSha256', label: 'fchk_sha256' },
+  { key: 'cubeSha256', label: 'cube_sha256' },
+  { key: 'cubeDims', label: 'cube_dims' },
+  { key: 'cubeMin', label: 'cube_min' },
+  { key: 'cubeMax', label: 'cube_max' },
+  { key: 'cubeMean', label: 'cube_mean' },
+  { key: 'fchkTotalEnergyHartree', label: 'fchk_total_energy_hartree' },
+  { key: 'mullikenChargeSum', label: 'mulliken_charge_sum' },
+  { key: 'mullikenChargeDeviation', label: 'mulliken_charge_deviation' },
+  { key: 'spinMultiplicity', label: 'spin_multiplicity' },
+  { key: 'unpairedElectrons', label: 'unpaired_electrons' },
 ]);
 
-export const DATASET_SCHEMA_VERSION = 1;
+/** Version 2 added the wavefunction columns; existing keys and order are unchanged. */
+export const DATASET_SCHEMA_VERSION = 2;
 
 function text(value) {
   return value === null || value === undefined ? null : String(value);
@@ -74,6 +91,26 @@ export function runRow(record) {
   const provenance = run.provenance && typeof run.provenance === 'object' ? run.provenance : {};
   const method = provenance.method && typeof provenance.method === 'object' ? provenance.method : {};
   const conformer = run.conformer && typeof run.conformer === 'object' ? run.conformer : {};
+  // The wavefunction block is written by `wavefunction.js` when a run carries a
+  // `.fchk`/`.cube`; a record without one reads as an empty block, so every
+  // column below stays null rather than becoming a zero.
+  const wavefunction = run.wavefunction && typeof run.wavefunction === 'object'
+    ? run.wavefunction
+    : parsed.wavefunction && typeof parsed.wavefunction === 'object' ? parsed.wavefunction : {};
+  const artifacts = Array.isArray(wavefunction.artifacts) ? wavefunction.artifacts : [];
+  const artifactSha = (kind) => {
+    const match = artifacts.find((item) => item && item.kind === kind);
+    return text(match?.sha256);
+  };
+  const cube = wavefunction.cube && typeof wavefunction.cube === 'object' ? wavefunction.cube : null;
+  const fchk = wavefunction.fchk && typeof wavefunction.fchk === 'object' ? wavefunction.fchk : null;
+  // Derived blocks are present but may be `{ok: false, reason}`. Only a
+  // computed value reaches a cell; "not computable" is an empty cell, and the
+  // reason lives in the run record.
+  const gap = fchk?.orbitalGap?.ok === true ? fchk.orbitalGap : null;
+  const charge = fchk?.chargeSanity?.ok === true ? fchk.chargeSanity : null;
+  const spin = fchk?.spin?.ok === true ? fchk.spin : null;
+  const dims = Array.isArray(cube?.dims) && cube.dims.length === 3 ? cube.dims.join('x') : null;
   return {
     id: text(run.id),
     finishedAt: text(run.finishedAt || run.startedAt),
@@ -97,13 +134,28 @@ export function runRow(record) {
     conformerMember: text(conformer.id),
     conformerRelativeKcal: num(conformer.relativeKcal),
     conformerPopulation: num(conformer.population),
-    homoEv: num(parsed?.orbitals?.alpha?.homoEv),
-    lumoEv: num(parsed?.orbitals?.alpha?.lumoEv),
-    gapEv: num(parsed?.orbitals?.alpha?.gapEv),
+    // Frontier orbitals: the log's Pop=Full table first, because that is the
+    // calculation's own print. A run whose route did not ask for it can still
+    // carry a checkpoint, which holds the same converged SCF orbitals, so the
+    // fchk-derived values fill the cells instead of leaving them empty.
+    homoEv: num(parsed?.orbitals?.alpha?.homoEv) ?? num(gap?.homo?.energyEv),
+    lumoEv: num(parsed?.orbitals?.alpha?.lumoEv) ?? num(gap?.lumo?.energyEv),
+    gapEv: num(parsed?.orbitals?.alpha?.gapEv) ?? num(gap?.gapEv),
     hardnessEv: num(parsed?.orbitals?.alpha?.etaEv),
     conformerProtomer: text(conformer.protomer),
     inputSha256: text(run.inputSha256),
     outputSha256: text(run.outputSha256),
+    fchkSha256: artifactSha('fchk'),
+    cubeSha256: artifactSha('cube'),
+    cubeDims: text(dims),
+    cubeMin: num(cube?.stats?.min),
+    cubeMax: num(cube?.stats?.max),
+    cubeMean: num(cube?.stats?.mean),
+    fchkTotalEnergyHartree: num(fchk?.totalEnergyHartree),
+    mullikenChargeSum: num(charge?.chargeSum),
+    mullikenChargeDeviation: num(charge?.deviation),
+    spinMultiplicity: integer(spin?.multiplicity),
+    unpairedElectrons: integer(spin?.unpairedElectrons),
   };
 }
 
