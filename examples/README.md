@@ -8,6 +8,7 @@ file once the desktop build is associated with `.ncs`.
 | --- | --- | --- |
 | [`opt-freq.ncs`](opt-freq.ncs) | Reactant optimization + frequency | 2 |
 | [`ts-search.ncs`](ts-search.ncs) | Transition-state search | 4 |
+| [`apn-fluorescence.ncs`](apn-fluorescence.ncs) | Reproduction of a published TD-DFT solvatochromism protocol ([notes](../docs/reproductions/molecules-29-01808.md)) | 8 |
 | [`emission.ncs`](emission.ncs) | Emission from S1 (Opt then TD) | 3 |
 | [`single-point.ncs`](single-point.ncs) | Single-point energy + NBO charges | 1 |
 

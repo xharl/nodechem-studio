@@ -1,0 +1,854 @@
+{
+  "schemaVersion": 1,
+  "name": "APN 1 — TD-DFT solvatochromism reproduction (Molecules 2024, 29, 1808)",
+  "molecule": {
+    "smiles": "C1=CC=C(C=C1)C2=CC(=NC(=C2C#N)N)C3=CC=CC=C3",
+    "charge": 0,
+    "multiplicity": 1,
+    "fragments": [],
+    "coords": [
+      {
+        "element": "N",
+        "x": 1.3499,
+        "y": -1.685,
+        "z": 0.0001
+      },
+      {
+        "element": "N",
+        "x": 0.0379,
+        "y": -3.6517,
+        "z": 0.0005
+      },
+      {
+        "element": "N",
+        "x": -3.3695,
+        "y": -2.679,
+        "z": -0.0007
+      },
+      {
+        "element": "C",
+        "x": -0.9673,
+        "y": -0.1134,
+        "z": 0.0006
+      },
+      {
+        "element": "C",
+        "x": 1.4049,
+        "y": -0.3341,
+        "z": 0.0007
+      },
+      {
+        "element": "C",
+        "x": -2.1398,
+        "y": 0.7344,
+        "z": 0.0004
+      },
+      {
+        "element": "C",
+        "x": 0.2892,
+        "y": 0.4875,
+        "z": 0.0009
+      },
+      {
+        "element": "C",
+        "x": -1.0608,
+        "y": -1.5031,
+        "z": 0
+      },
+      {
+        "element": "C",
+        "x": 2.7372,
+        "y": 0.2221,
+        "z": 0.0002
+      },
+      {
+        "element": "C",
+        "x": 0.1153,
+        "y": -2.2356,
+        "z": -0.0004
+      },
+      {
+        "element": "C",
+        "x": -2.7046,
+        "y": 1.1432,
+        "z": -1.2078
+      },
+      {
+        "element": "C",
+        "x": -2.7058,
+        "y": 1.1427,
+        "z": 1.2082
+      },
+      {
+        "element": "C",
+        "x": 3.3841,
+        "y": 0.4923,
+        "z": 1.208
+      },
+      {
+        "element": "C",
+        "x": 3.3838,
+        "y": 0.4913,
+        "z": -1.2081
+      },
+      {
+        "element": "C",
+        "x": -3.8351,
+        "y": 1.9602,
+        "z": -1.2083
+      },
+      {
+        "element": "C",
+        "x": -3.8364,
+        "y": 1.9596,
+        "z": 1.2077
+      },
+      {
+        "element": "C",
+        "x": 4.6714,
+        "y": 1.0293,
+        "z": 1.2077
+      },
+      {
+        "element": "C",
+        "x": 4.6712,
+        "y": 1.0282,
+        "z": -1.2083
+      },
+      {
+        "element": "C",
+        "x": -4.401,
+        "y": 2.3684,
+        "z": -0.0006
+      },
+      {
+        "element": "C",
+        "x": 5.3149,
+        "y": 1.2972,
+        "z": -0.0004
+      },
+      {
+        "element": "C",
+        "x": -2.3395,
+        "y": -2.1543,
+        "z": -0.0004
+      },
+      {
+        "element": "H",
+        "x": 0.3935,
+        "y": 1.5695,
+        "z": 0.0011
+      },
+      {
+        "element": "H",
+        "x": -2.2762,
+        "y": 0.834,
+        "z": -2.1584
+      },
+      {
+        "element": "H",
+        "x": -2.2784,
+        "y": 0.833,
+        "z": 2.1591
+      },
+      {
+        "element": "H",
+        "x": 2.8969,
+        "y": 0.2888,
+        "z": 2.1588
+      },
+      {
+        "element": "H",
+        "x": 2.8964,
+        "y": 0.287,
+        "z": -2.1587
+      },
+      {
+        "element": "H",
+        "x": -4.275,
+        "y": 2.2784,
+        "z": -2.1489
+      },
+      {
+        "element": "H",
+        "x": -4.2773,
+        "y": 2.2775,
+        "z": 2.148
+      },
+      {
+        "element": "H",
+        "x": 5.1728,
+        "y": 1.2387,
+        "z": 2.148
+      },
+      {
+        "element": "H",
+        "x": 5.1726,
+        "y": 1.2368,
+        "z": -2.1489
+      },
+      {
+        "element": "H",
+        "x": -5.2813,
+        "y": 3.0044,
+        "z": -0.001
+      },
+      {
+        "element": "H",
+        "x": 6.3173,
+        "y": 1.7152,
+        "z": -0.0007
+      },
+      {
+        "element": "H",
+        "x": -0.3795,
+        "y": -4.0402,
+        "z": 0.8417
+      },
+      {
+        "element": "H",
+        "x": -0.3822,
+        "y": -4.0412,
+        "z": -0.8389
+      }
+    ],
+    "bonds": [
+      {
+        "a": 1,
+        "b": 5,
+        "order": 2
+      },
+      {
+        "a": 1,
+        "b": 10,
+        "order": 1
+      },
+      {
+        "a": 2,
+        "b": 10,
+        "order": 1
+      },
+      {
+        "a": 2,
+        "b": 33,
+        "order": 1
+      },
+      {
+        "a": 2,
+        "b": 34,
+        "order": 1
+      },
+      {
+        "a": 3,
+        "b": 21,
+        "order": 3
+      },
+      {
+        "a": 4,
+        "b": 6,
+        "order": 1
+      },
+      {
+        "a": 4,
+        "b": 7,
+        "order": 2
+      },
+      {
+        "a": 4,
+        "b": 8,
+        "order": 1
+      },
+      {
+        "a": 5,
+        "b": 7,
+        "order": 1
+      },
+      {
+        "a": 5,
+        "b": 9,
+        "order": 1
+      },
+      {
+        "a": 6,
+        "b": 11,
+        "order": 2
+      },
+      {
+        "a": 6,
+        "b": 12,
+        "order": 1
+      },
+      {
+        "a": 7,
+        "b": 22,
+        "order": 1
+      },
+      {
+        "a": 8,
+        "b": 10,
+        "order": 2
+      },
+      {
+        "a": 8,
+        "b": 21,
+        "order": 1
+      },
+      {
+        "a": 9,
+        "b": 13,
+        "order": 2
+      },
+      {
+        "a": 9,
+        "b": 14,
+        "order": 1
+      },
+      {
+        "a": 11,
+        "b": 15,
+        "order": 1
+      },
+      {
+        "a": 11,
+        "b": 23,
+        "order": 1
+      },
+      {
+        "a": 12,
+        "b": 16,
+        "order": 2
+      },
+      {
+        "a": 12,
+        "b": 24,
+        "order": 1
+      },
+      {
+        "a": 13,
+        "b": 17,
+        "order": 1
+      },
+      {
+        "a": 13,
+        "b": 25,
+        "order": 1
+      },
+      {
+        "a": 14,
+        "b": 18,
+        "order": 2
+      },
+      {
+        "a": 14,
+        "b": 26,
+        "order": 1
+      },
+      {
+        "a": 15,
+        "b": 19,
+        "order": 2
+      },
+      {
+        "a": 15,
+        "b": 27,
+        "order": 1
+      },
+      {
+        "a": 16,
+        "b": 19,
+        "order": 1
+      },
+      {
+        "a": 16,
+        "b": 28,
+        "order": 1
+      },
+      {
+        "a": 17,
+        "b": 20,
+        "order": 2
+      },
+      {
+        "a": 17,
+        "b": 29,
+        "order": 1
+      },
+      {
+        "a": 18,
+        "b": 20,
+        "order": 1
+      },
+      {
+        "a": 18,
+        "b": 30,
+        "order": 1
+      },
+      {
+        "a": 19,
+        "b": 31,
+        "order": 1
+      },
+      {
+        "a": 20,
+        "b": 32,
+        "order": 1
+      }
+    ],
+    "geometry": {
+      "source": "imported",
+      "file": "pubchem-668105-3d.sdf",
+      "format": "sdf"
+    }
+  },
+  "defaults": {
+    "engine": "gaussian",
+    "method": "B3LYP",
+    "basis": "6-311++G(d,p)",
+    "memory": "4",
+    "memoryUnit": "GB",
+    "nproc": 4
+  },
+  "nodes": [
+    {
+      "id": "apn-opt",
+      "type": "calc",
+      "kind": "Opt",
+      "title": "Ground-state optimisation (B3LYP/6-311++G(d,p))",
+      "state": "ready",
+      "x": 120,
+      "y": 80,
+      "settings": {
+        "engine": "",
+        "jobType": "Opt",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_opt.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 0,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "Tight",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": null
+    },
+    {
+      "id": "apn-freq",
+      "type": "calc",
+      "kind": "Freq",
+      "title": "Frequency: prove a minimum",
+      "state": "ready",
+      "x": 120,
+      "y": 230,
+      "settings": {
+        "engine": "",
+        "jobType": "Freq",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_freq.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 0,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": 0,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "apn-opt"
+    },
+    {
+      "id": "apn-td-toluene",
+      "type": "calc",
+      "kind": "SP",
+      "title": "TD-DFT, 5 singlet states, PCM Toluene",
+      "state": "ready",
+      "x": 380,
+      "y": 80,
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_toluene.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "Toluene",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "apn-freq"
+    },
+    {
+      "id": "apn-td-thf",
+      "type": "calc",
+      "kind": "SP",
+      "title": "TD-DFT, 5 singlet states, PCM THF",
+      "state": "ready",
+      "x": 380,
+      "y": 200,
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_thf.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "THF",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "apn-freq"
+    },
+    {
+      "id": "apn-td-dcm",
+      "type": "calc",
+      "kind": "SP",
+      "title": "TD-DFT, 5 singlet states, PCM DCM",
+      "state": "ready",
+      "x": 380,
+      "y": 320,
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_dcm.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "Dichloromethane",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "apn-freq"
+    },
+    {
+      "id": "apn-td-dmso",
+      "type": "calc",
+      "kind": "SP",
+      "title": "TD-DFT, 5 singlet states, PCM DMSO",
+      "state": "ready",
+      "x": 380,
+      "y": 440,
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_dmso.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "DMSO",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "apn-freq"
+    },
+    {
+      "id": "apn-td-meoh",
+      "type": "calc",
+      "kind": "SP",
+      "title": "TD-DFT, 5 singlet states, PCM Methanol",
+      "state": "ready",
+      "x": 380,
+      "y": 560,
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_meoh.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "Methanol",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "tdRoot": 0,
+        "spinSweep": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "apn-freq"
+    },
+    {
+      "id": "apn-note",
+      "type": "note",
+      "kind": "Note",
+      "title": "Source and limits of this reproduction",
+      "state": "ready",
+      "x": 80,
+      "y": 530,
+      "note": {
+        "text": "Reproduces the computational protocol of Molecules 2024, 29(8), 1808 (open access, CC BY 4.0): structures optimized with DFT/B3LYP/6-311++G(d,p) in Gaussian 16, vibrational analysis to confirm a minimum, then TD-DFT with five singlet excited states at the same level in the PCM solvent model, for toluene, THF, DCM, DMSO and methanol. Targets reported for compound 1 in methanol and DMSO: 408.18 nm (3.037 eV, f = 0.640) and ~309 nm (4.009 eV, f = 0.412). No result is claimed for those targets here: this project prepares the inputs, and the paper does not state the cavity/dispersion settings or the optimization solvent, which are left at Gaussian defaults and flagged in the reproduction notes."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "apn-opt",
+      "to": "apn-freq",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-toluene",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-thf",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-dcm",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-dmso",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-meoh",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    }
+  ]
+}
