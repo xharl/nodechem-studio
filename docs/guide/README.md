@@ -21,6 +21,8 @@ If you are new, read these in order:
 1. [Install](install.md) — get the app onto a machine, and learn where it keeps its files.
 2. [Your first project](first-project.md) — open the seeded project, run the dry run, read the result.
 3. [The canvas](canvas.md) — blocks, connections, the inspector, and what the node colours mean.
+3b. [Flows, datasets and stages](flows.md) — several graphs in one project, a family of molecules
+   through the same blocks, and the barrier that waits for a whole stage.
 4. [Engines](engines.md) — choose Gaussian 16 or xTB, and know which settings belong to which.
 4b. [Conformers and protomers](conformers.md) — search or import an ensemble, then choose the shape a
    later block runs.
@@ -28,8 +30,11 @@ If you are new, read these in order:
    per record, with outputs for the whole set.
 5. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.
 6. [Results](results.md) — the results panel, gates, validity checks, methods text, run bundles.
-7. [Projects and runs on disk](project-files.md) — the `.ncs` file and the run folder.
-8. [Appearance](appearance.md) — the three themes, what a theme may change, and the font bundle.
+7. [Output blocks and artifacts](outputs.md) — write CSV, JSON, HTML or a zip bundle, with a hashed
+   manifest.
+8. [Reports](reports.md) — the record-grouped per-flow report and the combined report across flows.
+9. [Projects and runs on disk](project-files.md) — the `.ncs` file and the run folder.
+10. [Appearance](appearance.md) — the three themes, what a theme may change, and the font bundle.
 
 Reference pages:
 
@@ -43,7 +48,8 @@ Reference pages:
   gaps it does not cover yet.
 - [Privacy and licensing](privacy-and-licensing.md) — the one outbound call (an update check you
   trigger), and what the licence does and does not grant.
-- [Headless CLI](cli.md) — `ncs validate`, `ncs build-input` and `ncs run`, with its exit codes.
+- [Headless CLI](cli.md) — `ncs validate`, `ncs build-input`, `ncs run` and `ncs report`, with its
+  exit codes.
 
 Normative references, for people reading code or writing tooling:
 

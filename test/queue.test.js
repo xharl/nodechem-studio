@@ -410,12 +410,19 @@ describe('QueueManager — condition and loop runtime', () => {
     expect(afterResume.status).toBe('needs-review');
   });
 
-  it('completes a merge node and blocks at an output node', async () => {
-    const { exe, queueManager } = await makeStack();
+  it('completes a merge node and writes the output artifact', async () => {
+    const { exe, queueManager, queuesRoot } = await makeStack();
     const tasks = [
       task('a'),
       { nodeId: 'join', type: 'merge', title: 'join', kind: 'Merge', executable: false, merge: { policy: 'all' } },
-      { nodeId: 'out', type: 'output', title: 'out', kind: 'Output', executable: false },
+      {
+        nodeId: 'out',
+        type: 'output',
+        title: 'out',
+        kind: 'Output',
+        executable: false,
+        output: { kind: 'csv', path: 'reports/dataset.csv', include: 'records', bundle: 'project.zip', manifest: true, notes: '' },
+      },
     ];
     const edges = [
       { from: 'a', to: 'join', type: 'dependency' },
@@ -426,9 +433,19 @@ describe('QueueManager — condition and loop runtime', () => {
     const byId = Object.fromEntries(finished.tasks.map((item) => [item.nodeId, item]));
     expect(byId.join.status).toBe('completed');
     expect(byId.join.reason).toContain('policy all');
-    expect(byId.out.status).toBe('blocked');
-    expect(byId.out.reason).toContain('GN-008');
-    expect(finished.status).toBe('needs-review');
+    expect(byId.out.status).toBe('completed');
+    expect(byId.out.reason).toContain('reports/dataset.csv');
+    expect(finished.status).toBe('completed');
+
+    const root = path.join(queuesRoot, started.id, 'artifacts');
+    const csv = await fsp.readFile(path.join(root, 'reports', 'dataset.csv'), 'utf8');
+    expect(csv.split('\n')[0]).toContain('run_id');
+    expect(csv.trimEnd().split('\n')).toHaveLength(2);
+    const manifest = JSON.parse(await fsp.readFile(path.join(root, 'manifest.json'), 'utf8'));
+    expect(manifest).toHaveLength(1);
+    expect(manifest[0]).toMatchObject({ path: 'reports/dataset.csv', kind: 'csv', queueId: started.id });
+    expect(manifest[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifest[0].bytes).toBe(Buffer.byteLength(csv));
   });
 });
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultSettings } from '../src/shared/projectSchema.js';
+import { OUTPUT_KINDS, defaultSettings } from '../src/shared/projectSchema.js';
 import { DEFAULT_CONFORMER_SETTINGS } from '../src/shared/conformers.js';
 
 /**
@@ -187,6 +187,19 @@ describe('project-format coverage', () => {
     ]);
     const missing = [...keys].filter((key) => !doc.includes('`' + key + '`'));
     expect(missing).toEqual([]);
+  });
+
+  it('documents the schema-v2 containers and every output kind', () => {
+    // RFC 0001 added containers an outside reader must know about: a file that
+    // carries flows[] and datasets[] is not readable from the old prose alone.
+    const doc = read('docs/PROJECT-FORMAT.md');
+    const containers = ['flows[]', 'datasets[]', 'runner', 'reports[]', 'activeFlowId', 'records[]'];
+    const missingContainers = containers.filter((key) => !doc.includes('`' + key + '`'));
+    expect(missingContainers).toEqual([]);
+    const missingKinds = OUTPUT_KINDS.filter((kind) => !doc.includes('`' + kind + '`'));
+    expect(missingKinds).toEqual([]);
+    // The one thing the format deliberately cannot do.
+    expect(doc).toContain('no PDF');
   });
 
   it('indexes every guide page it ships', () => {

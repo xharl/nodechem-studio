@@ -1,11 +1,13 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   blockedPendingTasks,
   finalStatus,
   nextReadyTask,
   topologicalOrder,
 } from '../../src/shared/workflowGraph.js';
+import { artifactFor } from '../../src/shared/artifactExport.js';
 import { conditionFields, evaluateCondition } from '../../src/shared/controlFlow.js';
 import { engineFor } from '../../src/shared/engines/index.js';
 import { ladderVerdict } from '../../src/shared/methodLadder.js';
@@ -60,6 +62,28 @@ async function writeJsonAtomic(filePath, value) {
 
 function oneLine(value, max = 200) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+}
+
+/** The hash a manifest entry records; computed here, never in a pure module. */
+function sha256Hex(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/**
+ * Resolve an artifact path under a root and refuse anything that escapes it.
+ *
+ * `path.resolve` lets an absolute entry replace the root — exactly the case the
+ * prefix check catches — and a `..` segment climbs out. Both are refused rather
+ * than "cleaned": a path that leaves the output folder is a mistake, not a name.
+ */
+export function resolveArtifactPath(root, relative) {
+  const base = path.resolve(root);
+  const target = path.resolve(base, String(relative || ''));
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  if (target !== base && !target.startsWith(prefix)) {
+    throw new Error(`Artifact path "${relative}" escapes the artifact root "${base}".`);
+  }
+  return target;
 }
 
 /**
@@ -292,9 +316,16 @@ const OUTPUT_PATH_SAFE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 /** The artifact an output block writes (RFC 0001). Paths are project-relative. */
 function outputRecord(raw) {
   const kind = OUTPUT_KIND_SET.has(raw?.kind) ? raw.kind : 'zip';
-  const artifactPath = typeof raw?.path === 'string' && OUTPUT_PATH_SAFE.test(raw.path) && !raw.path.split('/').includes('..')
-    ? raw.path
-    : (kind === 'zip' ? 'project.zip' : `reports/report.${kind}`);
+  const requested = typeof raw?.path === 'string' ? raw.path : '';
+  // An explicit path is a commitment: refuse one that could leave the output
+  // folder instead of silently writing somewhere else under a fallback name.
+  const segments = requested.split('/');
+  if (requested && (!OUTPUT_PATH_SAFE.test(requested)
+    || segments.some((segment) => segment === '..' || segment === '.'))) {
+    throw new Error(`Output block path "${requested}" must be relative and stay inside the output folder.`);
+  }
+  const artifactPath = requested
+    || (kind === 'zip' ? 'project.zip' : `reports/report.${kind}`);
   return {
     kind,
     path: artifactPath,
@@ -499,9 +530,15 @@ function publicQueue(queue) {
 }
 
 export class QueueManager {
-  constructor({ queuesRoot, runManager, emit }) {
+  constructor({ queuesRoot, runManager, emit, artifactsRoot = null }) {
     this.queuesRoot = queuesRoot;
     this.runManager = runManager;
+    // RFC 0001: the CLI points this at the folder the user named (`--out`), so
+    // `reports/…` and `manifest.json` land beside `queues/`. The desktop app
+    // omits it and keeps artifacts inside the queue folder.
+    this.artifactsRoot = typeof artifactsRoot === 'string' && artifactsRoot.trim()
+      ? path.resolve(artifactsRoot)
+      : null;
     this.emitExternal = emit || (() => {});
     this.queues = new Map();
     this.loops = new Set();
@@ -951,6 +988,23 @@ export class QueueManager {
   }
 
   /**
+   * An output block waits for every upstream task to settle — any terminal
+   * status, not only success — or, when it is wired to nothing, for every
+   * calculation in its flow. That is what lets a partial family still produce
+   * a report naming the records that failed.
+   */
+  outputReady(queue, task) {
+    const terminal = new Set(['completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted']);
+    const sources = queue.edges
+      .filter((edge) => edge.to === task.nodeId && edge.type !== 'loop')
+      .map((edge) => queue.tasks.find((entry) => entry.nodeId === edge.from))
+      .filter(Boolean);
+    if (sources.length > 0) return sources.every((source) => terminal.has(String(source.status)));
+    const runs = queue.tasks.filter((entry) => entry.type === 'calc' || entry.type === 'conformers');
+    return runs.every((entry) => terminal.has(String(entry.status)));
+  }
+
+  /**
    * Run the queue.
    *
    * RFC 0001: up to `queue.maxParallel` executable tasks are in flight at once.
@@ -967,7 +1021,10 @@ export class QueueManager {
     const inFlight = new Map();
     try {
       while (queue.status === 'running') {
-        const blocked = blockedPendingTasks(queue.tasks, queue.edges);
+        // An output block is exempt from the ordinary block cascade: a failed
+        // record must still be reported, not silently remove the artifact.
+        const blocked = blockedPendingTasks(queue.tasks, queue.edges)
+          .filter((item) => queue.tasks.find((entry) => entry.nodeId === item.nodeId)?.type !== 'output');
         for (const item of blocked) {
           const task = queue.tasks.find((entry) => entry.nodeId === item.nodeId);
           if (task && task.status === 'pending') {
@@ -984,8 +1041,27 @@ export class QueueManager {
         let started = 0;
         let progressed = false;
         while (queue.status === 'running') {
-          const task = nextReadyTask(queue.tasks, queue.edges, inFlight);
-          if (!task) break;
+          // Hold an output block until its whole upstream has settled, even
+          // when it has no ordering edge to wait on.
+          const skip = new Set(inFlight.keys());
+          for (const entry of queue.tasks) {
+            if (entry.type === 'output' && entry.status === 'pending' && !this.outputReady(queue, entry)) {
+              skip.add(entry.nodeId);
+            }
+          }
+          let task = nextReadyTask(queue.tasks, queue.edges, skip);
+          if (!task) {
+            // A collector whose upstream failed is ready by the queue's own
+            // rule even though `nextReadyTask` cannot see it as satisfied.
+            const collector = queue.tasks.find((entry) => entry.type === 'output'
+              && entry.status === 'pending' && !skip.has(entry.nodeId) && this.outputReady(queue, entry));
+            if (collector) {
+              await this.runControl(queue, collector);
+              progressed = true;
+              continue;
+            }
+            break;
+          }
           // Issue #101: a pending-input block is not a control node; it fails
           // with the planner's reason before anything is spawned.
           if (task.pendingInput) {
@@ -1013,7 +1089,8 @@ export class QueueManager {
         // graph ends with pending tasks and no reason.
         if (inFlight.size === 0) {
           if (started === 0 && !progressed) {
-            const late = blockedPendingTasks(queue.tasks, queue.edges);
+            const late = blockedPendingTasks(queue.tasks, queue.edges)
+              .filter((item) => queue.tasks.find((entry) => entry.nodeId === item.nodeId)?.type !== 'output');
             for (const item of late) {
               const task = queue.tasks.find((entry) => entry.nodeId === item.nodeId);
               if (task && task.status === 'pending') {
@@ -1498,6 +1575,246 @@ export class QueueManager {
     });
   }
 
+  /**
+   * Where an output block writes. A queue without an explicit root keeps its
+   * artifacts inside the queue folder, so a desktop run remains one directory.
+   */
+  artifactsRootFor(queue) {
+    return this.artifactsRoot || path.resolve(path.join(this.queueDir(queue.id), 'artifacts'));
+  }
+
+  /**
+   * The executable tasks an output block collects: its ancestors in the plan,
+   * in plan order. An output block wired to nothing still reports the runs of
+   * its own flow — an empty artifact would hide the family that actually ran.
+   */
+  artifactEntries(queue, task) {
+    const collects = (entry) => entry && (entry.type === 'calc' || entry.type === 'conformers');
+    const seen = new Set();
+    const stack = queue.edges
+      .filter((edge) => edge.to === task.nodeId && edge.type !== 'loop')
+      .map((edge) => edge.from);
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const edge of queue.edges) {
+        if (edge.to === id && edge.type !== 'loop') stack.push(edge.from);
+      }
+    }
+    const entries = queue.tasks.filter((entry) => seen.has(entry.nodeId) && collects(entry));
+    if (entries.length > 0) return entries;
+    return queue.tasks.filter((entry) => collects(entry)
+      && (!entry.flowId || !task.flowId || entry.flowId === task.flowId));
+  }
+
+  /** Dataset record metadata from the queue snapshot, in plan order. */
+  recordInfoFor(queue) {
+    const info = new Map();
+    for (const task of queue.tasks) {
+      if (!task.recordId || info.has(task.recordId)) continue;
+      info.set(task.recordId, {
+        id: task.recordId,
+        label: task.record?.label || task.recordId,
+        charge: Number.isInteger(task.record?.charge) ? task.record.charge : null,
+        multiplicity: Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : null,
+      });
+    }
+    return [...info.values()];
+  }
+
+  /**
+   * The `run.json` for every task that got as far as a run folder. A failed
+   * block without one is simply absent: the report names the failure and does
+   * not invent a result.
+   */
+  async readRunRecords(entries) {
+    const records = {};
+    for (const task of entries) {
+      if (!task.runDir) continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const record = JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
+        if (task.runId) records[task.runId] = record;
+        if (task.nodeId && !records[task.nodeId]) records[task.nodeId] = record;
+      } catch {
+        // Missing or unreadable: leave it out rather than fail the whole artifact.
+      }
+    }
+    return records;
+  }
+
+  /**
+   * Bundle contents for a `zip` output: the queue snapshot, the record files
+   * and each finished run's run.json/input/output. Hashes are computed here and
+   * written as `SHA256SUMS` plus a small `manifest.json` inside the archive.
+   */
+  async bundleFiles(queue, entries, recordId = null) {
+    const files = [];
+    const add = async (name, filePath) => {
+      try {
+        files.push({ name, bytes: await fsp.readFile(filePath) });
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    };
+
+    await add('queue.json', path.join(this.queueDir(queue.id), 'queue.json'));
+    const recordsDir = path.join(this.queueDir(queue.id), 'records');
+    const recordFiles = await fsp.readdir(recordsDir).catch(() => []);
+    for (const fileName of recordFiles.sort()) {
+      if (!fileName.endsWith('.json')) continue;
+      if (recordId && fileName !== `${recordId}.json`) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await add(`records/${fileName}`, path.join(recordsDir, fileName));
+    }
+
+    for (const task of entries) {
+      if (!task.runDir) continue;
+      const base = `flows/${task.flowId || 'main'}/records/${task.recordId || 'record'}/runs/${task.runId || task.nodeId}`;
+      const names = new Set(['run.json']);
+      if (task.inputName) names.add(task.inputName);
+      if (task.outputName) names.add(task.outputName);
+      for (const name of names) {
+        // eslint-disable-next-line no-await-in-loop
+        await add(`${base}/${name}`, path.join(task.runDir, name));
+      }
+    }
+
+    const manifest = {
+      kind: 'nodechem-studio.artifact-bundle',
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      queueId: queue.id,
+      flowId: (queue.tasks.find((task) => task.flowId) || {}).flowId || null,
+      files: files.map((file) => ({
+        name: file.name,
+        bytes: file.bytes.length,
+        sha256: sha256Hex(file.bytes),
+      })),
+    };
+    files.push({
+      name: 'SHA256SUMS',
+      bytes: manifest.files.map((file) => `${file.sha256}  ${file.name}`).join('\n') + '\n',
+    });
+    files.push({ name: 'manifest.json', bytes: `${JSON.stringify(manifest, null, 2)}\n` });
+    return files;
+  }
+
+  /**
+   * Append one entry to `<artifactsRoot>/manifest.json`. The manifest is a JSON
+   * array so a reader can verify each artifact without trusting the app; the
+   * write is atomic, like every queue snapshot.
+   */
+  async appendArtifactEntry(root, entry) {
+    const file = path.join(root, 'manifest.json');
+    let manifest = [];
+    try {
+      const parsed = JSON.parse(await fsp.readFile(file, 'utf8'));
+      if (Array.isArray(parsed)) manifest = parsed;
+      else if (parsed && Array.isArray(parsed.artifacts)) manifest = parsed.artifacts;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    manifest.push(entry);
+    await fsp.mkdir(root, { recursive: true });
+    await writeJsonAtomic(file, manifest);
+    return manifest;
+  }
+
+  /** Build, write and manifest one artifact. Returns the manifest entry. */
+  async writeOutputArtifact(queue, task, output, {
+    entries, records, recordInfo, recordId = null, include = 'records',
+  }) {
+    const root = this.artifactsRootFor(queue);
+    const generatedAt = new Date().toISOString();
+    const files = output.kind === 'zip'
+      ? await this.bundleFiles(queue, entries, recordId)
+      : null;
+    const artifact = artifactFor({ ...output, include }, {
+      queue,
+      records,
+      entries,
+      recordId,
+      recordInfo,
+      files,
+      generatedAt,
+      appVersion: this.runManager?.appInfo?.version || null,
+      flowId: task.flowId || null,
+    });
+    const target = resolveArtifactPath(root, artifact.path);
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.writeFile(target, artifact.bytes);
+    const entry = {
+      path: artifact.path,
+      sha256: sha256Hex(artifact.bytes),
+      bytes: artifact.bytes.length,
+      kind: output.kind,
+      flowId: task.flowId || null,
+      generatedAt,
+      queueId: queue.id,
+    };
+    await this.appendArtifactEntry(root, entry);
+    return entry;
+  }
+
+  /**
+   * An output block is a collector, not a stage: it runs once every upstream
+   * task is terminal — including a failed record — and reports what exists.
+   * Blocking it on a failed record would leave a partial family with no report,
+   * which is the opposite of the continue-and-report policy.
+   */
+  async runOutput(queue, task) {
+    const output = task.output && typeof task.output === 'object' ? task.output : {};
+    const include = output.include === 'record' ? 'record' : 'records';
+    const entries = this.artifactEntries(queue, task);
+    const records = await this.readRunRecords(entries);
+    const recordInfo = this.recordInfoFor(queue);
+    const written = [];
+    try {
+      if (include === 'record') {
+        const groups = new Map();
+        for (const entry of entries) {
+          if (!entry.recordId) continue;
+          if (!groups.has(entry.recordId)) groups.set(entry.recordId, []);
+          groups.get(entry.recordId).push(entry);
+        }
+        // A record whose blocks were all blocked still gets a named, empty
+        // artifact rather than disappearing from the set.
+        for (const info of recordInfo) {
+          if (!groups.has(info.id)) groups.set(info.id, []);
+        }
+        if (groups.size === 0) {
+          written.push(await this.writeOutputArtifact(queue, task, output, {
+            entries, records, recordInfo, recordId: null, include,
+          }));
+        } else {
+          for (const [recordId, group] of groups) {
+            // eslint-disable-next-line no-await-in-loop
+            written.push(await this.writeOutputArtifact(queue, task, output, {
+              entries: group, records, recordInfo, recordId, include,
+            }));
+          }
+        }
+      } else {
+        written.push(await this.writeOutputArtifact(queue, task, output, {
+          entries, records, recordInfo, include,
+        }));
+      }
+      const detail = written.length === 1
+        ? `${written[0].path} · ${written[0].bytes} bytes · sha256 ${written[0].sha256.slice(0, 16)}…`
+        : `${written.length} artifacts: ${written.slice(0, 3).map((entry) => entry.path).join(', ')}`
+          + `${written.length > 3 ? ` and ${written.length - 3} more` : ''}`;
+      this.setTaskOutcome(task, 'completed', oneLine(`wrote ${detail}`, 400));
+    } catch (error) {
+      // The OS message is the useful one (ENOSPC, EACCES); keep it verbatim.
+      this.setTaskOutcome(task, 'failed', oneLine(error?.message || String(error), 400));
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
   async runControl(queue, task) {
     // RFC 0001: an input block is a declaration, not work. It completes at once
     // and records how many records the flow is iterating over; its geometry and
@@ -1525,8 +1842,13 @@ export class QueueManager {
       const inputs = this.incomingSources(queue, task.nodeId).length;
       const policy = task.merge?.policy || 'all';
       this.setTaskOutcome(task, 'completed', `merged ${inputs} input(s), policy ${policy} (readiness waits for all)`);
+    } else if (task.type === 'output') {
+      // RFC 0001: an output block writes a real artifact (csv/json/html/zip)
+      // under the artifact root and records its SHA-256 in the manifest.
+      await this.runOutput(queue, task);
+      return;
     } else {
-      this.setTaskOutcome(task, 'blocked', 'output bundling is not implemented yet (GN-008)');
+      this.setTaskOutcome(task, 'blocked', 'this control block has no runtime');
     }
     await this.persist(queue);
     this.publish(queue);
