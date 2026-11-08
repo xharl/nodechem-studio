@@ -23,6 +23,7 @@ import {
   checkImaginaryFrequencies,
   checkMethodBasisCompatibility,
   checkOptimizationConvergence,
+  checkConformerSpread,
   checkSpinContamination,
   normalizeValidityContext,
   runValidityChecks,
@@ -90,6 +91,7 @@ describe('validity checks — contract', () => {
       'engine-settings',
       'method-basis-compatibility',
       'opt-convergence',
+      'conformer-spread',
     ]);
     expect(VALIDITY_CHECKS.every((check) => Array.isArray(check.phases) && check.phases.length > 0)).toBe(true);
   });
@@ -98,6 +100,7 @@ describe('validity checks — contract', () => {
     const checks = [
       checkChargeMultiplicity, checkSpinContamination, checkGeometrySanity,
       checkImaginaryFrequencies, checkMethodBasisCompatibility, checkOptimizationConvergence,
+      checkConformerSpread,
     ];
     for (const check of checks) {
       const result = check({});
@@ -559,6 +562,7 @@ describe('running checks', () => {
     const result = runValidityChecks(context, { phase: 'post' });
     expect(result.findings.map((finding) => finding.id).sort()).toEqual([
       'charge-multiplicity',
+      'conformer-spread',
       'engine-settings',
       'imaginary-frequencies',
       'method-basis-compatibility',
@@ -582,6 +586,7 @@ describe('running checks', () => {
     const result = runValidityChecks(context, { phase: 'pre' });
     expect(result.findings.map((finding) => finding.id).sort()).toEqual([
       'charge-multiplicity',
+      'conformer-spread',
       'engine-settings',
       'geometry-sanity',
       'method-basis-compatibility',
@@ -592,8 +597,8 @@ describe('running checks', () => {
   it('removes a disabled check from the result entirely', () => {
     const before = runValidityChecks(context, { phase: 'post' });
     const after = runValidityChecks(context, { phase: 'post', disabled: ['spin-contamination'] });
-    expect(before.findings).toHaveLength(6);
-    expect(after.findings).toHaveLength(5);
+    expect(before.findings).toHaveLength(7);
+    expect(after.findings).toHaveLength(6);
     expect(after.findings.map((finding) => finding.id)).not.toContain('spin-contamination');
   });
 

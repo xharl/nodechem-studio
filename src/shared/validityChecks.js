@@ -141,6 +141,14 @@ export const VALIDITY_CHECKS = Object.freeze([
     engines: Object.freeze(['gaussian', 'xtb']),
     description: 'A frequency job may only claim a minimum when the optimisation it reads completed.',
   },
+  {
+    id: 'conformer-spread',
+    title: 'Conformer ensemble',
+    phases: Object.freeze(['pre', 'post']),
+    blocking: false,
+    engines: Object.freeze(['gaussian', 'xtb']),
+    description: 'A block fed by a conformer ensemble must cite the member it ran, and a spread above the threshold must be declared rather than hidden.',
+  },
 ]);
 
 export const VALIDITY_CHECK_IDS = Object.freeze(VALIDITY_CHECKS.map((check) => check.id));
@@ -855,8 +863,47 @@ export function checkOptimizationConvergence({ settings = {}, parsed = null, ups
   return unknown(id, `"${title}" has no recorded gate verdict, so its convergence is unknown.`, evidence);
 }
 
-/* ── Runner ───────────────────────────────────────────────── */
+/* ── Conformer ensemble (#30) ─────────────────────────────── */
 
+/**
+ * A calculation that reads a conformer ensemble must cite the member it ran,
+ * and a wide ensemble is a warning even when the chosen member is the lowest:
+ * the number that matters is how far the answer moves with the choice.
+ */
+export function checkConformerSpread({ conformer = null } = {}) {
+  const id = 'conformer-spread';
+  if (!conformer || typeof conformer !== 'object') {
+    return skipped(id, 'This block does not read a conformer ensemble.');
+  }
+  const memberId = String(conformer.memberId || '').slice(0, 24);
+  const spread = Number(conformer.spreadKcal);
+  const threshold = Number(conformer.thresholdKcal ?? 2);
+  const evidence = {
+    source: String(conformer.title || conformer.nodeId || '').slice(0, 120),
+    member: memberId || null,
+    relativeKcal: Number.isFinite(Number(conformer.relativeKcal)) ? Number(conformer.relativeKcal) : null,
+    population: Number.isFinite(Number(conformer.population)) ? Number(conformer.population) : null,
+    protomer: String(conformer.protomer || ''),
+    spreadKcal: Number.isFinite(spread) ? spread : null,
+    thresholdKcal: Number.isFinite(threshold) ? threshold : null,
+    requiresSelection: Boolean(conformer.requiresSelection),
+  };
+  if (!memberId) {
+    return finding(id, CHECK_STATUS.FAIL,
+      `"${evidence.source || 'The conformer block'}" has no selected conformer${conformer.requiresSelection ? '; its protomers must be chosen explicitly' : ''}.`,
+      evidence);
+  }
+  if (Number.isFinite(spread) && Number.isFinite(threshold) && spread > threshold) {
+    return finding(id, CHECK_STATUS.WARNING,
+      `The chosen conformer is ${Number(conformer.relativeKcal ?? 0).toFixed(2)} kcal/mol above the lowest, and the retained ensemble spans ${spread.toFixed(2)} kcal/mol (threshold ${threshold.toFixed(2)}).`,
+      evidence);
+  }
+  return finding(id, CHECK_STATUS.PASS,
+    `Runs on conformer ${memberId}${Number.isFinite(spread) ? `, ensemble spread ${spread.toFixed(2)} kcal/mol` : ''}.`,
+    evidence);
+}
+
+/* ── Runner ───────────────────────────────────────────────── */
 /**
  * Settings that belong to the other engine.
  *
@@ -901,6 +948,7 @@ const CHECK_FUNCTIONS = Object.freeze({
   'engine-settings': checkEngineSettings,
   'method-basis-compatibility': checkMethodBasisCompatibility,
   'opt-convergence': checkOptimizationConvergence,
+  'conformer-spread': checkConformerSpread,
 });
 
 function disabledFrom(settings) {
@@ -1002,6 +1050,19 @@ export function normalizeValidityContext(raw = {}) {
     } : null,
   } : null;
 
+  const conformerRaw = raw && typeof raw.conformer === 'object' && raw.conformer !== null ? raw.conformer : null;
+  const conformer = conformerRaw ? {
+    nodeId: oneLine(conformerRaw.nodeId, '').slice(0, 64) || null,
+    title: oneLine(conformerRaw.title, '').slice(0, 120) || null,
+    memberId: oneLine(conformerRaw.memberId, '').slice(0, 24),
+    relativeKcal: finiteNumber(conformerRaw.relativeKcal),
+    population: finiteNumber(conformerRaw.population),
+    protomer: oneLine(conformerRaw.protomer, '').slice(0, 40),
+    spreadKcal: finiteNumber(conformerRaw.spreadKcal),
+    thresholdKcal: finiteNumber(conformerRaw.thresholdKcal),
+    requiresSelection: conformerRaw.requiresSelection === true,
+  } : null;
+
   return {
     settings: {
       jobType: oneLine(settingsRaw.jobType, '').slice(0, 32),
@@ -1016,6 +1077,7 @@ export function normalizeValidityContext(raw = {}) {
       coords,
     },
     upstream,
+    conformer,
   };
 }
 

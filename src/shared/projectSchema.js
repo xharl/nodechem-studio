@@ -21,6 +21,11 @@ import { MODERN_ROUTE_PRESET, defaultDispersionFor } from './routePresets.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS } from './engines/xtb.js';
 import {
+  CONFORMER_GENERATORS,
+  CONFORMER_METHODS,
+  DEFAULT_CONFORMER_SETTINGS,
+} from './conformers.js';
+import {
   DEFAULT_OPT_CONVERGENCE,
   DEFAULT_TS_FORCE_CONSTANTS,
   OPT_CONVERGENCE_IDS,
@@ -53,7 +58,7 @@ export const LIMITS = Object.freeze({
 });
 
 export const NODE_TYPES = Object.freeze([
-  'calc', 'condition', 'loop', 'merge', 'output', 'note',
+  'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note',
 ]);
 
 /** States a project file may carry. Queue states are reserved for GN-003. */
@@ -98,6 +103,7 @@ const JOB_KINDS = {
 };
 
 const TYPE_KINDS = {
+  conformers: 'Conformers',
   condition: 'If',
   loop: 'Loop',
   merge: 'Merge',
@@ -107,6 +113,7 @@ const TYPE_KINDS = {
 
 const TYPE_LABELS = {
   calc: 'Calculation',
+  conformers: 'Conformer ensemble',
   condition: 'Condition',
   loop: 'Retry loop',
   merge: 'Join branches',
@@ -118,6 +125,7 @@ const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'name', 'molecule', 'defaults',
 const NODE_COMMON_KEYS = new Set(['id', 'type', 'kind', 'title', 'state', 'x', 'y']);
 const NODE_TYPE_KEYS = {
   calc: new Set(['settings', 'output', 'checkpointFrom']),
+  conformers: new Set(['settings', 'output']),
   condition: new Set(['condition']),
   loop: new Set(['loop']),
   merge: new Set(['merge']),
@@ -362,6 +370,160 @@ function readXtbThreads(c, value, path, { legacy = false, fallback = '' } = {}) 
 }
 
 /* ── Sections ─────────────────────────────────────────────── */
+
+/**
+ * Settings for a conformer block. Deliberately separate from the calculation
+ * settings: CREST has no route, basis or SCF, and a shared key space would let
+ * a route value leak into a conformer search.
+ */
+function normalizeConformerSettings(c, raw, path, legacy) {
+  const provided = raw === undefined || raw === null ? {} : raw;
+  if (!isPlainObject(provided)) {
+    c.error(path, 'must be an object.');
+    return { ...DEFAULT_CONFORMER_SETTINGS, charge: 0, multiplicity: 1 };
+  }
+  warnUnknown(c, provided, new Set([
+    'generator', 'method', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
+    'temperature', 'spreadThresholdKcal', 'selectedConformerId', 'importPath',
+    'charge', 'multiplicity',
+  ]), path);
+  // A conformer block is new in this schema, so a file that names one setting
+  // and omits the rest is complete enough: the documented defaults fill in.
+  const source = { ...DEFAULT_CONFORMER_SETTINGS, charge: 0, multiplicity: 1, ...provided };
+  const generator = readEnum(c, source.generator, CONFORMER_GENERATORS, `${path}.generator`, {
+    legacy, fallback: DEFAULT_CONFORMER_SETTINGS.generator,
+  });
+  const importPath = readString(c, source.importPath, `${path}.importPath`, { legacy, fallback: '', max: 260 });
+  if (generator === 'import' && !importPath) {
+    c.warn(`${path}.importPath`, 'is empty; an imported ensemble needs a multi-XYZ file before this block can run.');
+  }
+  const selected = readString(c, source.selectedConformerId, `${path}.selectedConformerId`, { legacy, fallback: '', max: 24 });
+  if (selected && !/^c\d+$/.test(selected)) {
+    c.error(`${path}.selectedConformerId`, 'must be a conformer id such as "c1", or empty for automatic selection.');
+  }
+  return {
+    generator,
+    method: readEnum(c, source.method, CONFORMER_METHODS, `${path}.method`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.method,
+    }),
+    energyWindowKcal: readNumber(c, source.energyWindowKcal, `${path}.energyWindowKcal`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.energyWindowKcal, min: 0, max: 100,
+    }),
+    rmsdThreshold: readNumber(c, source.rmsdThreshold, `${path}.rmsdThreshold`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.rmsdThreshold, min: 0.01, max: 10,
+    }),
+    maxConformers: readInteger(c, source.maxConformers, `${path}.maxConformers`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.maxConformers, min: 1, max: 200,
+    }),
+    temperature: readNumber(c, source.temperature, `${path}.temperature`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.temperature, min: 1, max: 1000,
+    }),
+    spreadThresholdKcal: readNumber(c, source.spreadThresholdKcal, `${path}.spreadThresholdKcal`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal, min: 0, max: 50,
+    }),
+    selectedConformerId: selected,
+    importPath,
+    charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
+    multiplicity: readInteger(c, source.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
+  };
+}
+
+function normalizeConformerAtoms(c, raw, path, legacy) {
+  if (!Array.isArray(raw)) return [];
+  if (raw.length > LIMITS.atoms) {
+    c.error(path, `must contain at most ${LIMITS.atoms} atoms.`);
+    return [];
+  }
+  const atoms = [];
+  raw.forEach((atom, index) => {
+    const atomPath = `${path}[${index}]`;
+    if (!isPlainObject(atom)) {
+      c.error(atomPath, 'must be an object with element, x, y and z.');
+      return;
+    }
+    const element = readString(c, atom.element, `${atomPath}.element`, { legacy, fallback: '', max: 3, required: true });
+    if (!element) return;
+    if (!isElementSymbol(element)) {
+      c.error(`${atomPath}.element`, `unknown element symbol "${element}".`);
+      return;
+    }
+    atoms.push({
+      element,
+      x: readNumber(c, atom.x, `${atomPath}.x`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
+      y: readNumber(c, atom.y, `${atomPath}.y`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
+      z: readNumber(c, atom.z, `${atomPath}.z`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
+    });
+  });
+  return atoms;
+}
+
+/**
+ * The ensemble summary a conformer block carries between runs. It is validated
+ * like any other project data: ids are bounded, member rows are capped, and the
+ * selected geometry is the only coordinates kept (one geometry, not N).
+ */
+function normalizeConformerOutput(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be null or a conformer ensemble summary.');
+    return null;
+  }
+  const members = Array.isArray(raw.members)
+    ? raw.members.slice(0, 200).map((member, index) => {
+      if (!isPlainObject(member)) return null;
+      const memberPath = `${path}.members[${index}]`;
+      return {
+        id: readString(c, member.id, `${memberPath}.id`, { legacy: true, fallback: '', max: 24 }),
+        rank: readInteger(c, member.rank, `${memberPath}.rank`, { legacy: true, fallback: index + 1, min: 1, max: 1000 }),
+        energyEh: readNumber(c, member.energyEh, `${memberPath}.energyEh`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+        relativeKcal: readNumber(c, member.relativeKcal, `${memberPath}.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+        population: readNumber(c, member.population, `${memberPath}.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
+        rmsdToLowest: readNumber(c, member.rmsdToLowest, `${memberPath}.rmsdToLowest`, { legacy: true, fallback: 0, min: 0, max: 100 }),
+        protomer: readString(c, member.protomer, `${memberPath}.protomer`, { legacy: true, fallback: '', max: 40 }),
+        kept: Boolean(member.kept),
+        dropped: ['energy', 'rmsd', 'count'].includes(member.dropped) ? member.dropped : null,
+        atoms: member.kept ? normalizeConformerAtoms(c, member.atoms, `${memberPath}.atoms`, legacy) : [],
+      };
+    }).filter(Boolean)
+    : [];
+  const selectedRaw = isPlainObject(raw.selected) ? raw.selected : null;
+  const selected = selectedRaw ? {
+    id: readString(c, selectedRaw.id, `${path}.selected.id`, { legacy: true, fallback: '', max: 24 }),
+    energyEh: readNumber(c, selectedRaw.energyEh, `${path}.selected.energyEh`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    relativeKcal: readNumber(c, selectedRaw.relativeKcal, `${path}.selected.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    population: readNumber(c, selectedRaw.population, `${path}.selected.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
+    protomer: readString(c, selectedRaw.protomer, `${path}.selected.protomer`, { legacy: true, fallback: '', max: 40 }),
+    atoms: normalizeConformerAtoms(c, selectedRaw.atoms, `${path}.selected.atoms`, legacy),
+  } : null;
+  return {
+    generator: readString(c, raw.generator, `${path}.generator`, { legacy: true, fallback: '', max: 24 }),
+    method: readString(c, raw.method, `${path}.method`, { legacy: true, fallback: '', max: 24 }),
+    count: readInteger(c, raw.count, `${path}.count`, { legacy: true, fallback: members.filter((member) => member.kept).length, min: 0, max: 200 }),
+    total: readInteger(c, raw.total, `${path}.total`, { legacy: true, fallback: members.length, min: 0, max: 5000 }),
+    spreadKcal: raw.spreadKcal === null || raw.spreadKcal === undefined
+      ? null
+      : readNumber(c, raw.spreadKcal, `${path}.spreadKcal`, { legacy: true, fallback: 0, min: 0, max: 1e5 }),
+    generatedAt: readString(c, raw.generatedAt, `${path}.generatedAt`, { legacy: true, fallback: '', max: 40 }),
+    selectedId: readString(c, raw.selectedId, `${path}.selectedId`, { legacy: true, fallback: '', max: 24 }),
+    requiresSelection: Boolean(raw.requiresSelection),
+    autoSelected: Boolean(raw.autoSelected),
+    protomers: Array.isArray(raw.protomers) ? raw.protomers.slice(0, 20).map((item) => String(item).slice(0, 40)) : [],
+    pruned: {
+      energy: readInteger(c, raw.pruned?.energy, `${path}.pruned.energy`, { legacy: true, fallback: 0, min: 0, max: 5000 }),
+      rmsd: readInteger(c, raw.pruned?.rmsd, `${path}.pruned.rmsd`, { legacy: true, fallback: 0, min: 0, max: 5000 }),
+      count: readInteger(c, raw.pruned?.count, `${path}.pruned.count`, { legacy: true, fallback: 0, min: 0, max: 5000 }),
+    },
+    warnings: Array.isArray(raw.warnings)
+      ? raw.warnings.slice(0, 20).map((warning) => ({
+        id: readString(c, warning?.id, `${path}.warnings.id`, { legacy: true, fallback: '', max: 40 }),
+        status: readString(c, warning?.status, `${path}.warnings.status`, { legacy: true, fallback: 'warn', max: 12 }),
+        message: readString(c, warning?.message, `${path}.warnings.message`, { legacy: true, fallback: '', max: 400 }),
+      }))
+      : [],
+    members,
+    selected,
+  };
+}
 
 function normalizeCoords(c, raw, legacy) {
   if (raw === undefined || raw === null) return [];
@@ -789,6 +951,14 @@ function normalizeNode(c, raw, index, legacy) {
         manifest: readBoolean(c, source.manifest, `${path}.output.manifest`, { legacy, fallback: true }),
         notes: readString(c, source.notes, `${path}.output.notes`, { legacy, fallback: '', max: 2000 }),
       },
+    };
+  }
+
+  if (type === 'conformers') {
+    return {
+      ...common,
+      settings: normalizeConformerSettings(c, raw.settings, `${path}.settings`, legacy),
+      output: normalizeConformerOutput(c, raw.output, `${path}.output`, legacy),
     };
   }
 

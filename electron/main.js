@@ -288,6 +288,27 @@ async function chooseExecutable(config = {}) {
   return result.canceled ? null : result.filePaths[0];
 }
 
+async function chooseCrestExecutable() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Locate the CREST executable',
+    defaultPath: process.platform === 'win32' ? 'C:\\crest\\crest.exe' : '/usr/local/bin/crest',
+    properties: ['openFile'],
+    filters: process.platform === 'win32'
+      ? [{ name: 'CREST for Windows', extensions: ['exe', 'bat', 'cmd'] }, { name: 'All files', extensions: ['*'] }]
+      : [{ name: 'All files', extensions: ['*'] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+}
+
+async function chooseEnsembleFile() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a multi-XYZ conformer ensemble',
+    properties: ['openFile'],
+    filters: [{ name: 'XYZ files', extensions: ['xyz', 'trj'] }, { name: 'All files', extensions: ['*'] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+}
+
 async function readProjectFile(filePath) {
   const target = projectPathFromArg(filePath);
   if (!target) {
@@ -731,6 +752,8 @@ app.whenReady().then(async () => {
     mainWindow.close();
   });
   ipcMain.handle('gaussian:pick-executable', (_event, config) => chooseExecutable(config || {}));
+  ipcMain.handle('crest:pick-executable', () => chooseCrestExecutable());
+  ipcMain.handle('conformers:pick-ensemble', () => chooseEnsembleFile());
   ipcMain.handle('gaussian:preflight', (_event, config) => preflight(config || {}, {
     platform: process.platform,
     env: process.env,

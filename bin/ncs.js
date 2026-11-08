@@ -32,7 +32,7 @@ const USAGE = `ncs — headless NodeChem Studio
 
   ncs validate <project.ncs> [--json]
   ncs build-input <project.ncs> --node <id> [--out <file>]
-  ncs run <project.ncs> --out <dir> [--dry-run] [--executable <path>]
+  ncs run <project.ncs> --out <dir> [--dry-run] [--executable <path>] [--crest <path>]
       [--timeout <seconds>] [--json]
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
@@ -186,6 +186,9 @@ async function commandRun({ positional, flags }) {
     options: {
       dryRun: Boolean(flags['dry-run']),
       executable: flags.executable ? String(flags.executable) : '',
+      // A workflow with a CREST block needs the binary the same way a
+      // calculation block needs its engine; the queue fails by name otherwise.
+      crestExecutable: flags.crest ? String(flags.crest) : '',
       scratchDir: '',
     },
   }).catch((error) => fail(`queue did not start: ${error.message}`, EXIT.engine));

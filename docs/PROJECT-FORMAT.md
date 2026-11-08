@@ -88,6 +88,7 @@ Type-specific payloads:
 | `type` | Payload |
 | --- | --- |
 | `calc` | `settings` (route), `output` (`{ file, size }` or null), `checkpointFrom` (node id or null) |
+| `conformers` | `settings` (own key space, below), `output` (ensemble summary or null) |
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
 | `merge` | `merge { policy, notes }` |
@@ -113,6 +114,28 @@ behaviour.
 
 `settings.gates`: `termination`, `scf`, `imaginary`, `minMagnitude`, `thermo`,
 `finalEnergy`.
+
+`conformers.settings` is a separate key space — route keys cannot leak into a conformer search:
+`generator` (`crest` or `import`), `method` (`gfn2` or `gfnff`), `energyWindowKcal`,
+`rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`,
+`importPath`, `charge`, `multiplicity`. Defaults: energy window 10 kcal/mol, RMSD 0.5 Å, at most
+20 conformers, 298.15 K, spread warning at 2 kcal/mol.
+
+`conformers.output` is the ensemble summary written back after a search:
+
+| Key | Notes |
+| --- | --- |
+| `generator`, `method` | `crest`, `import`, or `fixture` for a dry run |
+| `count`, `total` | retained after pruning / frames read |
+| `spreadKcal` | highest minus lowest retained member, null when one member |
+| `selectedId`, `selected { id, energyEh, relativeKcal, population, protomer, atoms[] }` | the member downstream blocks run |
+| `requiresSelection`, `autoSelected`, `protomers[]` | true when more than one protomer survives, which forbids an automatic choice |
+| `members[] { id, rank, energyEh, relativeKcal, population, rmsdToLowest, protomer, kept, dropped, atoms[] }` | ranked table; kept members carry their geometry so the choice is offline |
+| `pruned { energy, rmsd, count }`, `warnings[]`, `generatedAt` | what was dropped and why |
+
+A calculation block fed by a `conformers` block runs the selected member's geometry. When no member
+is selected — including every protomer case — the queue refuses to build its input rather than
+falling back to the imported structure.
 
 `edges[]` — `id`, `from`, `to`, `type` (`dependency`, `checkpoint`, `branch`,
 `loop`), plus `branch` (`true`/`false`) on branch edges. Self-edges, duplicate

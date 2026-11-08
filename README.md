@@ -20,8 +20,9 @@ Without either, the dry run exercises the whole pipeline on a labelled fixture.
 
 **Status: v0.3.0 — early preview.** The graph, the durable queue, the dry-run path, per-block engine
 selection, undo/redo, project templates, crash-safe drafts, three themes, the workflow report, the
-headless CLI, spectra and thermochemistry, reaction energetics, the structure viewer's animation and
-superposition, and both engines' input builders and parsers are implemented and covered by tests.
+headless CLI, spectra and thermochemistry, reaction energetics, conformer and protomer ensembles,
+the structure viewer's animation and superposition, and both engines' input builders and parsers
+are implemented and covered by tests.
 What has *not* been proven is a real run: no licensed Gaussian job and no real xTB job has been
 executed by the project's automated tests. Read [Current limitations](#current-limitations) before
 you trust a result.
@@ -36,6 +37,10 @@ you trust a result.
 - **Two engines, chosen per block** — Gaussian 16 job types down to `Opt=TS`, IRC and scans; xTB
   with GFN0/1/2 and GFN-FF, solvation, threads and restart hand-off, judged by the same validity
   protocol where the checks apply.
+- **Conformer and protomer ensembles** — a Structure block runs CREST (GFN2 or GFN-FF) or imports a
+  multi-XYZ, ranks the members by energy, prunes by energy window and RMSD, and refuses to choose a
+  protomer for you. A downstream block runs the member you picked, and `run.json` records which one
+  it was. CREST is not bundled.
 - **Results you can defend** — gates answer "did it run", validity checks answer "is it
   defensible", an offline signature table explains known engine failures, and any two finished runs
   can be compared without recomputing anything.
@@ -85,6 +90,7 @@ directory, requirements and the unsigned-build warning.
 | [Your first project](docs/guide/first-project.md) | Dry run, workflow, own geometry, saving |
 | [The canvas](docs/guide/canvas.md) | Blocks, connections, states, inspector |
 | [Engines](docs/guide/engines.md) | Gaussian 16 vs xTB, job types, defaults, xTB setup |
+| [Conformers](docs/guide/conformers.md) | CREST or imported ensembles, ranking, protomers, choosing a member |
 | [Workflows](docs/guide/workflow.md) | Queue, conditions, loops, checkpoints, cluster export |
 | [Results](docs/guide/results.md) | Gates, validity checks, thermochemistry, viewer, bundles |
 | [Projects and runs on disk](docs/guide/project-files.md) | `.ncs` file, run folders, provenance |
@@ -146,6 +152,9 @@ docs/              documentation; the user guide lives in docs/guide/
   is still pending.
 - **No real xTB run has been recorded in this checkout.** The builder, parser and fixture path are
   covered by tests; the end-to-end suite only runs when `XTB_BIN` points at a real binary.
+- **CREST is driven, not bundled, and has not been run here.** The argument construction, the
+  ranking and every failure path are tested; a missing executable fails the block by name rather
+  than producing an ensemble.
 - **No packaged macOS build.** The runner and preflight support macOS; there is no build to sign or
   test.
 - **xTB validity checks are narrower than Gaussian's.** xTB has no route, basis or ECP to inspect, so

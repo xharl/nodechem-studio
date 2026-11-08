@@ -21,6 +21,8 @@ If you are new, read these in order:
 2. [Your first project](first-project.md) — open the seeded project, run the dry run, read the result.
 3. [The canvas](canvas.md) — blocks, connections, the inspector, and what the node colours mean.
 4. [Engines](engines.md) — choose Gaussian 16 or xTB, and know which settings belong to which.
+4b. [Conformers and protomers](conformers.md) — search or import an ensemble, then choose the shape a
+   later block runs.
 5. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.
 6. [Results](results.md) — the results panel, gates, validity checks, methods text, run bundles.
 7. [Projects and runs on disk](project-files.md) — the `.ncs` file and the run folder.

@@ -19,6 +19,11 @@ import {
   normalizeDraft,
 } from '../shared/draft.js';
 import { defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import {
+  DEFAULT_CONFORMER_SETTINGS,
+  formatPopulation,
+  formatRelativeKcal,
+} from '../shared/conformers.js';
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import * as shared from '../shared/workflowTasks.js';
@@ -344,6 +349,12 @@ function nodeDetail(node) {
     return routeShort(node.settings);
   }
   if (node.type === 'condition') return node.condition.expression.replace(/\s*\n\s*/g, ' · ');
+  if (node.type === 'conformers') {
+    const output = node.output;
+    if (!output) return `${node.settings.generator === 'import' ? 'import' : 'CREST'} · not run`;
+    const spread = Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(1)}` : '';
+    return `${output.count} of ${output.total} kept${spread}`;
+  }
   if (node.type === 'loop') return `max ${node.loop.maxAttempts} attempts · ${nodeById(node.loop.target)?.title || 'no target'}`;
   if (node.type === 'merge') return node.merge.policy === 'any' ? 'wait for any input' : 'wait for all inputs';
   if (node.type === 'output') return `${node.output.bundle} · manifest`;
@@ -357,6 +368,13 @@ function nodeFoot(node) {
     return { left: gateChips(node).join(' · '), right: output };
   }
   if (node.type === 'condition') return { left: `unknown → ${node.condition.unknown.replace('-', ' ')}`, right: '2 branches' };
+  if (node.type === 'conformers') {
+    const method = node.settings.generator === 'crest'
+      ? `CREST ${node.settings.method === 'gfnff' ? 'GFN-FF' : 'GFN2'}`
+      : 'imported ensemble';
+    const chosen = node.output?.selectedId || '';
+    return { left: method, right: chosen ? `using ${chosen}` : 'no choice' };
+  }
   if (node.type === 'loop') return { left: `until ${node.loop.until}`, right: `×${node.loop.maxAttempts}` };
   if (node.type === 'merge') return { left: `policy: ${node.merge.policy}`, right: 'join' };
   if (node.type === 'output') return { left: 'bundle + manifest', right: 'zip' };
@@ -366,6 +384,7 @@ function nodeFoot(node) {
 
 function kindCode(node) {
   if (node.type === 'condition') return 'IF';
+  if (node.type === 'conformers') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
   if (node.type === 'output') return 'OUT';
@@ -375,6 +394,7 @@ function kindCode(node) {
 
 function kindLabel(node) {
   if (node.type === 'condition') return 'Control';
+  if (node.type === 'conformers') return 'Structure';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
   if (node.type === 'output') return 'Data';
@@ -1448,6 +1468,78 @@ function loopInspector(node) {
   </div>`;
 }
 
+function conformersInspector(node) {
+  const s = node.settings || {};
+  const output = node.output && typeof node.output === 'object' ? node.output : null;
+  const selectedId = output?.selectedId || s.selectedConformerId || '';
+  const members = Array.isArray(output?.members) ? output.members : [];
+  const warnings = Array.isArray(output?.warnings) ? output.warnings : [];
+  const warningBlock = warnings.length
+    ? `<div class="code-block" style="margin-bottom:10px">${warnings.map((warning) => `<div>⚠ ${esc(warning.message)}</div>`).join('')}</div>`
+    : '';
+  const selected = output?.selected;
+  const summaryLine = output
+    ? `${output.count} of ${output.total} kept${Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(2)} kcal/mol` : ''}`
+    : 'no ensemble yet';
+  const rows = members.length
+    ? `<table class="batch-table">
+        <thead><tr><th>Member</th><th>ΔE</th><th>Pop.</th><th>RMSD</th><th></th></tr></thead>
+        <tbody>${members.map((member) => `<tr${member.kept ? '' : ' class="is-muted"'}>
+          <td>${esc(member.id)}${member.protomer ? ` · ${esc(member.protomer)}` : ''}</td>
+          <td>${formatRelativeKcal(member.relativeKcal)}</td>
+          <td>${formatPopulation(member.population)}</td>
+          <td>${Number.isFinite(member.rmsdToLowest) ? member.rmsdToLowest.toFixed(2) : '—'}</td>
+          <td>${member.kept
+            ? `<button type="button" class="btn small${member.id === selectedId ? ' primary' : ''}" data-action="select-conformer" data-conformer-id="${esc(member.id)}">${member.id === selectedId ? 'using' : 'use'}</button>`
+            : `<span class="inspector-note">${esc(member.dropped || 'dropped')}</span>`}</td>
+        </tr>`).join('')}</tbody>
+      </table>`
+    : `<div class="inspector-note">No ensemble yet. ${s.generator === 'import'
+      ? 'Choose a multi-XYZ file and run the block.'
+      : 'Run the block with a CREST executable configured.'}</div>`;
+
+  return `${inspectorHead('Structure · conformers', node.title, summaryLine)}
+  <div class="inspector-scroll">
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${selected
+      ? `using ${esc(selected.id)} · ${formatRelativeKcal(selected.relativeKcal)} kcal/mol · ${formatPopulation(selected.population)}`
+      : 'no member chosen'}</span></div>
+    ${warningBlock}
+    ${group('Ensemble', summaryLine, true, [rows])}
+    ${group('Search', s.generator === 'crest' ? 'CREST' : 'imported file', true, [
+      `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
+        <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
+        <option value="import"${s.generator === 'import' ? ' selected' : ''}>Import a multi-XYZ</option>
+      </select></div>`,
+      s.generator === 'crest'
+        ? `<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
+            <option value="gfn2"${s.method === 'gfn2' ? ' selected' : ''}>GFN2-xTB</option>
+            <option value="gfnff"${s.method === 'gfnff' ? ' selected' : ''}>GFN-FF</option>
+          </select></div>`
+        : `<div class="field full"><label>Ensemble file</label>
+            <div style="display:flex;gap:6px">
+              <input class="input" data-conformer-field="importPath" value="${esc(s.importPath || '')}" placeholder="C:\\path\\to\\conformers.xyz">
+              <button type="button" class="btn small" data-action="pick-ensemble">Choose…</button>
+            </div>
+          </div>`,
+      `<div class="field"><label>Energy window (kcal/mol)</label><input class="input" type="number" min="0" max="100" step="0.5" data-conformer-field="energyWindowKcal" value="${esc(s.energyWindowKcal)}"></div>`,
+      `<div class="field"><label>RMSD threshold (Å)</label><input class="input" type="number" min="0.01" max="10" step="0.05" data-conformer-field="rmsdThreshold" value="${esc(s.rmsdThreshold)}"></div>`,
+      `<div class="field"><label>Keep at most</label><input class="input" type="number" min="1" max="200" data-conformer-field="maxConformers" value="${esc(s.maxConformers)}"></div>`,
+      `<div class="field"><label>Temperature (K)</label><input class="input" type="number" min="1" max="1000" step="0.15" data-conformer-field="temperature" value="${esc(s.temperature)}"></div>`,
+      `<div class="field"><label>Spread warning (kcal/mol)</label><input class="input" type="number" min="0" max="50" step="0.5" data-conformer-field="spreadThresholdKcal" value="${esc(s.spreadThresholdKcal)}"></div>`,
+      `<div class="field"><label>Charge</label><input class="input" type="number" min="-10" max="10" data-conformer-field="charge" value="${esc(s.charge)}"></div>`,
+      `<div class="field"><label>Multiplicity</label><input class="input" type="number" min="1" max="10" data-conformer-field="multiplicity" value="${esc(s.multiplicity)}"></div>`,
+    ].join(''))}
+    <div class="inspector-actions-row">
+      <button type="button" class="btn small" data-action="validate">Validate project</button>
+      <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
+    </div>
+  </div>
+  <div class="inspector-footer">
+    <button type="button" class="btn primary" data-action="run-workflow">Run workflow</button>
+    <button type="button" class="btn" data-action="validate">Validate</button>
+  </div>`;
+}
+
 function simpleInspector(node) {
   const isNote = node.type === 'note';
   const body = isNote
@@ -1558,6 +1650,7 @@ function renderInspector() {
     const node = nodeById(state.selected.id);
     if (!node) { el.innerHTML = renderProjectInspector(); return; }
     if (node.type === 'calc') { el.innerHTML = calcInspector(node); mountStructureViewer(el, node); return; }
+    if (node.type === 'conformers') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
     if (node.type === 'condition') { el.innerHTML = conditionInspector(node); return; }
     if (node.type === 'loop') { el.innerHTML = loopInspector(node); return; }
     el.innerHTML = simpleInspector(node);
@@ -1577,6 +1670,9 @@ const BLOCKS = [
     { type: 'scan', icon: 'Scan', title: 'PES scan', note: 'coordinate scan' },
     { type: 'sp', icon: 'SP', title: 'Single point', note: 'energy at a geometry' },
     { type: 'pop', icon: 'Pop', title: 'Population analysis', note: 'charges + orbitals' },
+  ] },
+  { group: 'Structure', items: [
+    { type: 'conformers', icon: 'CF', title: 'Conformer ensemble', note: 'rank + prune conformers' },
   ] },
   { group: 'Control flow', items: [
     { type: 'condition', icon: 'IF', title: 'Condition', note: 'TRUE / FALSE branches' },
@@ -1657,6 +1753,16 @@ function addBlock(type) {
     node = {
       id, type: 'loop', kind: 'Loop', title: 'Retry loop', state: 'ready', ...position,
       loop: { maxAttempts: 3, mode: 'retry', target: '', until: 'condition is false' },
+    };
+  } else if (type === 'conformers') {
+    node = {
+      id, type: 'conformers', kind: 'Conformers', title: 'Conformer ensemble', state: 'ready', ...position,
+      settings: {
+        ...DEFAULT_CONFORMER_SETTINGS,
+        charge: state.project.molecule.charge,
+        multiplicity: state.project.molecule.multiplicity,
+      },
+      output: null,
     };
   } else if (type === 'merge') {
     node = {
@@ -2618,6 +2724,7 @@ function readRunConfig() {
   try {
     const saved = JSON.parse(localStorage.getItem(RUN_CONFIG_STORAGE_KEY) || '{}');
     if (saved.executable) $('#run-exe').value = saved.executable;
+    if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
     if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
     if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
   } catch {
@@ -2629,6 +2736,7 @@ function saveRunConfig() {
   try {
     localStorage.setItem(RUN_CONFIG_STORAGE_KEY, JSON.stringify({
       executable: $('#run-exe').value.trim(),
+      crestExecutable: $('#run-crest').value.trim(),
       scratchDir: $('#run-scratch').value.trim(),
       dryRun: $('#run-dry').checked,
     }));
@@ -2652,6 +2760,75 @@ async function pickGaussian() {
   }
 }
 
+async function pickCrest() {
+  if (!desktop?.pickCrestExecutable) { toast('Open the Electron app to choose an executable.'); return; }
+  try {
+    const selected = await desktop.pickCrestExecutable();
+    if (selected) {
+      $('#run-crest').value = selected;
+      saveRunConfig();
+      toast('CREST executable selected.');
+    }
+  } catch (error) {
+    toast(`Could not choose the CREST executable: ${error.message}`);
+  }
+}
+
+/**
+ * Pick a member of the ensemble and make it the geometry downstream blocks run.
+ * The member's atoms travel with the project, so the choice survives a restart
+ * even after the queue folder has moved.
+ */
+function selectConformer(id) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'conformers' || !node.output) return;
+  const member = (node.output.members || []).find((entry) => entry.id === id);
+  if (!member || !member.kept) return;
+  if (!Array.isArray(member.atoms) || member.atoms.length === 0) {
+    toast('That conformer has no geometry recorded; run the ensemble again.');
+    return;
+  }
+  node.settings.selectedConformerId = id;
+  node.output.selectedId = id;
+  node.output.selected = {
+    id: member.id,
+    energyEh: member.energyEh,
+    relativeKcal: member.relativeKcal,
+    population: member.population,
+    protomer: member.protomer,
+    atoms: member.atoms,
+  };
+  node.output.requiresSelection = false;
+  node.output.autoSelected = false;
+  node.state = 'passed';
+  refreshDirty();
+  renderGraph();
+  renderInspector();
+  toast(`Using conformer ${id}${Number.isFinite(member.relativeKcal) ? ` (ΔE ${member.relativeKcal.toFixed(2)} kcal/mol)` : ''}.`);
+}
+
+async function pickEnsembleFile() {
+  if (!desktop?.pickEnsembleFile) { toast('Open the Electron app to choose an ensemble file.'); return; }
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'conformers') return;
+  try {
+    const file = await desktop.pickEnsembleFile();
+    if (!file) return;
+    node.settings.importPath = file;
+    node.settings.generator = 'import';
+    node.output = null;
+    node.state = 'ready';
+    refreshDirty();
+    renderGraph();
+    renderInspector();
+    toast('Ensemble file selected. Run the block to rank it.');
+  } catch (error) {
+    toast(`Could not choose the ensemble file: ${error.message}`);
+  }
+}
+
 async function preflightRun({ quiet = false } = {}) {
   if (!desktop) {
     appendRunOutput('Browser preview: no Electron bridge. Start the desktop app to run preflight.\n');
@@ -2671,6 +2848,35 @@ async function preflightRun({ quiet = false } = {}) {
     appendRunOutput(`Preflight error: ${error.message}\n`);
     if (!quiet) toast(`Preflight error: ${error.message}`);
     return null;
+  }
+  // The engine preflight knows nothing about CREST, and a CREST block that
+  // cannot find its binary is a blocking failure, not a warning. Check it here
+  // and fold the answer into the same report rather than letting the queue be
+  // the first place the user hears about it.
+  if (!config.dryRun) {
+    let needsCrest = false;
+    try {
+      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      needsCrest = tasks.some((task) => task.type === 'conformers' && task.conformers?.generator === 'crest');
+    } catch {
+      // An unbuildable plan is reported by the queue's own error; nothing to add.
+    }
+    if (needsCrest) {
+      const crest = $('#run-crest').value.trim();
+      result = {
+        ...result,
+        ok: result.ok && Boolean(crest),
+        checks: [
+          ...(Array.isArray(result.checks) ? result.checks : []),
+          {
+            id: 'crest',
+            label: 'CREST executable',
+            ok: Boolean(crest),
+            detail: crest || 'not chosen — a CREST conformer block cannot run',
+          },
+        ],
+      };
+    }
   }
   appendRunOutput(formatPreflightReport(result));
   if (!quiet) toast(result.ok ? 'Preflight passed.' : 'Preflight found issues; see the run console.');
@@ -2724,6 +2930,7 @@ async function startSelectedRun() {
       outputName: built.outputName,
       settings: settingsForNode(node),
       executable: $('#run-exe').value.trim(),
+      crestExecutable: $('#run-crest').value.trim(),
       scratchDir: $('#run-scratch').value.trim(),
       dryRun,
       gates: gatesForNode(node),
@@ -2898,6 +3105,7 @@ async function startWorkflowUnlocked() {
       options: {
         dryRun,
         executable: $('#run-exe').value.trim(),
+        crestExecutable: $('#run-crest').value.trim(),
         scratchDir: $('#run-scratch').value.trim(),
       },
     });
@@ -2982,6 +3190,30 @@ async function attachQueueParsed(queue) {
   if (changed && state.selected.type === 'node') renderInspector();
 }
 
+/**
+ * Copy finished conformer ensembles into their blocks. The queue is the only
+ * place a real search result exists, so this is what makes the table appear in
+ * the inspector; a re-run with the same stamp does not stomp a later choice.
+ */
+function attachQueueEnsembles(queue) {
+  let changed = false;
+  for (const task of queue?.tasks || []) {
+    if (task?.type !== 'conformers' || task.status !== 'completed' || !task.ensemble) continue;
+    const node = nodeById(task.nodeId);
+    if (!node || node.type !== 'conformers') continue;
+    if (node.output && node.output.generatedAt === task.ensemble.generatedAt) continue;
+    node.output = task.ensemble;
+    node.settings.selectedConformerId = task.ensemble.selectedId || '';
+    node.state = task.ensemble.requiresSelection ? 'review' : 'passed';
+    changed = true;
+  }
+  if (changed) {
+    refreshDirty();
+    renderGraph();
+    renderInspector();
+  }
+}
+
 function handleQueueEvent(event) {
   if (!event) return;
   if (event.type === 'queue-output') {
@@ -2991,6 +3223,7 @@ function handleQueueEvent(event) {
   }
   if (!event.queue) return;
   applyQueue(event.queue);
+  attachQueueEnsembles(event.queue);
   if (event.type === 'queue-started') {
     const queuedEngine = event.queue.tasks.find((task) => task.engine)?.engine
       || state.project?.defaults?.engine;
@@ -3605,6 +3838,9 @@ function handleAction(action, element) {
     case 'preflight': preflightRun(); break;
     case 'run-selected': startSelectedRun(); break;
     case 'run-workflow': startWorkflow(); break;
+    case 'select-conformer': selectConformer(element.dataset.conformerId); break;
+    case 'pick-ensemble': pickEnsembleFile(); break;
+    case 'pick-crest': pickCrest(); break;
     case 'pause-workflow': pauseWorkflow(); break;
     case 'export-workflow-report': exportWorkflowReportAction(); break;
     case 'resume-workflow': resumeWorkflow(); break;
@@ -3776,6 +4012,10 @@ function onDocumentChange(event) {
     renderInspector();
     return;
   }
+  if (target.dataset.conformerField) {
+    applyConformerField(target);
+    return;
+  }
   if (target.dataset.branchEdit) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
@@ -3833,8 +4073,45 @@ function onDocumentChange(event) {
   }
 }
 
+/**
+ * One writer for the conformer block's settings. Both the input and the change
+ * listeners come here, so typing a number and picking from a select behave the
+ * same way.
+ */
+function applyConformerField(target) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'conformers') return;
+  const key = target.dataset.conformerField;
+  const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity'];
+  if (numeric.includes(key)) {
+    const bounds = {
+      energyWindowKcal: [0, 100], rmsdThreshold: [0.01, 10], maxConformers: [1, 200],
+      temperature: [1, 1000], spreadThresholdKcal: [0, 50], charge: [-10, 10], multiplicity: [1, 10],
+    }[key];
+    const value = Number(target.value);
+    if (!Number.isFinite(value)) return;
+    node.settings[key] = clamp(value, bounds[0], bounds[1]);
+  } else {
+    node.settings[key] = target.value;
+    if (key === 'generator' && node.output && node.output.generator !== target.value) {
+      // An imported table is not what CREST would produce, and a CREST run is
+      // not the file that was imported: switching the source voids the choice.
+      node.output = null;
+      node.state = 'ready';
+    }
+  }
+  refreshDirty();
+  renderGraph();
+  renderInspector();
+}
+
 function onDocumentInput(event) {
   const target = event.target;
+  if (target.dataset.conformerField) {
+    applyConformerField(target);
+    return;
+  }
   if (target.id === 'palette-search') {
     renderPalette();
     return;

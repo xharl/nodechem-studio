@@ -29,6 +29,29 @@ async function writeJson(filePath, value) {
   await fsp.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+/**
+ * The conformer a run was built on (issue #30). Bounded and coerced here for
+ * the same reason every other renderer-supplied value is: run.json is written
+ * by the main process and must not be shaped by an untrusted payload.
+ */
+function conformerRecord(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const text = (value, max) => String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+  const number = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
+  const id = text(raw.id, 24);
+  if (!id) return null;
+  return {
+    nodeId: text(raw.nodeId, 64) || null,
+    title: text(raw.title, 120),
+    generator: text(raw.generator, 24),
+    id,
+    relativeKcal: number(raw.relativeKcal),
+    population: number(raw.population),
+    protomer: text(raw.protomer, 40),
+    spreadKcal: number(raw.spreadKcal),
+  };
+}
+
 export class RunManager {
   constructor({ runsRoot, emit, createRunner, appInfo }) {
     this.runsRoot = runsRoot;
@@ -143,6 +166,7 @@ export class RunManager {
       inputSha256,
       outputSha256: null,
       app: { ...this.appInfo },
+      ...(payload.conformer ? { conformer: conformerRecord(payload.conformer) } : {}),
       provenance: {
         kind: provenanceKindFor(dryRun),
         // The job keyword is part of the method record: a methods paragraph

@@ -173,6 +173,7 @@ licensed Gaussian installation (GN-001).
 | Viewer (#71) | Normal-mode animation from real displacement blocks, optimisation trajectory replay, Kabsch/Horn superposition with RMSD, SVG figure export | `normalModes.js`, `trajectory.js`, `superpose.js`, `superpositionCard.js` + tests |
 | Import and corpus (#27, #28) | Batch indexing of a folder of Gaussian and xTB logs; a golden corpus of twenty real Gaussian 09/16 logs including truncated and SCF-failed cases | `logImport.js`, `test/fixtures/real/`, `test/realCorpus.test.js` |
 | Diagnostics and failure explanations (#55) | One-click redacted diagnostics bundle; offline signature table for known engine failures | `diagnostics.js`, `errorSignatures.js`, `test/diagnostics.test.js`, `test/errorSignatures.test.js` |
+| Conformer and protomer ensembles (#30) | A Structure block runs CREST (GFN2/GFN-FF) or imports a multi-XYZ, ranks by energy, prunes by window and RMSD, computes Boltzmann populations, refuses an automatic protomer choice, carries the chosen member into downstream inputs and into `run.json` | `conformers.js`, `electron/runner/crestRunner.js`, `test/conformers.test.js`, `test/conformerWorkflow.test.js` |
 
 ## 5. Delivery phases
 

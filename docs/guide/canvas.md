@@ -17,6 +17,7 @@ from anywhere.
 | | PES scan | Coordinate scan |
 | | Single point | Energy at a geometry |
 | | Population analysis | Charges and orbitals |
+| Structure | Conformer ensemble | Rank and choose a conformer / protomer ([details](conformers.md)) |
 | Control flow | Condition | TRUE / FALSE branches |
 | | Loop | Retry with max attempts |
 | | Join | Merge branches |

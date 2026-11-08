@@ -461,7 +461,22 @@ export function modeFrame(modes, index, phase, amplitude = 0.6) {
  * viewer rather than an empty/fake one.
  */
 export function resolveStructure(node) {
-  if (!node || node.type !== 'calc') return null;
+  if (!node) return null;
+  // A conformer block has no run to parse: the geometry it would show is the
+  // member the user picked, taken from the ensemble summary it carries.
+  if (node.type === 'conformers') {
+    const atoms = node.output?.selected?.atoms;
+    if (!Array.isArray(atoms) || atoms.length === 0) return null;
+    const geometry = { atoms, source: `conformer ${node.output.selected.id}` };
+    let prepared;
+    try {
+      prepared = prepareGeometry(geometry);
+    } catch {
+      return null;
+    }
+    return { geometry: prepared, rawGeometry: geometry, modes: describeModes(null, prepared.atomCount), source: geometry.source };
+  }
+  if (node.type !== 'calc') return null;
   const parsed = node.output?.parsed ?? node.parsed ?? null;
   const geometry = parsed?.finalGeometry ?? parsed?.geometry?.final ?? null;
   if (!geometry || !Array.isArray(geometry.atoms) || geometry.atoms.length === 0) return null;
@@ -943,7 +958,7 @@ export function mountStructureViewer(inspectorEl, node) {
     activeViewer.destroy();
     activeViewer = null;
   }
-  if (!inspectorEl || !node || node.type !== 'calc') return null;
+  if (!inspectorEl || !node || (node.type !== 'calc' && node.type !== 'conformers')) return null;
   const resolved = resolveStructure(node);
   if (!resolved) return null;
 
@@ -979,6 +994,9 @@ export function mountStructureViewer(inspectorEl, node) {
   activeViewer = viewer;
   viewer.setGeometry(resolved.rawGeometry, resolved.modes);
 
+  const label = panel.querySelector('.section-label');
+  if (label) label.textContent = node.type === 'conformers' ? 'Chosen conformer' : 'Final geometry';
+  panel.setAttribute('aria-label', node.type === 'conformers' ? 'Chosen conformer viewer' : 'Parsed structure viewer');
   const sourceLabel = resolved.source ? `${resolved.source} orientation` : 'source unknown';
   source.textContent = `${resolved.geometry.atomCount} atoms · ${resolved.geometry.bonds.length} bonds · ${sourceLabel}`;
   legendSlot.append(legendFor(resolved.geometry));

@@ -13,6 +13,14 @@ import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
 import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
+import { CrestRunner } from './crestRunner.js';
+import {
+  ensembleSummary,
+  fixtureConformerFrames,
+  parseMultiXyz,
+  rankEnsemble,
+  withEnergies,
+} from '../../src/shared/conformers.js';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
@@ -27,7 +35,7 @@ const TASK_STATUSES = new Set([
   'pending', 'running', 'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
 ]);
 
-const TASK_TYPES = new Set(['calc', 'condition', 'loop', 'merge', 'output', 'note']);
+const TASK_TYPES = new Set(['calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note']);
 
 function queueIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -106,10 +114,88 @@ function routeSettings(raw) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
+function conformerTaskRecord(raw, nodeId) {
+  const inputName = String(raw?.inputName || '');
+  if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
+    throw new Error(`Conformer task "${nodeId}" must have a safe .xyz input name.`);
+  }
+  const inputText = String(raw?.inputText || '');
+  if (!inputText.trim()) throw new Error(`Conformer task "${nodeId}" has no starting geometry.`);
+  if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
+    throw new Error(`Conformer task "${nodeId}" input is larger than 2 MiB.`);
+  }
+  const conf = raw?.conformers && typeof raw.conformers === 'object' ? raw.conformers : {};
+  const generator = conf.generator === 'import' ? 'import' : 'crest';
+  const importPath = oneLine(conf.importPath, 500);
+  if (generator === 'import' && !importPath) {
+    throw new Error(`Conformer task "${nodeId}" has no ensemble file to import.`);
+  }
+  const number = (value, fallback, min, max) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+  };
+  return {
+    nodeId,
+    type: 'conformers',
+    title: oneLine(raw?.title, 120) || nodeId,
+    kind: oneLine(raw?.kind, 32) || 'Conformers',
+    executable: true,
+    engine: null,
+    argv: null,
+    route: null,
+    status: 'pending',
+    attempts: 0,
+    runId: null,
+    runDir: null,
+    inputName,
+    outputName: 'crest.out',
+    settings: null,
+    gates: {},
+    validity: null,
+    checkpointName: '',
+    checkpointFrom: null,
+    condition: null,
+    loop: null,
+    merge: null,
+    ladder: null,
+    spin: null,
+    reaction: null,
+    loopAttempts: 0,
+    conditionResult: null,
+    summary: null,
+    history: [],
+    gateVerdict: null,
+    parsedSummary: null,
+    error: null,
+    reason: null,
+    previousError: null,
+    startedAt: null,
+    finishedAt: null,
+    ensemble: null,
+    ensembleFile: null,
+    inputText,
+    conformers: {
+      generator,
+      method: conf.method === 'gfnff' ? 'gfnff' : 'gfn2',
+      energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
+      rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
+      maxConformers: Math.round(number(conf.maxConformers, 20, 1, 200)),
+      temperature: number(conf.temperature, 298.15, 1, 1000),
+      spreadThresholdKcal: number(conf.spreadThresholdKcal, 2, 0, 50),
+      selectedConformerId: /^c\d+$/.test(String(conf.selectedConformerId || '')) ? String(conf.selectedConformerId) : '',
+      importPath,
+      charge: Math.round(number(conf.charge, 0, -10, 10)),
+      multiplicity: Math.round(number(conf.multiplicity, 1, 1, 10)),
+      argv: Array.isArray(conf.argv) ? conf.argv.map(String).slice(0, 32) : [],
+    },
+  };
+}
+
 function taskRecord(raw, index) {
   const nodeId = String(raw?.nodeId || '');
   if (!SAFE_ID.test(nodeId)) throw new Error(`Task ${index + 1} has an invalid node id.`);
   const executable = Boolean(raw?.executable);
+  if (TASK_TYPES.has(raw?.type) && raw.type === 'conformers') return conformerTaskRecord(raw, nodeId);
   const engineId = String(raw?.engine || 'gaussian');
   const engine = engineFor(engineId);
   const argv = Array.isArray(raw?.argv) ? raw.argv.map(String) : null;
@@ -182,6 +268,19 @@ function taskRecord(raw, index) {
       count: Number.isInteger(Number(rawSpin.count)) ? Number(rawSpin.count) : null,
     }
     : null;
+  const rawConformer = raw?.conformer && typeof raw.conformer === 'object' ? raw.conformer : null;
+  const conformer = rawConformer && /^c\d+$/.test(String(rawConformer.id || ''))
+    ? {
+      nodeId: oneLine(rawConformer.nodeId, 64) || null,
+      title: oneLine(rawConformer.title, 120),
+      generator: oneLine(rawConformer.generator, 24),
+      id: String(rawConformer.id),
+      relativeKcal: Number.isFinite(Number(rawConformer.relativeKcal)) ? Number(rawConformer.relativeKcal) : null,
+      population: Number.isFinite(Number(rawConformer.population)) ? Number(rawConformer.population) : null,
+      protomer: oneLine(rawConformer.protomer, 40),
+      spreadKcal: Number.isFinite(Number(rawConformer.spreadKcal)) ? Number(rawConformer.spreadKcal) : null,
+    }
+    : null;
   const rawLadder = raw?.ladder && typeof raw.ladder === 'object' ? raw.ladder : null;
   const ladderId = rawLadder ? String(rawLadder.id || '') : '';
   const ladder = rawLadder && SAFE_ID.test(ladderId)
@@ -221,6 +320,7 @@ function taskRecord(raw, index) {
     ladder,
     spin,
     reaction,
+    conformer,
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -319,6 +419,10 @@ export class QueueManager {
 
   inputPath(queueId, nodeId) {
     return path.join(this.queueDir(queueId), 'inputs', `${nodeId}.gjf`);
+  }
+
+  conformerInputPath(queueId, nodeId) {
+    return path.join(this.queueDir(queueId), 'inputs', `${nodeId}.xyz`);
   }
 
   async persist(queue) {
@@ -437,11 +541,21 @@ export class QueueManager {
     const options = payload.options || {};
     const dryRun = Boolean(options.dryRun);
     const executable = String(options.executable || '').trim();
+    const crestExecutable = String(options.crestExecutable || '').trim();
     const scratchDir = String(options.scratchDir || '').trim();
+    const needsCalcEngine = tasks.some((task) => task.executable && task.type === 'calc');
+    const needsCrest = tasks.some((task) => task.type === 'conformers' && task.conformers?.generator === 'crest');
     if (!dryRun) {
-      if (!executable) throw new Error('Choose the calculation executable before running the workflow.');
-      const stat = await fsp.stat(executable).catch(() => null);
-      if (!stat?.isFile()) throw new Error(`Calculation executable not found: ${executable}`);
+      if (needsCalcEngine) {
+        if (!executable) throw new Error('Choose the calculation executable before running the workflow.');
+        const stat = await fsp.stat(executable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`Calculation executable not found: ${executable}`);
+      }
+      if (needsCrest) {
+        if (!crestExecutable) throw new Error('Choose the CREST executable before running a conformer search (or set the block to import an ensemble).');
+        const stat = await fsp.stat(crestExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`CREST executable not found: ${crestExecutable}`);
+      }
     }
 
     const id = queueIdFor();
@@ -454,7 +568,7 @@ export class QueueManager {
       finishedAt: null,
       currentTaskId: null,
       reason: null,
-      options: { dryRun, executable: dryRun ? null : executable, scratchDir },
+      options: { dryRun, executable: dryRun ? null : executable, crestExecutable: dryRun ? null : crestExecutable, scratchDir },
       edges,
       tasks,
       // Method ladders: one verdict per ladder group, evaluated when every rung
@@ -469,7 +583,10 @@ export class QueueManager {
     await fsp.mkdir(path.join(this.queueDir(id), 'inputs'), { recursive: true });
     for (const task of tasks) {
       if (!task.executable) continue;
-      await fsp.writeFile(this.inputPath(id, task.nodeId), task.inputText, 'utf8');
+      const inputPath = task.type === 'conformers'
+        ? this.conformerInputPath(id, task.nodeId)
+        : this.inputPath(id, task.nodeId);
+      await fsp.writeFile(inputPath, task.inputText, 'utf8');
     }
     this.queues.set(id, queue);
     await this.persist(queue);
@@ -653,6 +770,11 @@ export class QueueManager {
           continue;
         }
 
+        if (task.type === 'conformers') {
+          await this.runConformers(queue, task);
+          continue;
+        }
+
         await this.runTask(queue, task);
         const spinChanged = await this.evaluateSpins(queue);
         const reactionChanged = await this.evaluateReactions(queue);
@@ -679,6 +801,120 @@ export class QueueManager {
     } finally {
       this.loops.delete(queue.id);
     }
+  }
+
+  /**
+   * Run one conformer search and rank what it produced.
+   *
+   * Deliberately outside `runTask`: CREST has no route, gates or termination
+   * record, so it is not an engine. The artifacts land beside the queue, the
+   * summary is stored on the task, and the renderer copies the summary into the
+   * block's output so the project can build downstream inputs offline.
+   */
+  async runConformers(queue, task) {
+    const conf = task.conformers;
+    const dir = path.join(this.queueDir(queue.id), 'conformers', task.nodeId);
+    await fsp.mkdir(dir, { recursive: true });
+
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+
+    try {
+      let ensembleText = '';
+      let energies = [];
+      let source = conf.generator;
+
+      if (queue.options.dryRun) {
+        const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+        const parsedInput = parseMultiXyz(inputText);
+        if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+          throw new Error(`The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
+        }
+        const fixture = fixtureConformerFrames(parsedInput.frames[0].atoms);
+        ensembleText = fixture.text;
+        energies = fixture.energies;
+        source = 'fixture';
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: 'Dry run: a labelled three-member fixture, not a conformer search.',
+        });
+      } else if (conf.generator === 'import') {
+        const imported = await CrestRunner.readImport(conf.importPath);
+        ensembleText = imported.ensembleText;
+        energies = imported.energies;
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: `Imported ensemble ${imported.ensemblePath}`,
+        });
+      } else {
+        const runner = new CrestRunner();
+        this.conformersRunner = runner;
+        const result = await runner.run({
+          executable: queue.options.crestExecutable,
+          argv: conf.argv,
+          cwd: dir,
+          outputName: task.outputName,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        }).finally(() => {
+          if (this.conformersRunner === runner) this.conformersRunner = null;
+        });
+        if (result.cancelled) throw new Error('Conformer search cancelled by the user.');
+        if (Number(result.exitCode) !== 0) {
+          throw new Error(`CREST exited with code ${result.exitCode}; see ${task.outputName} in the queue folder.`);
+        }
+        ensembleText = result.ensembleText;
+        energies = result.energies;
+      }
+
+      await fsp.writeFile(path.join(dir, 'ensemble.xyz'), ensembleText, 'utf8');
+      const parsed = parseMultiXyz(ensembleText);
+      if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
+      const merged = withEnergies(parsed.frames, energies);
+      if (merged.error) throw new Error(merged.error);
+      const ranked = rankEnsemble({
+        frames: merged.frames,
+        energyWindowKcal: conf.energyWindowKcal,
+        rmsdThreshold: conf.rmsdThreshold,
+        maxConformers: conf.maxConformers,
+        temperature: conf.temperature,
+        spreadThresholdKcal: conf.spreadThresholdKcal,
+        selectedConformerId: conf.selectedConformerId,
+      });
+      if (ranked.error) throw new Error(ranked.error);
+
+      const summary = ensembleSummary(ranked, { generator: source, method: conf.method });
+      summary.generatedAt = new Date().toISOString();
+      const summaryPath = path.join(dir, 'conformers.json');
+      await writeJsonAtomic(summaryPath, summary);
+
+      task.status = 'completed';
+      task.ensemble = summary;
+      task.ensembleFile = 'conformers.json';
+      task.runDir = dir;
+      task.finishedAt = new Date().toISOString();
+      task.summary = `${summary.count} of ${summary.total} conformers retained`
+        + (summary.spreadKcal !== null ? `, spread ${summary.spreadKcal.toFixed(2)} kcal/mol` : '')
+        + (summary.requiresSelection ? '; protomers need an explicit choice' : '');
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Ensemble ${task.summary}.` });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Conformer search failed: ${task.error}` });
+    }
+    await this.persist(queue);
+    this.publish(queue);
   }
 
   async runTask(queue, task) {
@@ -786,6 +1022,9 @@ export class QueueManager {
         gates: task.gates,
         validity,
         checkpointHandoff,
+        // Issue #30: the conformer this run is built on travels into run.json,
+        // so a result can never be read as if it came from the imported geometry.
+        ...(task.conformer ? { conformer: task.conformer } : {}),
       });
       task.runId = response.runId;
       task.runDir = response.runDir;
@@ -1065,6 +1304,9 @@ export class QueueManager {
       }
       if (task.status === 'running' && task.runId) {
         await this.runManager.cancel(task.runId).catch(() => {});
+      }
+      if (task.status === 'running' && task.type === 'conformers') {
+        this.conformersRunner?.cancel();
       }
     }
     queue.currentTaskId = null;

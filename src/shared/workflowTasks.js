@@ -12,6 +12,7 @@ import { engineOrDefault } from './engines/index.js';
 import { ladderRungs } from './methodLadder.js';
 import { spinSweepFor } from './spinSweep.js';
 import { runSettingsFor } from './engineSettings.js';
+import { DEFAULT_CONFORMER_SETTINGS, crestArgv, xyzText } from './conformers.js';
 import { checkTsForceConstants, freqGeometryWarnings, optConvergenceWarnings } from './tsForceConstants.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from './validityChecks.js';
 
@@ -42,8 +43,74 @@ export function moleculeForNode(project, node) {
   const molecule = project?.molecule || {};
   const charge = Number.isInteger(settings.charge) ? settings.charge : molecule.charge;
   const multiplicity = Number.isInteger(settings.multiplicity) ? settings.multiplicity : molecule.multiplicity;
-  const coords = Array.isArray(molecule.coords) && molecule.coords.length > 0 ? molecule.coords : DEMO_WATER;
+  // Issue #30: a calculation downstream of a conformer block runs on the
+  // conformer that was *chosen*, not on the project's single imported geometry.
+  const conformer = conformerForNode(project, node);
+  const chosen = conformer?.atoms;
+  const coords = Array.isArray(chosen) && chosen.length > 0
+    ? chosen
+    : (Array.isArray(molecule.coords) && molecule.coords.length > 0 ? molecule.coords : DEMO_WATER);
   return { charge, multiplicity, coords };
+}
+
+/** Settings of a conformer block, with the documented defaults filled in. */
+export function conformerSettingsFor(node) {
+  const source = node?.settings && typeof node.settings === 'object' ? node.settings : {};
+  const pick = (key) => (source[key] === undefined || source[key] === null ? DEFAULT_CONFORMER_SETTINGS[key] : source[key]);
+  return {
+    generator: String(pick('generator') || 'crest'),
+    method: String(pick('method') || 'gfn2'),
+    energyWindowKcal: Number(pick('energyWindowKcal')),
+    rmsdThreshold: Number(pick('rmsdThreshold')),
+    maxConformers: Number(pick('maxConformers')),
+    temperature: Number(pick('temperature')),
+    spreadThresholdKcal: Number(pick('spreadThresholdKcal')),
+    selectedConformerId: String(source.selectedConformerId || ''),
+    importPath: String(source.importPath || ''),
+  };
+}
+
+/**
+ * The conformer block a calculation reads its geometry from, when one is
+ * connected by a dependency edge.
+ */
+export function conformerSourceFor(project, node) {
+  if (!node || node.type === 'conformers') return null;
+  const edges = Array.isArray(project?.edges) ? project.edges : [];
+  const edge = edges.find((item) => item.to === node.id
+    && item.type === 'dependency'
+    && nodeById(project, item.from)?.type === 'conformers');
+  return edge ? nodeById(project, edge.from) : null;
+}
+
+/**
+ * The chosen conformer of the upstream block: the geometry and the numbers a
+ * downstream run must cite, or null when no conformer block feeds this node.
+ */
+export function conformerForNode(project, node) {
+  const source = conformerSourceFor(project, node);
+  if (!source) return null;
+  const output = source.output && typeof source.output === 'object' ? source.output : null;
+  const selected = output?.selected && Array.isArray(output.selected.atoms) && output.selected.atoms.length > 0
+    ? output.selected
+    : null;
+  return {
+    nodeId: source.id,
+    title: source.title,
+    generator: output?.generator || '',
+    spreadKcal: Number.isFinite(output?.spreadKcal) ? output.spreadKcal : null,
+    thresholdKcal: Number.isFinite(Number(source.settings?.spreadThresholdKcal))
+      ? Number(source.settings.spreadThresholdKcal)
+      : DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal,
+    requiresSelection: Boolean(output?.requiresSelection),
+    atoms: selected ? selected.atoms : null,
+    selected: selected ? {
+      id: String(selected.id || ''),
+      relativeKcal: Number(selected.relativeKcal ?? 0),
+      population: Number(selected.population ?? 0),
+      protomer: String(selected.protomer || ''),
+    } : null,
+  };
 }
 
 export function gatesForNode(node) {
@@ -160,11 +227,23 @@ export function optConvergenceIssues(project, node) {
 
 export function blockingValidityFinding(project, node, settings, molecule) {
   const engine = engineForNode(project, node);
+  const conformer = conformerForNode(project, node);
   const result = runValidityChecks({
     settings,
     molecule,
     parsed: null,
     upstream: validityUpstreamFor(project, node),
+    conformer: conformer ? {
+      nodeId: conformer.nodeId,
+      title: conformer.title,
+      memberId: conformer.selected?.id || '',
+      relativeKcal: conformer.selected?.relativeKcal ?? null,
+      population: conformer.selected?.population ?? null,
+      protomer: conformer.selected?.protomer || '',
+      spreadKcal: conformer.spreadKcal,
+      thresholdKcal: conformer.thresholdKcal,
+      requiresSelection: conformer.requiresSelection,
+    } : null,
   }, { phase: 'pre', engine: engine.id });
   const blocking = new Set(VALIDITY_CHECKS.filter((check) => check.blocking).map((check) => check.id));
   return result.findings.find((finding) => finding.status === CHECK_STATUS.FAIL && blocking.has(finding.id)) || null;
@@ -172,6 +251,7 @@ export function blockingValidityFinding(project, node, settings, molecule) {
 
 export function validityForNode(project, node) {
   const molecule = moleculeForNode(project, node);
+  const conformer = conformerForNode(project, node);
   return {
     settings: {
       jobType: node.settings.jobType,
@@ -182,6 +262,17 @@ export function validityForNode(project, node) {
     },
     molecule,
     upstream: validityUpstreamFor(project, node),
+    conformer: conformer ? {
+      nodeId: conformer.nodeId,
+      title: conformer.title,
+      memberId: conformer.selected?.id || '',
+      relativeKcal: conformer.selected?.relativeKcal ?? null,
+      population: conformer.selected?.population ?? null,
+      protomer: conformer.selected?.protomer || '',
+      spreadKcal: conformer.spreadKcal,
+      thresholdKcal: conformer.thresholdKcal,
+      requiresSelection: conformer.requiresSelection,
+    } : null,
   };
 }
 
@@ -200,17 +291,38 @@ export function buildRunInput(project, node, { taskId = node?.id, settingsOverri
     : baseMolecule;
   const blocking = blockingValidityFinding(project, node, settings, molecule);
   if (blocking) throw new Error(blocking.message || blocking.detail || `The ${blocking.id} check failed.`);
-  const base = safeBase(taskId);
-  if (engine.id === 'xtb') {
-    return engine.buildInput({ title: node.title, settings, molecule, inputName: `${base}.xyz` });
+  // Issue #30: a block fed by a conformer ensemble may not run until a member
+  // is chosen. Falling back to the project geometry would silently discard the
+  // entire conformer stage, which is the error this feature exists to stop.
+  const conformer = conformerForNode(project, node);
+  if (conformer && !conformer.selected) {
+    throw new Error(`"${conformer.title}" has no selected conformer. Run the ensemble and choose a member before running "${node.title}".`);
   }
-  return engine.buildInput({
-    title: node.title,
-    settings,
-    molecule,
-    inputName: `${base}.gjf`,
-    oldCheckpoint: oldCheckpointFor(project, node),
-  });
+  const base = safeBase(taskId);
+  const built = engine.id === 'xtb'
+    ? engine.buildInput({ title: node.title, settings, molecule, inputName: `${base}.xyz` })
+    : engine.buildInput({
+      title: node.title,
+      settings,
+      molecule,
+      inputName: `${base}.gjf`,
+      oldCheckpoint: oldCheckpointFor(project, node),
+    });
+  return {
+    ...built,
+    ...(conformer?.selected ? {
+      conformer: {
+        nodeId: conformer.nodeId,
+        title: conformer.title,
+        generator: conformer.generator,
+        id: conformer.selected.id,
+        relativeKcal: conformer.selected.relativeKcal,
+        population: conformer.selected.population,
+        protomer: conformer.selected.protomer,
+        spreadKcal: conformer.spreadKcal,
+      },
+    } : {}),
+  };
 }
 
 /**
@@ -237,6 +349,11 @@ export function buildWorkflowPlan(project) {
   const idsFor = new Map();
 
   for (const node of nodes) {
+    if (node.type === 'conformers') {
+      tasks.push(conformerTask(project, node));
+      idsFor.set(node.id, [node.id]);
+      continue;
+    }
     if (node.type !== 'calc') {
       tasks.push({
         nodeId: node.id,
@@ -368,5 +485,45 @@ function calculationTask(project, node, { taskId, settingsOverride = null, title
     ...(ladder ? { ladder } : {}),
     ...(spin ? { spin } : {}),
     ...(emissionFor ? { emission: emissionFor } : {}),
+    ...(built.conformer ? { conformer: built.conformer } : {}),
+  };
+}
+
+/**
+ * The conformer-search task.
+ *
+ * It is executable but has no engine: CREST is not a calculation engine in this
+ * app's vocabulary (no route, no gates, no parsed output), and pretending it
+ * was one would force it through a runner built for Gaussian. The queue has a
+ * dedicated path for it, just as it does for conditions and merges.
+ */
+function conformerTask(project, node) {
+  const settings = conformerSettingsFor(node);
+  const molecule = project?.molecule || {};
+  const charge = Number.isInteger(node?.settings?.charge) ? node.settings.charge : Number(molecule.charge ?? 0);
+  const multiplicity = Number.isInteger(node?.settings?.multiplicity) ? node.settings.multiplicity : Number(molecule.multiplicity ?? 1);
+  const coords = Array.isArray(molecule.coords) && molecule.coords.length > 0 ? molecule.coords : DEMO_WATER;
+  const inputName = `${safeBase(node.id)}.xyz`;
+  return {
+    nodeId: node.id,
+    type: 'conformers',
+    title: node.title,
+    kind: node.kind || 'Conformers',
+    executable: true,
+    engine: null,
+    inputName,
+    outputName: 'crest.out',
+    inputText: xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
+    gates: null,
+    validity: null,
+    checkpointFrom: null,
+    conformers: {
+      ...settings,
+      charge,
+      multiplicity,
+      argv: settings.generator === 'crest'
+        ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
+        : [],
+    },
   };
 }

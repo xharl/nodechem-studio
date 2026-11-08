@@ -293,6 +293,14 @@ export function planClusterExport({
   const orderIndex = new Map(ordered.order.map((nodeId, index) => [nodeId, index]));
 
   const byId = new Map(tasks.map((task) => [String(task.nodeId), task]));
+  const conformerBlocks = tasks.filter((task) => task?.type === 'conformers');
+  if (conformerBlocks.length > 0) {
+    // A cluster job that read the project geometry instead of the chosen member
+    // would be a silent chemistry change, so this refuses rather than exports
+    // a plan whose first calculation is built from the wrong structure.
+    const names = conformerBlocks.map((task) => `"${task.title || task.nodeId}"`).join(', ');
+    throw new Error(`Cluster export does not include conformer blocks: ${names}. Run the ensemble, choose the member, and export the calculation blocks from a project whose geometry is that member.`);
+  }
   const calcTasks = tasks.filter((task) => task?.type === 'calc');
   if (calcTasks.length === 0) {
     throw new Error('The project has no calculation blocks to export.');

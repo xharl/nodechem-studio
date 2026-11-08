@@ -99,6 +99,16 @@ describe('planClusterExport — file set and staged inputs', () => {
     expect(fileNamed(plan, 'submit-all.sh')).toContain('sbatch');
   });
 
+  it('refuses to export a plan that contains a conformer block', () => {
+    const { tasks, edges } = slurmProject();
+    const withConformers = [
+      { nodeId: 'conf', type: 'conformers', title: 'Conformer ensemble', executable: false },
+      ...tasks,
+    ];
+    expect(() => planClusterExport({ format: 'slurm', tasks: withConformers, edges }))
+      .toThrow(/does not include conformer blocks.*Conformer ensemble/);
+  });
+
   it('does not export control-flow nodes as jobs', () => {
     const { tasks, edges } = slurmProject();
     const plan = planClusterExport({ format: 'slurm', tasks, edges });
