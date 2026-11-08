@@ -19,6 +19,8 @@ import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js
 import { BATCH_MAX_LOG_BYTES, summarizeLog } from '../src/shared/logImport.js';
 import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { methodsParagraphFor } from '../src/shared/methodsParagraph.js';
+import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
+import { convertParsed } from '../src/shared/converters/index.js';
 import {
   PROJECT_EXTENSIONS,
   classifySavePath,
@@ -478,6 +480,79 @@ async function exportRunBundle(runId) {
   }
 }
 
+
+/**
+ * Export one run's parsed output in a format other software reads (#99).
+ *
+ * The converters are engine-neutral: this function hands them a parsed record
+ * and nothing else, so a second engine needs no change here. A dry-run fixture
+ * is refused outright — it is synthetic output, and a file on disk would not
+ * carry that label any more.
+ */
+async function exportRunFormat(runId, formatId, spectrum) {
+  const id = String(runId || '');
+  if (!isSafeRunId(id)) {
+    return { canceled: false, error: { message: 'Run id must be a safe run folder name.' } };
+  }
+  const runDir = path.join(app.getPath('userData'), 'runs', id);
+  let record;
+  try {
+    record = JSON.parse(await fsp.readFile(path.join(runDir, 'run.json'), 'utf8'));
+  } catch (error) {
+    return { canceled: false, error: { message: `Could not read this run: ${error.message}` } };
+  }
+  if (record?.dryRun) {
+    return {
+      canceled: false,
+      error: { message: 'This run is a dry-run fixture: its output is synthetic, so it is not exported.' },
+    };
+  }
+  let logName = null;
+  try {
+    const entries = await fsp.readdir(runDir);
+    const candidates = entries.filter((name) => /\.(log|out)$/i.test(name));
+    if (candidates.length > 0) {
+      logName = candidates.sort((a, b) => a.localeCompare(b))[0];
+    }
+  } catch {
+    logName = null;
+  }
+  if (!logName) {
+    return { canceled: false, error: { message: 'This run has no saved output file to convert.' } };
+  }
+
+  let converted;
+  try {
+    const text = await fsp.readFile(path.join(runDir, logName), 'utf8');
+    converted = convertParsed(parseGaussianOutput(text), formatId, {
+      spectrum: spectrum || 'ir',
+      title: `${id}`,
+      date: new Date(),
+    });
+  } catch (error) {
+    return { canceled: false, error: { message: error.message } };
+  }
+
+  const target = await dialog.showSaveDialog(mainWindow, {
+    title: `Export ${converted.format}`,
+    defaultPath: path.join(app.getPath('documents'), `${id}.${converted.extension}`),
+    filters: [{ name: converted.format, extensions: [converted.extension] }],
+  });
+  if (target.canceled || !target.filePath) return { canceled: true };
+  try {
+    await fsp.writeFile(target.filePath, converted.text, 'utf8');
+  } catch (error) {
+    return { canceled: false, error: { message: `Could not write ${target.filePath}: ${error.message}` } };
+  }
+  return {
+    canceled: false,
+    path: target.filePath,
+    format: converted.format,
+    bytes: Buffer.byteLength(converted.text, 'utf8'),
+    notes: converted.notes || [],
+  };
+}
+
 /**
  * Read a folder of existing logs and return one summary row per file.
  *
@@ -848,6 +923,11 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('runs:verify', (_event, runId) => runManager.verify(runId));
   ipcMain.handle('runs:export-bundle', (_event, runId) => exportRunBundle(runId));
+  ipcMain.handle('runs:export-format', (_event, payload) => exportRunFormat(
+    payload?.runId,
+    payload?.format,
+    payload?.spectrum,
+  ));
   ipcMain.handle('runs:export-dataset', (_event, format) => exportDataset(format));
   ipcMain.handle('queue:start', (_event, payload) => queueManager.start(payload));
   ipcMain.handle('queue:pause', (_event, queueId) => queueManager.pause(queueId));

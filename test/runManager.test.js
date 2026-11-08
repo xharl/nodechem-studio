@@ -107,6 +107,8 @@ describe('RunManager dry-run path', () => {
     const runJson = JSON.parse(await fsp.readFile(path.join(root, response.runId, 'run.json'), 'utf8'));
     expect(runJson.status).toBe('completed');
     expect(runJson.gates.overall).toBe('pass');
+    // A dry run's output is a fixture, so no binary cache is left behind.
+    expect(runJson.cache).toBeNull();
     expect(runJson.parsed.termination).toBe('Normal termination of Gaussian');
     expect(runJson.parsed.complete).toBe(true);
     expect(runJson.parsed.bytes.windows.map((window) => window.name)).toEqual(['fixture']);
@@ -331,6 +333,11 @@ describe('RunManager large-output handling', () => {
     const runJson = JSON.parse(await fsp.readFile(path.join(response.runDir, 'run.json'), 'utf8'));
     expect(runJson.truncated).toBe(true);
     expect(runJson.status).toBe('needs-review');
+    // The synthetic log has no `Standard orientation` block, so there is
+    // nothing to cache — and the record says that rather than writing an empty
+    // file that would look like a trajectory with zero frames.
+    expect(runJson.cache.file).toBeNull();
+    expect(runJson.cache.skipped).toMatch(/no trajectory/);
     expect(runJson.parsed.termination).toBe('Normal termination of Gaussian');
     expect(runJson.parsed.complete).toBe(false);
     expect(runJson.parsed.bytes.truncated).toBe(true);

@@ -65,6 +65,7 @@ import {
 } from '../shared/tsForceConstants.js';
 import { runClusterAction } from './clusterExport.js';
 import { exportRunBundleAction } from './runBundle.js';
+import { exportRunFormatAction } from './runConverter.js';
 import { provenanceSummary, syncVerifyButton, verifyRunInput } from './provenance.js';
 import { mountThermochemistryView } from './thermochemistryView.js';
 import { installResultsView } from './resultsView.js';
@@ -4029,6 +4030,11 @@ function handleAction(action, element) {
     case 'export-run-bundle':
       exportRunBundleAction({ desktop, runId: state.run.id, notify: toast });
       break;
+    case 'export-run-format': {
+      const choice = document.getElementById('run-export-format')?.value || 'extxyz';
+      exportRunFormatAction({ desktop, runId: state.run.id, choice, notify: toast });
+      break;
+    }
     case 'copy-diagnostics': copyDiagnostics(); break;
     case 'export-dataset': exportRunDataset(element.dataset.datasetFormat); break;
     case 'save-diagnostics': saveDiagnostics(); break;

@@ -22,6 +22,11 @@ import process from 'node:process';
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
+import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
+import { parseStructureRecords } from '../src/shared/structureImport.js';
+import { convertParsed, convertStructure } from '../src/shared/converters/index.js';
+import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
+import { parseCube } from '../src/shared/cubeFile.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 
@@ -36,6 +41,10 @@ const USAGE = `ncs — headless NodeChem Studio
       [--timeout <seconds>] [--json]
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
+  ncs convert <input> --format <extxyz|xyz|sdf|jcamp> [--spectrum ir|raman|uv]
+      [--out <file>] [--json]
+  ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
+  ncs cache <file.ncsr> --inspect [--json]
 
 Exit codes: 0 success, 2 invalid project, 3 gate failure, 4 engine failure,
 5 merge conflict.
@@ -299,6 +308,125 @@ async function commandMerge({ positional, flags }) {
   process.exit(EXIT.ok);
 }
 
+/**
+ * `ncs convert` — turn a finished log, a structure file or a saved project into
+ * a format other software reads. The engine-specific parsing stops at the door:
+ * every branch produces atoms, frames or spectra, and the converters never ask
+ * which program produced them.
+ */
+async function commandConvert({ positional, flags }) {
+  const [input] = positional;
+  if (!input) fail('convert needs an input file.');
+  const formatId = String(flags.format || '').trim();
+  if (!formatId) fail('convert needs --format <extxyz|xyz|sdf|jcamp>.');
+  const file = path.resolve(input);
+
+  try {
+    const text = await fs.readFile(file, 'utf8');
+    const extension = path.extname(file).toLowerCase();
+    let converted;
+    if (extension === '.ncs') {
+      const parsed = JSON.parse(text);
+      const coords = parsed?.molecule?.coords;
+      if (!Array.isArray(coords) || coords.length === 0) fail('this project has no molecule to export.');
+      converted = convertStructure({ atoms: coords, bonds: parsed?.molecule?.bonds }, formatId, {
+        title: parsed?.name || path.basename(file, extension),
+      });
+    } else if (extension === '.log' || extension === '.out') {
+      const parsed = parseGaussianOutput(text);
+      converted = convertParsed(parsed, formatId, {
+        spectrum: String(flags.spectrum || 'ir'),
+        title: path.basename(file, extension),
+      });
+    } else {
+      const { records } = parseStructureRecords(text, { filename: path.basename(file) });
+      const first = records[0];
+      if (!first) fail('the structure file contained no records.');
+      converted = convertStructure({ atoms: first.atoms, bonds: first.bonds }, formatId, { title: first.name });
+    }
+
+    const out = flags.out ? path.resolve(String(flags.out)) : `${file.slice(0, file.length - extension.length)}.${converted.extension}`;
+    await fs.writeFile(out, converted.text, 'utf8');
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify({
+        ok: true, format: converted.format, out, mediaType: converted.mediaType, bytes: Buffer.byteLength(converted.text), notes: converted.notes,
+      }, null, 2)}\n`);
+    } else {
+      for (const note of converted.notes || []) process.stdout.write(`note: ${note}\n`);
+      process.stdout.write(`${converted.format} written to ${out} (${Buffer.byteLength(converted.text)} bytes)\n`);
+    }
+    process.exit(EXIT.ok);
+  } catch (error) {
+    process.stderr.write(`ncs: ${error.message}\n`);
+    process.exit(EXIT.invalid);
+  }
+}
+
+
+/**
+ * `ncs cache` — write a parsed run or a volumetric field as typed arrays, or
+ * inspect an existing cache. The cache is what a viewer should read: the cost
+ * of opening a trajectory stops depending on how many characters the log has.
+ */
+async function commandCache({ positional, flags }) {
+  const [input] = positional;
+  if (!input) fail('cache needs an input file.');
+  const file = path.resolve(input);
+  let buffer;
+  try {
+    buffer = await fs.readFile(file);
+  } catch (error) {
+    fail(`cannot read ${input}: ${error.message}`, EXIT.invalid);
+  }
+
+  if (path.extname(file).toLowerCase() === '.ncsr') {
+    const info = cacheInfo(buffer);
+    if (flags.json || !process.stdout.isTTY) {
+      process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
+      process.exit(EXIT.ok);
+    }
+    process.stdout.write(`cache version ${info.version}, written ${info.createdAt || 'unknown'}\n`);
+    for (const [key, value] of Object.entries(info.meta || {})) {
+      if (typeof value === 'object' && value !== null) continue;
+      process.stdout.write(`  ${key}: ${value}\n`);
+    }
+    for (const section of info.sections) process.stdout.write(`  section ${section.name} (${section.dtype}, ${section.length})\n`);
+    process.exit(EXIT.ok);
+  }
+
+  const text = buffer.toString('utf8');
+  const extension = path.extname(file).toLowerCase();
+  let cache;
+  try {
+    if (extension === '.cube') {
+      cache = cacheFromCube(parseCube(text), { precision: String(flags.precision || 'f64') });
+    } else {
+      cache = cacheFromParsed(parseGaussianOutput(text));
+    }
+  } catch (error) {
+    process.stderr.write(`ncs: ${error.message}\n`);
+    process.exit(EXIT.invalid);
+  }
+  const bytes = writeCache(cache);
+  const out = flags.out ? path.resolve(String(flags.out)) : `${file.slice(0, file.length - extension.length)}.ncsr`;
+  await fs.writeFile(out, bytes);
+  const payload = {
+    ok: true,
+    out,
+    kind: cache.meta.kind,
+    bytes: bytes.length,
+    sourceBytes: buffer.length,
+    ratio: buffer.length > 0 ? Number((bytes.length / buffer.length).toFixed(3)) : null,
+    sections: cache.sections.map((section) => section.name),
+  };
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  } else {
+    process.stdout.write(`cache written to ${out}: ${bytes.length} bytes from ${buffer.length} (ratio ${payload.ratio})\n`);
+  }
+  process.exit(EXIT.ok);
+}
+
 const { command, positional, flags } = parseArgs(process.argv.slice(2));
 if (!command || command === '--help' || command === '-h' || command === 'help') {
   process.stdout.write(USAGE);
@@ -310,6 +438,8 @@ const handlers = {
   run: commandRun,
   diff: commandDiff,
   merge: commandMerge,
+  convert: commandConvert,
+  cache: commandCache,
 };
 const handler = handlers[command];
 if (!handler) fail(`unknown command "${command}".`);

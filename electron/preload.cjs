@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('desktop', {
   saveText: (payload) => ipcRenderer.invoke('text:save', payload),
   verifyRun: (runId) => ipcRenderer.invoke('runs:verify', runId),
   exportRunBundle: (runId) => ipcRenderer.invoke('runs:export-bundle', runId),
+  exportRunFormat: (runId, format, spectrum) => ipcRenderer.invoke('runs:export-format', { runId, format, spectrum }),
   exportDataset: (format) => ipcRenderer.invoke('runs:export-dataset', format),
   startQueue: (payload) => ipcRenderer.invoke('queue:start', payload),
   pauseQueue: (queueId) => ipcRenderer.invoke('queue:pause', queueId),

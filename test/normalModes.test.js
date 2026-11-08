@@ -11,7 +11,11 @@ describe('normal-mode parsing on a real frequency job', () => {
   const parsed = parseGaussianOutput(fixture('g16-dvb-ir.out'));
 
   it('reads every mode, every atom and no incomplete block', () => {
-    expect(parsed.normalModesMeta).toEqual({ modeCount: 54, incomplete: 0, atomCount: 20 });
+    // `frequencies` and `irIntensities` are the full printed table, index
+    // aligned, so a converter can pair a mode with its intensity (#99).
+    expect(parsed.normalModesMeta).toMatchObject({ modeCount: 54, incomplete: 0, atomCount: 20 });
+    expect(parsed.normalModesMeta.frequencies).toHaveLength(54);
+    expect(parsed.normalModesMeta.irIntensities).toHaveLength(54);
     expect(parsed.normalModes.frequencies).toHaveLength(54);
     expect(parsed.normalModes.displacements).toHaveLength(54);
     expect(parsed.normalModes.displacements[0]).toHaveLength(20);

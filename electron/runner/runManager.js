@@ -13,6 +13,7 @@ import { normaliseAppInfo, provenanceKindFor } from '../../src/shared/provenance
 import { engineFor, DEFAULT_ENGINE_ID } from '../../src/shared/engines/index.js';
 import { xtbSolvationFromArgv, parseXtbGeometry } from '../../src/shared/engines/xtb.js';
 import { normalizeValidityContext, runValidityChecks } from '../../src/shared/validityChecks.js';
+import { cacheFromParsed, writeCache } from '../../src/shared/cache.js';
 
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
@@ -368,9 +369,41 @@ export class RunManager {
       requireStableWavefunction: payload.settings?.stableOpt === true,
     });
 
+    // Cache the trajectory as typed arrays (#99). A viewer then reloads a run
+    // without re-parsing the log: on a real optimisation the file is a few
+    // kilobytes instead of hundreds, and there is no regex pass. The cache is a
+    // convenience, never a requirement — a failure here must not turn a
+    // finished run into a failed one, so it is recorded and swallowed.
+    context.cache = await this.writeCache(context, parsed);
     const status = parsed.status === 'error' || gates.overall === 'fail' ? 'failed'
       : gates.overall === 'pass' ? 'completed' : 'needs-review';
     await this.finish(context, { status, exitCode, parsed, gates, error: null, outputProvenance });
+  }
+
+  /**
+   * Write the run's trajectory cache, or say why there is none.
+   *
+   * Dry runs are skipped on purpose: their output is a fixture, and a binary
+   * file next to the run would outlive the label that says so.
+   */
+  async writeCache(context, parsed) {
+    if (context.payload?.dryRun || !parsed) return null;
+    try {
+      const cache = cacheFromParsed(parsed);
+      const bytes = writeCache(cache);
+      const file = 'trajectory.ncsr';
+      await fsp.writeFile(path.join(context.runDir, file), bytes);
+      return {
+        file,
+        kind: cache.meta.kind,
+        bytes: bytes.length,
+        frames: cache.meta.frames,
+        atoms: cache.meta.atoms,
+      };
+    } catch (error) {
+      // No trajectory in this output, or a frame set that does not line up.
+      return { file: null, skipped: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   /**
@@ -426,6 +459,7 @@ export class RunManager {
       },
       status,
       exitCode,
+      cache: context.cache ?? null,
       parsed,
       gates,
       error,

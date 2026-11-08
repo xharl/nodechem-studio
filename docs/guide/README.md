@@ -35,6 +35,8 @@ Reference pages:
 - [FAQ](faq.md) — short answers to the questions testers ask first.
 - [Wavefunctions](wavefunction.md) — what a `.cube` and an `.fchk` contain, what the app reads from
   them, and which analyses are still deferred.
+- [Converters](converters.md) — `ncs convert`: extxyz, xyz, SDF and JCAMP-DX, and the conventions
+  each one carries.
 - [Output corpus](parser-corpus.md) — the real Gaussian logs the parser is tested against, and the
   gaps it does not cover yet.
 - [Privacy and licensing](privacy-and-licensing.md) — the one outbound call (an update check you

@@ -1501,6 +1501,11 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
         modeCount: parsedModes.modeCount,
         incomplete: parsedModes.incomplete,
         atomCount: parsedModes.atomCount,
+        // The full table as printed, including modes the viewer cannot animate.
+        // Index-aligned with each other, so a converter can pair a wavenumber
+        // with its IR intensity without assuming the filtered list kept order.
+        frequencies: parsedModes.frequencies,
+        irIntensities: parsedModes.irIntensities,
       }
       : null,
     charges,

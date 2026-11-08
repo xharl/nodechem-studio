@@ -257,6 +257,15 @@
         <button class="btn primary small" data-action="run-selected">Run selected block</button>
         <button class="btn small" id="verify-run" data-action="verify-run" disabled>Verify input</button>
         <button class="btn small" data-action="export-run-bundle" title="Write methods.md, manifest.json and the run files to a new folder">Export run bundle</button>
+        <select id="run-export-format" class="btn small" aria-label="Format to export the run in" title="Frames for a viewer, SDF for an editor, JCAMP for spectroscopy software">
+          <option value="extxyz">extxyz (frames)</option>
+          <option value="xyz">xyz (frames)</option>
+          <option value="sdf">sdf (structure)</option>
+          <option value="jcamp:ir">JCAMP (IR)</option>
+          <option value="jcamp:raman">JCAMP (Raman)</option>
+          <option value="jcamp:uv">JCAMP (UV/Vis)</option>
+        </select>
+        <button class="btn small" data-action="export-run-format" title="Convert this run into a format other software reads">Export as…</button>
         <button class="btn small danger" id="cancel-run" data-action="cancel-run" disabled>Stop</button>
       </div>
       <p class="run-hint" id="run-hint">Dry run writes a synthetic fixture log and evaluates the parser. Uncheck to launch the engine executable.</p>
