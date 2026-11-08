@@ -61,6 +61,17 @@ function taskRow(task, record) {
     error: text(task.error),
     dryRun: record?.dryRun === true,
     engine: text(record?.engine || parsed.engine),
+    // A geometry that crossed an engine boundary: where it came from, so the
+    // report shows the hand-off rather than implying the block ran on its own.
+    geometryHandoff: (task.geometryHandoff || record?.geometryHandoff)
+      ? {
+        from: text(task.geometryHandoff?.from ?? record?.geometryHandoff?.from),
+        fromEngine: text(task.geometryHandoff?.fromEngine ?? record?.geometryHandoff?.fromEngine),
+        toEngine: text(task.geometryHandoff?.toEngine ?? record?.geometryHandoff?.toEngine),
+        atoms: Number.isFinite(task.geometryHandoff?.atoms ?? record?.geometryHandoff?.atoms)
+          ? (task.geometryHandoff?.atoms ?? record?.geometryHandoff?.atoms) : null,
+      }
+      : null,
     jobType: text(record?.provenance?.jobType || method.jobType),
     method: text(method.functional || method.hamiltonian),
     basis: text(method.basis),
@@ -237,7 +248,11 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
 
   const provenanceRows = rows.map((row) => (
     '<tr>'
-    + `<td>${escapeHtml(row.title)}</td>`
+    + `<td>${escapeHtml(row.title)}${row.geometryHandoff
+      ? ` <span class="mono">(geometry from ${escapeHtml(row.geometryHandoff.from)} · `
+        + `${escapeHtml(row.geometryHandoff.fromEngine)} → ${escapeHtml(row.geometryHandoff.toEngine)}, `
+        + `${escapeHtml(String(row.geometryHandoff.atoms ?? MISSING))} atoms)</span>`
+      : ''}</td>`
     + `<td class="mono">${escapeHtml(row.runId === null ? MISSING : row.runId)}</td>`
     + `<td class="mono">${escapeHtml(shortHash(row.inputSha256) ?? MISSING)}</td>`
     + `<td class="mono">${escapeHtml(shortHash(row.outputSha256) ?? MISSING)}</td>`

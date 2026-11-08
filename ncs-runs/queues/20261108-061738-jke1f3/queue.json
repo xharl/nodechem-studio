@@ -1,0 +1,293 @@
+{
+  "id": "20261108-061738-jke1f3",
+  "projectName": "xTB pre-opt then DFT",
+  "status": "completed",
+  "createdAt": "2026-11-08T06:17:38.413Z",
+  "updatedAt": "2026-11-08T06:17:39.211Z",
+  "finishedAt": "2026-11-08T06:17:39.211Z",
+  "currentTaskId": null,
+  "reason": null,
+  "options": {
+    "dryRun": true,
+    "executable": null,
+    "scratchDir": ""
+  },
+  "edges": [
+    {
+      "from": "pre-opt",
+      "to": "sp",
+      "type": "checkpoint"
+    }
+  ],
+  "tasks": [
+    {
+      "nodeId": "pre-opt",
+      "type": "calc",
+      "title": "xTB pre-opt",
+      "kind": "Opt",
+      "executable": true,
+      "engine": "xtb",
+      "argv": [
+        "pre-opt.xyz",
+        "--gfn",
+        "2",
+        "--opt",
+        "tight"
+      ],
+      "route": "GFN2-xTB Opt",
+      "status": "completed",
+      "attempts": 1,
+      "runId": "20261108-061738-nrwmg1",
+      "runDir": "/opt/data/Projects/gaussian-node-studio/ncs-runs/runs/20261108-061738-nrwmg1",
+      "inputName": "pre-opt.xyz",
+      "outputName": "pre-opt.out",
+      "settings": {
+        "jobType": "Opt",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "optConvergence": "",
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "tight",
+        "xtbThreads": "",
+        "solvation": false
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": true,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": false
+      },
+      "validity": {
+        "settings": {
+          "jobType": "Opt",
+          "method": "B3LYP",
+          "basis": "def2-SVP",
+          "dispersion": "GD3BJ",
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "O",
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            {
+              "element": "H",
+              "x": 0.96,
+              "y": 0,
+              "z": 0
+            },
+            {
+              "element": "H",
+              "x": -0.24,
+              "y": 0.93,
+              "z": 0
+            }
+          ]
+        },
+        "upstream": null
+      },
+      "checkpointName": "xtbrestart",
+      "checkpointFrom": null,
+      "condition": null,
+      "loop": null,
+      "merge": null,
+      "ladder": null,
+      "spin": null,
+      "reaction": null,
+      "loopAttempts": 0,
+      "conditionResult": null,
+      "summary": {
+        "normalTermination": true,
+        "errorTermination": false,
+        "scfConverged": true,
+        "scfFailed": false,
+        "optimizationCompleted": true,
+        "stationaryPoint": true,
+        "modeCount": 3,
+        "imaginaryCount": 0,
+        "minImaginary": null,
+        "absMinImaginary": null,
+        "freeEnergy": -5.068048760159,
+        "finalEnergy": -5.070370764545,
+        "gatePass": true,
+        "gateFail": false
+      },
+      "history": [],
+      "gateVerdict": "pass",
+      "parsedSummary": {
+        "complete": true,
+        "status": "completed",
+        "optimization": {
+          "completed": true
+        },
+        "energyHartree": -5.070370764545,
+        "spinSquared": null,
+        "spinSquaredSource": null,
+        "freeEnergyHartree": -5.068048760159,
+        "irc": null
+      },
+      "error": null,
+      "reason": null,
+      "previousError": null,
+      "startedAt": "2026-11-08T06:17:38.416Z",
+      "finishedAt": "2026-11-08T06:17:38.786Z"
+    },
+    {
+      "nodeId": "sp",
+      "type": "calc",
+      "title": "DFT single point",
+      "kind": "SP",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "sp.gjf"
+      ],
+      "route": null,
+      "status": "completed",
+      "attempts": 1,
+      "runId": "20261108-061738-3qlysp",
+      "runDir": "/opt/data/Projects/gaussian-node-studio/ncs-runs/runs/20261108-061738-3qlysp",
+      "inputName": "sp.gjf",
+      "outputName": "sp.out",
+      "settings": {
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "def2-TZVP",
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "optConvergence": "",
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "solvation": false
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": false
+      },
+      "validity": {
+        "settings": {
+          "jobType": "SP",
+          "method": "B3LYP",
+          "basis": "def2-TZVP",
+          "dispersion": "GD3BJ",
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "O",
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            {
+              "element": "H",
+              "x": 0.96,
+              "y": 0,
+              "z": 0
+            },
+            {
+              "element": "H",
+              "x": -0.24,
+              "y": 0.93,
+              "z": 0
+            }
+          ]
+        },
+        "upstream": {
+          "id": "pre-opt",
+          "title": "xTB pre-opt",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Opt",
+            "method": "B3LYP",
+            "basis": "def2-SVP",
+            "dispersion": "GD3BJ"
+          },
+          "parsed": null
+        }
+      },
+      "checkpointName": "sp.chk",
+      "checkpointFrom": {
+        "nodeId": "pre-opt",
+        "checkpoint": "",
+        "geometryOnly": true
+      },
+      "condition": null,
+      "loop": null,
+      "merge": null,
+      "ladder": null,
+      "spin": null,
+      "reaction": null,
+      "loopAttempts": 0,
+      "conditionResult": null,
+      "summary": {
+        "normalTermination": true,
+        "errorTermination": false,
+        "scfConverged": true,
+        "scfFailed": false,
+        "optimizationCompleted": true,
+        "stationaryPoint": true,
+        "modeCount": 4,
+        "imaginaryCount": 0,
+        "minImaginary": null,
+        "absMinImaginary": null,
+        "freeEnergy": -76.02,
+        "finalEnergy": -76,
+        "gatePass": true,
+        "gateFail": false
+      },
+      "history": [],
+      "gateVerdict": "pass",
+      "parsedSummary": {
+        "complete": true,
+        "status": "completed",
+        "optimization": {
+          "completed": true
+        },
+        "energyHartree": -76,
+        "spinSquared": null,
+        "spinSquaredSource": null,
+        "freeEnergyHartree": -76.02,
+        "irc": null
+      },
+      "error": null,
+      "reason": null,
+      "previousError": null,
+      "startedAt": "2026-11-08T06:17:38.794Z",
+      "finishedAt": "2026-11-08T06:17:39.210Z",
+      "geometryHandoff": {
+        "from": "pre-opt",
+        "fromEngine": "xtb",
+        "toEngine": "gaussian",
+        "atoms": 3
+      }
+    }
+  ],
+  "ladders": {},
+  "spins": {},
+  "reactions": {}
+}

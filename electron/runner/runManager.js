@@ -11,7 +11,7 @@ import { methodBlockFor } from '../../src/shared/gaussianInput.js';
 import { ecpFromInput } from '../../src/shared/ecp.js';
 import { normaliseAppInfo, provenanceKindFor } from '../../src/shared/provenance.js';
 import { engineFor, DEFAULT_ENGINE_ID } from '../../src/shared/engines/index.js';
-import { xtbSolvationFromArgv } from '../../src/shared/engines/xtb.js';
+import { xtbSolvationFromArgv, parseXtbGeometry } from '../../src/shared/engines/xtb.js';
 import { normalizeValidityContext, runValidityChecks } from '../../src/shared/validityChecks.js';
 
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
@@ -211,6 +211,16 @@ export class RunManager {
         multiplicity: Number.isInteger(requestedMultiplicity) ? requestedMultiplicity : 1,
       });
       await fsp.writeFile(path.join(runDir, payload.outputName), outputText, 'utf8');
+      // A dry run still has to produce the artefact a real xTB job leaves behind
+      // (xtbopt.xyz), or a downstream block has nothing to hand over. It is
+      // written from the input geometry and labelled as a fixture.
+      if (engine.id === 'xtb') {
+        const fixtureGeometry = parseXtbGeometry(payload.inputText);
+        if (fixtureGeometry) {
+          const xyz = [`${fixtureGeometry.atoms.length}`, 'fixture geometry (dry run, not optimised)', ...fixtureGeometry.atoms.map((atom) => `${atom.element} ${atom.x.toFixed(6)} ${atom.y.toFixed(6)} ${atom.z.toFixed(6)}`)].join('\n') + '\n';
+          await fsp.writeFile(path.join(runDir, 'xtbopt.xyz'), xyz, 'utf8');
+        }
+      }
       this.emit({ type: 'output', runId, text: outputText });
       const fixtureBytes = Buffer.byteLength(outputText, 'utf8');
       context.outputPath = path.join(runDir, payload.outputName);
@@ -285,6 +295,21 @@ export class RunManager {
       argv: Array.isArray(payload.argv) ? payload.argv.map(String) : null,
       route: payload.route || null,
     });
+    // xTB writes the optimised geometry to `xtbopt.xyz` instead of printing it,
+    // so a downstream block can only receive a parsed geometry if it is read
+    // from the run folder here.
+    if (engine.id === 'xtb' && parsed) {
+      for (const dir of [scratchDir, runDir]) {
+        if (parsed.finalGeometry) break;
+        try {
+          const geometry = parseXtbGeometry(await fsp.readFile(path.join(dir, 'xtbopt.xyz'), 'utf8'));
+          if (geometry) parsed.finalGeometry = geometry;
+        } catch {
+          // No optimised geometry for this job (a single point, or a dry run
+          // that did not write one) — the hand-off will report it.
+        }
+      }
+    }
     // Issue #25: the validity checks run on the parsed records, never on the
     // exit code. They are reported next to the gates (gates.validity) and do
     // not change gates.overall: the job can run correctly while the science is

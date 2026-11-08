@@ -22,8 +22,18 @@ export function nodeById(project, id) {
   return nodes.find((node) => node.id === id) || null;
 }
 
+/**
+ * The engine a block runs on: its own `settings.engine` when set, otherwise the
+ * project default. Empty means "inherit", so a .ncs written before per-block
+ * engines existed keeps loading with the project's engine.
+ */
+export function engineForNode(project, node) {
+  const chosen = String(node?.settings?.engine || project?.defaults?.engine || 'gaussian');
+  return engineOrDefault(chosen);
+}
+
 export function settingsForNode(project, node) {
-  const engine = engineOrDefault(project?.defaults?.engine);
+  const engine = engineForNode(project, node);
   return runSettingsFor(engine.id, { ...node.settings });
 }
 
@@ -79,7 +89,7 @@ export function validityUpstreamFor(project, node) {
 }
 
 export function checkpointNameFor(project, node, taskId = node?.id) {
-  const engine = engineOrDefault(project?.defaults?.engine);
+  const engine = engineForNode(project, node);
   return engine.checkpointArtifact({
     checkpointName: node?.settings?.checkpoint || '',
     nodeId: safeBase(taskId || 'task'),
@@ -89,12 +99,21 @@ export function checkpointNameFor(project, node, taskId = node?.id) {
 export function checkpointSourceFor(project, node) {
   const source = checkpointSourceNode(project, node);
   if (!source) return null;
+  // Across engines there is no artifact the downstream engine can read: the
+  // parsed final geometry is handed over instead, and the edge says so.
+  if (engineForNode(project, source).id !== engineForNode(project, node).id) {
+    return { nodeId: source.id, checkpoint: '', geometryOnly: true };
+  }
   return { nodeId: source.id, checkpoint: checkpointNameFor(project, source) };
 }
 
 export function oldCheckpointFor(project, node) {
   const source = checkpointSourceNode(project, node);
-  return source ? checkpointNameFor(project, source) : '';
+  if (!source) return '';
+  // A source on another engine has no checkpoint this one can read; emitting
+  // %OldChk would point Gaussian at a file that does not exist.
+  if (engineForNode(project, source).id !== engineForNode(project, node).id) return '';
+  return checkpointNameFor(project, source);
 }
 
 export function tsForceConstantIssues(project, node) {
@@ -112,7 +131,7 @@ export function optConvergenceIssues(project, node) {
 }
 
 export function blockingValidityFinding(project, node, settings, molecule) {
-  const engine = engineOrDefault(project?.defaults?.engine);
+  const engine = engineForNode(project, node);
   const result = runValidityChecks({
     settings,
     molecule,
@@ -140,7 +159,7 @@ export function validityForNode(project, node) {
 
 /** The engine's input for one calculation node, exactly as it will be written. */
 export function buildRunInput(project, node, { taskId = node?.id, settingsOverride = null } = {}) {
-  const engine = engineOrDefault(project?.defaults?.engine);
+  const engine = engineForNode(project, node);
   // A ReadFC TS block without a usable checkpoint hand-off has nothing to read.
   const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node);
   if (issues.errors.length > 0) throw new Error(issues.errors[0]);
@@ -152,7 +171,7 @@ export function buildRunInput(project, node, { taskId = node?.id, settingsOverri
     ? { ...baseMolecule, multiplicity: Number(settings.multiplicity) }
     : baseMolecule;
   const blocking = blockingValidityFinding(project, node, settings, molecule);
-  if (blocking) throw new Error(blocking.message);
+  if (blocking) throw new Error(blocking.message || blocking.detail || `The ${blocking.id} check failed.`);
   const base = safeBase(taskId);
   if (engine.id === 'xtb') {
     return engine.buildInput({ title: node.title, settings, molecule, inputName: `${base}.xyz` });

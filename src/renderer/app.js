@@ -22,6 +22,7 @@ import { defaultGates, defaultSettings, validateProject } from '../shared/projec
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import * as shared from '../shared/workflowTasks.js';
+import { engineForNode } from '../shared/workflowTasks.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
 import {
   MODERN_ROUTE_PRESET,
@@ -1099,7 +1100,7 @@ function calcInspector(node) {
   const outs = outgoing(node.id);
   const status = statusFor(node);
   const checkpointSource = node.checkpointFrom ? nodeById(node.checkpointFrom) : null;
-  const engine = engineOrDefault(state.project?.defaults?.engine);
+  const engine = engineForNode(state.project, node);
   const isXtb = engine.id === 'xtb';
   const gaussianResources = showsGaussianResources(engine.id);
   const checkpointHandoff = showsCheckpointHandoff(engine.id);
@@ -1161,6 +1162,12 @@ function calcInspector(node) {
 
   const jobGroup = group('Job', s.jobType, true, [
     inputField('Title', 'title', node.title, { full: true }),
+    // Per-block engine (#63): the empty value inherits the project default, so
+    // a project that has never used this setting reads exactly as before.
+    selectField('Engine', 'engine', [
+      ['', `Project default (${engineOrDefault(state.project?.defaults?.engine).label})`],
+      ...Object.values(ENGINES).map((entry) => [entry.id, entry.label]),
+    ], s.engine ?? ''),
     selectField('Job type', 'jobType', JOB_TYPES, s.jobType),
     !isXtb && s.jobType === 'IRC' ? selectField('IRC direction', 'ircDirection', IRC_DIRECTIONS, s.ircDirection) : '',
     !isXtb && isOptJob(s.jobType)
@@ -1689,7 +1696,7 @@ function addBlock(type) {
 /* ── Node and edge editing ────────────────────────────────── */
 
 function updateNodeField(node, key, value) {
-  const isXtb = engineOrDefault(state.project?.defaults?.engine).id === 'xtb';
+  const isXtb = engineForNode(state.project, node).id === 'xtb';
   if (key === 'title') {
     node.title = String(value).trim() || node.title;
     return;

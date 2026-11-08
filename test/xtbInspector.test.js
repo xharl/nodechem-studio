@@ -115,7 +115,7 @@ describe('rendered calculation inspector', () => {
 
   it('renders no Gaussian resource or checkpoint field for an xTB node', () => {
     expect(nodeFields(renderFor('xtb'))).toEqual([
-      'title', 'jobType', 'xtbMethod', 'xtbOptLevel', 'xtbThreads',
+      'title', 'engine', 'jobType', 'xtbMethod', 'xtbOptLevel', 'xtbThreads',
       'solvation', 'solvationModel', 'solvent',
       'charge', 'multiplicity', 'imaginary', 'minMagnitude',
     ]);
@@ -123,7 +123,7 @@ describe('rendered calculation inspector', () => {
 
   it('renders the full Gaussian field set for the same node', () => {
     expect(nodeFields(renderFor('gaussian'))).toEqual([
-      'title', 'jobType',
+      'title', 'engine', 'jobType',
       'memory', 'memoryUnit', 'nproc', 'checkpoint',
       'routePreset', 'method', 'basis', 'dispersion', 'scf', 'grid', 'population', 'verbosity',
       'tdStates', 'tdTriplets',

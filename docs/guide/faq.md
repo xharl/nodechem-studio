@@ -17,7 +17,10 @@ No. It writes a synthetic file headed `FIXTURE OUTPUT` and the record is marked
 `provenance.kind: "fixture"`. Anywhere the docs say "dry run", they mean that fixture.
 
 **Can one project use Gaussian for one block and xTB for another?**
-No. The engine is a project-level choice. Use two projects and pass the geometry between them.
+Yes. Set **Engine** on the individual block (inspector → Job → Engine); blocks left at
+*Project default* follow **Molecule → Defaults**. A GFN2-xTB pre-optimisation can hand its parsed
+final geometry to a Gaussian block in the same workflow — the edge carries a geometry, not a
+checkpoint.
 
 **Can it submit to a cluster?**
 It can **export** a SLURM or PBS submission folder — one script per calculation block plus a

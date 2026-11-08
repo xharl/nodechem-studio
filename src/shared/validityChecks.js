@@ -118,6 +118,14 @@ export const VALIDITY_CHECKS = Object.freeze([
     description: 'A TS has exactly one imaginary mode; a minimum has none.',
   },
   {
+    id: 'engine-settings',
+    title: 'Engine / settings',
+    phases: Object.freeze(['pre', 'post']),
+    blocking: true,
+    engines: Object.freeze(['gaussian', 'xtb']),
+    description: 'A setting that belongs to the other engine is refused on this block instead of being silently ignored.',
+  },
+  {
     id: 'method-basis-compatibility',
     title: 'Method / basis compatibility',
     phases: Object.freeze(['pre', 'post']),
@@ -849,11 +857,47 @@ export function checkOptimizationConvergence({ settings = {}, parsed = null, ups
 
 /* ── Runner ───────────────────────────────────────────────── */
 
+/**
+ * Settings that belong to the other engine.
+ *
+ * A block may switch engine independently of the project (#63), and a setting
+ * the chosen engine cannot honour must be refused rather than dropped: an xTB
+ * block carrying `TD` or a Gaussian block carrying an xTB optimisation level
+ * would otherwise run something the user did not ask for.
+ */
+function checkEngineSettings({ settings, engine }) {
+  const id = 'engine-settings';
+  const source = settings && typeof settings === 'object' ? settings : {};
+  const text = (value) => (value === undefined || value === null ? '' : String(value).trim());
+  if (engine === 'xtb') {
+    const offender = [
+      ['Custom route keywords', text(source.customKeywords)],
+      ['TD-DFT states', Number(source.tdStates) > 0 ? String(source.tdStates) : ''],
+      ['TD-DFT triplets', Number(source.tdTriplets) > 0 ? String(source.tdTriplets) : ''],
+      ['Stable=Opt', source.stableOpt === true ? 'true' : ''],
+      ['The NMR job type', text(source.jobType) === 'NMR' ? 'NMR' : ''],
+    ].find(([, value]) => value !== '');
+    if (offender) {
+      return {
+        id,
+        status: CHECK_STATUS.FAIL,
+        detail: `${offender[0]} cannot be used on an xTB block. Choose the Gaussian engine for this block, or clear the setting.`,
+      };
+    }
+    return { id, status: CHECK_STATUS.PASS, detail: 'No Gaussian-only setting is set on this xTB block.' };
+  }
+  // The schema fills xTB fields with their defaults on every block, so their
+  // presence says nothing; only the xTB side can distinguish a deliberate
+  // Gaussian-only setting from a default.
+  return { id, status: CHECK_STATUS.PASS, detail: 'This block runs on Gaussian; no xTB-only setting is in use.' };
+}
+
 const CHECK_FUNCTIONS = Object.freeze({
   'charge-multiplicity': checkChargeMultiplicity,
   'spin-contamination': checkSpinContamination,
   'geometry-sanity': checkGeometrySanity,
   'imaginary-frequencies': checkImaginaryFrequencies,
+  'engine-settings': checkEngineSettings,
   'method-basis-compatibility': checkMethodBasisCompatibility,
   'opt-convergence': checkOptimizationConvergence,
 });

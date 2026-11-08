@@ -87,6 +87,7 @@ describe('validity checks — contract', () => {
       'spin-contamination',
       'geometry-sanity',
       'imaginary-frequencies',
+      'engine-settings',
       'method-basis-compatibility',
       'opt-convergence',
     ]);
@@ -558,6 +559,7 @@ describe('running checks', () => {
     const result = runValidityChecks(context, { phase: 'post' });
     expect(result.findings.map((finding) => finding.id).sort()).toEqual([
       'charge-multiplicity',
+      'engine-settings',
       'imaginary-frequencies',
       'method-basis-compatibility',
       'opt-convergence',
@@ -580,6 +582,7 @@ describe('running checks', () => {
     const result = runValidityChecks(context, { phase: 'pre' });
     expect(result.findings.map((finding) => finding.id).sort()).toEqual([
       'charge-multiplicity',
+      'engine-settings',
       'geometry-sanity',
       'method-basis-compatibility',
       'opt-convergence',
@@ -589,8 +592,8 @@ describe('running checks', () => {
   it('removes a disabled check from the result entirely', () => {
     const before = runValidityChecks(context, { phase: 'post' });
     const after = runValidityChecks(context, { phase: 'post', disabled: ['spin-contamination'] });
-    expect(before.findings).toHaveLength(5);
-    expect(after.findings).toHaveLength(4);
+    expect(before.findings).toHaveLength(6);
+    expect(after.findings).toHaveLength(5);
     expect(after.findings.map((finding) => finding.id)).not.toContain('spin-contamination');
   });
 

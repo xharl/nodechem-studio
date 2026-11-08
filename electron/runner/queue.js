@@ -12,6 +12,7 @@ import { ladderVerdict } from '../../src/shared/methodLadder.js';
 import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
 import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
+import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
@@ -125,12 +126,16 @@ function taskRecord(raw, index) {
   }
   let checkpointFrom = null;
   if (raw?.checkpointFrom && SAFE_ID.test(String(raw.checkpointFrom.nodeId))) {
+    // A cross-engine edge hands over a parsed geometry, not a file: there is no
+    // checkpoint name to validate.
+    const geometryOnly = raw.checkpointFrom.geometryOnly === true;
     checkpointFrom = {
       nodeId: String(raw.checkpointFrom.nodeId),
-      checkpoint: declaredCheckpointFor(engine, raw.checkpointFrom.checkpoint),
+      checkpoint: geometryOnly ? '' : declaredCheckpointFor(engine, raw.checkpointFrom.checkpoint),
+      ...(geometryOnly ? { geometryOnly: true } : {}),
     };
   }
-  if (checkpointFrom && !isSafeCheckpointName(engine, checkpointFrom.checkpoint)) {
+  if (checkpointFrom && !checkpointFrom.geometryOnly && !isSafeCheckpointName(engine, checkpointFrom.checkpoint)) {
     throw new Error(`Task "${nodeId}" hands off a checkpoint with an unsafe name.`);
   }
   const checkpointName = checkpointArtifactFor(engine, {
@@ -675,7 +680,7 @@ export class QueueManager {
 
   async runTask(queue, task) {
     let checkpointHandoff = null;
-    if (task.checkpointFrom) {
+    if (task.checkpointFrom && !task.checkpointFrom.geometryOnly) {
       const upstream = queue.tasks.find((entry) => entry.nodeId === task.checkpointFrom.nodeId);
       const upstreamEngine = upstream ? engineFor(upstream.engine || 'gaussian') : null;
       const upstreamCheckpoint = upstream && upstreamEngine ? checkpointArtifactFor(upstreamEngine, upstream) : '';
@@ -722,12 +727,36 @@ export class QueueManager {
     this.publish(queue);
 
     try {
-      const inputText = await fsp.readFile(this.inputPath(queue.id, task.nodeId), 'utf8');
-      // Issue #25: give the run the upstream optimisation evidence it needs to
-      // decide whether a downstream frequency may call its geometry a minimum.
+      let inputText = await fsp.readFile(this.inputPath(queue.id, task.nodeId), 'utf8');
       const upstreamTask = task.checkpointFrom
         ? queue.tasks.find((entry) => entry.nodeId === task.checkpointFrom.nodeId) || null
         : null;
+      // Cross-engine hand-off: an xTB block leaves no Gaussian checkpoint, so the
+      // downstream Gaussian block takes the *parsed* final geometry of the run
+      // that finished instead of the geometry it was planned with.
+      const upstreamEngineId = upstreamTask ? String(upstreamTask.engine || 'gaussian') : null;
+      if (upstreamTask && upstreamTask.runDir && upstreamEngineId !== task.engine) {
+        const atoms = await readUpstreamGeometry(upstreamTask.runDir);
+        if (!atoms) {
+          task.status = 'failed';
+          task.error = `"${upstreamTask.title}" finished but its run record carries no parsed final geometry to hand over.`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
+        if (task.engine === 'gaussian') {
+          inputText = applyGeometryHandoff(inputText, atoms);
+        }
+        task.geometryHandoff = {
+          from: upstreamTask.nodeId,
+          fromEngine: upstreamEngineId,
+          toEngine: task.engine,
+          atoms: atoms.length,
+        };
+      }
+      // Issue #25: give the run the upstream optimisation evidence it needs to
+      // decide whether a downstream frequency may call its geometry a minimum.
       const validity = {
         ...(task.validity || {}),
         upstream: upstreamTask ? {

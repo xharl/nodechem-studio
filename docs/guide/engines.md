@@ -1,12 +1,28 @@
 # Engines
 
-NodeChem Studio drives two calculation engines. **The engine is a project-level choice**: open
-**Molecule → Defaults** and pick **Engine**. Every calculation block in the project is then built for
-that engine, so choose it before you build a workflow. A saved project keeps the engine it saved;
-the app never switches one behind your back.
+NodeChem Studio drives two calculation engines. The engine is resolved per block: a calculation
+block that names its own engine (inspector → **Engine**) runs on that engine, and a block that leaves
+the field at **Project default** follows **Molecule → Defaults**. A saved project keeps whatever it
+saved; the app never switches an engine behind your back, and a block that never set the field keeps
+following the project default exactly as before.
 
-One project, one engine. If you need a Gaussian level of theory for one step and a cheap GFN
-pre-screen for another, use two projects and pass the geometry between them.
+This is what makes a mixed workflow possible in one project:
+
+- a **GFN2-xTB pre-optimisation** block (cheap, no licence) followed by
+- a **Gaussian single point** or optimisation block (B3LYP-D3BJ/def2-TZVP) that starts from the
+  pre-optimised geometry.
+
+The step that crosses an engine boundary hands over a **geometry**, not a checkpoint: xTB writes its
+result to `xtbopt.xyz` instead of printing it, so the downstream Gaussian block reads the parsed
+final geometry from the finished run and rewrites its own molecule specification. The queue refuses
+the hand-off, with a specific message, when the upstream run recorded no geometry. Provenance names
+the source block and both engines, and the report prints them next to the block.
+
+A setting that belongs to the other engine is refused before the run rather than silently dropped:
+a TD-DFT request, a Gaussian checkpoint, `Stable=Opt`, the NMR job type or custom route keywords on
+an xTB block stop the run with a message naming the setting. Route fields the xTB engine simply does
+not use (method, basis, SCF, grid, population, dispersion) stay ignored, as the inspector already
+says, so switching an existing block to xTB does not require clearing the form first.
 
 ## Gaussian 16 — licensed commercial software
 

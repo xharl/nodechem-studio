@@ -120,6 +120,43 @@ export function methodBlockFor(settings = {}) {
   };
 }
 
+/**
+ * Replace the molecule specification of a Gaussian input with new Cartesian
+ * coordinates, keeping the route and everything after the geometry (basis and
+ * ECP blocks) intact.
+ *
+ * This is how a geometry crosses an engine boundary: an xTB optimisation
+ * produces no checkpoint, so the downstream Gaussian block is built from the
+ * project geometry and its coordinates are swapped for the *parsed* final
+ * geometry of the run that finished. Throws when the input has no recognisable
+ * molecule specification, rather than guessing where to write.
+ */
+export function replaceInputGeometry(inputText, atoms) {
+  const lines = String(inputText ?? '').split(/\r\n|\n|\r/);
+  if (!Array.isArray(atoms) || atoms.length === 0) throw new Error('No atoms were supplied for the geometry hand-off.');
+  const atomLine = /^[A-Z][a-z]?\s+-?\d+\.\d+\s+-?\d+\.\d+\s+-?\d+\.\d+\s*$/;
+  const chargeLine = /^\s*-?\d+\s+\d+\s*$/;
+  // The molecule specification starts at the first charge/multiplicity line
+  // that is followed by atom rows.
+  let start = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!chargeLine.test(lines[index])) continue;
+    if (index + 1 < lines.length && atomLine.test(lines[index + 1])) { start = index; break; }
+  }
+  if (start === -1) throw new Error('The input has no charge/multiplicity line followed by atoms; the geometry cannot be replaced.');
+  let end = start + 1;
+  while (end < lines.length && atomLine.test(lines[end])) end += 1;
+  const replacement = atoms.map((atom, index) => {
+    const element = oneLine(atom.element);
+    if (!/^[A-Z][a-z]?$/.test(element)) throw new Error(`Atom ${index + 1} has an invalid element symbol.`);
+    const x = finiteNumber(atom.x, `Atom ${index + 1} x`);
+    const y = finiteNumber(atom.y, `Atom ${index + 1} y`);
+    const z = finiteNumber(atom.z, `Atom ${index + 1} z`);
+    return `${element.padEnd(2)} ${x.toFixed(6).padStart(12)} ${y.toFixed(6).padStart(12)} ${z.toFixed(6).padStart(12)}`;
+  });
+  return [...lines.slice(0, start + 1), ...replacement, ...lines.slice(end)].join('\n');
+}
+
 export function buildGaussianInput({
   title = 'NodeChem Studio task',
   settings = {},

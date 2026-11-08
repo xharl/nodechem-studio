@@ -113,8 +113,9 @@ When you are ready to run something real:
   or `g16` on Linux/macOS), run **Preflight**, then uncheck **Dry run**. Follow
   [Running a real Gaussian job](engines.md#running-a-real-gaussian-job).
 
-Read [Engines](engines.md) before your first real run: the engine is a project-level choice, and the
-settings that belong to the other engine are ignored rather than guessed at.
+Read [Engines](engines.md) before your first real run: the engine can be set per block (or left to
+the project default), route settings the chosen engine does not use are ignored rather than guessed
+at, and a Gaussian-only request on an xTB block is refused before the run starts.
 
 ## What "done" looks like
 

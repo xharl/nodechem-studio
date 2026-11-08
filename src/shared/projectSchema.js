@@ -129,7 +129,7 @@ const SETTINGS_KEYS = new Set([
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
   'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'spinSweep', 'referenceNodeId',
-  'xtbMethod', 'xtbOptLevel', 'xtbThreads',
+  'xtbMethod', 'xtbOptLevel', 'xtbThreads', 'engine',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
@@ -181,6 +181,8 @@ export function defaultSettings(overrides = {}) {
     spinSweep: null,
     // The block whose free energy is the reactant of this path, if declared.
     referenceNodeId: '',
+    // Empty means the project default engine.
+    engine: '',
     // Issue #25: validity checks are on by default; a node opts out by id.
     disabledChecks: [],
   };
@@ -576,6 +578,11 @@ function normalizeSettings(c, raw, path, legacy) {
       'adds an Opt keyword, but the job type and force constants already emit one. Remove it, or the input builder will refuse to compose the route.');
   }
   return {
+    // Per-block engine override. Empty means "use the project default", which is
+    // what every .ncs written before this setting existed says.
+    engine: source.engine === undefined || source.engine === null || source.engine === ''
+      ? ''
+      : (readEnum(c, source.engine, ENGINE_IDS, `${path}.engine`, { legacy, fallback: 'gaussian' }) || 'gaussian'),
     jobType: readEnum(c, source.jobType, JOB_TYPES, `${path}.jobType`, { legacy, fallback: 'Opt', required: true }) || 'Opt',
     method: readString(c, source.method, `${path}.method`, { legacy, fallback: MODERN_ROUTE_PRESET.method, max: 64, required: true }) || MODERN_ROUTE_PRESET.method,
     basis: readString(c, source.basis, `${path}.basis`, { legacy, fallback: MODERN_ROUTE_PRESET.basis, max: 64, required: true }) || MODERN_ROUTE_PRESET.basis,
