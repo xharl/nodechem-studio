@@ -181,3 +181,169 @@ describe('output completeness', () => {
     expect(outputEvidence('no records here')).toEqual([]);
   });
 });
+
+/* Issue #77: the composite energy, never a component energy. */
+describe('composite method output and gates', () => {
+  const synthetic = (lines) => [
+    '! FIXTURE OUTPUT — synthetic Gaussian-shaped log, not a licensed Gaussian run',
+    ...lines,
+  ].join('\n');
+
+  it('reads the CBS-QB3 summary and reports its 0 K energy as the final energy', () => {
+    const parsed = parseGaussianOutput(synthetic([
+      ' #p CBS-QB3',
+      '',
+      ' CBS-QB3 on water',
+      '',
+      ' 0 1',
+      ' O 0.0 0.0 0.0',
+      ' SCF Done:  E(RB3LYP) =  -76.400000000     A.U. after   10 cycles',
+      ' CBS-QB3 (0 K)=        -39.069832 CBS-QB3 Energy=           -39.066969',
+      ' CBS-QB3 Enthalpy=     -39.066025 CBS-QB3 Free Energy=      -39.088192',
+      ' Normal termination of Gaussian 16',
+    ]));
+    expect(parsed.composite).toMatchObject({
+      expected: 'CBS-QB3',
+      method: 'CBS-QB3',
+      zeroPointEnergyHartree: -39.069832,
+      thermalEnergyHartree: -39.066969,
+      enthalpyHartree: -39.066025,
+      freeEnergyHartree: -39.088192,
+    });
+    expect(parsed.finalEnergy).toEqual({ hartree: -39.069832, source: 'composite:CBS-QB3' });
+    const gate = evaluateGates(parsed, {}).gates.find((entry) => entry.name === 'Composite energy');
+    expect(gate.result).toBe('pass');
+  });
+
+  it('reads G4(MP2) as G4MP2 in the route and in the summary', () => {
+    const parsed = parseGaussianOutput(synthetic([
+      ' #p G4MP2',
+      ' SCF Done:  E(RB3LYP) =  -76.500000000     A.U. after   10 cycles',
+      ' G4(MP2)(0 K)=   -76.450000000 G4(MP2) Energy=   -76.447000000',
+      ' G4(MP2) Enthalpy=   -76.446000000 G4(MP2) Free Energy=   -76.468000000',
+      ' Normal termination of Gaussian 16',
+    ]));
+    expect(parsed.composite.expected).toBe('G4(MP2)');
+    expect(parsed.composite.method).toBe('G4(MP2)');
+    expect(parsed.composite.keyword).toBe('G4MP2');
+    expect(parsed.finalEnergy.source).toBe('composite:G4(MP2)');
+    expect(evaluateGates(parsed, { requireComposite: 'G4(MP2)' }).gates
+      .find((entry) => entry.name === 'Composite energy').result).toBe('pass');
+  });
+
+  /*
+   * This is the regression test for the bug the issue describes: a composite
+   * block whose log carries only component SCF/CCSD energies used to report
+   * the last one as the final energy and pass the final-energy gate.
+   */
+  it('refuses to report a component energy when the composite summary is missing', () => {
+    const parsed = parseGaussianOutput(synthetic([
+      ' #p G4',
+      '',
+      ' G4 on water',
+      '',
+      ' 0 1',
+      ' O 0.0 0.0 0.0',
+      ' SCF Done:  E(RB3LYP) =  -76.400000000     A.U. after   10 cycles',
+      ' CCSD(T)= -76.4200000000D+00',
+      ' Normal termination of Gaussian 16',
+    ]));
+    // The parser must not fall back to the SCF or the CCSD(T) component.
+    expect(parsed.finalEnergy).toEqual({ hartree: null, source: null });
+    expect(parsed.composite).toMatchObject({ expected: 'G4', found: false });
+
+    const result = evaluateGates(parsed, { requireFinalEnergy: true });
+    const compositeGate = result.gates.find((entry) => entry.name === 'Composite energy');
+    expect(compositeGate.result).toBe('fail');
+    expect(compositeGate.detail).toMatch(/component link, not the composite result/);
+    expect(result.gates.find((entry) => entry.name === 'Final energy record').result).toBe('unknown');
+    expect(result.overall).toBe('fail');
+  });
+
+  it('fails a composite block whose log printed a different composite method', () => {
+    const parsed = parseGaussianOutput(synthetic([
+      ' #p G4',
+      ' SCF Done:  E(RB3LYP) =  -76.400000000     A.U. after   10 cycles',
+      ' G3(0 K)=   -76.410000000 G3 Energy=   -76.407000000',
+      ' Normal termination of Gaussian 16',
+    ]));
+    expect(parsed.composite.method).toBe('G3');
+    expect(evaluateGates(parsed, {}).gates.find((entry) => entry.name === 'Composite energy').result).toBe('fail');
+  });
+
+  it('marks an incomplete composite log as not evaluated rather than failed or passed', () => {
+    const parsed = parseGaussianOutput(synthetic([
+      ' #p G4',
+      ' SCF Done:  E(RB3LYP) =  -76.400000000     A.U. after   10 cycles',
+    ]), { truncated: true });
+    const gate = evaluateGates(parsed, {}).gates.find((entry) => entry.name === 'Composite energy');
+    expect(gate.result).toBe('unknown');
+    expect(evaluateGates(parsed, {}).overall).toBe('unknown');
+  });
+});
+
+/* Issue #77: counterpoise block parsing and BSSE. */
+describe('counterpoise output', () => {
+  const synthetic = (lines) => [
+    '! FIXTURE OUTPUT — synthetic Gaussian-shaped log, not a licensed Gaussian run',
+    ...lines,
+  ].join('\n');
+
+  const COUNTERPOISE_BLOCK = [
+    ' #p B3LYP/6-31G(d) SP Counterpoise=2',
+    '',
+    ' water dimer',
+    '',
+    ' 0 1',
+    ' O(Fragment=1) 0.0 0.0 0.0',
+    ' Counterpoise corrected energy =    -622.483714884838',
+    '                  BSSE energy =       0.005664641553',
+    '             sum of fragments =    -622.333463706103',
+    '          complexation energy =     -97.84 kcal/mole (raw)',
+    '          complexation energy =     -94.28 kcal/mole (corrected)',
+    ' Normal termination of Gaussian 16',
+  ];
+
+  it('parses the corrected complex, monomer sum, BSSE and both interaction energies', () => {
+    const parsed = parseGaussianOutput(synthetic(COUNTERPOISE_BLOCK));
+    expect(parsed.counterpoise).toMatchObject({
+      fragments: 2,
+      found: true,
+      complexEnergyHartree: -622.483714884838,
+      monomerSumHartree: -622.333463706103,
+      bsseHartree: 0.005664641553,
+      bsseSource: 'printed',
+      rawInteractionKcalPerMol: -97.84,
+      correctedInteractionKcalPerMol: -94.28,
+    });
+    expect(parsed.counterpoise.bsseKcalPerMol).toBeCloseTo(3.5546, 4);
+    expect(parsed.counterpoise.interactionCorrectedHartree).toBeCloseTo(-0.1502447, 6);
+    expect(parsed.finalEnergy).toEqual({
+      hartree: -622.483714884838,
+      source: 'counterpoise-corrected',
+    });
+  });
+
+  it('accepts the older Counterpoise: prefix', () => {
+    const parsed = parseGaussianOutput(synthetic([
+      ' #p B3LYP/6-31G(d) Counterpoise=2',
+      ' Counterpoise: corrected energy = -2660.083831739527',
+      ' Counterpoise: BSSE energy = 0.003902746890',
+      ' Normal termination of Gaussian 16',
+    ]));
+    expect(parsed.counterpoise.complexEnergyHartree).toBeCloseTo(-2660.083831739527, 10);
+    expect(parsed.counterpoise.bsseHartree).toBeCloseTo(0.003902746890, 12);
+  });
+
+  it('records a requested Counterpoise route even when the summary is missing', () => {
+    const parsed = parseGaussianOutput(synthetic([
+      ' #p B3LYP/6-31G(d) SP Counterpoise=2',
+      ' SCF Done:  E(RB3LYP) =  -622.400000000     A.U. after   10 cycles',
+      ' Normal termination of Gaussian 16',
+    ]));
+    expect(parsed.counterpoise).toMatchObject({ fragments: 2, found: false, bsseHartree: null });
+    // The route requested a correction but the block is missing: the raw SCF
+    // energy must not be reported as the corrected answer.
+    expect(parsed.finalEnergy).toEqual({ hartree: null, source: null });
+  });
+});

@@ -63,7 +63,15 @@
 
 import { atomicNumber } from './elements.js';
 import { ecpMissingMessage, ecpRequirement } from './ecp.js';
-import { hasBuiltinDispersion } from './routePresets.js';
+import {
+  HARTREE_TO_KCAL_PER_MOL,
+  compositeSettingConflicts,
+  counterpoiseCount,
+  counterpoiseFragmentIssues,
+  hasBuiltinDispersion,
+  isCompositeJobType,
+  isCompositeMethodName,
+} from './routePresets.js';
 
 export const CHECK_STATUS = Object.freeze({
   PASS: 'pass',
@@ -140,6 +148,14 @@ export const VALIDITY_CHECKS = Object.freeze([
     blocking: true,
     engines: Object.freeze(['gaussian']),
     description: 'Heavy elements need a basis that carries an ECP, and built-in dispersion must not be double-counted.',
+  },
+  {
+    id: 'counterpoise-bsse',
+    title: 'Counterpoise / BSSE',
+    phases: Object.freeze(['pre', 'post']),
+    blocking: true,
+    engines: Object.freeze(['gaussian']),
+    description: 'A Counterpoise job needs one fragment label per atom and a parsed counterpoise block; BSSE is reported separately from the interaction energy.',
   },
   {
     id: 'opt-convergence',
@@ -220,11 +236,6 @@ const ECP_BASIS_PREFIXES = Object.freeze([
 /** Methods that do not consume a Gaussian basis/ECP at all. */
 const SEMIEMPIRICAL_METHODS = Object.freeze([
   'am1', 'pm3', 'pm6', 'pm7', 'mndo', 'mindo', 'indo', 'cndo', 'zindo',
-]);
-
-/** Composite methods that fix their own basis and ECP sequence. */
-const COMPOSITE_METHODS = Object.freeze([
-  'g1', 'g2', 'g3', 'g4', 'cbsqb3', 'cbsapno', 'w1', 'w1bd',
 ]);
 
 /** First element beyond krypton: all-electron Pople/cc bases stop at Kr. */
@@ -661,10 +672,28 @@ export function checkImaginaryFrequencies({ settings = {}, parsed = null, minMag
  */
 export function checkMethodBasisCompatibility({ settings = {}, molecule = {} } = {}) {
   const id = 'method-basis-compatibility';
+  const jobType = oneLine(settings.jobType);
   const method = oneLine(settings.method);
   const basis = oneLine(settings.basis);
   const dispersion = oneLine(settings.dispersion);
   const atoms = toAtomList(molecule);
+
+  // Issue #77: a composite job type is a complete route. Any leftover
+  // method/basis (or another route ingredient) is a conflict and must fail,
+  // not be quietly overridden.
+  if (isCompositeJobType(jobType)) {
+    const conflicts = compositeSettingConflicts(settings);
+    const evidence = { jobType, method: method || null, basis: basis || null, conflicts };
+    if (conflicts.length > 0) {
+      return finding(id, CHECK_STATUS.FAIL,
+        `${jobType} fixes its own method, basis and job steps; remove the conflicting `
+        + `${conflicts.join(', ')} setting${conflicts.length === 1 ? '' : 's'} rather than letting the route override them.`,
+        evidence);
+    }
+    return finding(id, CHECK_STATUS.PASS,
+      `${jobType} is a composite method that runs its own documented method/basis sequence; no separate method or basis was supplied.`,
+      evidence);
+  }
 
   if (!method || !basis) {
     return unknown(id, 'The method and basis must both be set before their pairing can be checked.');
@@ -715,12 +744,12 @@ export function checkMethodBasisCompatibility({ settings = {}, molecule = {} } =
       message: `${method} is semi-empirical and does not consume a Gaussian basis set; ${basis} is ignored, so its ECP `
         + 'cannot apply.',
     });
-  } else if (COMPOSITE_METHODS.includes(key)) {
+  } else if (isCompositeMethodName(method)) {
     issues.push({
-      kind: 'method-defines-basis',
-      severity: CHECK_SEVERITY.WARNING,
-      message: `${method} is a composite method that fixes its own basis and ECP sequence; the explicit ${basis} `
-        + 'will be overridden.',
+      kind: 'method-is-composite',
+      severity: CHECK_SEVERITY.ERROR,
+      message: `${method} is a composite method and takes no separate method/basis pair; composite methods are job types`
+        + ` in this app, not method names. Choose a supported composite job type instead of writing ${method}/${basis}.`,
     });
   }
 
@@ -911,6 +940,107 @@ export function checkConformerSpread({ conformer = null } = {}) {
     evidence);
 }
 
+/* ── Counterpoise / BSSE (issue #77) ──────────────────────── */
+
+/**
+ * Counterpoise correction. Pre-run it verifies that the fragment count the
+ * route will carry matches the labels on every atom. Post-run it reads the
+ * counterpoise summary and reports BSSE separately from the interaction
+ * energy; a run with no summary is `unknown`/`fail`, never a pass with a
+ * component energy standing in for the corrected complex.
+ */
+export function checkCounterpoise({ settings = {}, molecule = {}, parsed = null } = {}) {
+  const id = 'counterpoise-bsse';
+  const declaredCount = counterpoiseCount(settings);
+  const record = parsed?.counterpoise ?? null;
+  // The queue's validity payload carries only the route keys it knows about;
+  // a parsed counterpoise block therefore remains reportable even when the
+  // setting did not travel with it. An explicit `0` is still "off".
+  const settingAbsent = settings?.counterpoise === undefined
+    || settings?.counterpoise === null || settings?.counterpoise === '';
+  const inferred = declaredCount === 0 && settingAbsent && record?.found === true
+    && Number.isInteger(record.fragments);
+  const count = inferred ? record.fragments : declaredCount;
+
+  if (count === null) {
+    return finding(id, CHECK_STATUS.FAIL,
+      'Counterpoise must be an integer between 2 and 10, or off.', { counterpoise: settings?.counterpoise ?? null });
+  }
+  if (count === 0) {
+    if (record?.found) {
+      return finding(id, CHECK_STATUS.WARNING,
+        'The output contains a counterpoise summary, but this block does not request Counterpoise; the corrected energy is not the block\'s declared result.',
+        { counterpoise: 0, outputFragments: record.fragments ?? null });
+    }
+    return skipped(id, 'This block does not request a counterpoise correction.');
+  }
+
+  const issues = inferred ? [] : counterpoiseFragmentIssues({ settings, molecule });
+  const basis = oneLine(settings.basis) || null;
+  if (issues.length > 0) {
+    return finding(id, CHECK_STATUS.FAIL, issues.join(' '), { counterpoise: count, basis, issues });
+  }
+
+  if (!parsed) {
+    return finding(id, CHECK_STATUS.PASS,
+      `Counterpoise=${count} with fragment labels 1-${count} on every atom; the corrected complex and monomer energies will be read from the counterpoise summary.`,
+      { counterpoise: count, basis });
+  }
+
+  if (!record) {
+    return unknown(id,
+      `Counterpoise=${count} was requested, but the output contains no counterpoise summary; BSSE was not evaluated.`,
+      { counterpoise: count, basis, complete: parsed.complete !== false });
+  }
+
+  const evidence = {
+    counterpoise: count,
+    counterpoiseSource: inferred ? 'output' : 'settings',
+    basis,
+    fragments: record.fragments,
+    complexEnergyHartree: record.complexEnergyHartree,
+    monomerSumHartree: record.monomerSumHartree,
+    bsseHartree: record.bsseHartree,
+    bsseKcalPerMol: record.bsseKcalPerMol,
+    rawInteractionKcalPerMol: record.rawInteractionKcalPerMol,
+    correctedInteractionKcalPerMol: record.correctedInteractionKcalPerMol,
+    interactionCorrectedHartree: record.interactionCorrectedHartree,
+    bsseSource: record.bsseSource,
+  };
+
+  if (!record.found) {
+    if (parsed.complete === false || parsed.status !== 'completed') {
+      return unknown(id,
+        `Counterpoise=${count} was requested, but the output is incomplete and has no counterpoise summary.`,
+        evidence);
+    }
+    return finding(id, CHECK_STATUS.FAIL,
+      `Counterpoise=${count} was requested and the job completed, but the output contains no counterpoise summary.`,
+      evidence);
+  }
+
+  if (record.fragments !== null && record.fragments !== count) {
+    return finding(id, CHECK_STATUS.FAIL,
+      `The output ran Counterpoise=${record.fragments}, but this block asks for Counterpoise=${count}.`,
+      evidence);
+  }
+  if (record.bsseHartree === null || record.complexEnergyHartree === null) {
+    return unknown(id,
+      'The counterpoise summary was found, but the corrected complex energy or BSSE value was not printed.',
+      evidence);
+  }
+
+  const bsseKcal = record.bsseKcalPerMol === null ? null : `${record.bsseKcalPerMol.toFixed(2)} kcal/mol`;
+  const interaction = record.rawInteractionKcalPerMol !== null && record.correctedInteractionKcalPerMol !== null
+    ? ` Corrected interaction ${record.correctedInteractionKcalPerMol.toFixed(2)} kcal/mol vs raw ${record.rawInteractionKcalPerMol.toFixed(2)} kcal/mol.`
+    : '';
+  return finding(id, CHECK_STATUS.PASS,
+    `Counterpoise=${count}${basis ? ` at ${basis}` : ''}: corrected complex ${record.complexEnergyHartree} Eh,`
+    + ` monomers in the same basis ${record.monomerSumHartree ?? 'not printed'} Eh,`
+    + ` BSSE ${record.bsseHartree} Eh${bsseKcal ? ` (${bsseKcal})` : ''}.${interaction}`,
+    evidence);
+}
+
 /* ── Runner ───────────────────────────────────────────────── */
 /**
  * Settings that belong to the other engine.
@@ -931,6 +1061,7 @@ function checkEngineSettings({ settings, engine }) {
       ['TD-DFT triplets', Number(source.tdTriplets) > 0 ? String(source.tdTriplets) : ''],
       ['Stable=Opt', source.stableOpt === true ? 'true' : ''],
       ['The NMR job type', text(source.jobType) === 'NMR' ? 'NMR' : ''],
+      ['A composite method job type', isCompositeJobType(source.jobType) ? text(source.jobType) : ''],
       ['Raman activities', source.raman === true ? 'true' : ''],
       ['Frontier-orbital descriptors', source.orbitals === true ? 'true' : ''],
     ].find(([, value]) => value !== '');
@@ -981,6 +1112,7 @@ const CHECK_FUNCTIONS = Object.freeze({
   'imaginary-frequencies': checkImaginaryFrequencies,
   'engine-settings': checkEngineSettings,
   'method-basis-compatibility': checkMethodBasisCompatibility,
+  'counterpoise-bsse': checkCounterpoise,
   'opt-convergence': checkOptimizationConvergence,
   'conformer-spread': checkConformerSpread,
 });
@@ -1057,6 +1189,7 @@ export function normalizeValidityContext(raw = {}) {
       x: finiteNumber(atom?.x),
       y: finiteNumber(atom?.y),
       z: finiteNumber(atom?.z),
+      ...(integerOrNull(atom?.fragment) > 0 ? { fragment: integerOrNull(atom.fragment) } : {}),
     }))
     : [];
   const disabledChecks = Array.isArray(settingsRaw.disabledChecks)
@@ -1103,6 +1236,16 @@ export function normalizeValidityContext(raw = {}) {
       method: oneLine(settingsRaw.method, '').slice(0, 64),
       basis: oneLine(settingsRaw.basis, '').slice(0, 64),
       dispersion: oneLine(settingsRaw.dispersion, '').slice(0, 16),
+      // Absent means "the payload did not say"; an explicit 0 is a real "off".
+      ...(integerOrNull(settingsRaw.counterpoise) !== null
+        ? { counterpoise: integerOrNull(settingsRaw.counterpoise) }
+        : {}),
+      counterpoiseChargeStates: Array.isArray(settingsRaw.counterpoiseChargeStates)
+        ? settingsRaw.counterpoiseChargeStates.slice(0, 10).map((state) => ({
+          charge: integerOrNull(state?.charge),
+          multiplicity: integerOrNull(state?.multiplicity),
+        }))
+        : [],
       disabledChecks,
     },
     molecule: {

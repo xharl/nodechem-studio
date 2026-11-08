@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  JOB_TYPES,
   MAX_PROJECT_BYTES,
   SCHEMA_VERSION,
   defaultGates,
@@ -528,7 +529,18 @@ describe('schema helpers', () => {
   it('maps job types to short node kinds', () => {
     expect(kindForJob('Opt Freq')).toBe('O+F');
     expect(kindForJob('Opt=TS')).toBe('TS');
+    expect(kindForJob('G4')).toBe('Composite');
     expect(kindForJob('unknown')).toBe('SP');
+  });
+
+  it('offers composite job types without a method/basis placeholder', () => {
+    expect(JOB_TYPES).toEqual(expect.arrayContaining(['CBS-QB3', 'G4', 'G4(MP2)']));
+    const settings = defaultSettings({ jobType: 'G4' });
+    expect(settings.method).toBe('');
+    expect(settings.basis).toBe('');
+    expect(settings.dispersion).toBe('');
+    expect(settings.counterpoise).toBe(0);
+    expect(settings.counterpoiseChargeStates).toEqual([]);
   });
 
   it('summarizes errors with paths and a remainder count', () => {

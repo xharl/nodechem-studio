@@ -6,10 +6,10 @@ Two questions get answered separately, and that separation is the most important
   final energy. A gate result is `pass`, `fail` or `unknown`. Missing evidence is `unknown`, never
   `pass`.
 - **Is the result defensible?** → **validity checks**. Charge/multiplicity parity, spin
-  contamination, geometry sanity, imaginary-mode count, method/basis compatibility, optimisation
-  convergence. A check that does not apply to the selected engine (for example method/basis
-  compatibility under xTB) is reported as **not applicable**, which is different from **unknown**
-  ("the question applies but there is no evidence") and is never a pass.
+  contamination, geometry sanity, imaginary-mode count, method/basis compatibility, counterpoise
+  coverage, optimisation convergence. A check that does not apply to the selected engine (for
+  example method/basis compatibility under xTB) is reported as **not applicable**, which is
+  different from **unknown** ("the question applies but there is no evidence") and is never a pass.
 
 - **How does it differ from the run before?** → **Compare**. Under a finished run, pick another
   run; the panel shows both values, the signed difference (comparison minus baseline) and flags a
@@ -63,14 +63,20 @@ The panel is a pure function of one `run.json` record: it reads no disk and inve
 | Frequency record | frequency jobs | A frequency section was parsed |
 | Thermochemistry record | when required | Thermochemistry was requested and found |
 | Final energy record | when required | A final energy was requested and found |
+| Composite energy | composite jobs | The log carries the method-specific composite summary; the SCF/post-HF component energies are never accepted as the composite result |
 
 Which gates are required comes from the block's **Gates** checkboxes in the inspector, so the record
 states exactly what the block asked for. A required gate that cannot be judged makes the task
 `needs-review` and blocks its dependents. It is never silently promoted to a pass.
 
+The **Composite energy** gate is added automatically when the echoed route names a composite method
+(`G4`, `G4MP2`, `CBS-QB3`, …). It passes only on the method's own summary block. A log that
+terminated normally but contains only SCF or post-HF energies from the component links fails it:
+those numbers are ingredients, not the composite answer.
+
 ## Validity checks
 
-Six checks, implemented as pure functions in `src/shared/validityChecks.js`. They run before a job
+Ten checks, implemented as pure functions in `src/shared/validityChecks.js`. They run before a job
 (project **Validate** and run start) and after it (`run.json` → `gates.validity`).
 
 | Check | What it verifies | Phase | A failure is |
@@ -79,7 +85,8 @@ Six checks, implemented as pure functions in `src/shared/validityChecks.js`. The
 | `spin-contamination` | `S**2` before and after annihilation against `S(S+1)`; the deviation is recorded | post | error above 0.50, warning above 0.10 |
 | `geometry-sanity` | Atom clashes, implausibly short contacts, stretched bonds, angle anomalies against covalent-radius sums | pre | error for a clash, warnings otherwise |
 | `imaginary-frequencies` | Exactly one imaginary mode for `Opt=TS`, none for `Freq`/`Opt Freq`, and the magnitude floor | post | error |
-| `method-basis-compatibility` | Heavy elements in a basis with no ECP; semi-empirical or composite methods given a basis; empirical dispersion added twice | pre, post | error for the ECP gap, warnings otherwise |
+| `method-basis-compatibility` | Heavy elements in a basis with no ECP; semi-empirical methods given a basis; composite methods given a separate method/basis; empirical dispersion added twice | pre, post | error for the ECP gap and composite conflicts, warnings otherwise |
+| `counterpoise-bsse` | `Counterpoise=N` has fragment labels 1..N on every atom, and the output carries a counterpoise summary; BSSE is reported separately from the interaction energy | pre, post | error for a fragment mismatch or a missing summary on a completed job |
 | `opt-convergence` | A frequency job only claims a minimum when its optimisation reported completion | pre, post | reported as a failure; does not block the run |
 
 Findings carry `{ id, status, message, evidence, severity }`. A check never passes on a missing
@@ -109,6 +116,58 @@ rather than implied. Where the parser finds no thermochemistry section, the pane
 
 xTB's free energy already uses mRRHO; the app adds no quasi-harmonic or standard-state correction on
 top of it.
+
+## Composite methods
+
+`CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4` and `G4(MP2)` are **job types**, not method
+strings. Selecting one writes a single route keyword — `#p CBS-QB3`, `#p G4`, `#p G4MP2` — with no
+`method/basis` pair and no additional `Opt`. Gaussian expands that keyword into its documented
+sequence of geometry, frequency and single-point links; writing `CBS-QB3/6-31G(d)` or appending
+`Opt` is a different, invalid route, so the builder refuses a block that still carries a method,
+basis, dispersion, solvation, TD, population, custom keyword or a conflicting option.
+
+The parsed answer for a composite run is the method's own summary block, for example:
+
+```
+ CBS-QB3 (0 K)=        -39.069832 CBS-QB3 Energy=           -39.066969
+ CBS-QB3 Enthalpy=     -39.066025 CBS-QB3 Free Energy=      -39.088192
+```
+
+`finalEnergy` is the **(0 K)** value, because that is the composite electronic energy including the
+model's scaled zero-point term. `Energy`, `Enthalpy` and `Free Energy` are kept separately in
+`composite` — they differ by the thermochemical corrections the model applies. A log without the
+summary reports **no** composite energy, even if its component links printed SCF or CCSD(T) numbers:
+the Composite energy gate fails (or is `unknown` for a truncated parse) rather than promoting a
+component energy to the answer.
+
+**Scope.** The app writes the route keyword and reads Gaussian's final summary; it does not yet expand
+the recipe into one queue task per link, so per-step provenance is not exposed here. `W1`, `W1U`,
+`W1BD` and the less common G3 variants are refused for now because their summary output has not been
+verified.
+
+## Counterpoise and BSSE
+
+Turn on **Counterpoise** for a fragment job and give the fragment count `N`. Every atom must carry a
+fragment label `1..N`, and `molecule.fragments` must agree with `N`; otherwise the input builder and
+the `counterpoise-bsse` validity check refuse the block. The route gets `Counterpoise=N`, each atom
+is written as `O(Fragment=1)`, and a per-fragment charge/spin pair is written when the fragments are
+not all at the complex's charge state.
+
+The counterpoise summary is read as five distinct numbers:
+
+- **corrected complex energy** — the complex in the full dimer basis;
+- **sum of fragments** — the monomers in that same basis (Gaussian prints their sum, not one line per
+  monomer, so individual monomer energies are not claimed);
+- **BSSE energy** — `E(complex, raw) − E(complex, corrected)`, the basis-set superposition correction;
+- **raw interaction energy** and **corrected interaction energy** in kcal/mol, as printed.
+
+BSSE is a basis-set incompleteness correction, **not** an estimate of the total interaction error,
+and it is **not** `corrected complex − sum of fragments` (that difference is the corrected
+interaction energy). The app reports BSSE separately from the interaction energy and names the
+basis; it does not add or hide it. Monomer **deformation** terms are not available in the
+counterpoise block — they need separate monomer optimisations — so the app does not show them.
+Counterpoise is refused with SCRF solvation, TD/population/frontier-orbital/Stability analyses
+(Gaussian cannot produce molecular orbitals from it) and with IRC, Scan, NMR or composite job types.
 
 ## Thermochemistry at another temperature or pressure
 

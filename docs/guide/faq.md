@@ -41,10 +41,25 @@ No. GFN methods are parameterised semi-empirical approximations: good for screen
 pre-optimisation, not for energies or barriers comparable to DFT or wavefunction results.
 
 **Why does an xTB run list some validity checks as not applicable?**
-Two of the six checks inspect Gaussian route settings (method/basis compatibility and spin
-contamination). xTB has no route or basis, so those are reported as *not applicable* — a distinct
-state from *unknown*, and never a pass. The engine-neutral checks (charge/multiplicity, geometry
-sanity, imaginary modes, optimisation convergence) run for xTB and can fail a result.
+Three of the ten checks inspect Gaussian-only concepts (method/basis compatibility, spin
+contamination and counterpoise). xTB has no route, basis or counterpoise correction, so those are
+reported as *not applicable* — a distinct state from *unknown*, and never a pass. The engine-neutral
+checks (charge/multiplicity, geometry sanity, imaginary modes, optimisation convergence) run for xTB
+and can fail a result.
+
+**Can I run G4 or CBS-QB3?**
+Yes — choose the composite method as the block's **job type**, not as a method string. The app writes
+the bare Gaussian keyword (`#p G4`, `#p CBS-QB3`, `#p G4MP2`) because the method expands into its own
+sequence of links and takes no separate basis. The result is reported only from the method's own
+final summary; if the log lacks that summary, the run is not credited with a composite energy. W1
+and the less common G3 variants are not offered yet.
+
+**Why is BSSE not subtracted from my interaction energy?**
+BSSE is reported as its own number, alongside the raw and counterpoise-corrected interaction
+energies. It is a basis-set incompleteness correction, not a universal error bar, and the corrected
+value is the complex energy in the full fragment basis minus the monomers in that same basis. The
+app keeps the terms separate so you can see what was corrected; monomer deformation is not in
+Gaussian's counterpoise block and is not shown.
 
 **Why are memory, cores and checkpoint fields missing in an xTB project?**
 xTB has no equivalent. It takes `Threads` (`OMP_NUM_THREADS`) instead, and a checkpoint edge copies

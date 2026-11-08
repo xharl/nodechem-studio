@@ -310,3 +310,131 @@ describe('imported geometry', () => {
     expect(text).toMatch(/O\s+1\.200000\s+0\.000000\s+0\.000000/);
   });
 });
+
+/* Issue #77: composite methods are complete routes, not a method/basis pair. */
+describe('issue #77 — composite method routes', () => {
+  it('writes only the composite keyword, with no method/basis pair and no Opt', () => {
+    expect(routeFor(defaultSettings({ jobType: 'CBS-QB3' }))).toBe('#p CBS-QB3');
+    expect(routeFor(defaultSettings({ jobType: 'G4' }))).toBe('#p G4');
+    expect(routeFor(defaultSettings({ jobType: 'G4(MP2)' }))).toBe('#p G4MP2');
+    expect(routeFor(defaultSettings({ jobType: 'CBS-4M' }))).toBe('#p CBS-4M');
+  });
+
+  it('does not plant B3LYP/def2-SVP defaults on a composite job', () => {
+    const settings = defaultSettings({ jobType: 'G4' });
+    expect(settings.method).toBe('');
+    expect(settings.basis).toBe('');
+    expect(settings.dispersion).toBe('');
+  });
+
+  it('allows ordinary SCF and grid options on the composite route', () => {
+    expect(routeFor(defaultSettings({ jobType: 'G4', scf: 'Tight', grid: 'UltraFine' })))
+      .toBe('#p G4 SCF=Tight Integral=UltraFine');
+  });
+
+  it('refuses a leftover method or basis instead of silently ignoring it', () => {
+    expect(() => routeFor({ ...defaultSettings({ jobType: 'G4' }), method: 'B3LYP' }))
+      .toThrow(/method "B3LYP"/);
+    expect(() => routeFor({ ...defaultSettings({ jobType: 'G4' }), basis: '6-31G(d)' }))
+      .toThrow(/basis "6-31G\(d\)"/);
+    expect(() => routeFor({ ...defaultSettings({ jobType: 'G4' }), dispersion: 'GD3BJ' }))
+      .toThrow(/dispersion/);
+    expect(() => routeFor({ ...defaultSettings({ jobType: 'G4' }), orbitals: true }))
+      .toThrow(/frontier-orbital/);
+  });
+
+  it('refuses a composite keyword typed into the method field', () => {
+    expect(() => routeFor({ ...baseSettings, method: 'G4' }))
+      .toThrow(/choose it as the job type/);
+  });
+
+  it('records the composite method in the provenance block', () => {
+    expect(methodBlockFor(defaultSettings({ jobType: 'G4(MP2)' }))).toMatchObject({
+      functional: 'G4(MP2)',
+      basis: 'method-defined',
+      composite: 'G4(MP2)',
+      compositeKeyword: 'G4MP2',
+    });
+  });
+});
+
+/* Issue #77: Counterpoise=N input with fragment labels. */
+const WATER_DIMER = [
+  { element: 'O', x: 0.00, y: 0.00, z: 0.00, fragment: 1 },
+  { element: 'H', x: 0.49, y: 0.76, z: -0.29, fragment: 1 },
+  { element: 'H', x: 0.49, y: -0.76, z: -0.29, fragment: 1 },
+  { element: 'O', x: 0.00, y: 0.00, z: 2.98, fragment: 2 },
+  { element: 'H', x: -0.91, y: 0.00, z: 3.24, fragment: 2 },
+  { element: 'H', x: -0.01, y: 0.00, z: 2.03, fragment: 2 },
+];
+
+function counterpoiseSettings(overrides = {}) {
+  return {
+    ...defaultSettings({ jobType: 'SP' }),
+    method: 'B3LYP',
+    basis: '6-31G(d)',
+    checkpoint: 'dimer.chk',
+    dispersion: '',
+    counterpoise: 2,
+    ...overrides,
+  };
+}
+
+describe('issue #77 — counterpoise input', () => {
+  it('writes Counterpoise=N and a fragment label on every atom', () => {
+    const text = buildGaussianInput({
+      settings: counterpoiseSettings(),
+      molecule: { charge: 0, multiplicity: 1, fragments: ['O', 'O'], coords: WATER_DIMER },
+      inputName: 'dimer.gjf',
+    });
+    expect(text).toContain('#p B3LYP/6-31G(d) SP Counterpoise=2');
+    expect(text).toContain('O(Fragment=1)');
+    expect(text).toContain('O(Fragment=2)');
+    expect(text).toContain('H(Fragment=2)');
+  });
+
+  it('writes the whole-system and per-fragment charge/spin line when given', () => {
+    const text = buildGaussianInput({
+      settings: counterpoiseSettings({
+        charge: 1,
+        counterpoiseChargeStates: [
+          { charge: 1, multiplicity: 2 },
+          { charge: 0, multiplicity: 1 },
+        ],
+      }),
+      molecule: { charge: 1, multiplicity: 2, fragments: ['O', 'O'], coords: WATER_DIMER },
+      inputName: 'dimer.gjf',
+    });
+    expect(text).toContain('1 2 1 2 0 1');
+  });
+
+  it('refuses when the labels do not cover fragments 1..N', () => {
+    const wrong = WATER_DIMER.map((atom, index) => (index === 5 ? { ...atom, fragment: 3 } : atom));
+    expect(() => buildGaussianInput({
+      settings: counterpoiseSettings(),
+      molecule: { charge: 0, multiplicity: 1, fragments: ['O', 'O'], coords: wrong },
+      inputName: 'dimer.gjf',
+    })).toThrow(/consecutively|exceed/);
+  });
+
+  it('refuses when the molecule fragment strings disagree with Counterpoise=N', () => {
+    expect(() => buildGaussianInput({
+      settings: counterpoiseSettings(),
+      molecule: { charge: 0, multiplicity: 1, fragments: ['O'], coords: WATER_DIMER },
+      inputName: 'dimer.gjf',
+    })).toThrow(/declares 1 fragment/);
+  });
+
+  it('refuses a counterpoise combination Gaussian cannot run', () => {
+    expect(() => buildGaussianInput({
+      settings: counterpoiseSettings({ jobType: 'IRC' }),
+      molecule: { charge: 0, multiplicity: 1, fragments: ['O', 'O'], coords: WATER_DIMER },
+      inputName: 'dimer.gjf',
+    })).toThrow(/Counterpoise is available/);
+    expect(() => buildGaussianInput({
+      settings: counterpoiseSettings({ solvation: true }),
+      molecule: { charge: 0, multiplicity: 1, fragments: ['O', 'O'], coords: WATER_DIMER },
+      inputName: 'dimer.gjf',
+    })).toThrow(/SCRF/);
+  });
+});

@@ -11,6 +11,13 @@ import {
   jobKeywordFor,
 } from './tsForceConstants.js';
 import { basisNameFor, ecpMissingMessage, ecpRequirement } from './ecp.js';
+import {
+  compositeMethodFor,
+  compositeSettingConflicts,
+  counterpoiseCount,
+  counterpoiseFragmentIssues,
+  isCompositeMethodName,
+} from './routePresets.js';
 
 export const DEMO_WATER = [
   { element: 'O', x: 0.000000, y: 0.000000, z: 0.117300 },
@@ -101,10 +108,51 @@ export function tdKeywordFor(settings = {}) {
   return `TD=(NStates=${states}${suffix}${rootSuffix})`;
 }
 
+/**
+ * Route for a first-class composite method: `#p G4`, `#p CBS-QB3`,
+ * `#p G4MP2`. No method/basis pair and no `Opt` job keyword — the composite
+ * keyword expands into its documented links by itself. `SCF`, `Integral` and
+ * `Output` remain ordinary route options.
+ */
+function compositeRouteFor(settings, method) {
+  const conflicts = compositeSettingConflicts(settings);
+  if (conflicts.length > 0) {
+    throw new Error(`${method.id} is a composite method that supplies its own method, basis and`
+      + ` job steps; remove the conflicting ${conflicts.join(', ')} setting${conflicts.length === 1 ? '' : 's'}`
+      + ` instead of having it silently ignored.`);
+  }
+  const tokens = [`#p ${method.keyword}`];
+  const scf = oneLine(settings.scf);
+  if (scf) tokens.push(`SCF=${scf}`);
+  const grid = gridFor(settings) || '';
+  if (grid) tokens.push(`Integral=${grid}`);
+  const verbosity = oneLine(settings.verbosity);
+  if (verbosity) tokens.push(`Output=${verbosity}`);
+  return tokens.join(' ');
+}
+
 export function routeFor(settings = {}, { basisName = null } = {}) {
+  const composite = compositeMethodFor(settings.jobType);
+  if (composite) return compositeRouteFor(settings, composite);
+
   const values = routeValues(settings);
+  // The old free-text workaround put the composite keyword in the method
+  // field, producing `G4/6-31G(d)`, which Gaussian refuses. Point at the job
+  // type instead of writing an invalid route.
+  const compositeName = compositeMethodFor(values.functional);
+  if (compositeName) {
+    throw new Error(`${values.functional} is a composite method and takes no separate method/basis pair;`
+      + ' choose it as the job type instead of typing it into the method field.');
+  }
+  if (isCompositeMethodName(values.functional)) {
+    throw new Error(`${values.functional} is a composite method this build does not support yet;`
+      + ' it cannot be written as an ordinary method/basis route.');
+  }
   const basis = basisName || values.basis;
   const tokens = [`#p ${values.functional}/${basis} ${values.job}`];
+  const counterpoise = counterpoiseCount(settings);
+  if (counterpoise === null) throw new Error('Counterpoise must be an integer between 2 and 10, or off.');
+  if (counterpoise > 0) tokens.push(`Counterpoise=${counterpoise}`);
   if (values.dispersion) tokens.push(`EmpiricalDispersion=${values.dispersion}`);
   if (values.scf) tokens.push(`SCF=${values.scf}`);
   if (values.grid) tokens.push(`Integral=${values.grid}`);
@@ -133,6 +181,23 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
  * `null` means the route carries no keyword for that field.
  */
 export function methodBlockFor(settings = {}) {
+  const composite = compositeMethodFor(settings.jobType);
+  if (composite) {
+    // The existing provenance/methods-text fields are a method/basis pair, so
+    // a composite method fills them with its own name and an explicit
+    // "method-defined" basis instead of a fake functional or an empty string.
+    return {
+      functional: composite.id,
+      basis: 'method-defined',
+      dispersion: null,
+      solvation: null,
+      grid: gridFor(settings) || null,
+      scf: oneLine(settings.scf) || null,
+      td: null,
+      composite: composite.id,
+      compositeKeyword: composite.keyword,
+    };
+  }
   const values = routeValues(settings);
   return {
     functional: values.functional,
@@ -214,6 +279,36 @@ export function buildGaussianInput({
       + `${settings.jobType || 'Opt'} would silently drop the keyword.`);
   }
 
+  // Counterpoise (#77): the fragment count is explicit, and every atom must
+  // carry a matching fragment label. A mismatch is refused here rather than
+  // written into an input Gaussian cannot interpret.
+  const counterpoise = counterpoiseCount(settings);
+  if (counterpoise === null) {
+    throw new Error('Counterpoise must be an integer between 2 and 10, or off.');
+  }
+  if (counterpoise > 0) {
+    const jobType = String(settings.jobType || 'Opt');
+    if (compositeMethodFor(jobType)) {
+      throw new Error('Counterpoise cannot be combined with a composite method;'
+        + ' run the complex and the fragments at the composite level as separate blocks.');
+    }
+    if (!['SP', 'Opt', 'Freq', 'Opt Freq'].includes(jobType)) {
+      throw new Error(`Counterpoise is available for SP, Opt, Freq and Opt Freq jobs; ${jobType} `
+        + 'cannot carry it.');
+    }
+    if (settings.solvation) {
+      throw new Error('Counterpoise cannot be combined with SCRF solvation; Gaussian documents the two as incompatible.');
+    }
+    if (Number(settings.tdStates) > 0 || oneLine(settings.population) || settings.orbitals === true || settings.stableOpt === true) {
+      throw new Error('Counterpoise calculations cannot produce molecular orbitals; remove TD, population, frontier orbitals or Stable=Opt from this block.');
+    }
+    const issues = counterpoiseFragmentIssues({
+      settings,
+      molecule: { ...molecule, charge: molecule.charge ?? settings.charge },
+    });
+    if (issues.length > 0) throw new Error(issues.join(' '));
+  }
+
   const charge = finiteNumber(molecule.charge ?? settings.charge ?? 0, 'Charge', { min: -10, max: 10 });
   if (!Number.isInteger(charge)) throw new Error('Charge must be an integer.');
   const multiplicity = finiteNumber(
@@ -233,7 +328,13 @@ export function buildGaussianInput({
     const x = finiteNumber(atom.x, `Atom ${index + 1} x`);
     const y = finiteNumber(atom.y, `Atom ${index + 1} y`);
     const z = finiteNumber(atom.z, `Atom ${index + 1} z`);
-    return `${element.padEnd(2)} ${x.toFixed(6).padStart(12)} ${y.toFixed(6).padStart(12)} ${z.toFixed(6).padStart(12)}`;
+    // Counterpoise fragment membership is Gaussian's documented atom-label
+    // parameter: O(Fragment=1). It is written only when counterpoise is on;
+    // every other input keeps its byte-identical two-character element column.
+    const label = counterpoise > 0
+      ? `${element}(Fragment=${Number(atom.fragment)})`
+      : element.padEnd(2);
+    return `${label} ${x.toFixed(6).padStart(12)} ${y.toFixed(6).padStart(12)} ${z.toFixed(6).padStart(12)}`;
   });
 
   const checkpoint = oneLine(settings.checkpoint || inputName.replace(/\.(gjf|com)$/i, '.chk'));
@@ -267,7 +368,20 @@ export function buildGaussianInput({
   lines.push('');
   lines.push(oneLine(title, 'NodeChem Studio task'));
   lines.push('');
-  lines.push(`${charge} ${multiplicity}`);
+  const fragmentStates = counterpoise > 0 && Array.isArray(settings.counterpoiseChargeStates)
+    ? settings.counterpoiseChargeStates
+    : [];
+  if (fragmentStates.length > 0) {
+    // Gaussian's documented counterpoise charge line: whole system first, then
+    // one charge/spin pair per fragment in fragment-number order.
+    lines.push([
+      charge,
+      multiplicity,
+      ...fragmentStates.flatMap((state) => [Number(state.charge), Number(state.multiplicity)]),
+    ].join(' '));
+  } else {
+    lines.push(`${charge} ${multiplicity}`);
+  }
   lines.push(...coordinateLines);
   lines.push('');
   lines.push('');
