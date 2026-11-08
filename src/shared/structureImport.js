@@ -1,16 +1,20 @@
 /**
  * Structure import for NodeChem Studio.
  *
- * Reads Cartesian geometries from .xyz, .mol, .sdf, .gjf and .com. Pure module:
- * text in, validated molecule out. Z-matrices are refused with a specific
- * message rather than converted silently.
+ * Reads Cartesian geometries from .xyz, .mol, .sdf, .gjf, .com and the extra
+ * readers in `structureParsers.js`, and ChemDraw drawings from .cdxml. Pure
+ * module: text in, validated molecule out. Z-matrices are refused with a
+ * specific message rather than converted silently.
+ *
+ * A CDXML record is the exception to "geometry": it is a 2D drawing, so it
+ * carries `geometry.dimension = '2d'` and must never be treated as a conformer.
  *
  * Every imported structure is checked for: known element symbols, finite
  * coordinates, charge/multiplicity range, and electron-count parity.
  */
 
 import { atomicNumber, isElementSymbol } from './elements.js';
-import { logFrames, parseCjson, parseMol2, parsePdb, parsePdbModels } from './structureParsers.js';
+import { isCdxmlDocument, logFrames, parseCdxml, parseCjson, parseMol2, parsePdb, parsePdbModels } from './structureParsers.js';
 import { parseTrajectory } from './trajectory.js';
 
 export class StructureError extends Error {}
@@ -29,10 +33,11 @@ function integer(value) {
   return Number.isInteger(number) ? number : null;
 }
 
-const SUPPORTED_EXTENSIONS = Object.freeze(['xyz', 'mol', 'sdf', 'gjf', 'com']);
+const SUPPORTED_EXTENSIONS = Object.freeze(['xyz', 'mol', 'sdf', 'gjf', 'com', 'cdxml']);
 const EXTRA_EXTENSIONS = Object.freeze(['mol2', 'pdb', 'ent', 'pdbqt', 'cjson', 'log', 'out']);
 // Extensions we recognise only in order to refuse them with a reason (#59/#58).
-const REFUSED_EXTENSIONS = Object.freeze(['chk', 'fchk', 'smi', 'smiles', 'inchi', 'inchi1']);
+// `cdx` is refused by name too: it is ChemDraw's binary form (#120).
+const REFUSED_EXTENSIONS = Object.freeze(['chk', 'fchk', 'smi', 'smiles', 'inchi', 'inchi1', 'cdx']);
 
 function formatFor(filename, text) {
   const extension = String(filename).toLowerCase().split('.').pop();
@@ -42,6 +47,10 @@ function formatFor(filename, text) {
   // or a plain run log, and a MOL2 begins with `#` comment lines that used to
   // look like a .gjf route section.
   if (/@<TRIPOS>MOLECULE/i.test(text)) return 'mol2';
+  // A .cdxml may arrive under any name (or pasted), and the header is
+  // unambiguous, so content wins over the extension here too. A real .cdx is
+  // binary and is refused above, by extension, before anything is sniffed.
+  if (isCdxmlDocument(text)) return 'cdxml';
   if (/^\s*Standard orientation:/m.test(text) && /Gaussian|GINC|Entering Link 1/i.test(text)) return 'log';
   if (/^\{"molecule"|"conformer"\s*:\s*\{/m.test(text)) return 'cjson';
   if (/^(ATOM  |HETATM)/m.test(text)) {
@@ -54,7 +63,7 @@ function formatFor(filename, text) {
   return '';
 }
 
-function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, parity = 'error' }) {
+function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, parity = 'error', geometry = null }) {
   if (atoms.length === 0) throw new StructureError('The structure has no atoms.');
   if (atoms.length > MAX_ATOMS) throw new StructureError(`The structure has ${atoms.length} atoms; the limit is ${MAX_ATOMS}.`);
 
@@ -70,7 +79,8 @@ function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, 
       }
       return number;
     });
-    return { element, x: coords[0], y: coords[1], z: coords[2] };
+    const isotope = integer(atom.isotope);
+    return { element, x: coords[0], y: coords[1], z: coords[2], ...(isotope ? { isotope } : {}) };
   });
 
   // Bonds are 1-based in every file format here; they are validated against the
@@ -90,7 +100,18 @@ function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, 
     const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
     if (seenBonds.has(key)) continue;
     seenBonds.add(key);
-    finalBonds.push({ a: Math.min(a, b), b: Math.max(a, b), order: order === 1.5 || order === 2 || order === 3 ? order : 1 });
+    // A wedge/hash is a statement the file makes about the drawing, not a
+    // calculated stereocentre, so it is carried verbatim (CDXML, #120) rather
+    // than dropped — and never turned into an R/S label.
+    const stereo = raw?.stereo && typeof raw.stereo === 'object' && raw.stereo.kind
+      ? { kind: String(raw.stereo.kind), ...(integer(raw.stereo.narrowEnd) ? { narrowEnd: integer(raw.stereo.narrowEnd) } : {}) }
+      : null;
+    finalBonds.push({
+      a: Math.min(a, b),
+      b: Math.max(a, b),
+      order: order === 1.5 || order === 2 || order === 3 ? order : 1,
+      ...(stereo ? { stereo } : {}),
+    });
   }
 
   const finalCharge = integer(charge ?? 0);
@@ -135,6 +156,9 @@ function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, 
     charge: finalCharge,
     multiplicity: consistentMultiplicity,
     warnings,
+    // A CDXML record says what its coordinates are: a 2D drawing. Everything
+    // else here is a geometry a calculation may start from.
+    ...(geometry && typeof geometry === 'object' ? { geometry } : {}),
   };
 }
 
@@ -342,6 +366,23 @@ export function parseStructureRecords(text, { filename = '' } = {}) {
   const format = formatFor(filename, normalized);
   const lines = normalized.split(/\r\n|\n|\r/);
 
+  if (format === 'cdxml') {
+    // Every fragment is one record, so a salt or host–guest drawing imports as
+    // several structures. A fragment this reader cannot read is reported by
+    // name and does not hide the fragments it could read.
+    const entries = cdxmlEntries(normalized, filename);
+    const records = entries.map((entry) => {
+      if (entry.error) return entry;
+      try {
+        return finalize({ ...entry, format, parity: 'adjust' });
+      } catch (error) {
+        return { error: error.message };
+      }
+    });
+    if (records.length === 0) throw new StructureError('The CDXML contains no fragment to import.');
+    return { format, records };
+  }
+
   if (format === 'sdf' && normalized.includes('$$$$')) {
     const blocks = normalized.split('$$$$').map((block) => block.trim()).filter(Boolean);
     const records = [];
@@ -385,6 +426,15 @@ function baseName(filename) {
   return String(filename || '').split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
 }
 
+/** CDXML failures are structure-import failures, so callers see one error class. */
+function cdxmlEntries(text, filename) {
+  try {
+    return parseCdxml(text, { name: baseName(filename) });
+  } catch (error) {
+    throw new StructureError(error.message);
+  }
+}
+
 /**
  * Formats the reader does not implement yet. Naming the format and the tracking
  * issue is more useful than "Unrecognised structure format", which suggests the
@@ -408,6 +458,12 @@ function unsupportedFormatError(format, filename) {
   if (format === 'smi') {
     return new StructureError(`${filename || 'The file'} is a SMILES list, which carries no coordinates. `
       + 'Export the structures as .sdf or .mol2 and import that instead.');
+  }
+  if (format === 'cdx') {
+    return new StructureError(`${filename || 'This file'} is a ChemDraw .cdx document, a proprietary binary drawing format `
+      + 'this reader does not decode: it has no public specification and this project does not guess at one. '
+      + 'Open it in ChemDraw and save it as CDXML (.cdxml), the documented XML form, which imports here; '
+      + 'an SDF export also works.');
   }
   return null;
 }
@@ -445,12 +501,23 @@ function parseSingle(text, { filename = '' } = {}) {
   else if (format === 'mol2') parsed = parseMol2(normalized, { name: baseName(filename) });
   else if (format === 'pdb' || format === 'pdbqt') parsed = parsePdb(normalized, { name: baseName(filename), pdbqt: format === 'pdbqt' });
   else if (format === 'cjson') parsed = parseCjson(normalized, { name: baseName(filename) });
-  else if (format === 'log') {
+  else if (format === 'cdxml') {
+    const entries = cdxmlEntries(normalized, filename);
+    if (entries.length === 0) throw new StructureError('The CDXML contains no fragment to import.');
+    if (entries[0].error) throw new StructureError(entries[0].error);
+    parsed = entries[0];
+    if (entries.length > 1) {
+      parsed.warnings = [
+        ...(parsed.warnings ?? []),
+        `The drawing contains ${entries.length} fragments; fragment 1 is loaded. Use the record picker to choose another.`,
+      ];
+    }
+  } else if (format === 'log') {
     const frames = logFrames(parseTrajectory(normalized)?.steps ?? [], { name: baseName(filename) });
     if (frames.length === 0) throw new StructureError('This Gaussian log contains no Standard orientation block.');
     parsed = frames[frames.length - 1];
   } else if (unsupportedFormatError(format, filename)) throw unsupportedFormatError(format, filename);
-  else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com, .mol2, .pdb, .pdbqt, .cjson, .log.');
+  else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com, .mol2, .pdb, .pdbqt, .cjson, .cdxml, .log.');
 
   // Only .mol/.sdf/.gjf state charge or multiplicity, so only they are held to
   // the parity rule as an error.

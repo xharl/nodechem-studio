@@ -24,6 +24,7 @@ Select an input block and use **Import dataset file…** in the inspector. The f
 | `.xyz` | One frame: a count line, a comment line (the label), then the atom lines |
 | `.csv` | Rows grouped by `id`/`label` (one atom per row), or repeated `x1,y1,z1,…` columns (one record per row) |
 | `.json` | An array of records, or an object with a `records` array |
+| `.cdxml` | One `<fragment>` of a ChemDraw drawing; see [ChemDraw drawings](#chemdraw-drawings-cdxml) below |
 
 Every record needs coordinates. **A file with no geometry is refused**: this app does not invent a
 structure, embed a SMILES string or fill in a demo molecule. Bad records are skipped and named in
@@ -67,6 +68,44 @@ The CSV needs an `element` column (or `element1`, `element2`, … beside the coo
 When the file picker is unavailable, the same inspector has a **Paste records instead** field: paste
 the SDF, XYZ, CSV or JSON text, choose a format (or let it detect), and import. This is also what
 keeps the browser preview usable without the desktop bridge.
+
+### ChemDraw drawings (`.cdxml`)
+
+ChemDraw can save its drawing as CDXML, the XML form, and that is what this app reads. Every
+`<fragment>` becomes one record, so a salt, a host–guest pair or a scheme drawn on one page imports as
+several records instead of one merged molecule.
+
+| The file says | The import reads |
+| --- | --- |
+| `<n p="x y">` | one atom at `z = 0` |
+| a `<t>` label inside a node — `O`, `N`, `Cl`, `Na`, `N+`, `O-`, `NH4+` | that element and its formal charge |
+| an unlabelled node | carbon |
+| `<b B="…" E="…" Order="…">` | a bond; `Order="1.5"` stays aromatic |
+| `Display="WedgeBegin"`, `WedgeEnd`, `WedgedHashBegin`, `WedgedHashEnd` | the narrow end, recorded as a tetrahedral **drawing cue** |
+
+**It is a drawing, not a geometry.** Coordinates are the page units ChemDraw stores (y up), with `z`
+set to `0`; bond lengths are typographic, not physical, and only the drawn skeleton is present —
+hydrogens that the drawing leaves implicit are not added. The record therefore carries
+`geometry.dimension = "2d"` and a warning that says the same thing, so nothing downstream can mistake
+planar page coordinates for a conformer. No R/S is assigned: a wedge states which end is narrow, and
+that is all that is kept. The import never embeds, optimises or "cleans up" the drawing.
+
+Refused **by name**, with the reason in the message:
+
+- a node label that cannot be reduced to one element (`CO2H`, `SO3H`, a stray word) — it is never
+  quietly turned into carbon;
+- a bond `Order` other than 1, 2, 3 or 1.5, and a bond whose `B`/`E` names a node outside its own
+  fragment;
+- a fragment with no nodes or a node with no readable `p`; the other fragments in the file still
+  import, and the error names the fragment it belongs to.
+
+Arrows, curves, TLC plates and other non-molecule graphics are not chemistry and are skipped, but the
+first record's warnings name the element types that were ignored, so nothing disappears in silence. A
+text block drawn near a fragment is used as that record's label.
+
+`.cdx` — the proprietary binary ChemDraw document — is **not** read. The refusal names the format and
+asks for a CDXML save (or an SDF export): the binary layout has no public specification and this
+reader does not guess at one.
 
 ## Records in the inspector
 
