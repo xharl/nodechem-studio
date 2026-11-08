@@ -13,12 +13,45 @@ import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 
 const roots = [];
+const onWindows = process.platform === 'win32';
 
 const coords = [
   { element: 'O', x: 0, y: 0, z: 0 },
   { element: 'H', x: 0.96, y: 0, z: 0 },
   { element: 'H', x: -0.24, y: 0.93, z: 0 },
 ];
+
+/**
+ * A stand-in for CREST 3 (#100). It refuses to run unless argv names a file it
+ * can read from its own working directory, then writes the ensemble and the
+ * energies a search produces. The assertion is the point: a suite that only
+ * dry-runs never checks that CREST can open the file it was given.
+ */
+const FAKE_CREST = [
+  '#!/bin/sh',
+  'set -eu',
+  'if [ ! -f "$1" ]; then',
+  '  echo "fake crest: no input file at $PWD/$1" >&2',
+  '  exit 64',
+  'fi',
+  'echo "fake crest: read $1 from $PWD ($(sed -n 1p "$1") atoms)"',
+  "cat > crest_conformers.xyz <<'EOF'",
+  '3',
+  'conformer 1',
+  'O 0.000000 0.000000 0.000000',
+  'H 0.960000 0.000000 0.000000',
+  'H -0.240000 0.930000 0.000000',
+  '3',
+  'conformer 2',
+  'O 0.000000 0.000000 0.000000',
+  'H 0.960000 0.000000 1.200000',
+  'H -0.240000 0.930000 1.200000',
+  'EOF',
+  "cat > crest.energies <<'EOF'",
+  '1 -76.40000000',
+  '2 -76.39500000',
+  'EOF',
+].join('\n');
 
 /** A conformer block feeding one optimisation, through a dependency edge. */
 function conformerProject({ output = null, settings = {}, edgeType = 'dependency' } = {}) {
@@ -388,5 +421,40 @@ describe('conformer queue path', () => {
       edges: [],
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     })).rejects.toThrow(/CREST executable/i);
+  });
+
+  it.skipIf(onWindows)('spawns CREST in the folder where its input was staged (#100)', async () => {
+    // Keep both stub frames: this test is about where CREST ran, not pruning.
+    const project = conformerProject({ output: selection(), settings: { rmsdThreshold: 0.05 } });
+    const plan = buildWorkflowPlan(project);
+    const { base, queueManager } = await stack();
+    const crestPath = path.join(base, 'fake-crest.sh');
+    await fsp.writeFile(crestPath, FAKE_CREST, { encoding: 'utf8', mode: 0o755 });
+
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      edges: [],
+      options: { dryRun: false, executable: null, crestExecutable: crestPath, scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const list = await queueManager.list();
+      const queue = list.find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+
+    const conformers = done.tasks.find((task) => task.nodeId === 'conf');
+    expect(conformers.error).toBeNull();
+    expect(conformers.status).toBe('completed');
+    expect(conformers.ensemble.total).toBe(2);
+    expect(conformers.ensemble.spreadKcal).toBeCloseTo(0.005 * 627.5094740631, 2);
+
+    // The stub could only print this after opening the staged file from its cwd.
+    const log = await fsp.readFile(path.join(conformers.runDir, 'crest.out'), 'utf8');
+    expect(log).toMatch(/fake crest: read ensemble\.xyz from /);
+    expect(log).toMatch(/\(3 atoms\)/);
+    // CREST's artifacts landed beside the input, in the folder it ran in.
+    await fsp.access(path.join(conformers.runDir, 'crest_conformers.xyz'));
+    await fsp.access(path.join(conformers.runDir, 'crest.energies'));
   });
 });
