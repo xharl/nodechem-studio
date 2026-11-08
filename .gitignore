@@ -20,3 +20,12 @@ node_modules
 
 # Dry-run output written by `ncs run` in the working directory
 ncs-runs/
+
+# Python client bytecode (clients/python)
+__pycache__/
+*.pyc
+
+# The Python client's fixture folder is named `runs/`, like app output. Keep the
+# committed fixture even though the line above ignores run folders generally.
+!clients/python/tests/fixtures/runs/
+!clients/python/tests/fixtures/runs/**
