@@ -235,7 +235,23 @@ A `Scan` block gets the located extremum. A one-dimensional scan is fitted with 
 
 The queue then writes `reactions.<ircNodeId>` = `ΔG‡ = G(TS) − G(reactant)` in kcal/mol with the scheme named in the string, and the workflow report prints it next to the number. Undeclared or missing free energies produce a reason, never a number.
 
-**pKa** is computed from an isodesmic cycle with the constant already defined for the thermochemistry module (1.364 kcal mol⁻¹ per pKa unit at 298.15 K). The helper requires the deprotonation free energy, the reference free energy, the reference pKa and the solvent; missing any of them returns `available: false` with the list of what is missing, because a pKa without its solvent and reference is a free-energy difference with a decimal point moved.
+**Rates.** When the queue has a ΔG‡ for the path, the reaction card reports `k` at the run temperature with its unit: `s⁻¹` for a unimolecular reaction, `M⁻¹s⁻¹` for a bimolecular one. The molecularity is the reactant block's fragment count — the declared fragment strings, or the per-atom fragment labels when those are absent — and it is never assumed. A reactant block that declares neither gets `k = not reported` with the reason, because a rate without a unit is not a rate. Beside the number the card prints:
+
+- the small temperature table: 298.15 K and the run temperature, deduplicated, or an explicit list when one is supplied (a ΔG‡ computed at one temperature is reused at the others, which assumes ΔH‡ and ΔS‡ are constant over the range — the caption says so);
+- the Arrhenius fit (`Ea`, `ln A`, `R²`) when the table has at least three points over at least 10 K, refused otherwise with the count or the range that blocked it;
+- the Eyring expression, the transmission coefficient (1) and the free-energy block ΔG‡ came from, plus whether ZPE and thermal corrections are included;
+- `not reported` for a null rate — never zero.
+
+A barrier taken from a ΔE rather than a ΔG is labelled **electronic-energy estimate** and is never presented as a transition-state-theory rate.
+
+**Scan barrier.** A scan card reports the located extremum as a **scan barrier**, with the grid step as its resolution (`± <step> <coordinate> grid`). It says plainly that this is not a transition-state barrier: a scan surface has a grid extremum, not a saddle point, it carries no ΔG‡, and no rate is derived from it.
+
+**pKa and E° cycles.** `src/shared/pka.js` implements the two practical cycles:
+
+- **pKa** from an isodesmic cycle: `pKa = pKa(reference) + [ΔG(sample) − ΔG(reference)] / 1.364 kcal mol⁻¹`. The cycle needs the acid, its conjugate base, a reference acid/base pair and the solvent; the card names the conversion (1.364 kcal mol⁻¹ per pKa unit = 2.303 RT at 298.15 K) and prints the reference with its citation. Reference acids ship in `src/data/pkaReferences.json`, each with its pKa, solvent, temperature, ionic strength and source.
+- **E°** from `E°(sample) = E°(reference) + [ΔG(reference) − ΔG(sample)] / (nF)`, with `n` derived from the charge on each side (or given explicitly), `F = 23.0605 kcal mol⁻¹ V⁻¹`, and the reference couple taken from `src/data/redoxReferences.json`. Both couples need computed free energies at the same level of theory; the library supplies the measured offset that anchors them to SHE, and the card states that offset. An absolute potential is never computed from a single free energy.
+
+Missing reference, missing solvent, a solvent mismatch, or a species without a frequency job gives `not reported` with the missing block named — never a pKa or an E° from an electronic energy alone.
 
 ## NMR shieldings
 
@@ -312,9 +328,10 @@ An IRC table prints energies *relative to the transition state*; the card recove
 energy from the header line Gaussian prints above the table and shows both. A job with neither
 block gets no card, and the app never fills the gap with a straight line.
 
-The barrier shown is a potential-energy difference on the computed points. It is **not** ΔG‡, it
-carries no thermochemical correction, and no rate constant is derived from it. For a ΔG‡ you need a
-frequency job at the saddle point and at each minimum; that work is tracked in the issue tracker.
+The barrier shown for the path itself is a potential-energy difference on the computed points. It is
+**not** ΔG‡, it carries no thermochemical correction, and no rate constant is derived from it. A rate
+comes only from the queue's ΔG‡ verdict for the same path (see **Rates** above), which needs a
+frequency job at the saddle point and at the reactant; a scan has no such verdict.
 
 ## Structure viewer
 

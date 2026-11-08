@@ -255,6 +255,9 @@ export function eyringRate({ deltaGkcal, temperatureKelvin = 298.15 }) {
   const h = 6.62607015e-34;
   const R = 8.314462618;
   const T = Number(temperatureKelvin);
+  // `Number(null)` is 0, so a missing barrier must be rejected before coercion:
+  // a null ΔG‡ is not a barrierless reaction.
+  if (deltaGkcal === null || deltaGkcal === undefined) return null;
   const dG = Number(deltaGkcal);
   if (!Number.isFinite(T) || T <= 0 || !Number.isFinite(dG)) return null;
   const prefactor = (kB * T) / h;

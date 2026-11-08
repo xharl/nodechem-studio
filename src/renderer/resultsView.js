@@ -19,6 +19,8 @@ import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 import { ircGate, pathBarrier, profileSvg, profilePoints, scanExtremum, scanSurfaceSvg } from '../shared/reactionPath.js';
+import { buildKinetics, kineticsSummaryLine } from '../shared/kinetics.js';
+import { pkaCycle, pkaCycleLine, redoxCycle, redoxCycleLine } from '../shared/pka.js';
 import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
 import { mountSuperposition } from './superpositionCard.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
@@ -749,9 +751,15 @@ function spectrumFigure(states) {
 /**
  * Reaction path (IRC) or potential-energy scan. The barrier printed here is a
  * potential-energy difference on the computed points, not ΔG‡, and the caption
- * says so; a rate is never derived from it.
+ * says so; a rate is only derived when the queue supplies a ΔG‡ verdict for
+ * this path — never from the potential-energy barrier.
+ *
+ * `options.reaction` is the queue's verdict for this run (`kcalPerMol`,
+ * `temperatureK`, `available`), and `options.molecularity` the reactant block's
+ * fragment count. Without them the card says k is not reported and names what
+ * is missing rather than guessing a unit.
  */
-function reactionPathCard(runRecord, parsed, flags) {
+function reactionPathCard(runRecord, parsed, flags, options = {}) {
   const record = parsed?.reactionPath || parsed?.scan;
   if (!record || !Array.isArray(record.points) || record.points.length === 0) return '';
   const method = runRecord?.provenance?.method || null;
@@ -773,6 +781,7 @@ function reactionPathCard(runRecord, parsed, flags) {
   const barrier = pathBarrier(record, { levelOfTheory: level || null, thermochemicalTreatment: treatment });
   const parameter = Array.isArray(record.parameterNames) && record.parameterNames.length
     ? record.parameterNames[0] : null;
+  const extremum = irc ? null : scanExtremum(record);
   const rows = points.slice(0, 25).map((point) => '<tr>'
     + `<td>${esc(point.point)}</td>`
     + `<td class="is-left">${esc(irc
@@ -794,7 +803,6 @@ function reactionPathCard(runRecord, parsed, flags) {
           + `${gate.checks.map((check) => `${esc(check.id)}: ${esc(check.status)}`).join(' · ')}</p>`;
       })()
       : (() => {
-        const extremum = scanExtremum(record);
         if (!extremum) return '';
         return `<p class="results-note" data-field="scan-extremum">Extremum: <strong>${esc(extremum.relativeKcal.toFixed(2))} kcal mol⁻¹</strong>`
           + `${extremum.interpolated
@@ -802,11 +810,20 @@ function reactionPathCard(runRecord, parsed, flags) {
             : ` at node ${esc(extremum.point)}`}`
           + `${extremum.interpolated ? '' : ` — ${esc(extremum.note)}`}</p>`;
       })())
-    + (barrier
-      ? `<p class="results-note" data-field="barrier">Highest point: <strong>${esc(barrier.maxKcal.toFixed(2))} kcal mol⁻¹</strong>`
-        + ` at point ${esc(barrier.point)}${Number.isFinite(barrier.rxCoord) ? ` (RxCoord ${esc(barrier.rxCoord.toFixed(5))})` : ''}.`
-        + ` ${levelText} This is a potential-energy difference on the computed points — not ΔG‡, no thermochemical correction is applied, and no rate constant is derived from it.</p>`
-      : '')
+    + (extremum
+      ? '<p class="results-note" data-field="barrier">Scan barrier: '
+        + `<strong>${esc((Number.isFinite(extremum.vertexKcal) ? extremum.vertexKcal : extremum.relativeKcal).toFixed(2))} kcal mol⁻¹</strong>`
+        + `${extremum.interpolated
+          ? ` at ${esc(extremum.coordinate || 'coordinate')} = ${esc(extremum.vertexX.toFixed(4))}`
+          : ` at grid node ${esc(extremum.point)}`}`
+        + `${scanStepText(extremum)}. This is a barrier from the scan extremum, not a transition-state barrier: a scan surface has an extremum on a grid, not a saddle point, and it carries no ΔG‡. `
+        + `± the grid step is the resolution of the scan. ${levelText}</p>`
+      : (barrier
+        ? `<p class="results-note" data-field="barrier">Highest point: <strong>${esc(barrier.maxKcal.toFixed(2))} kcal mol⁻¹</strong>`
+          + ` at point ${esc(barrier.point)}${Number.isFinite(barrier.rxCoord) ? ` (RxCoord ${esc(barrier.rxCoord.toFixed(5))})` : ''}.`
+          + ` ${levelText} This is a potential-energy difference on the computed points — not ΔG‡, no thermochemical correction is applied, and no rate constant is derived from it.</p>`
+        : ''))
+    + (irc ? kineticsBlockHtml(options, flags) : '')
     + (record.kind === 'relaxed' || record.kind === 'unrelaxed' ? (scanSurfaceSvg(record) || profileSvg(record)) : profileSvg(record))
     + '<table class="results-table" data-field="reaction-path">'
     + `<thead><tr><th>#</th><th class="is-left">${irc ? 'RxCoord' : esc(parameter || 'coordinate')}</th><th>ΔE / kcal mol⁻¹</th><th>E / Eh</th></tr></thead>`
@@ -814,6 +831,118 @@ function reactionPathCard(runRecord, parsed, flags) {
     + (points.length > 25 ? `<p class="results-missing">Showing the first 25 of ${esc(points.length)} points.</p>` : '')
     + caveatHtml(flags, 'These path energies');
   return card(irc ? 'Reaction path' : 'Potential-energy scan', body, 'is-wide');
+}
+
+/** The scan step, when the fitted extremum carries its neighbours. */
+function scanStepText(extremum) {
+  if (!Array.isArray(extremum.neighbours) || extremum.neighbours.length < 3) return '';
+  const step = Math.abs(extremum.neighbours[1].x - extremum.neighbours[0].x);
+  if (!Number.isFinite(step) || step === 0) return '';
+  return ` (± ${esc(step.toPrecision(3))} ${esc(extremum.coordinate || 'coordinate')} grid)`;
+}
+
+/**
+ * Eyring kinetics for the reaction this path belongs to.
+ *
+ * The queue's verdict supplies ΔG‡ and its temperature; the reactant block's
+ * fragment count supplies the unit. A missing number is printed as
+ * `not reported` with the reason, never as zero.
+ */
+function kineticsBlockHtml(options, flags) {
+  const reaction = isObject(options.reaction) ? options.reaction : null;
+  if (!reaction) {
+    return '<p class="results-note" data-field="kinetics">k = <strong>not reported</strong> — this run record carries no ΔG‡ for the reaction, '
+      + 'so no rate constant is computed. The queue verdict for this path names the transition-state and reactant blocks; without both free energies there is no barrier to convert.</p>';
+  }
+  const molecularity = Number.isFinite(options.molecularity)
+    ? { value: options.molecularity, basis: text(options.molecularityBasis) || 'the reactant block' }
+    : null;
+  const report = buildKinetics({
+    deltaGkcal: Number.isFinite(reaction.kcalPerMol) ? reaction.kcalPerMol : null,
+    deltaGLabel: 'G(TS) − G(reactant)',
+    freeEnergyKey: reaction.available ? 'Sum of electronic and thermal Free Energies' : null,
+    zpeIncluded: reaction.available === true,
+    thermalIncluded: reaction.available === true,
+    temperatureK: Number.isFinite(reaction.temperatureK) ? reaction.temperatureK : null,
+    molecularity,
+    refusalReason: text(reaction.reason),
+  });
+  const table = report.available
+    ? '<table class="results-table" data-field="kinetics-temperature-table">'
+      + '<thead><tr><th>T / K</th><th>k / ' + esc(report.units) + '</th><th>t½</th></tr></thead><tbody>'
+      + report.table.map((row) => '<tr>'
+        + `<td>${esc(row.temperatureK.toFixed(2))}</td>`
+        + `<td>${esc(row.kText)}</td>`
+        + `<td>${esc(row.halfLifeText)}</td>`
+        + '</tr>').join('')
+      + '</tbody></table>'
+    : '';
+  const fit = report.available && report.fit?.available
+    ? `<p class="results-note" data-field="kinetics-fit">Arrhenius fit from the table: Ea = ${esc(report.fit.eaKcalPerMol.toFixed(2))} kcal mol⁻¹, `
+      + `ln A = ${esc(report.fit.lnA.toFixed(3))}, R² = ${esc(report.fit.rSquared === null ? MISSING_TEXT : report.fit.rSquared.toFixed(5))}. `
+      + `${esc(report.fit.scheme)}</p>`
+    : report.available
+      ? `<p class="results-note" data-field="kinetics-fit">Arrhenius fit: ${esc(report.fit?.reason || MISSING_TEXT)}</p>`
+      : '';
+  const provenance = report.available
+    ? `<p class="results-note" data-field="kinetics-provenance">ΔG‡ from ${esc(report.deltaG.label)}`
+      + `${report.deltaG.freeEnergyKey ? ` (${esc(report.deltaG.freeEnergyKey)})` : ''}; `
+      + `${esc(report.provenance.corrections.statement)} `
+      + `${esc(report.provenance.temperature.statement)} `
+      + `Molecularity ${esc(String(report.molecularity))} from ${esc(report.provenance.molecularity.basis || 'the reactant block')}.</p>`
+    : '';
+  return '<div data-field="kinetics">'
+    + `<p class="results-note results-kinetics-line" data-field="kinetics-line">${esc(kineticsSummaryLine(report))}</p>`
+    + table
+    + fit
+    + provenance
+    + (report.available ? `<p class="results-note">Assumptions: ${esc(report.assumptions.join(' '))}</p>` : '')
+    + (report.warnings.length ? `<p class="results-note is-warn">${esc(report.warnings.join(' '))}</p>` : '')
+    + caveatHtml(flags, 'This rate constant')
+    + '</div>';
+}
+
+/**
+ * pKa and redox cycles.
+ *
+ * A cycle is a group of blocks whose free energies are subtracted, so it is
+ * carried on the parsed output as `cycles[]` (see `docs/guide/results.md`).
+ * Every number is rendered with the reference and citation it was anchored to,
+ * and an incomplete cycle prints `not reported` with the missing block named.
+ */
+function solutionEnergeticsCard(record, parsed, flags) {
+  const cycles = Array.isArray(parsed?.cycles) ? parsed.cycles
+    : Array.isArray(record?.cycles) ? record.cycles : [];
+  if (cycles.length === 0) return '';
+  const blocks = cycles.map((cycle) => {
+    if (cycle?.kind === 'pka') {
+      const result = pkaCycle(cycle);
+      const line = pkaCycleLine(result);
+      return '<div data-field="pka-cycle">'
+        + `<p class="results-note" data-field="pka-line">${esc(line)}</p>`
+        + '<p class="results-note" data-field="pka-unit">Conversion: '
+        + `${esc(result.unit.name)} (${esc(result.unit.meaning)}). `
+        + 'A pKa is only defined in a solvent against a reference acid; both are printed above.</p>'
+        + (result.available
+          ? `<p class="results-note">ΔG_deprot = ${esc(result.deltaGDeprotonationKcal.toFixed(2))} kcal mol⁻¹; `
+            + `ΔG(reference) = ${esc(result.deltaGReferenceKcal.toFixed(2))} kcal mol⁻¹. ${esc(result.scheme)}</p>`
+          : '')
+        + '</div>';
+    }
+    if (cycle?.kind === 'redox') {
+      const result = redoxCycle(cycle);
+      return '<div data-field="redox-cycle">'
+        + `<p class="results-note" data-field="redox-line">${esc(redoxCycleLine(result))}</p>`
+        + '<p class="results-note" data-field="redox-scheme">'
+        + `${esc(result.scheme)}; F = ${esc(result.faraday.value.toFixed(4))} kcal mol⁻¹ V⁻¹, `
+        + `SHE offset ${esc(result.sheOffsetV === null ? MISSING_TEXT : `${result.sheOffsetV.toFixed(3)} V`)}. `
+        + 'E° is reported against SHE by adding the reference couple\'s offset; the electron convention cancels in the cycle.</p>'
+        + '</div>';
+    }
+    return '';
+  }).join('');
+  if (!blocks) return '';
+  return card('Solution energetics', blocks + caveatHtml(flags, 'These cycle results'), 'is-wide');
 }
 
 /**
@@ -1139,7 +1268,7 @@ function trajectoryCard(parsed, flags) {
  * Render one run record. Missing sections are omitted or marked
  * "not reported"; nothing is derived from a field the record does not carry.
  */
-export function resultsPanelHtml(record) {
+export function resultsPanelHtml(record, options = {}) {
   if (!isObject(record)) return emptyStateHtml();
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
@@ -1178,7 +1307,8 @@ export function resultsPanelHtml(record) {
     frequenciesCard(parsed, flags),
     excitedStatesCard(parsed, flags, record),
     orbitalsCard(parsed, flags),
-    reactionPathCard(record, parsed, flags),
+    reactionPathCard(record, parsed, flags, options),
+    solutionEnergeticsCard(record, parsed, flags),
     trajectoryCard(parsed, flags),
     nmrCard(parsed, flags),
     ramanCard(parsed, flags),
@@ -1243,6 +1373,30 @@ export function installResultsView({
   let currentRecord = null;
   installStyles(doc);
 
+  // The queue that produced the run is kept so a reaction path can be rendered
+  // with the ΔG‡ verdict the queue computed for it. The card still refuses to
+  // print k when a run has no verdict or no declared molecularity; this only
+  // supplies what the queue already knows.
+  let queueReactions = {};
+  let queueTasksByRunId = new Map();
+  const rememberQueue = (queue) => {
+    if (!queue || typeof queue !== 'object') return;
+    queueReactions = queue.reactions && typeof queue.reactions === 'object' ? queue.reactions : {};
+    queueTasksByRunId = new Map((Array.isArray(queue.tasks) ? queue.tasks : [])
+      .filter((task) => task?.runId)
+      .map((task) => [String(task.runId), task]));
+  };
+  const reactionOptions = (record) => {
+    const task = queueTasksByRunId.get(String(record?.id ?? ''));
+    const reaction = task ? queueReactions[task.nodeId] : null;
+    if (!reaction) return {};
+    return {
+      reaction,
+      molecularity: Number.isFinite(task?.molecularity) ? task.molecularity : null,
+      molecularityBasis: task?.molecularityBasis || null,
+    };
+  };
+
   const show = (record) => {
     if (!isObject(record)) {
       currentRecord = null;
@@ -1252,7 +1406,7 @@ export function installResultsView({
       return;
     }
     currentRecord = record;
-    container.innerHTML = resultsPanelHtml(record);
+    container.innerHTML = resultsPanelHtml(record, reactionOptions(record));
     container.hidden = false;
     consoleEl?.classList.add('has-results');
     mountCompareBar(record);
@@ -1525,6 +1679,13 @@ export function installResultsView({
     if (event.type === 'started' && !isQueueRunning(doc)) show(null);
   });
 
+  // Queue snapshots carry the reaction verdicts. A later snapshot re-renders a
+  // reaction path that was shown before its ΔG‡ was available.
+  desktop?.onQueueEvent?.((event) => {
+    rememberQueue(event?.queue);
+    if (currentRecord && Object.keys(reactionOptions(currentRecord)).length > 0) show(currentRecord);
+  });
+
   return {
     show,
     get record() {
@@ -1624,6 +1785,8 @@ const RESULTS_VIEW_CSS = `
 .results-chip.is-status-needs-review, .results-chip.is-status-running,
 .results-chip.is-status-unknown, .results-gate.is-unknown { color: var(--kind-condition); border-color: color-mix(in srgb, var(--kind-condition) 40%, var(--border-subtle)); }
 .results-note { margin: 6px 0 0; color: var(--text-tertiary); font-size: var(--text-size-xs); line-height: 1.45; }
+.results-note.is-warn { color: var(--state-review); }
+.results-kinetics-line { font-family: var(--font-mono); color: var(--text-primary); }
 .results-big { margin: 2px 0 0; font: var(--text-size-lg)/1.35 var(--font-mono); color: var(--text-primary); }
 .results-modes { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; }
 .results-mode { font: var(--text-size-xs)/1.35 var(--font-mono); color: var(--text-primary); }
