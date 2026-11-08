@@ -573,8 +573,45 @@ export class QueueManager {
           : null,
       });
       queue.reactions = queue.reactions || {};
+      // Where the path ends, checked against the block declared as the reactant.
+      // An IRC summary cannot show that an endpoint is a minimum, but it can show
+      // whether the endpoint sits at the energy of the block that is supposed to
+      // be there — and that is the part a gate can decide.
+      const endpoints = task.parsedSummary?.irc || null;
+      let endpointCheck = {
+        status: 'unknown',
+        detail: 'This output carries no IRC path with two endpoints.',
+      };
+      if (endpoints && reactantTask) {
+        const reactantEnergy = reactantTask.parsedSummary?.energyHartree ?? null;
+        const candidates = [
+          { end: 'first', energy: endpoints.firstEnergyHartree },
+          { end: 'last', energy: endpoints.lastEnergyHartree },
+        ].filter((entry) => Number.isFinite(entry.energy) && Number.isFinite(reactantEnergy));
+        if (candidates.length === 0) {
+          endpointCheck = { status: 'unknown', detail: 'The path or the reactant block has no final energy to compare.' };
+        } else {
+          const best = candidates
+            .map((entry) => ({ ...entry, deltaKcal: Math.abs(entry.energy - reactantEnergy) * 627.5094740631 }))
+            .sort((a, b) => a.deltaKcal - b.deltaKcal)[0];
+          endpointCheck = {
+            status: best.deltaKcal <= 2 ? 'pass' : 'fail',
+            end: best.end,
+            deltaKcal: best.deltaKcal,
+            toleranceKcal: 2,
+            detail: `The ${best.end} end of the path is ${best.deltaKcal.toFixed(2)} kcal/mol from the declared reactant `
+              + `(tolerance ${2} kcal/mol).`,
+          };
+        }
+      } else if (!reactantTask) {
+        endpointCheck = {
+          status: 'unknown',
+          detail: 'No reactant block is declared, so the path ends were not checked against one.',
+        };
+      }
       queue.reactions[task.nodeId] = {
         ...verdict,
+        endpointCheck,
         transitionStateNodeId: task.reaction.transitionStateNodeId,
         reactantNodeId: task.reaction.reactantNodeId,
         evaluatedAt: new Date().toISOString(),
@@ -744,6 +781,15 @@ export class QueueManager {
         spinSquaredSource: record.parsed.spinSquared?.source || null,
         freeEnergyHartree: Number.isFinite(record.parsed.thermochemistry?.freeEnergyHartree)
           ? record.parsed.thermochemistry.freeEnergyHartree : null,
+        // The ends of an IRC path, so a reaction check can compare them with the
+        // blocks that are supposed to be the reactant and the product.
+        irc: Array.isArray(record.parsed.reactionPath?.points) && record.parsed.reactionPath.points.length > 1
+          ? {
+            firstEnergyHartree: record.parsed.reactionPath.points[0].energyHartree ?? null,
+            lastEnergyHartree: record.parsed.reactionPath.points[record.parsed.reactionPath.points.length - 1].energyHartree ?? null,
+            points: record.parsed.reactionPath.points.length,
+          }
+          : null,
       } : null;
       task.status = record.status === 'completed' ? 'completed'
         : record.status === 'needs-review' ? 'needs-review'

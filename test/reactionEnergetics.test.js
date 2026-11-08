@@ -185,6 +185,47 @@ describe('the queue and the report', () => {
     expect(queue.reactions.irc.reason).toMatch(/reactant has none/);
   });
 
+  it('checks the path ends against the declared reactant', async () => {
+    const queue = {
+      id: 'q',
+      reactions: {},
+      tasks: [
+        { nodeId: 'ts', status: 'completed', parsedSummary: { freeEnergyHartree: -100 } },
+        { nodeId: 'r', status: 'completed', parsedSummary: { energyHartree: -100.02, freeEnergyHartree: -100.02 } },
+        {
+          nodeId: 'irc',
+          status: 'completed',
+          reaction: { transitionStateNodeId: 'ts', reactantNodeId: 'r' },
+          parsedSummary: { irc: { firstEnergyHartree: -100.0201, lastEnergyHartree: -99.9, points: 19 } },
+        },
+      ],
+    };
+    await manager().evaluateReactions(queue);
+    expect(queue.reactions.irc.endpointCheck.status).toBe('pass');
+    expect(queue.reactions.irc.endpointCheck.end).toBe('first');
+    expect(queue.reactions.irc.endpointCheck.deltaKcal).toBeLessThan(1);
+  });
+
+  it('fails the endpoint check when neither end is near the declared reactant', async () => {
+    const queue = {
+      id: 'q',
+      reactions: {},
+      tasks: [
+        { nodeId: 'ts', status: 'completed', parsedSummary: { freeEnergyHartree: -100 } },
+        { nodeId: 'r', status: 'completed', parsedSummary: { energyHartree: -99.5, freeEnergyHartree: -99.5 } },
+        {
+          nodeId: 'irc',
+          status: 'completed',
+          reaction: { transitionStateNodeId: 'ts', reactantNodeId: 'r' },
+          parsedSummary: { irc: { firstEnergyHartree: -100.0201, lastEnergyHartree: -100.0, points: 19 } },
+        },
+      ],
+    };
+    await manager().evaluateReactions(queue);
+    expect(queue.reactions.irc.endpointCheck.status).toBe('fail');
+    expect(queue.reactions.irc.endpointCheck.detail).toMatch(/kcal\/mol from the declared reactant/);
+  });
+
   it('renders the ΔG‡ block with its scheme', () => {
     const model = buildWorkflowReport({
       id: 'q-react',

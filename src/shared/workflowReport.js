@@ -159,6 +159,14 @@ export function buildWorkflowReport(queue, records = {}, { generatedAt = null, a
         transitionStateNodeId: text(reaction?.transitionStateNodeId),
         reactantNodeId: text(reaction?.reactantNodeId),
         temperatureK: Number.isFinite(reaction?.temperatureK) ? reaction.temperatureK : null,
+        endpointCheck: reaction?.endpointCheck
+          ? {
+            status: ['pass', 'fail', 'unknown'].includes(reaction.endpointCheck.status) ? reaction.endpointCheck.status : 'unknown',
+            detail: text(reaction.endpointCheck.detail),
+            end: text(reaction.endpointCheck.end) || null,
+            deltaKcal: Number.isFinite(reaction.endpointCheck.deltaKcal) ? reaction.endpointCheck.deltaKcal : null,
+          }
+          : null,
       })),
     fixtures: rows.filter((row) => row.dryRun).length,
   };
@@ -282,6 +290,9 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
         + `${escapeHtml(reaction.scheme || '')} `
         + `(TS block ${escapeHtml(reaction.transitionStateNodeId || MISSING)}, reactant block ${escapeHtml(reaction.reactantNodeId || MISSING)}.)</p>`
       : `<p class="warn">ΔG‡ not computed: ${escapeHtml(reaction.reason || 'the reaction path has no declared reactant block.')}</p>`)
+    + (reaction.endpointCheck
+      ? `<p class="warn">Path endpoints: <strong>${escapeHtml(reaction.endpointCheck.status)}</strong> — ${escapeHtml(reaction.endpointCheck.detail || '')}</p>`
+      : '')
   )).join('');
 
   const fixtureNote = model.fixtures > 0
