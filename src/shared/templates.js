@@ -105,11 +105,18 @@ function noteNode(id, title, x, y, text) {
 
 function projectObject(name, nodes, edges) {
   const clean = oneLine(name, 200) || UNTITLED_FALLBACK;
+  // Schema v2 (RFC 0001): the graph lives in a flow. `nodes`/`edges` are the
+  // in-memory aliases the renderer reads; the file view drops them.
   return {
     schemaVersion: SCHEMA_VERSION,
     name: clean,
     molecule: defaultMolecule(),
     defaults: projectDefaults(),
+    runner: { maxParallel: 1 },
+    datasets: [],
+    flows: [{ id: 'main', title: 'Workflow', nodes, edges }],
+    reports: [],
+    activeFlowId: 'main',
     nodes,
     edges,
   };

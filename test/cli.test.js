@@ -161,8 +161,9 @@ describe('ncs diff and ncs merge', () => {
     const result = await ncs(['merge', files.base, files.ours, files.theirs, '--out', out]);
     expect(result.code).toBe(0);
     const merged = JSON.parse(await readFile(out, 'utf8'));
-    expect(merged.nodes[0].title).toBe('Renamed by us');
-    expect(merged.nodes.some((node) => node.settings?.method === 'M06-2X')).toBe(true);
+    // Schema v2 writes `flows[]`; the top-level nodes array is an in-memory alias.
+    expect(merged.flows[0].nodes[0].title).toBe('Renamed by us');
+    expect(merged.flows[0].nodes.some((node) => node.settings?.method === 'M06-2X')).toBe(true);
     expect(validateProject(merged).ok).toBe(true);
   });
 
