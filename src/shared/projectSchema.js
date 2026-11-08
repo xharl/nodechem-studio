@@ -19,7 +19,7 @@ export const SCHEMA_VERSION = 1;
 import { isElementSymbol } from './elements.js';
 import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
 import { ENGINE_IDS } from './engines/index.js';
-import { XTB_METHODS, XTB_OPT_LEVELS } from './engines/xtb.js';
+import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import {
   CONFORMER_GENERATORS,
   CONFORMER_METHODS,
@@ -309,6 +309,37 @@ function readEnum(c, value, allowed, path, { legacy = false, fallback = '', requ
     return fallback;
   }
   return value;
+}
+
+/**
+ * Issue #102: the solvation allow-list belongs to the engine. Gaussian and ORCA
+ * projects keep the historical `PCM`/`SMD`/`CPCM` list; an xTB block accepts the
+ * models `buildXtbInput()` can actually emit, `ALPB` and `GBSA`.
+ *
+ * A Gaussian model on an xTB block is tolerated only while `solvation` is off.
+ * Every block created by `defaultSettings()` carries `solvationModel: 'PCM'`, and
+ * the renderer only rewrites it when solvation is switched on, so a stored `PCM`
+ * on a solvation-off xTB block is an inert placeholder, not a request. Keeping
+ * it readable is what lets projects saved before this fix open at all; asking
+ * for solvation then requires naming a model xTB implements.
+ */
+function readSolvationModel(c, value, path, { engine = 'gaussian', solvation = false, legacy = false } = {}) {
+  if (engine !== 'xtb') {
+    return readEnum(c, value, SOLVATION_MODELS, path, { legacy, fallback: 'PCM' });
+  }
+  // Absent means "not chosen"; the xTB builder already defaults that to ALPB.
+  if (value === undefined || value === null) return XTB_SOLVATION_MODELS[0];
+  // Empty is the inspector's "choose a model" state, and solvation-off blocks
+  // save it unchanged.
+  if (value === '') return '';
+  if (XTB_SOLVATION_MODELS.includes(value)) return value;
+  if (!solvation && SOLVATION_MODELS.includes(value)) return value;
+  const label = SOLVATION_MODELS.includes(value)
+    ? 'is a Gaussian-only solvation model'
+    : 'is not an xTB solvation model';
+  c.error(path,
+    `"${oneLine(value)}" ${label} and cannot be used on an xTB block; xTB accepts ${XTB_SOLVATION_MODELS.join(' or ')}.`);
+  return XTB_SOLVATION_MODELS[0];
 }
 
 function readInteger(c, value, path, { legacy = false, fallback = 0, min = -Infinity, max = Infinity } = {}) {
@@ -685,6 +716,17 @@ function normalizeDefaults(c, raw, legacy) {
 }
 
 /**
+ * The project-wide engine as seen by node validation, before `defaults` itself
+ * is normalized. It only selects the engine-specific solvation allow-list
+ * (#102); an absent or invalid value behaves as Gaussian here and is reported
+ * by `normalizeDefaults` where the error belongs.
+ */
+function projectEngineOf(rawDefaults) {
+  const engine = isPlainObject(rawDefaults) ? rawDefaults.engine : undefined;
+  return ENGINE_IDS.includes(engine) ? engine : 'gaussian';
+}
+
+/**
  * A method ladder: the same system at two to four levels of theory, gated on
  * how far the final energies spread. Kept in the project file so the ladder is
  * a property of the block, not of one particular run.
@@ -824,7 +866,7 @@ function normalizeCounterpoiseChargeStates(c, raw, path) {
   return states;
 }
 
-function normalizeSettings(c, raw, path, legacy) {
+function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   const source = requiredObject(c, raw, path, legacy, {});
   warnUnknown(c, source, SETTINGS_KEYS, path);
   const checkpoint = readString(c, source.checkpoint, `${path}.checkpoint`, { legacy, fallback: '', max: 128 });
@@ -837,6 +879,13 @@ function normalizeSettings(c, raw, path, legacy) {
       'adds an Opt keyword, but the job type and force constants already emit one. Remove it, or the input builder will refuse to compose the route.');
   }
   const jobType = readEnum(c, source.jobType, JOB_TYPES, `${path}.jobType`, { legacy, fallback: 'Opt', required: true }) || 'Opt';
+  // Per-block engine override; empty means "inherit the project default". The
+  // resolved engine decides which solvation models are meaningful (#102).
+  const engine = source.engine === undefined || source.engine === null || source.engine === ''
+    ? ''
+    : (readEnum(c, source.engine, ENGINE_IDS, `${path}.engine`, { legacy, fallback: 'gaussian' }) || 'gaussian');
+  const resolvedEngine = engine || projectEngine;
+  const solvation = readBoolean(c, source.solvation, `${path}.solvation`, { legacy, fallback: false });
   // A composite method has no method/basis of its own; absent fields stay
   // empty (not applicable), while an explicit value is preserved so the
   // builder and the validity check can refuse the conflict.
@@ -850,9 +899,7 @@ function normalizeSettings(c, raw, path, legacy) {
   return {
     // Per-block engine override. Empty means "use the project default", which is
     // what every .ncs written before this setting existed says.
-    engine: source.engine === undefined || source.engine === null || source.engine === ''
-      ? ''
-      : (readEnum(c, source.engine, ENGINE_IDS, `${path}.engine`, { legacy, fallback: 'gaussian' }) || 'gaussian'),
+    engine,
     jobType,
     method: readString(c, source.method, `${path}.method`, {
       legacy, fallback: compositeJob ? '' : MODERN_ROUTE_PRESET.method, max: 64, required: !compositeJob,
@@ -871,8 +918,10 @@ function normalizeSettings(c, raw, path, legacy) {
     grid: readEnum(c, source.grid, GRID_OPTIONS, `${path}.grid`, { legacy, fallback: '' }),
     population: readEnum(c, source.population, POPULATION_OPTIONS, `${path}.population`, { legacy, fallback: '' }),
     verbosity: readEnum(c, source.verbosity, VERBOSITY_OPTIONS, `${path}.verbosity`, { legacy, fallback: '' }),
-    solvation: readBoolean(c, source.solvation, `${path}.solvation`, { legacy, fallback: false }),
-    solvationModel: readEnum(c, source.solvationModel, SOLVATION_MODELS, `${path}.solvationModel`, { legacy, fallback: 'PCM' }),
+    solvation,
+    solvationModel: readSolvationModel(c, source.solvationModel, `${path}.solvationModel`, {
+      engine: resolvedEngine, solvation, legacy,
+    }),
     solvent: readString(c, source.solvent, `${path}.solvent`, { legacy, fallback: 'Water', max: 40 }) || 'Water',
     customKeywords,
     ircDirection: readEnum(c, source.ircDirection, IRC_DIRECTIONS, `${path}.ircDirection`, { legacy, fallback: 'forward' }),
@@ -923,7 +972,7 @@ function normalizeOutputRef(c, raw, path, legacy) {
   };
 }
 
-function normalizeNode(c, raw, index, legacy) {
+function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian') {
   const path = `nodes[${index}]`;
   if (!isPlainObject(raw)) {
     c.error(path, 'must be an object.');
@@ -955,7 +1004,7 @@ function normalizeNode(c, raw, index, legacy) {
       : readId(c, checkpointFromRaw, `${path}.checkpointFrom`) || null;
     return {
       ...common,
-      settings: normalizeSettings(c, raw.settings, `${path}.settings`, legacy),
+      settings: normalizeSettings(c, raw.settings, `${path}.settings`, legacy, projectEngine),
       output: normalizeOutputRef(c, raw.output, `${path}.output`, legacy),
       checkpointFrom,
     };
@@ -1195,9 +1244,10 @@ export function validateProject(raw) {
 
   const nodeIds = new Set();
   const nodes = [];
+  const projectEngine = projectEngineOf(raw.defaults);
   const nodesRaw = Array.isArray(raw.nodes) ? raw.nodes.slice(0, LIMITS.nodes) : [];
   nodesRaw.forEach((nodeRaw, index) => {
-    const node = normalizeNode(c, nodeRaw, index, legacy);
+    const node = normalizeNode(c, nodeRaw, index, legacy, projectEngine);
     if (!node) return;
     if (nodeIds.has(node.id)) {
       c.error(`nodes[${index}].id`, `duplicate node id "${node.id}".`);

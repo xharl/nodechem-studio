@@ -108,6 +108,21 @@ Type-specific payloads:
 `settings.engine` is a per-block override (`gaussian`, `xtb` or `orca`); an empty string means "use
 `defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
 edge between them is a geometry hand-off the queue either accepts or refuses with a recorded reason.
+`solvationModel` is validated against the engine the block resolves to:
+
+| Resolved engine | Accepted `solvationModel` values |
+| --- | --- |
+| `gaussian`, `orca` | `PCM`, `SMD`, `CPCM` |
+| `xtb` | `ALPB`, `GBSA`; an empty string means "not chosen" and an absent value defaults to `ALPB` |
+
+A Gaussian-only model on an xTB block is a validation error naming the engine and the two xTB
+models, because xTB never implements PCM, SMD or CPCM. There is one compatibility exception: a
+Gaussian model left on an xTB block whose `solvation` is `false` is an inert placeholder (the
+renderer's settings factory writes `PCM` on every block) and is preserved so projects saved before
+this rule still open; switching `solvation` on then requires naming ALPB or GBSA. A block with no
+engine set — neither `settings.engine` nor `defaults.engine` — validates as Gaussian, exactly as
+before.
+
 `ladder` declares method-ladder groups, `referenceNodeId` names the block a barrier or ΔG‡ is
 measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, `orbitals` adds the
 orbital-eigenvalue print (`Pop=Full` on Gaussian) that the frontier-orbital and Koopmans panel is
