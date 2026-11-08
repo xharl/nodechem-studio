@@ -119,6 +119,22 @@ export function buildWorkflowReport(queue, records = {}, { generatedAt = null, a
     counts,
     verdict,
     tasks: rows,
+    // One entry per method ladder, with the per-rung energies that produced the
+    // verdict. Absent ladders are omitted rather than reported as passed.
+    ladders: Object.entries(source.ladders && typeof source.ladders === 'object' ? source.ladders : {})
+      .map(([id, ladder]) => ({
+        id,
+        status: text(ladder?.status) || 'unknown',
+        toleranceKcal: Number.isFinite(ladder?.toleranceKcal) ? ladder.toleranceKcal : null,
+        spreadKcal: Number.isFinite(ladder?.spreadKcal) ? ladder.spreadKcal : null,
+        reason: text(ladder?.reason),
+        entries: (Array.isArray(ladder?.entries) ? ladder.entries : []).map((entry) => ({
+          id: text(entry?.id),
+          label: text(entry?.label),
+          energyHartree: Number.isFinite(entry?.energyHartree) ? entry.energyHartree : null,
+          relativeKcalPerMol: Number.isFinite(entry?.relativeKcalPerMol) ? entry.relativeKcalPerMol : null,
+        })),
+      })),
     fixtures: rows.filter((row) => row.dryRun).length,
   };
 }
@@ -195,6 +211,23 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
     + '</tr>'
   )).join('');
 
+  // The spread table for each method ladder: the numbers behind the verdict,
+  // including rungs that ran without a parsed energy (shown, not omitted).
+  const ladderBlocks = (Array.isArray(model.ladders) ? model.ladders : []).map((ladder) => {
+    const rowsHtml = ladder.entries.map((entry) => '<tr>'
+      + `<td>${escapeHtml(entry.label || entry.id || MISSING)}</td>`
+      + `<td class="num">${escapeHtml(value(entry.energyHartree, 8))}</td>`
+      + `<td class="num">${escapeHtml(value(entry.relativeKcalPerMol, 2))}</td>`
+      + '</tr>').join('');
+    const statusClass = ladder.status === 'pass' ? 'gates-pass' : ladder.status === 'fail' ? 'gates-fail' : '';
+    return '<h2>Method ladder — ' + escapeHtml(ladder.id) + '</h2>'
+      + `<p class="${statusClass}">${escapeHtml(ladder.status)} · spread `
+      + `${escapeHtml(value(ladder.spreadKcal, 2))} kcal/mol against a tolerance of `
+      + `${escapeHtml(value(ladder.toleranceKcal, 2))} kcal/mol. ${escapeHtml(ladder.reason || '')}</p>`
+      + '<table><thead><tr><th>Rung</th><th class="num">E / Eh</th><th class="num">ΔE / kcal mol⁻¹</th></tr></thead>'
+      + `<tbody>${rowsHtml}</tbody></table>`;
+  }).join('');
+
   const fixtureNote = model.fixtures > 0
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
@@ -231,6 +264,7 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
     + '<table><thead><tr><th>Block</th><th>Status</th><th>Gates</th><th>Validity</th><th>Engine</th>'
     + '<th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th>'
     + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
+    + ladderBlocks
     + (methodsBlocks ? '<h2>Methods</h2>' + methodsBlocks : '')
     + '<h2>Provenance</h2>'
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'

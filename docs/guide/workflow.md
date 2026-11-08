@@ -133,6 +133,39 @@ gates. A returned error termination is never imported as a pass, and a missing o
 instead of being fabricated. The folder and manifest format is defined in
 [`docs/CLUSTER_EXPORT.md`](../CLUSTER_EXPORT.md).
 
+## Method ladders
+
+A calculation block can run the same system at two to four levels of theory and be judged on how
+far the results spread. Set `settings.ladder` on the block in the project file:
+
+```json
+"ladder": {
+  "enabled": true,
+  "toleranceKcal": 3,
+  "rungs": [
+    { "label": "B3LYP", "method": "B3LYP", "basis": "def2-SVP", "dispersion": "GD3BJ" },
+    { "label": "PBE0",  "method": "PBE0",  "basis": "def2-SVP", "dispersion": "" },
+    { "label": "M06-2X","method": "M06-2X","basis": "def2-SVP", "dispersion": "" }
+  ]
+}
+```
+
+The block becomes one task per rung (`<nodeId>.r1`, `.r2`, …), each with its own input file, run
+folder and provenance. A dependency on the block waits for every rung; a checkpoint hand-off uses
+the **primary** rung and records `ladderPrimary: true` on the downstream task, so a consumer never
+picks a rung silently.
+
+One gate covers the group, written to the queue record as `ladders.<nodeId>`:
+
+- spread ≤ tolerance → **pass**;
+- spread > tolerance → **fail**, and the rungs are marked `needs-review` so the workflow stops;
+- a rung that did not run or reported no final energy → **unknown**, never a pass over the rungs
+  that did run.
+
+The spread is `(max − min) × 627.5095 kcal/mol` over the rung final energies. It measures
+sensitivity; it is not an average, and no single "consensus" energy is invented from it. The workflow
+report prints one table per ladder with each rung's energy and ΔE, alongside the verdict.
+
 ## Workflow report
 
 **Report…** in the queue header writes two files for the finished queue:

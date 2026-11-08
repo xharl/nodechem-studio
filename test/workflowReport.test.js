@@ -158,3 +158,37 @@ describe('workflow report HTML', () => {
     expect(workflowReportHtml(null)).toBe('');
   });
 });
+
+describe('method ladders in the report', () => {
+  it('prints one spread table per ladder and its verdict', async () => {
+    const { buildWorkflowReport, workflowReportHtml } = await import('../src/shared/workflowReport.js');
+    const queue = {
+      id: 'q-ladder',
+      projectName: 'Ladder',
+      status: 'completed',
+      createdAt: '2026-11-08T00:00:00Z',
+      finishedAt: '2026-11-08T00:10:00Z',
+      tasks: [{ nodeId: 'sp.r1', title: 'SP — B3LYP', status: 'completed', runId: 'r1' }],
+      ladders: {
+        sp: {
+          status: 'fail',
+          toleranceKcal: 3,
+          spreadKcal: 12.551,
+          reason: 'Spread 12.55 kcal/mol is above the 3 kcal/mol tolerance.',
+          entries: [
+            { id: 'sp.r1', label: 'B3LYP', energyHartree: -76.4, relativeKcalPerMol: 0 },
+            { id: 'sp.r2', label: 'PBE0', energyHartree: -76.42, relativeKcalPerMol: 12.55 },
+          ],
+        },
+      },
+    };
+    const model = buildWorkflowReport(queue, {});
+    expect(model.ladders).toHaveLength(1);
+    expect(model.ladders[0]).toMatchObject({ id: 'sp', status: 'fail', spreadKcal: 12.551 });
+    const html = workflowReportHtml(model);
+    expect(html).toContain('Method ladder — sp');
+    expect(html).toContain('PBE0');
+    expect(html).toContain('12.55');
+    expect(html).toContain('gates-fail');
+  });
+});

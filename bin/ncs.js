@@ -21,7 +21,7 @@ import process from 'node:process';
 
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
-import { buildWorkflowTasks } from '../src/shared/workflowTasks.js';
+import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 
@@ -153,12 +153,13 @@ async function commandRun({ positional, flags }) {
     process.exit(EXIT.invalid);
   }
 
-  let tasks;
+  let plan;
   try {
-    tasks = buildWorkflowTasks(result.project);
+    plan = buildWorkflowPlan(result.project);
   } catch (error) {
     fail(error.message, EXIT.invalid);
   }
+  const { tasks, edges: plannedEdges } = plan;
 
   const runsRoot = path.join(outDir, 'runs');
   const queuesRoot = path.join(outDir, 'queues');
@@ -181,7 +182,7 @@ async function commandRun({ positional, flags }) {
   const started = await queueManager.start({
     projectName: result.project.name || path.basename(file),
     tasks,
-    edges: result.project.edges,
+    edges: plannedEdges,
     options: {
       dryRun: Boolean(flags['dry-run']),
       executable: flags.executable ? String(flags.executable) : '',
@@ -209,6 +210,7 @@ async function commandRun({ positional, flags }) {
     queueId,
     status: queue.status,
     outDir,
+    ladders: queue.ladders || {},
     runs: await Promise.all((queue.tasks || []).map(async (task) => {
       const record = await readRunRecord(task.runDir);
       return {

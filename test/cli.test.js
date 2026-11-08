@@ -180,3 +180,40 @@ describe('ncs diff and ncs merge', () => {
     await expect(readFile(out, 'utf8')).rejects.toThrow();
   });
 });
+
+describe('method ladders end to end', () => {
+  it('runs one task per rung and writes a single ladder gate', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ncs-ladder-'));
+    const project = JSON.parse(await readFile(example('single-point.ncs'), 'utf8'));
+    const calc = project.nodes.find((node) => node.type === 'calc');
+    calc.settings = {
+      ...calc.settings,
+      ladder: {
+        enabled: true,
+        toleranceKcal: 3,
+        rungs: [
+          { label: 'B3LYP', method: 'B3LYP', basis: calc.settings.basis },
+          { label: 'PBE0', method: 'PBE0', basis: calc.settings.basis },
+          { label: 'M06-2X', method: 'M06-2X', basis: calc.settings.basis },
+        ],
+      },
+    };
+    const file = path.join(dir, 'ladder.ncs');
+    await writeFile(file, JSON.stringify(project), 'utf8');
+
+    const out = path.join(dir, 'out');
+    const result = await ncs(['run', file, '--out', out, '--dry-run'], { timeout: 180000 });
+    expect(result.code).toBe(0);
+    const summary = JSON.parse(result.stdout);
+    expect(summary.runs.map((run) => run.nodeId).sort()).toEqual([`${calc.id}.r1`, `${calc.id}.r2`, `${calc.id}.r3`]);
+
+    const queueFile = path.join(out, 'queues', summary.queueId, 'queue.json');
+    const queue = JSON.parse(await readFile(queueFile, 'utf8'));
+    const ladderId = Object.keys(queue.ladders)[0];
+    expect(ladderId).toBe(calc.id);
+    expect(queue.ladders[ladderId].status).toBe('pass');
+    expect(queue.ladders[ladderId].entries).toHaveLength(3);
+    expect(queue.ladders[ladderId].entries[0].label).toBe('B3LYP');
+    expect(queue.ladders[ladderId].toleranceKcal).toBe(3);
+  }, 180000);
+});

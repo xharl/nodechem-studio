@@ -2795,8 +2795,13 @@ async function startWorkflowUnlocked() {
   const dryRun = $('#run-dry').checked;
 
   let tasks;
+  let edges = state.project.edges;
   try {
-    tasks = buildWorkflowTasks();
+    // The plan expands method-ladder blocks into one task per rung and rewires
+    // the edges so a downstream block waits for every rung.
+    const plan = shared.buildWorkflowPlan(state.project);
+    tasks = plan.tasks;
+    edges = plan.edges;
   } catch (error) {
     appendRunOutput(`Input builder error: ${error.message}\n`);
     toast(`Cannot queue workflow: ${error.message}`);
@@ -2818,7 +2823,7 @@ async function startWorkflowUnlocked() {
     const queue = await desktop.startQueue({
       projectName: state.project.name,
       tasks,
-      edges: state.project.edges,
+      edges,
       options: {
         dryRun,
         executable: $('#run-exe').value.trim(),

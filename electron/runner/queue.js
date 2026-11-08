@@ -8,6 +8,7 @@ import {
 } from '../../src/shared/workflowGraph.js';
 import { conditionFields, evaluateCondition } from '../../src/shared/controlFlow.js';
 import { engineFor } from '../../src/shared/engines/index.js';
+import { ladderVerdict } from '../../src/shared/methodLadder.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -157,6 +158,17 @@ function taskRecord(raw, index) {
   const merge = type === 'merge'
     ? { policy: ['all', 'any'].includes(raw?.merge?.policy) ? raw.merge.policy : 'all' }
     : null;
+  const rawLadder = raw?.ladder && typeof raw.ladder === 'object' ? raw.ladder : null;
+  const ladderId = rawLadder ? String(rawLadder.id || '') : '';
+  const ladder = rawLadder && SAFE_ID.test(ladderId)
+    ? {
+      id: ladderId,
+      index: Number.isInteger(Number(rawLadder.index)) ? Number(rawLadder.index) : 0,
+      label: oneLine(rawLadder.label, 40) || `Rung ${Number(rawLadder.index) + 1}`,
+      count: Number.isInteger(Number(rawLadder.count)) ? Number(rawLadder.count) : null,
+      toleranceKcal: Number.isFinite(Number(rawLadder.toleranceKcal)) ? Number(rawLadder.toleranceKcal) : 3,
+    }
+    : null;
   return {
     nodeId,
     type,
@@ -182,6 +194,7 @@ function taskRecord(raw, index) {
     condition,
     loop,
     merge,
+    ladder,
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -418,6 +431,9 @@ export class QueueManager {
       options: { dryRun, executable: dryRun ? null : executable, scratchDir },
       edges,
       tasks,
+      // Method ladders: one verdict per ladder group, evaluated when every rung
+      // of that group has finished.
+      ladders: {},
     };
 
     await fsp.mkdir(path.join(this.queueDir(id), 'inputs'), { recursive: true });
@@ -430,6 +446,50 @@ export class QueueManager {
     this.publish(queue, 'queue-started');
     this.drain(queue).catch((error) => this.stall(queue, error));
     return publicQueue(queue);
+  }
+
+  /**
+   * One gate per method ladder. A group is judged only once every rung has
+   * finished; a rung that never ran leaves the verdict `unknown`, never a pass
+   * over the rungs that did run.
+   */
+  async evaluateLadders(queue) {
+    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted']);
+    const groups = new Map();
+    for (const task of queue.tasks) {
+      if (!task.ladder?.id) continue;
+      if (!groups.has(task.ladder.id)) groups.set(task.ladder.id, []);
+      groups.get(task.ladder.id).push(task);
+    }
+    let changed = false;
+    for (const [id, group] of groups) {
+      if (!group.every((task) => finished.has(String(task.status)))) continue;
+      const entries = [...group]
+        .sort((a, b) => (a.ladder.index || 0) - (b.ladder.index || 0))
+        .map((task) => ({
+          id: task.nodeId,
+          label: task.ladder.label,
+          energyHartree: Number.isFinite(task.parsedSummary?.energyHartree) ? task.parsedSummary.energyHartree : null,
+        }));
+      const verdict = ladderVerdict(entries, {
+        toleranceKcal: group[0].ladder.toleranceKcal,
+        expected: group[0].ladder.count ?? group.length,
+      });
+      queue.ladders = queue.ladders || {};
+      queue.ladders[id] = { ...verdict, evaluatedAt: new Date().toISOString() };
+      changed = true;
+      if (verdict.status === 'fail') {
+        const reason = `Method ladder "${id}" spread ${verdict.spreadKcal.toFixed(2)} kcal/mol exceeds the ${verdict.toleranceKcal} kcal/mol tolerance.`;
+        for (const task of group) {
+          if (task.status === 'completed') {
+            task.status = 'needs-review';
+            task.reason = reason;
+            task.finishedAt = task.finishedAt || new Date().toISOString();
+          }
+        }
+      }
+    }
+    return changed;
   }
 
   async drain(queue) {
@@ -460,6 +520,10 @@ export class QueueManager {
         }
 
         await this.runTask(queue, task);
+        if (await this.evaluateLadders(queue)) {
+          await this.persist(queue);
+          this.publish(queue);
+        }
       }
 
       if (queue.status !== 'running') return;
@@ -578,6 +642,8 @@ export class QueueManager {
         complete: record.parsed.complete !== false,
         status: record.parsed.status || null,
         optimization: { completed: record.parsed.optimization?.completed === true },
+        // The one number every rung of a method ladder has in common.
+        energyHartree: Number.isFinite(record.parsed.finalEnergy?.hartree) ? record.parsed.finalEnergy.hartree : null,
       } : null;
       task.status = record.status === 'completed' ? 'completed'
         : record.status === 'needs-review' ? 'needs-review'

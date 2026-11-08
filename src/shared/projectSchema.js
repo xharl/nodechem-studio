@@ -128,7 +128,7 @@ const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -174,6 +174,8 @@ export function defaultSettings(overrides = {}) {
     optConvergence: DEFAULT_OPT_CONVERGENCE,
     forceConstants: DEFAULT_TS_FORCE_CONSTANTS,
     gates: defaultGates(),
+    // A method ladder is opt-in; `null` means "this block is a normal block".
+    ladder: null,
     // Issue #25: validity checks are on by default; a node opts out by id.
     disabledChecks: [],
   };
@@ -441,6 +443,45 @@ function normalizeDefaults(c, raw, legacy) {
   };
 }
 
+/**
+ * A method ladder: the same system at two to four levels of theory, gated on
+ * how far the final energies spread. Kept in the project file so the ladder is
+ * a property of the block, not of one particular run.
+ */
+function normalizeLadder(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be null or an object with enabled, toleranceKcal and rungs.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['enabled', 'toleranceKcal', 'rungs']), path);
+  const enabled = readBoolean(c, raw.enabled, `${path}.enabled`, { legacy, fallback: false });
+  const toleranceKcal = readNumber(c, raw.toleranceKcal, `${path}.toleranceKcal`, {
+    legacy, fallback: 3, min: 0, max: 100000,
+  });
+  const rawRungs = Array.isArray(raw.rungs) ? raw.rungs : [];
+  if (enabled && (rawRungs.length < 2 || rawRungs.length > 4)) {
+    c.error(`${path}.rungs`, 'a method ladder needs between 2 and 4 rungs.');
+  }
+  const rungs = rawRungs.slice(0, 4).map((rung, index) => {
+    const entryPath = `${path}.rungs[${index}]`;
+    if (!isPlainObject(rung)) {
+      c.error(entryPath, 'must be an object with method and optionally basis, dispersion and label.');
+      return { label: `Rung ${index + 1}`, method: '', basis: '', dispersion: '' };
+    }
+    warnUnknown(c, rung, new Set(['label', 'method', 'basis', 'dispersion']), entryPath);
+    const method = readString(c, rung.method, `${entryPath}.method`, { legacy, fallback: '', max: 40 }) || '';
+    if (enabled && !method) c.error(`${entryPath}.method`, 'is required for an enabled rung.');
+    return {
+      label: readString(c, rung.label, `${entryPath}.label`, { legacy, fallback: `Rung ${index + 1}`, max: 40 }) || `Rung ${index + 1}`,
+      method,
+      basis: readString(c, rung.basis, `${entryPath}.basis`, { legacy, fallback: '', max: 40 }) || '',
+      dispersion: readString(c, rung.dispersion, `${entryPath}.dispersion`, { legacy, fallback: '', max: 40 }) || '',
+    };
+  });
+  return { enabled, toleranceKcal, rungs };
+}
+
 function normalizeGates(c, raw, path, legacy) {
   const source = requiredObject(c, raw, path, legacy, {});
   warnUnknown(c, source, GATE_KEYS, path);
@@ -528,6 +569,7 @@ function normalizeSettings(c, raw, path, legacy) {
     optConvergence: readEnum(c, source.optConvergence, OPT_CONVERGENCE_IDS, `${path}.optConvergence`, { legacy, fallback: DEFAULT_OPT_CONVERGENCE }),
     forceConstants: readEnum(c, source.forceConstants, TS_FORCE_CONSTANT_IDS, `${path}.forceConstants`, { legacy, fallback: DEFAULT_TS_FORCE_CONSTANTS }),
     gates: normalizeGates(c, source.gates, `${path}.gates`, legacy),
+    ladder: normalizeLadder(c, source.ladder, `${path}.ladder`, legacy),
     disabledChecks: normalizeDisabledChecks(c, source.disabledChecks, `${path}.disabledChecks`, legacy),
   };
 }

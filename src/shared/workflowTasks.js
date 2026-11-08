@@ -9,6 +9,7 @@
 
 import { DEMO_WATER } from './gaussianInput.js';
 import { engineOrDefault } from './engines/index.js';
+import { ladderRungs } from './methodLadder.js';
 import { runSettingsFor } from './engineSettings.js';
 import { checkTsForceConstants, freqGeometryWarnings, optConvergenceWarnings } from './tsForceConstants.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from './validityChecks.js';
@@ -76,11 +77,11 @@ export function validityUpstreamFor(project, node) {
   };
 }
 
-export function checkpointNameFor(project, node) {
+export function checkpointNameFor(project, node, taskId = node?.id) {
   const engine = engineOrDefault(project?.defaults?.engine);
   return engine.checkpointArtifact({
     checkpointName: node?.settings?.checkpoint || '',
-    nodeId: safeBase(node?.id || 'task'),
+    nodeId: safeBase(taskId || 'task'),
   });
 }
 
@@ -137,16 +138,16 @@ export function validityForNode(project, node) {
 }
 
 /** The engine's input for one calculation node, exactly as it will be written. */
-export function buildRunInput(project, node) {
+export function buildRunInput(project, node, { taskId = node?.id, settingsOverride = null } = {}) {
   const engine = engineOrDefault(project?.defaults?.engine);
   // A ReadFC TS block without a usable checkpoint hand-off has nothing to read.
   const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node);
   if (issues.errors.length > 0) throw new Error(issues.errors[0]);
-  const settings = settingsForNode(project, node);
+  const settings = settingsOverride || settingsForNode(project, node);
   const molecule = moleculeForNode(project, node);
   const blocking = blockingValidityFinding(project, node, settings, molecule);
   if (blocking) throw new Error(blocking.message);
-  const base = safeBase(node.id);
+  const base = safeBase(taskId);
   if (engine.id === 'xtb') {
     return engine.buildInput({ title: node.title, settings, molecule, inputName: `${base}.xyz` });
   }
@@ -165,10 +166,26 @@ export function buildRunInput(project, node) {
  * "no calculation blocks".
  */
 export function buildWorkflowTasks(project) {
+  return buildWorkflowPlan(project).tasks;
+}
+
+/**
+ * The task list plus the edges that connect it.
+ *
+ * A calculation block may carry a method ladder: it then becomes one task per
+ * rung (`<nodeId>~1`, `~2`, …) and the block itself is no longer a task.
+ * Dependencies expand to every rung; a checkpoint hand-off leaves only the
+ * primary rung (the first one), because a downstream block reads one file and
+ * picking a rung silently is exactly what a ladder must not do.
+ */
+export function buildWorkflowPlan(project) {
   const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
-  const tasks = nodes.map((node) => {
+  const tasks = [];
+  const idsFor = new Map();
+
+  for (const node of nodes) {
     if (node.type !== 'calc') {
-      return {
+      tasks.push({
         nodeId: node.id,
         type: node.type,
         title: node.title,
@@ -181,28 +198,87 @@ export function buildWorkflowTasks(project) {
           ? { maxAttempts: node.loop?.maxAttempts || 3, mode: node.loop?.mode || 'retry', target: node.loop?.target || '' }
           : null,
         merge: node.type === 'merge' ? { policy: node.merge?.policy || 'all' } : null,
-      };
+      });
+      idsFor.set(node.id, [node.id]);
+      continue;
     }
-    const built = buildRunInput(project, node);
-    return {
-      nodeId: node.id,
-      type: 'calc',
-      title: node.title,
-      kind: node.kind || 'Calc',
-      executable: true,
-      engine: built.engine,
-      argv: built.argv,
-      route: built.route,
-      inputName: built.inputName,
-      outputName: built.outputName,
-      inputText: built.inputText,
-      settings: settingsForNode(project, node),
-      gates: gatesForNode(node),
-      validity: validityForNode(project, node),
-      checkpointName: checkpointNameFor(project, node),
-      checkpointFrom: checkpointSourceFor(project, node),
-    };
-  });
+
+    const ladder = ladderRungs(node.settings);
+    if (!ladder) {
+      tasks.push(calculationTask(project, node, { taskId: node.id }));
+      idsFor.set(node.id, [node.id]);
+      continue;
+    }
+
+    // Task ids must satisfy the queue's SAFE_ID rule, so the separator is a dot.
+    const ids = ladder.rungs.map((rung) => `${node.id}.r${rung.index + 1}`);
+    ladder.rungs.forEach((rung, index) => {
+      const settings = {
+        ...settingsForNode(project, node),
+        method: rung.method || node.settings.method,
+        basis: rung.basis || node.settings.basis,
+        dispersion: rung.dispersion || node.settings.dispersion,
+        ladder: null,
+      };
+      tasks.push(calculationTask(project, node, {
+        taskId: ids[index],
+        settingsOverride: settings,
+        title: `${node.title} — ${rung.label}`,
+        ladder: {
+          id: node.id,
+          index: rung.index,
+          label: rung.label,
+          count: ladder.rungs.length,
+          toleranceKcal: ladder.toleranceKcal,
+        },
+      }));
+    });
+    idsFor.set(node.id, ids);
+  }
+
+  const edges = [];
+  for (const edge of Array.isArray(project?.edges) ? project.edges : []) {
+    const fromIds = idsFor.get(edge.from) || [];
+    const toIds = idsFor.get(edge.to) || [];
+    const sources = edge.type === 'checkpoint' ? fromIds.slice(0, 1) : fromIds;
+    for (const from of sources) {
+      for (const to of toIds) edges.push({ ...edge, from, to });
+    }
+  }
+
+  // A downstream task reads the checkpoint of the *primary* rung; record that
+  // explicitly so the run record cannot imply it consumed the whole ladder.
+  for (const task of tasks) {
+    if (!task.checkpointFrom) continue;
+    const sourceIds = idsFor.get(task.checkpointFrom.nodeId) || [];
+    if (sourceIds.length > 0 && sourceIds[0] !== task.checkpointFrom.nodeId) {
+      task.checkpointFrom = { ...task.checkpointFrom, nodeId: sourceIds[0], ladderPrimary: true };
+    }
+  }
+
   if (!tasks.some((task) => task.executable)) throw new Error('The workflow has no calculation blocks to run.');
-  return tasks;
+  return { tasks, edges };
+}
+
+function calculationTask(project, node, { taskId, settingsOverride = null, title = null, ladder = null }) {
+  const built = buildRunInput(project, node, { taskId, settingsOverride });
+  return {
+    nodeId: taskId,
+    type: 'calc',
+    title: title || node.title,
+    kind: node.kind || 'Calc',
+    executable: true,
+    engine: built.engine,
+    argv: built.argv,
+    route: built.route,
+    inputName: built.inputName,
+    outputName: built.outputName,
+    inputText: built.inputText,
+    settings: settingsOverride || settingsForNode(project, node),
+    gates: gatesForNode(node),
+    validity: validityForNode(project, node),
+    checkpointName: checkpointNameFor(project, node, taskId),
+    checkpointFrom: checkpointSourceFor(project, node),
+    ...(ladder ? { ladder } : {}),
+  };
 }
