@@ -551,3 +551,11 @@ converged orbitals, so those cells are filled from it (see [Wavefunctions](wavef
 ## Next
 
 [Projects and runs on disk →](project-files.md)
+
+## Figures in the results panel
+
+Spectra, orbital levels and convergence curves are drawn by the shared figure module
+(`src/shared/figures/`) rather than by panel-local code, so the panel and the workflow report show
+the same picture of the same numbers. Every figure states its broadening and its units, and carries
+an accessible name (`role="img"` with a `<title>` and `<desc>`); a measured trace imported over a
+computed spectrum is dashed and named in the caption, never merged into the computed curve.

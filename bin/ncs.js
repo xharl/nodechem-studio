@@ -71,7 +71,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
       [--max-parallel N] [--executable <path>] [--crest <path>]
       [--timeout <seconds>] [--json]
-  ncs report <out-dir> [--flow <id>] [--include-imported] [--out <file>]
+  ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
   ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
   ncs record import --program <name> --version <version> --method <method>
       --basis <basis> --energy <hartree> (--source <file>|--source-sha256 <hex>)
@@ -419,7 +419,7 @@ async function queueRunRecords(queue) {
  * single `flow` does the same for `ncs report --flow`. A flow with no queue is
  * simply absent: the report describes what ran.
  */
-async function collectReportModels(outDir, { flow = null, flows = null, includeImported = false } = {}) {
+async function collectReportModels(outDir, { flow = null, flows = null, includeImported = false, figures = 'basic' } = {}) {
   const queuesDir = path.join(outDir, 'queues');
   let entries;
   try {
@@ -458,11 +458,18 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
   const models = [];
   for (const [flowId, queue] of selected) {
     // eslint-disable-next-line no-await-in-loop
-    models.push(buildWorkflowReport({ ...queue, flowId }, await queueRunRecords(queue), {
+    const records = await queueRunRecords(queue);
+    // A slice figure needs a volume. With --figures=surfaces the cube files the
+    // block read are parsed from the run folder; without one the figure says so.
+    // eslint-disable-next-line no-await-in-loop
+    const volumes = figures === 'surfaces' ? await cubeVolumesFor(queue) : null;
+    models.push(buildWorkflowReport({ ...queue, flowId }, records, {
       generatedAt,
       appVersion: 'cli',
       recordInfo: queueRecordInfo(queue),
       includeImported,
+      figureLevel: figures,
+      volumes,
     }));
   }
 
@@ -490,6 +497,50 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
     if (model) models.push(model);
   }
   return models;
+}
+
+/**
+ * Parsed cube volumes for the tasks of a queue, keyed by node id.
+ *
+ * Only a cube file that sits in the task's own run folder is read: the report
+ * may not reach outside the folder it is documenting, and a volume from
+ * somewhere else would be a figure about a different file.
+ */
+async function cubeVolumesFor(queue) {
+  const volumes = {};
+  for (const task of Array.isArray(queue.tasks) ? queue.tasks : []) {
+    if (!task?.runDir || !task.nodeId) continue;
+    let entries;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      entries = await fs.readdir(task.runDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const cube = entries.find((entry) => entry.isFile() && /\.cube$/i.test(entry.name));
+    if (!cube) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const text = await fs.readFile(path.join(task.runDir, cube.name), 'utf8');
+      const parsedCube = parseCube(text);
+      // The figure slices in index space and labels the axes in Å, which is only
+      // true when the cube's axes are axis-aligned: a rotated cube is reported
+      // rather than drawn as if it were an xy plane.
+      const axisAligned = parsedCube.axes.every((vector, index) => vector
+        .every((component, componentIndex) => (componentIndex === index ? true : Math.abs(component) < 1e-6)));
+      volumes[task.nodeId] = {
+        values: parsedCube.values,
+        origin: parsedCube.origin,
+        step: parsedCube.spacing,
+        counts: parsedCube.dims,
+        axisAligned,
+        source: cube.name,
+      };
+    } catch {
+      // An unreadable cube is not a figure; the report says the slice is absent.
+    }
+  }
+  return volumes;
 }
 
 /** Imported records written under `runs/` by `ncs record import`, newest first. */
@@ -562,7 +613,11 @@ async function commandReport({ positional, flags }) {
   // Issue #131: an imported result is listed either way; this flag decides
   // whether its number is also shown in the energy columns, labelled.
   const includeImported = flags['include-imported'] === true || flags['include-imported'] === 'true';
-  const models = await collectReportModels(outDir, { flow: wantedFlow, includeImported });
+  const figuresFlag = String(flags.figures || 'basic');
+  if (!['basic', 'surfaces', 'none'].includes(figuresFlag)) {
+    throw new Error(`--figures must be basic, surfaces or none (got "${figuresFlag}")`);
+  }
+  const models = await collectReportModels(outDir, { flow: wantedFlow, includeImported, figures: figuresFlag });
   if (models.length === 0) {
     fail(wantedFlow
       ? `no queue for flow "${wantedFlow}" under ${outDir}.`

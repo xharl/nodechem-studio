@@ -153,6 +153,13 @@ export function parseOrbitals(text) {
     ? descriptorsOf(frontierOf(block.beta), { spin: 'beta' })
     : null;
   const openShell = Boolean(beta);
+  // The manifolds themselves, not only the frontier pair: a level diagram and a
+  // report figure need the neighbours of the gap, and re-parsing the log for
+  // them would be a second source of truth.
+  const manifoldOf = (manifold) => (manifold ? {
+    occupied: manifold.occupied.map((value) => round(value)),
+    virtual: manifold.virtual.map((value) => round(value)),
+  } : null);
   return {
     matched: true,
     reason: null,
@@ -160,6 +167,7 @@ export function parseOrbitals(text) {
     openShell,
     alpha,
     beta,
+    manifolds: { alpha: manifoldOf(block.alpha), beta: manifoldOf(block.beta) },
     // Which manifold a single "gap" number should come from: the alpha one for
     // a closed shell, and for an open shell the alpha gap with the beta values
     // kept alongside rather than silently averaged.
