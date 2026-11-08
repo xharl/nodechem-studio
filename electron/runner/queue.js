@@ -34,6 +34,12 @@ const SAFE_ARTIFACT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,123}$/;
 const MAX_INPUT_BYTES = 2 * 1024 * 1024;
 const MAX_TASKS = 500;
 
+// CREST resolves a relative input against its working directory, so the search
+// input is staged inside the task folder under this name and argv names only the
+// basename (#100). The task folder is where `crest_conformers.xyz`,
+// `crest.energies` and `crest.out` have to land.
+const CONFORMER_STAGED_INPUT = 'ensemble.xyz';
+
 const TASK_STATUSES = new Set([
   'pending', 'running', 'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
 ]);
@@ -53,6 +59,23 @@ async function writeJsonAtomic(filePath, value) {
 
 function oneLine(value, max = 200) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+}
+
+/**
+ * Point CREST's argv at the staged geometry (#100).
+ *
+ * `crestArgv()` puts the input operand first; a hand-written argv may name it
+ * elsewhere, so replace the first non-flag argument rather than blindly argv[0].
+ * An argv with no operand at all gets the staged name prepended. An empty argv
+ * is left alone: the runner already refuses that with a clear message.
+ */
+function conformerArgvFor(argv, inputName) {
+  const args = Array.isArray(argv) ? argv.map(String) : [];
+  if (args.length === 0) return args;
+  const operand = args.findIndex((argument) => !argument.startsWith('-'));
+  if (operand === -1) return [inputName, ...args];
+  args[operand] = inputName;
+  return args;
 }
 
 const ROUTE_SETTING_KEYS = [
@@ -855,6 +878,36 @@ export class QueueManager {
   }
 
   /**
+   * Copy the starting geometry into the folder CREST runs in and return the
+   * argv that names it (#100).
+   *
+   * The queue keeps its own copy under `inputs/`, but CREST resolves a relative
+   * argument against its working directory — the task folder, where its ensemble
+   * and log must land. Handing it `inputs/<node>.xyz` fails even though the file
+   * exists, so the geometry is staged as `ensemble.xyz` beside those artifacts
+   * and the argument is reduced to the basename, keeping the run folder
+   * self-contained. The 2 MiB bound is re-checked here because this copy is what
+   * the external program actually reads.
+   */
+  async stageConformerSearchInput(queue, task, dir) {
+    const source = this.conformerInputPath(queue.id, task.nodeId);
+    let inputText;
+    try {
+      inputText = await fsp.readFile(source, 'utf8');
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        throw new Error(`The starting geometry for "${task.nodeId}" is missing from the queue folder; start the queue again.`);
+      }
+      throw error;
+    }
+    if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
+      throw new Error(`The starting geometry for "${task.nodeId}" is larger than 2 MiB; a conformer search input is limited to 2 MiB.`);
+    }
+    await fsp.writeFile(path.join(dir, CONFORMER_STAGED_INPUT), inputText, 'utf8');
+    return conformerArgvFor(task.conformers.argv, CONFORMER_STAGED_INPUT);
+  }
+
+  /**
    * Run one conformer search and rank what it produced.
    *
    * Deliberately outside `runTask`: CREST has no route, gates or termination
@@ -915,11 +968,12 @@ export class QueueManager {
           text: `Imported ensemble ${imported.ensemblePath}`,
         });
       } else {
+        const argv = await this.stageConformerSearchInput(queue, task, dir);
         const runner = new CrestRunner();
         this.conformersRunner = runner;
         const result = await runner.run({
           executable: queue.options.crestExecutable,
-          argv: conf.argv,
+          argv,
           cwd: dir,
           outputName: task.outputName,
           onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),

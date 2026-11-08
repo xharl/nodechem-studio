@@ -7,18 +7,67 @@ import {
   buildWorkflowPlan,
   conformerForNode,
 } from '../src/shared/workflowTasks.js';
+import { parseMultiXyz, rankEnsemble, withEnergies } from '../src/shared/conformers.js';
 import { defaultSettings, validateProject } from '../src/shared/projectSchema.js';
 import { runValidityChecks } from '../src/shared/validityChecks.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
+import { CrestRunner } from '../electron/runner/crestRunner.js';
 
 const roots = [];
+const onWindows = process.platform === 'win32';
 
 const coords = [
   { element: 'O', x: 0, y: 0, z: 0 },
   { element: 'H', x: 0.96, y: 0, z: 0 },
   { element: 'H', x: -0.24, y: 0.93, z: 0 },
 ];
+
+/**
+ * A stand-in for CREST 3 (#100). It refuses to run unless argv names a file it
+ * can read from its own working directory, then writes the ensemble and the
+ * energies a search produces. The assertion is the point: a suite that only
+ * dry-runs never checks that CREST can open the file it was given.
+ */
+const FAKE_CREST = [
+  '#!/bin/sh',
+  'set -eu',
+  'if [ ! -f "$1" ]; then',
+  '  echo "fake crest: no input file at $PWD/$1" >&2',
+  '  exit 64',
+  'fi',
+  'echo "fake crest: read $1 from $PWD ($(sed -n 1p "$1") atoms)"',
+  "cat > crest_conformers.xyz <<'EOF'",
+  '3',
+  'conformer 1',
+  'O 0.000000 0.000000 0.000000',
+  'H 0.960000 0.000000 0.000000',
+  'H -0.240000 0.930000 0.000000',
+  '3',
+  'conformer 2',
+  'O 0.000000 0.000000 0.000000',
+  'H 0.960000 0.000000 1.200000',
+  'H -0.240000 0.930000 1.200000',
+  'EOF',
+  "cat > crest.energies <<'EOF'",
+  '1 -76.40000000',
+  '2 -76.39500000',
+  'EOF',
+].join('\n');
+
+/**
+ * Multi-XYZ text for water frames; one comment per frame. The second frame is
+ * displaced so RMSD pruning sees two distinct geometries, not two copies.
+ */
+const xyzFrames = (comments) => comments
+  .map((comment, index) => [
+    '3',
+    comment,
+    'O 0 0 0',
+    'H 0.96 0 0',
+    `H ${(-0.24 + index * 0.60).toFixed(2)} ${(0.93 + index * 0.70).toFixed(2)} 0`,
+  ].join('\n'))
+  .join('\n');
 
 /** A conformer block feeding one optimisation, through a dependency edge. */
 function conformerProject({ output = null, settings = {}, edgeType = 'dependency' } = {}) {
@@ -388,5 +437,138 @@ describe('conformer queue path', () => {
       edges: [],
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     })).rejects.toThrow(/CREST executable/i);
+  });
+
+  it.skipIf(onWindows)('spawns CREST in the folder where its input was staged (#100)', async () => {
+    // Keep both stub frames: this test is about where CREST ran, not pruning.
+    const project = conformerProject({ output: selection(), settings: { rmsdThreshold: 0.05 } });
+    const plan = buildWorkflowPlan(project);
+    const { base, queueManager } = await stack();
+    const crestPath = path.join(base, 'fake-crest.sh');
+    await fsp.writeFile(crestPath, FAKE_CREST, { encoding: 'utf8', mode: 0o755 });
+
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      edges: [],
+      options: { dryRun: false, executable: null, crestExecutable: crestPath, scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const list = await queueManager.list();
+      const queue = list.find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+
+    const conformers = done.tasks.find((task) => task.nodeId === 'conf');
+    expect(conformers.error).toBeNull();
+    expect(conformers.status).toBe('completed');
+    expect(conformers.ensemble.total).toBe(2);
+    expect(conformers.ensemble.spreadKcal).toBeCloseTo(0.005 * 627.5094740631, 2);
+
+    // The stub could only print this after opening the staged file from its cwd.
+    const log = await fsp.readFile(path.join(conformers.runDir, 'crest.out'), 'utf8');
+    expect(log).toMatch(/fake crest: read ensemble\.xyz from /);
+    expect(log).toMatch(/\(3 atoms\)/);
+    // CREST's artifacts landed beside the input, in the folder it ran in.
+    await fsp.access(path.join(conformers.runDir, 'crest_conformers.xyz'));
+    await fsp.access(path.join(conformers.runDir, 'crest.energies'));
+  });
+
+  it('ranks an imported ensemble from its sibling crest.energies (#103)', async () => {
+    const { base, queueManager } = await stack();
+    const ensemblePath = path.join(base, 'crest_conformers.xyz');
+    await fsp.writeFile(ensemblePath, xyzFrames(['conformer 1', 'conformer 2']), 'utf8');
+    await fsp.writeFile(path.join(base, 'crest.energies'), '1 -76.40000000\n2 -76.39500000\n', 'utf8');
+
+    const project = conformerProject({
+      output: selection(),
+      settings: { generator: 'import', importPath: ensemblePath, rmsdThreshold: 0.05 },
+    });
+    const plan = buildWorkflowPlan(project);
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      edges: [],
+      options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const list = await queueManager.list();
+      const queue = list.find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+
+    const conformers = done.tasks.find((task) => task.nodeId === 'conf');
+    expect(conformers.error).toBeNull();
+    expect(conformers.status).toBe('completed');
+    expect(conformers.ensemble.generator).toBe('import');
+    expect(conformers.ensemble.count).toBe(2);
+    expect(conformers.ensemble.spreadKcal).toBeCloseTo(0.005 * 627.5094740631, 2);
+    expect(conformers.ensemble.members.find((member) => member.rank === 2).energyEh).toBeCloseTo(-76.395, 9);
+  });
+});
+
+describe('imported conformer energies (#103)', () => {
+  afterEach(async () => {
+    await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+    roots.length = 0;
+  });
+
+  async function tempDir() {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gns-crest-import-'));
+    roots.push(dir);
+    return dir;
+  }
+
+  it('reads a sibling crest.energies and ranks frames whose comments are labels', async () => {
+    const dir = await tempDir();
+    const ensemblePath = path.join(dir, 'crest_conformers.xyz');
+    await fsp.writeFile(ensemblePath, xyzFrames(['conformer 1', 'conformer 2']), 'utf8');
+    await fsp.writeFile(path.join(dir, 'crest.energies'), '1 -76.40000000\n2 -76.39500000\n', 'utf8');
+
+    const imported = await CrestRunner.readImport(ensemblePath);
+    expect(imported.energies).toEqual([-76.4, -76.395]);
+    const parsed = parseMultiXyz(imported.ensembleText);
+    // Neither comment carries an energy; without the sibling file this fails.
+    expect(parsed.frames.map((frame) => frame.energyEh)).toEqual([null, null]);
+    const merged = withEnergies(parsed.frames, imported.energies);
+    expect(merged.error).toBeNull();
+    expect(merged.frames[1].energyEh).toBeCloseTo(-76.395, 9);
+    const ranked = rankEnsemble({ frames: merged.frames, rmsdThreshold: 0.05 });
+    expect(ranked.error).toBeNull();
+    expect(ranked.retained).toHaveLength(2);
+    expect(ranked.selectedId).toBe('c1');
+  });
+
+  it('falls back to <stem>.energies when the ensemble was renamed', async () => {
+    const dir = await tempDir();
+    const ensemblePath = path.join(dir, 'run7.xyz');
+    await fsp.writeFile(ensemblePath, xyzFrames(['conf a', 'conf b']), 'utf8');
+    await fsp.writeFile(path.join(dir, 'run7.energies'), '-76.41000000\n-76.40000000\n', 'utf8');
+
+    const imported = await CrestRunner.readImport(ensemblePath);
+    expect(imported.energies).toEqual([-76.41, -76.4]);
+  });
+
+  it('keeps working when every frame carries its own energy and no energies file exists', async () => {
+    const dir = await tempDir();
+    const ensemblePath = path.join(dir, 'crest_conformers.xyz');
+    await fsp.writeFile(ensemblePath, xyzFrames(['-76.4180', 'conf 2 -76.4172']), 'utf8');
+
+    const imported = await CrestRunner.readImport(ensemblePath);
+    expect(imported.energies).toEqual([]);
+    const merged = withEnergies(parseMultiXyz(imported.ensembleText).frames, imported.energies);
+    expect(merged.error).toBeNull();
+    expect(merged.frames.map((frame) => frame.energyEh)).toEqual([-76.418, -76.4172]);
+  });
+
+  it('still names the conformer when neither the comment nor a file has an energy', async () => {
+    const dir = await tempDir();
+    const ensemblePath = path.join(dir, 'crest_conformers.xyz');
+    await fsp.writeFile(ensemblePath, xyzFrames(['conformer 1', 'conformer 2']), 'utf8');
+
+    const imported = await CrestRunner.readImport(ensemblePath);
+    expect(imported.energies).toEqual([]);
+    const merged = withEnergies(parseMultiXyz(imported.ensembleText).frames, imported.energies);
+    expect(merged.error).toBe('Conformer 1 has no energy in its comment line and the energies file has no entry for it.');
   });
 });

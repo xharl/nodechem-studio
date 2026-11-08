@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { parseCrestEnergies } from '../../src/shared/conformers.js';
 
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const MAX_ENSEMBLE_BYTES = 64 * 1024 * 1024;
+// `crest.energies` is one short line per conformer; 4 MiB is thousands of
+// times more than a real ensemble needs and still bounds an accidental read.
+const MAX_ENERGIES_BYTES = 4 * 1024 * 1024;
 
 /**
  * Run one conformer search, or read an ensemble somebody else generated.
@@ -107,11 +111,7 @@ export class CrestRunner {
     }
     let energies = [];
     try {
-      energies = (await fsp.readFile(path.join(directory, 'crest.energies'), 'utf8'))
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => Number.parseFloat(line.split(/\s+/).pop()));
+      energies = parseCrestEnergies(await fsp.readFile(path.join(directory, 'crest.energies'), 'utf8'));
     } catch {
       // An ensemble whose comment lines carry the energy is still usable.
       energies = [];
@@ -119,7 +119,16 @@ export class CrestRunner {
     return { ensembleText: text, energies, ensemblePath };
   }
 
-  /** Read an ensemble produced elsewhere. The path is user-chosen, so bound it. */
+  /**
+   * Read an ensemble produced elsewhere. The path is user-chosen, so bound it.
+   *
+   * CREST writes its energies to `crest.energies` beside `crest_conformers.xyz`,
+   * so an imported ensemble is read the same way (#103): frames whose comment is
+   * a label or an index still rank, because the sibling energies file supplies
+   * what the comment does not. `<stem>.energies` covers an ensemble that was
+   * renamed on export (`run7.xyz` + `run7.energies`). A frame comment that does
+   * carry an energy still wins: `withEnergies()` prefers it.
+   */
   static async readImport(filePath) {
     const resolved = path.resolve(String(filePath || ''));
     const stat = await fsp.stat(resolved).catch(() => null);
@@ -127,7 +136,38 @@ export class CrestRunner {
     if (stat.size > MAX_ENSEMBLE_BYTES) {
       throw new Error(`The imported ensemble is ${(stat.size / (1024 * 1024)).toFixed(1)} MB; the limit is ${MAX_ENSEMBLE_BYTES / (1024 * 1024)} MB.`);
     }
-    return { ensembleText: await fsp.readFile(resolved, 'utf8'), energies: [], ensemblePath: resolved };
+    return {
+      ensembleText: await fsp.readFile(resolved, 'utf8'),
+      energies: await CrestRunner.readEnergiesBeside(resolved),
+      ensemblePath: resolved,
+    };
+  }
+
+  /**
+   * The energy list that belongs to an ensemble file: `crest.energies` in the
+   * same folder, then `<stem>.energies`. A missing or unusable file is `[]` —
+   * the ensemble may still carry an energy in every frame comment.
+   */
+  static async readEnergiesBeside(ensemblePath) {
+    const directory = path.dirname(ensemblePath);
+    const stem = path.basename(ensemblePath, path.extname(ensemblePath));
+    const candidates = [...new Set([
+      path.join(directory, 'crest.energies'),
+      path.join(directory, `${stem}.energies`),
+    ])];
+    for (const candidate of candidates) {
+      let text;
+      try {
+        const stat = await fsp.stat(candidate);
+        if (!stat.isFile() || stat.size > MAX_ENERGIES_BYTES) continue;
+        text = await fsp.readFile(candidate, 'utf8');
+      } catch {
+        continue;
+      }
+      const energies = parseCrestEnergies(text);
+      if (energies.length > 0) return energies;
+    }
+    return [];
   }
 
   cancel() {
