@@ -10,6 +10,15 @@ contextBridge.exposeInMainWorld('desktop', {
   exportCluster: (payload) => ipcRenderer.invoke('cluster:export', payload),
   importCluster: () => ipcRenderer.invoke('cluster:import'),
   setDirty: (dirty) => ipcRenderer.send('window:dirty', Boolean(dirty)),
+  // Close guard: main asks the renderer to save, and the renderer answers with
+  // exactly one of these. Both are fire-and-forget sends — main owns the window.
+  confirmClose: () => ipcRenderer.send('window:close-result', true),
+  cancelClose: () => ipcRenderer.send('window:close-result', false),
+  onSaveAndClose: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('app:save-and-close', handler);
+    return () => ipcRenderer.removeListener('app:save-and-close', handler);
+  },
   pickExecutable: () => ipcRenderer.invoke('gaussian:pick-executable'),
   preflight: (config) => ipcRenderer.invoke('gaussian:preflight', config),
   runTask: (payload) => ipcRenderer.invoke('gaussian:run', payload),

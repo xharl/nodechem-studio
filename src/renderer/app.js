@@ -8,7 +8,15 @@
 import {
   DEMO_WATER,
 } from '../shared/gaussianInput.js';
-import { defaultGates, defaultSettings } from '../shared/projectSchema.js';
+import {
+  DRAFT_KEY,
+  DRAFT_VERSION,
+  MAX_DRAFT_BYTES,
+  draftAgeLabel,
+  draftIsRestorable,
+  normalizeDraft,
+} from '../shared/draft.js';
+import { defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
 import {
@@ -230,6 +238,12 @@ const state = {
   statusMessage: 'Preview project · choose a calculation block to run it locally',
   projectPath: null,
   savedSnapshot: null,
+  // Snapshot of the project as loaded, used to tell "untitled and untouched"
+  // apart from a real edit so a fresh session never writes a draft for the seed
+  // project. `savedSnapshot` is null until the first open/save, so it cannot
+  // answer that question on its own.
+  draftBaseline: null,
+  draftTimer: null,
   dirty: null,
   run: {
     id: null,
@@ -579,12 +593,184 @@ function refreshDirty() {
     state.dirty = dirty;
     desktop?.setDirty?.(dirty);
   }
+  // Every mutation funnels through here, so this is the one place that needs to
+  // know a draft may be stale. The debounce coalesces a burst of edits (a drag,
+  // a slider) into a single write; nothing is written once the project is clean.
+  if (dirty) scheduleDraftSave();
 }
 
 function markProjectSaved(filePath) {
   state.projectPath = filePath;
   state.savedSnapshot = JSON.stringify(state.project);
+  state.draftBaseline = state.savedSnapshot;
+  // The draft bar offers to replace what is on screen; once another project
+  // becomes current that offer is meaningless, so it goes away with it.
+  dismissDraftBar();
   refreshDirty();
+}
+
+/* ── Crash-safe draft ─────────────────────────────────────── */
+
+// Long enough that typing or dragging does not hammer localStorage, short
+// enough that a crash costs at most the last moment of work.
+const DRAFT_DEBOUNCE_MS = 600;
+
+const draftStorage = () => {
+  // The renderer is also loaded in a plain browser during development.
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;   // storage disabled: run without drafts rather than fail
+  }
+};
+
+function clearDraft() {
+  try {
+    draftStorage()?.removeItem(DRAFT_KEY);
+  } catch {
+    // A failed removal must not break saving the project itself.
+  }
+}
+
+function scheduleDraftSave() {
+  if (!draftStorage()) return;
+  clearTimeout(state.draftTimer);
+  state.draftTimer = setTimeout(writeDraft, DRAFT_DEBOUNCE_MS);
+}
+
+/**
+ * Persist the project as the recovery copy. Oversized projects get no draft at
+ * all — a partial or truncated draft would be worse than none, because the next
+ * session would offer to restore work that was never fully saved.
+ */
+function writeDraft() {
+  state.draftTimer = null;
+  const storage = draftStorage();
+  if (!storage || !state.dirty) return;
+  let payload;
+  try {
+    if (JSON.stringify(state.project) === state.draftBaseline) return;
+    payload = JSON.stringify({
+      version: DRAFT_VERSION,
+      updatedAt: Date.now(),
+      filePath: state.projectPath || null,
+      project: state.project,
+    });
+  } catch {
+    clearDraft();
+    return;
+  }
+  if (!payload || new TextEncoder().encode(payload).length > MAX_DRAFT_BYTES) {
+    clearDraft();
+    return;
+  }
+  try {
+    storage.setItem(DRAFT_KEY, payload);
+  } catch {
+    clearDraft();   // over quota: keep the old draft out of the way
+  }
+}
+
+function dismissDraftBar() {
+  const bar = $('#draft-bar');
+  if (bar) bar.remove();
+}
+
+/**
+ * Non-blocking restore bar. It is deliberately not a modal: the draft is an
+ * offer, and the user must be able to keep working (or open a file) without
+ * answering it. Styling is inline because this element is created by the
+ * renderer and owns no stylesheet rule.
+ */
+function renderDraftBar(draft) {
+  dismissDraftBar();
+  const bar = document.createElement('div');
+  bar.id = 'draft-bar';
+  bar.setAttribute('role', 'status');
+  bar.style.cssText = [
+    'position:fixed',
+    'top:64px',
+    'left:50%',
+    'transform:translateX(-50%)',
+    'z-index:190',
+    'display:flex',
+    'align-items:center',
+    'gap:10px',
+    'max-width:min(560px, calc(100vw - 32px))',
+    'padding:8px 10px 8px 13px',
+    'border:1px solid var(--line-2)',
+    'border-radius:9px',
+    'background:var(--panel-2)',
+    'box-shadow:var(--shadow)',
+    'color:var(--text)',
+    'font-size:11px',
+  ].join(';');
+  bar.innerHTML = `
+    <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Unsaved draft from ${esc(draftAgeLabel(draft.updatedAt, Date.now()))}</span>
+    <button type="button" class="btn small" data-draft-action="restore">Restore</button>
+    <button type="button" class="btn small" data-draft-action="discard">Discard</button>`;
+  bar.addEventListener('click', (event) => {
+    const action = event.target.closest('[data-draft-action]')?.dataset.draftAction;
+    if (action === 'restore') { restoreDraft(draft); return; }
+    if (action === 'discard') {
+      clearDraft();
+      dismissDraftBar();
+      toast('Draft discarded.');
+    }
+  });
+  document.body.appendChild(bar);
+}
+
+/** Re-read the draft at startup; anything untrustworthy is dropped, not shown. */
+function offerDraftRestore() {
+  const storage = draftStorage();
+  if (!storage) return;
+  let raw;
+  try {
+    raw = storage.getItem(DRAFT_KEY);
+  } catch {
+    return;
+  }
+  if (!raw) return;
+  const draft = normalizeDraft(raw);
+  if (!draft) {
+    clearDraft();
+    return;
+  }
+  // Same project as the one just loaded: nothing was lost, so say nothing —
+  // and drop the copy so it cannot resurface later against a different file.
+  if (!draftIsRestorable(draft, state.project)) {
+    clearDraft();
+    return;
+  }
+  renderDraftBar(draft);
+}
+
+function restoreDraft(draft) {
+  // The draft is untrusted storage, so it goes through the same schema check as
+  // a file on disk before it can reach the graph renderer.
+  const parsed = validateProject(draft.project);
+  if (!parsed.ok) {
+    clearDraft();
+    dismissDraftBar();
+    toast('The saved draft was not a valid project, so it was discarded.');
+    return;
+  }
+  state.project = parsed.project;
+  state.selected = { type: 'project', id: null };
+  state.projectPath = draft.filePath || null;
+  dismissDraftBar();
+  // A restored draft is by definition unsaved work: without this the save pill
+  // would claim the project is saved and the close guard would let it go.
+  refreshDirty();
+  const name = $('#project-name-text');
+  if (name) name.textContent = state.project.name || 'Untitled project';
+  state.statusMessage = `Restored an unsaved draft from ${draftAgeLabel(draft.updatedAt, Date.now())}`;
+  renderGraph();
+  renderInspector();
+  updateCounts();
+  updateRunConsoleCopy();
+  toast('Draft restored. Save it to keep it.');
 }
 
 function updateCounts() {
@@ -2794,21 +2980,50 @@ async function openStartupProject() {
   }
 }
 
+/**
+ * Run the project save flow. Returns 'saved' | 'canceled' | 'failed' |
+ * 'unavailable' so the close guard can tell "the user backed out" from "the
+ * write failed" — the window stays open in every non-saved case.
+ */
 async function saveProject() {
-  if (!desktop) { toast('Open the Electron app to save a native project file.'); return; }
+  if (!desktop) { toast('Open the Electron app to save a native project file.'); return 'unavailable'; }
   try {
     const result = await desktop.saveProject(state.project, state.projectPath);
-    if (result.canceled) return;
+    if (result.canceled) return 'canceled';
     if (result.error) {
       toast(`Could not save project: ${result.error.message}`);
-      return;
+      return 'failed';
     }
     if (result.project) state.project = result.project;
     markProjectSaved(result.path);
+    // The work is on disk now, so the recovery copy has nothing left to offer.
+    clearDraft();
     toast(`Saved ${result.path}`);
+    return 'saved';
   } catch (error) {
     toast(`Could not save project: ${error.message}`);
+    return 'failed';
   }
+}
+
+/**
+ * Main asks for a save when the user picks "Save" in the close dialog (it owns
+ * the window, the renderer owns the project). Answer exactly once: confirmClose
+ * lets main close, cancelClose keeps the window open.
+ */
+function installCloseGuard() {
+  if (!desktop?.onSaveAndClose) return;
+  desktop.onSaveAndClose(async () => {
+    const outcome = await saveProject();
+    if (outcome === 'saved') {
+      desktop.confirmClose?.();
+      return;
+    }
+    // Anything else must leave the window alone: a failed save has already
+    // toasted its reason, and a cancelled save dialog is the user saying no.
+    if (outcome === 'canceled') toast('Close canceled: the project was not saved.');
+    desktop.cancelClose?.();
+  });
 }
 
 async function exportSelectedInput() {
@@ -3309,6 +3524,9 @@ async function loadAppInfo() {
 
 function init() {
   loadAppInfo();
+  // Remember the project exactly as loaded: until it changes, there is nothing
+  // worth drafting, and a fresh session must not overwrite a recoverable draft.
+  state.draftBaseline = JSON.stringify(state.project);
   if (window.innerWidth <= 820) state.inspectorHidden = true;
   readRunConfig();
   updateRunConsoleCopy();
@@ -3327,12 +3545,15 @@ function init() {
   renderInspector();
   renderQueue();
   restoreQueue();
-  openStartupProject();
+  // Offer the draft only after a startup project has had the chance to load,
+  // so the comparison is against the project the user will actually see.
+  openStartupProject().finally(offerDraftRestore);
   refreshHistory();
   setZoom(state.zoom);
   syncModeButtons();
   wireEvents();
   installResultsView({ desktop });
+  installCloseGuard();
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

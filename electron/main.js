@@ -86,6 +86,24 @@ let runManager = null;
 let queueManager = null;
 let windowDirty = false;
 
+/**
+ * Close guard state. Closing is the last chance to lose a session's work, so
+ * the close handler never lets the window go while the renderer reports unsaved
+ * changes — unless the user explicitly discards them.
+ *
+ * `allowClose` is the one-shot permission the handler checks first: it is set
+ * only after an explicit discard or after the renderer confirms the save, which
+ * is what keeps our own `window.close()` from re-entering the dialog.
+ * `closeSavePending` stops a second close attempt from stacking another
+ * save request while the renderer is still saving.
+ */
+let allowClose = false;
+let closeSavePending = false;
+let closeSaveTimer = null;
+
+/** How long to wait for the renderer's save before letting the user retry. */
+const CLOSE_SAVE_TIMEOUT_MS = 20000;
+
 function emitRunEvent(event) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('gaussian:event', event);
@@ -99,6 +117,15 @@ function emitQueueEvent(event) {
 }
 
 function createWindow() {
+  // Each window starts unguarded: a previous window's permission to close must
+  // never carry over (macOS keeps the app alive after the last close), and the
+  // stale dirty flag belongs to the window that owned it.
+  allowClose = false;
+  closeSavePending = false;
+  windowDirty = false;
+  clearTimeout(closeSaveTimer);
+  closeSaveTimer = null;
+
   mainWindow = new BrowserWindow({
     width: 1500,
     height: 960,
@@ -129,18 +156,48 @@ function createWindow() {
 
   mainWindow.on('closed', () => { mainWindow = null; });
 
+  /**
+   * Three-way close guard. The renderer owns the project and the native save
+   * dialog, so "Save" cannot be performed here: the handler refuses the close,
+   * asks the renderer to run its normal save flow, and waits for
+   * `window:close-result` before closing for real.
+   */
   mainWindow.on('close', (event) => {
-    if (!windowDirty) return;
+    if (allowClose || !windowDirty) return;
     const choice = dialog.showMessageBoxSync(mainWindow, {
       type: 'warning',
-      buttons: ['Cancel', 'Close without saving'],
-      defaultId: 0,
+      buttons: ['Cancel', 'Save', "Don't save"],
+      defaultId: 1,
       cancelId: 0,
+      noLink: true,
       title: 'Unsaved changes',
       message: 'This project has unsaved changes.',
-      detail: 'Close the window and lose them?',
+      detail: 'Save them before closing?',
     });
-    if (choice === 0) event.preventDefault();
+    if (choice === 0) {
+      event.preventDefault();
+      return;
+    }
+    if (choice === 2) {
+      // Explicit discard: let this close through without asking again.
+      allowClose = true;
+      return;
+    }
+    // Anything that is not an explicit "Save" (including a dialog dismissed
+    // without a choice) keeps the window: silence must never mean discard.
+    event.preventDefault();
+    if (choice !== 1 || closeSavePending) return;
+    closeSavePending = true;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('app:save-and-close');
+    // A renderer that never answers (a wedged save) must not lock the window
+    // shut forever. Dropping the flag only re-arms the dialog; it never closes
+    // anything on its own, so nothing is lost by the timeout.
+    clearTimeout(closeSaveTimer);
+    closeSaveTimer = setTimeout(() => {
+      closeSavePending = false;
+      closeSaveTimer = null;
+    }, CLOSE_SAVE_TIMEOUT_MS);
   });
 }
 
@@ -348,6 +405,22 @@ app.whenReady().then(async () => {
   ipcMain.handle('cluster:export', (_event, payload) => exportClusterScripts(payload));
   ipcMain.handle('cluster:import', () => importClusterResults());
   ipcMain.on('window:dirty', (_event, dirty) => { windowDirty = Boolean(dirty); });
+  /**
+   * The renderer's answer to `app:save-and-close`. `saved` is true only after
+   * its save flow completed; anything else (cancelled dialog, write failure)
+   * leaves the window open so the user can retry or copy their work out.
+   */
+  ipcMain.on('window:close-result', (event, saved) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    // Only the guarded window may decide its own fate.
+    if (event.sender !== mainWindow.webContents) return;
+    clearTimeout(closeSaveTimer);
+    closeSaveTimer = null;
+    closeSavePending = false;
+    if (saved !== true) return;
+    allowClose = true;
+    mainWindow.close();
+  });
   ipcMain.handle('gaussian:pick-executable', (_event, config) => chooseExecutable(config || {}));
   ipcMain.handle('gaussian:preflight', (_event, config) => preflight(config || {}, {
     platform: process.platform,
