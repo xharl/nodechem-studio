@@ -13,6 +13,7 @@ import {
   psi4SettingsOffenders,
 } from '../src/shared/engines/psi4.js';
 import { ENGINES, engineFor, engineOrDefault, isEngineId } from '../src/shared/engines/index.js';
+import * as projectSchema from '../src/shared/projectSchema.js';
 
 const real = (name) => readFileSync(`test/fixtures/real/${name}`, 'utf8');
 
@@ -129,6 +130,22 @@ describe('Psi4 input builder', () => {
       grid: 'UltraFine', stableOpt: true, customKeywords: 'Int=UltraFine',
     }).map((entry) => entry.field);
     expect(fields).toEqual(['solvation', 'tddft', 'population', 'dispersion', 'grid', 'stableOpt', 'customKeywords']);
+  });
+
+  it('accepts the schema defaults: solvation off and a solvent name are not a request', () => {
+    // Regression: the guard tested `String(false)` ("false", truthy) and the
+    // always-filled solvent name, so every default Psi4 block was refused.
+    const { defaultSettings } = projectSchema;
+    const defaults = defaultSettings({ engine: 'psi4', jobType: 'SP', method: 'hf', basis: '6-31g(d)' });
+    expect(defaults.solvation).toBe(false);
+    expect(psi4SettingsOffenders(defaults)).toEqual([]);
+    expect(() => buildPsi4Input({ settings: defaults, molecule: molecule(), inputName: 'x.dat' })).not.toThrow();
+    expect(psi4SettingsOffenders({ solvation: true, solvent: 'Water' }).map((entry) => entry.field)).toEqual(['solvation']);
+  });
+
+  it('refuses the Gaussian-only switches it cannot write instead of dropping them', () => {
+    const fields = psi4SettingsOffenders({ raman: true, orbitals: true, verbosity: 'Normal' }).map((entry) => entry.field);
+    expect(fields).toEqual(['raman', 'orbitals', 'verbosity']);
   });
 
   it('never interpolates a setting into the script as code', () => {

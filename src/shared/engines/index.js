@@ -186,12 +186,13 @@ export const PSI4_ENGINE = Object.freeze({
   parse: parsePsi4Output,
 
   /**
-   * Psi4 leaves no restart file this app can hand to another block. Returning a
-   * name keeps the generic task builder working; no checkpoint edge is offered
-   * for a Psi4 block, and the queue refuses one that a stale project carries.
+   * Psi4 leaves no restart file this app can hand to another block. Empty is the
+   * honest answer: the queue then skips the `.chk` name check and a cross-engine
+   * edge carries the parsed geometry instead. Inventing `${nodeId}.chk` made a
+   * dataset task id (`sp~water`) fail a validator for a file that never exists.
    */
-  checkpointArtifact({ nodeId = 'task' } = {}) {
-    return `${nodeId}.chk`;
+  checkpointArtifact() {
+    return '';
   },
 
   makeFixture({ imaginary = 0 } = {}) {

@@ -41,10 +41,10 @@ function fakeRunner(behaviour = () => ({})) {
     const state = { cancelled: false };
     return {
       cancel() { state.cancelled = true; },
-      async run({ outputName, cwd, onOutput }) {
+      async run({ outputName, cwd, onOutput, executable }) {
         meter.current += 1;
         meter.peak = Math.max(meter.peak, meter.current);
-        meter.order.push({ event: 'start', outputName });
+        meter.order.push({ event: 'start', outputName, executable });
         try {
           const plan = behaviour(outputName) || {};
           if (plan.delay) await new Promise((resolve) => setTimeout(resolve, plan.delay));
@@ -168,6 +168,41 @@ describe('RFC 0001 — the queue keeps the family on disk and runs it', () => {
     });
     await waitFor(async () => settled(await serialStack.queueManager.get(serial.id)), { label: 'serial completion' });
     expect(serialStack.factory.meter.peak).toBe(1);
+  });
+
+  it('launches each task with the binary of its own engine', async () => {
+    const { base, exe, queueManager, factory } = await makeStack();
+    const psi4Exe = path.join(base, 'psi4');
+    await fsp.writeFile(psi4Exe, '');
+    const tasks = [
+      task('opt', { engine: 'xtb', inputName: 'opt.xyz', outputName: 'opt.out', argv: ['opt.xyz', '--gfn', '2', '--sp'] }),
+      task('sp', { engine: 'psi4', inputName: 'sp.dat', outputName: 'sp.out', argv: ['sp.dat'] }),
+    ];
+    const started = await queueManager.start({
+      projectName: 'mixed engines',
+      tasks,
+      // No dependency edge: this test is about which binary each task gets,
+      // not about gate propagation between them.
+      edges: [],
+      options: { executables: { xtb: exe, psi4: psi4Exe }, scratchDir: '' },
+    });
+    await waitFor(async () => settled(await queueManager.get(started.id)), { label: 'mixed-engine completion' });
+    const byOutput = Object.fromEntries(factory.meter.order
+      .filter((entry) => entry.event === 'start')
+      .map((entry) => [entry.outputName, entry.executable]));
+    expect(byOutput['opt.out']).toBe(exe);
+    expect(byOutput['sp.out']).toBe(psi4Exe);
+  });
+
+  it('names the engine whose executable is missing instead of one generic message', async () => {
+    const { exe, queueManager } = await makeStack();
+    const tasks = [task('sp', { engine: 'psi4', inputName: 'sp.dat', outputName: 'sp.out', argv: ['sp.dat'] })];
+    await expect(queueManager.start({
+      projectName: 'missing psi4',
+      tasks,
+      edges: [],
+      options: { executables: { xtb: exe }, scratchDir: '' },
+    })).rejects.toThrow(/Psi4 executable/);
   });
 
   it('reports partial when one record fails and the other finishes', async () => {

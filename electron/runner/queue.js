@@ -128,6 +128,11 @@ function checkpointArtifactFor(engine, task = {}) {
       nodeId: String(task.nodeId || 'task'),
     });
   }
+  // An engine with no restart artifact (Psi4) hands off nothing: the edge
+  // carries the parsed geometry, so there is no checkpoint name to invent —
+  // and inventing one from a dataset task id (`sp~water`) produced a name the
+  // `.chk` validator then refused.
+  if (!engine.capabilities?.restartArtifact) return '';
   return String(task.checkpointName || `${task.nodeId || 'task'}.chk`);
 }
 
@@ -143,6 +148,21 @@ function declaredCheckpointFor(engine, declared) {
     return engine.capabilities.restartArtifact;
   }
   return name;
+}
+
+/**
+ * The binary a task must run: its own engine's path when the queue carries a
+ * per-engine map, else the single legacy `executable`. A mixed flow (xTB opt
+ * feeding a Psi4 single point) needs the former; one-engine callers keep the
+ * latter working unchanged.
+ */
+function queueExecutableFor(queue, task) {
+  const map = queue?.options?.executables;
+  if (map && typeof map === 'object') {
+    const path = String(map[task?.engine] || '').trim();
+    if (path) return path;
+  }
+  return queue?.options?.executable || null;
 }
 
 function isSafeCheckpointName(engine, name) {
@@ -375,7 +395,7 @@ function taskRecord(raw, index) {
     checkpointName: raw?.checkpointName,
     nodeId,
   });
-  if (!isSafeCheckpointName(engine, checkpointName)) {
+  if (checkpointName && !isSafeCheckpointName(engine, checkpointName)) {
     throw new Error(`Task "${nodeId}" has an unsafe checkpoint name.`);
   }
   const type = TASK_TYPES.has(raw?.type) ? raw.type : (executable ? 'calc' : 'note');
@@ -719,21 +739,36 @@ export class QueueManager {
     const options = payload.options || {};
     const dryRun = Boolean(options.dryRun);
     const executable = String(options.executable || '').trim();
+    // Per-engine executables (#98): one project can mix engines, and each task
+    // must launch its own binary. The map is keyed by engine id; the single
+    // `executable` stays as the fallback for callers that only know one engine.
+    const executables = options.executables && typeof options.executables === 'object'
+      ? Object.fromEntries(Object.entries(options.executables)
+        .map(([engine, value]) => [String(engine), String(value || '').trim()])
+        .filter(([, value]) => value))
+      : null;
+    const executableFor = (engineId) => executables?.[String(engineId || '')] || executable;
     const crestExecutable = String(options.crestExecutable || '').trim();
     const scratchDir = String(options.scratchDir || '').trim();
     // RFC 0001: 1 keeps the sequential drain every existing queue had.
     const maxParallel = Math.max(1, Math.min(Number(options.maxParallel) || 1, LIMITS.maxParallel));
-    const needsCalcEngine = tasks.some((task) => task.executable && task.type === 'calc');
+    const calcEngines = [...new Set(tasks
+      .filter((task) => task.executable && task.type === 'calc')
+      .map((task) => String(task.engine || 'gaussian')))];
+    const needsCalcEngine = calcEngines.length > 0;
     // A fanned-out member task carries an ensemble that is already stored in the
     // project; no CREST binary is needed to materialise it (#80).
     const needsCrest = tasks.some((task) => task.type === 'conformers'
       && task.conformers?.generator === 'crest'
       && !task.conformers?.member);
     if (!dryRun) {
-      if (needsCalcEngine) {
-        if (!executable) throw new Error('Choose the calculation executable before running the workflow.');
-        const stat = await fsp.stat(executable).catch(() => null);
-        if (!stat?.isFile()) throw new Error(`Calculation executable not found: ${executable}`);
+      for (const engineId of calcEngines) {
+        const path = executableFor(engineId);
+        if (!path) {
+          throw new Error(`Choose the ${engineFor(engineId).label} executable before running the workflow.`);
+        }
+        const stat = await fsp.stat(path).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`${engineFor(engineId).label} executable not found: ${path}`);
       }
       if (needsCrest) {
         if (!crestExecutable) throw new Error('Choose the CREST executable before running a conformer search (or set the block to import an ensemble).');
@@ -756,7 +791,15 @@ export class QueueManager {
       finishedAt: null,
       currentTaskId: null,
       reason: null,
-      options: { dryRun, executable: dryRun ? null : executable, crestExecutable: dryRun ? null : crestExecutable, scratchDir },
+      options: {
+        dryRun,
+        executable: dryRun ? null : executable,
+        // Per-engine paths travel with the queue so a relaunch or a replay can
+        // still tell which binary each task ran.
+        executables: dryRun ? null : executables,
+        crestExecutable: dryRun ? null : crestExecutable,
+        scratchDir,
+      },
       maxParallel,
       edges,
       tasks,
@@ -1480,7 +1523,7 @@ export class QueueManager {
         inputName: task.inputName,
         outputName: task.outputName,
         settings: task.settings,
-        executable: queue.options.executable,
+        executable: queueExecutableFor(queue, task),
         scratchDir: queue.options.scratchDir,
         dryRun: queue.options.dryRun,
         gates: task.gates,

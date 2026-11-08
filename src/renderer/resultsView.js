@@ -32,6 +32,8 @@ const MISSING_TEXT = 'not reported';
 const ENGINE_LABELS = Object.freeze({
   gaussian: 'Gaussian 16',
   xtb: 'xTB (GFN-xTB)',
+  orca: 'ORCA',
+  psi4: 'Psi4',
 });
 
 const RUN_STATUSES = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'running']);
@@ -185,10 +187,13 @@ function flagsFor(record) {
   const size = finite(bytes?.size);
   const bytesRead = finite(bytes?.bytesRead);
   const fixture = record?.dryRun === true || provenance.kind === 'fixture';
+  // The parser's own `truncated` flag is authoritative: a windowed read covers
+  // the file without reading every byte, so `bytesRead < size` alone is not
+  // evidence of a partial parse.
   const truncated = record?.truncated === true
     || parsed.complete === false
     || bytes?.truncated === true
-    || (size !== null && bytesRead !== null && bytesRead < size);
+    || (bytes?.truncated !== false && size !== null && bytesRead !== null && bytesRead < size);
   return { fixture, truncated, bytes };
 }
 
@@ -264,6 +269,29 @@ function programCard(parsed, flags) {
   return card('Program & route', kv([
     fieldValue('Program banner', banner ? esc(banner) : missingHtml(), 'program'),
   ]) + routeHtml + caveatHtml(flags, 'The program and route record'));
+}
+
+/**
+ * SAPT is an interaction energy, not a total energy for the complex: the parser
+ * deliberately leaves `finalEnergy` empty for it. This card is the only place
+ * the components are shown, and it says what the number is.
+ */
+function saptCard(parsed, flags) {
+  const sapt = isObject(parsed?.sapt) ? parsed.sapt : (isObject(parsed?.extras?.sapt) ? parsed.extras.sapt : null);
+  if (!sapt) return '';
+  const kjm = (value) => (Number.isFinite(value) ? `${value.toFixed(2)} kJ/mol` : missingHtml());
+  const rows = [
+    fieldValue('SAPT0 total', Number.isFinite(sapt.totalKj) ? `<strong>${esc(sapt.totalKj.toFixed(2))} kJ/mol</strong>` : missingHtml(), 'sapt-total'),
+    fieldValue('kcal/mol', Number.isFinite(sapt.totalKcal) ? esc(sapt.totalKcal.toFixed(2)) : missingHtml(), 'sapt-kcal'),
+    fieldValue('Electrostatics', kjm(sapt.electrostaticMha === null ? null : sapt.electrostaticMha * 2.6254996394799), 'sapt-electrostatics'),
+    fieldValue('Exchange', kjm(sapt.exchangeMha === null ? null : sapt.exchangeMha * 2.6254996394799), 'sapt-exchange'),
+    fieldValue('Induction', kjm(sapt.inductionMha === null ? null : sapt.inductionMha * 2.6254996394799), 'sapt-induction'),
+    fieldValue('Dispersion', kjm(sapt.dispersionMha === null ? null : sapt.dispersionMha * 2.6254996394799), 'sapt-dispersion'),
+  ];
+  return card('SAPT', kv(rows)
+    + '<p class="results-note">SAPT0 reports the interaction energy for the fragments in this geometry, '
+    + 'not a total energy for the complex. The components are additive within SAPT0.</p>'
+    + caveatHtml(flags, 'The SAPT decomposition'));
 }
 
 function energyCard(parsed, flags) {
@@ -1144,6 +1172,7 @@ export function resultsPanelHtml(record) {
     runCard(record, parsed, status, engineLabel),
     programCard(parsed, flags),
     energyCard(parsed, flags),
+    saptCard(parsed, flags),
     thermochemistryCard(parsed, flags),
     methodsCard(record),
     frequenciesCard(parsed, flags),

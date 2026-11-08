@@ -286,7 +286,13 @@ export function defaultSettings(overrides = {}) {
   // An explicit dispersion override wins; otherwise follow the resolved method
   // so a functional with built-in dispersion is not double-corrected.
   if (!Object.prototype.hasOwnProperty.call(overrides, 'dispersion')) {
-    settings.dispersion = composite ? '' : defaultDispersionFor(settings.method);
+    // Psi4 takes dispersion through the functional name (ωB97X-D, B97-D) and
+    // its builder refuses any EmpiricalDispersion field, so a default block
+    // must not plant one — otherwise the factory output its own UI creates
+    // could never be built into input.
+    settings.dispersion = composite || settings.engine === 'psi4'
+      ? ''
+      : defaultDispersionFor(settings.method);
   }
   return settings;
 }
