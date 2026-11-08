@@ -318,6 +318,18 @@ function taskRecord(raw, index) {
       spreadKcal: Number.isFinite(Number(rawConformer.spreadKcal)) ? Number(rawConformer.spreadKcal) : null,
     }
     : null;
+  // Issue #101: the planner deferred this calculation because its conformer
+  // ensemble did not exist when the workflow was queued. Carry the reason so the
+  // scheduler can fail the task with it instead of building an input from the
+  // project geometry (the silent substitution the conformer stage exists to stop).
+  const rawPending = raw?.pendingInput && typeof raw.pendingInput === 'object' ? raw.pendingInput : null;
+  const pendingInput = rawPending
+    ? {
+      reason: oneLine(rawPending.reason, 400),
+      conformerId: oneLine(rawPending.conformerId, 64) || null,
+      conformerTitle: oneLine(rawPending.conformerTitle, 120) || null,
+    }
+    : null;
   const rawLadder = raw?.ladder && typeof raw.ladder === 'object' ? raw.ladder : null;
   const ladderId = rawLadder ? String(rawLadder.id || '') : '';
   const ladder = rawLadder && SAFE_ID.test(ladderId)
@@ -367,6 +379,7 @@ function taskRecord(raw, index) {
     spin,
     reaction,
     conformer,
+    pendingInput,
     fanOut,
     loopAttempts: 0,
     conditionResult: null,
@@ -815,6 +828,20 @@ export class QueueManager {
 
         const task = nextReadyTask(queue.tasks, queue.edges);
         if (!task) break;
+
+        // Issue #101: this calculation was planned before its conformer block
+        // produced an ensemble. Its input cannot be rebuilt from the queue — the
+        // task carries no input text — so fail it with the planner's reason. A
+        // queue task must never run on the project geometry instead.
+        if (task.pendingInput) {
+          task.status = 'failed';
+          task.error = task.pendingInput.reason
+            || `"${task.title}" has no selected conformer. Run the ensemble and choose a member before running it.`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          continue;
+        }
 
         if (!task.executable) {
           await this.runControl(queue, task);

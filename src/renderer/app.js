@@ -2640,10 +2640,15 @@ function toast(message) {
 
 const safeBase = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
 
-function selectedCalcNode() {
+function selectedCalcNode({ conformers = false } = {}) {
   if (state.selected.type !== 'node') return null;
   const node = nodeById(state.selected.id);
-  return node?.type === 'calc' ? node : null;
+  if (!node) return null;
+  if (node.type === 'calc') return node;
+  // Issue 101: a conformer block is runnable on its own (its search), so the
+  // run paths that pass `conformers: true` accept it; export still asks for a
+  // calculation and keeps refusing it.
+  return conformers && node.type === 'conformers' ? node : null;
 }
 
 function gatesForNode(node) {
@@ -2962,9 +2967,12 @@ async function preflightRun({ quiet = false } = {}) {
 }
 
 async function startSelectedRun() {
-  const node = selectedCalcNode();
-  if (!node) { toast('Select a calculation block first.'); return; }
+  const node = selectedCalcNode({ conformers: true });
+  if (!node) { toast('Select a calculation or conformer block first.'); return; }
   if (!desktop) { toast(BROWSER_PREVIEW_RUN_MESSAGE); return; }
+  // A conformer block is a queue task (CREST is not a calculation engine), so
+  // it runs through a one-task queue rather than the single-run bridge.
+  if (node.type === 'conformers') { await startSelectedConformerRun(node); return; }
 
   openRunConsole();
   saveRunConfig();
@@ -3022,6 +3030,70 @@ async function startSelectedRun() {
     setRunState('failed', 'failed');
     $('#cancel-run')?.setAttribute('disabled', '');
     toast(`Runner error: ${error.message}`);
+  }
+}
+
+/**
+ * Issue 101: run one conformer block on its own.
+ *
+ * The search is the same task "Run workflow" queues, built by the shared
+ * planner; only this block is included, so the documented "run the block once
+ * before expanding it" step works without deleting the downstream calculation.
+ * The queue's normal events copy the stored ensemble back into the block
+ * (`attachQueueEnsembles`), so the table and member choice appear as usual.
+ */
+async function startSelectedConformerRun(node) {
+  openRunConsole();
+  saveRunConfig();
+  const dryRun = $('#run-dry').checked;
+  const crestExecutable = $('#run-crest').value.trim();
+  if (!dryRun && !crestExecutable) {
+    toast('Choose the CREST executable before running a conformer search.');
+    return;
+  }
+
+  let task;
+  try {
+    task = shared.conformerSearchTask(state.project, node);
+  } catch (error) {
+    appendRunOutput(`Input builder error: ${error.message}\n`);
+    toast(`Cannot build the conformer search: ${error.message}`);
+    return;
+  }
+
+  state.run.output = '';
+  state.run.gates = [];
+  state.run.nodeId = node.id;
+  state.run.id = null;
+  state.run.dir = null;
+  syncVerifyButton($('#verify-run'), null);
+  $('#run-output').textContent = 'Starting conformer search…\n';
+  $('#run-gates').innerHTML = '';
+  mountThermochemistryView($('#run-thermo'), null);
+  $('#run-title').textContent = node.title;
+  $('#run-path').textContent = '';
+  $('#cancel-run')?.setAttribute('disabled', '');
+  setRunState('running', dryRun ? 'dry run' : 'running');
+
+  try {
+    const queue = await desktop.startQueue({
+      projectName: state.project.name || 'Conformer search',
+      tasks: [task],
+      edges: [],
+      options: {
+        dryRun,
+        executable: $('#run-exe').value.trim(),
+        crestExecutable,
+        scratchDir: $('#run-scratch').value.trim(),
+      },
+    });
+    applyQueue(queue);
+    appendRunOutput(`Conformer search queued for "${node.title}".\n`);
+  } catch (error) {
+    appendRunOutput(`Queue error: ${error.message}\n`);
+    setRunState('failed', 'failed');
+    $('#cancel-run')?.setAttribute('disabled', '');
+    toast(`Could not run the conformer search: ${error.message}`);
   }
 }
 
