@@ -16,6 +16,7 @@ import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 import { LIMITS } from '../../src/shared/projectSchema.js';
 import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
+import { sha256File } from './hashing.js';
 import { CrestRunner } from './crestRunner.js';
 import {
   ensembleSummary,
@@ -266,8 +267,22 @@ function conformerTaskRecord(raw, nodeId) {
     generator: oneLine(rawMember.generator, 24),
     method: oneLine(rawMember.method, 24),
     energyEh: Number.isFinite(Number(rawMember.energyEh)) ? Number(rawMember.energyEh) : null,
+    // Issue #130: a fanned-out member must not lose the unit and method its
+    // energy was produced with; the branch's conformers.json repeats them.
+    energyKcal: Number.isFinite(Number(rawMember.energyKcal)) ? Number(rawMember.energyKcal) : null,
+    energyUnit: rawMember.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
+    energyMethod: oneLine(rawMember.energyMethod, 40),
+    origin: {
+      program: oneLine(rawMember.origin?.program, 40),
+      version: oneLine(rawMember.origin?.version, 40),
+      method: oneLine(rawMember.origin?.method, 60),
+      sourceSha256: oneLine(rawMember.origin?.sourceSha256, 64),
+    },
     relativeKcal: Number.isFinite(Number(rawMember.relativeKcal)) ? Number(rawMember.relativeKcal) : null,
-    population: Number.isFinite(Number(rawMember.population)) ? Number(rawMember.population) : null,
+    // A mixed ensemble's members have no population (null), which is not 0%.
+    population: rawMember.population === null || rawMember.population === undefined
+      ? null
+      : (Number.isFinite(Number(rawMember.population)) ? Number(rawMember.population) : null),
     protomer: oneLine(rawMember.protomer, 40),
     spreadKcal: Number.isFinite(Number(rawMember.spreadKcal)) ? Number(rawMember.spreadKcal) : null,
     temperature: Number.isFinite(Number(rawMember.temperature)) ? Number(rawMember.temperature) : null,
@@ -340,6 +355,17 @@ function conformerTaskRecord(raw, nodeId) {
       spreadThresholdKcal: number(conf.spreadThresholdKcal, 2, 0, 50),
       selectedConformerId: /^c\d+$/.test(String(conf.selectedConformerId || '')) ? String(conf.selectedConformerId) : '',
       importPath,
+      // Issues #129/#130: declared provenance and unit of the imported file.
+      // Bounded here so a hand-written queue payload cannot smuggle in an
+      // unbounded string, and never inferred from the generator.
+      energyUnit: conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
+      energyMethod: oneLine(conf.energyMethod, 40),
+      origin: {
+        program: oneLine(conf.origin?.program, 40),
+        version: oneLine(conf.origin?.version, 40),
+        method: oneLine(conf.origin?.method, 60),
+        sourceSha256: oneLine(conf.origin?.sourceSha256, 64),
+      },
       charge: Math.round(number(conf.charge, 0, -10, 10)),
       multiplicity: Math.round(number(conf.multiplicity, 1, 1, 10)),
       argv: Array.isArray(conf.argv) ? conf.argv.map(String).slice(0, 32) : [],
@@ -1330,20 +1356,40 @@ export class QueueManager {
       let ensembleText = '';
       let energies = [];
       let source = conf.generator;
+      let origin = null;
+      // Issue #130: a CREST search writes Hartree energies; only an imported
+      // file can carry another unit, and only if the block says so.
+      const energyUnit = conf.generator === 'import'
+        ? (conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree')
+        : 'hartree';
+      const energyMethod = conf.generator === 'import' ? conf.energyMethod : '';
 
       if (conf.generator === 'import') {
         // Reading an ensemble is a file operation, not an engine call, so a dry
         // run must use the real ensemble. It used to drop straight to the
         // three-member fixture and then fail downstream on "no selected
         // conformer": the dry run hid the data it exists to check.
-        const imported = await CrestRunner.readImport(this.resolveImportPath(queue, conf.importPath));
+        const importPath = this.resolveImportPath(queue, conf.importPath);
+        const imported = await CrestRunner.readImport(importPath);
         ensembleText = imported.ensembleText;
         energies = imported.energies;
+        // Issue #129: the hash is of the bytes on disk, not of the parsed
+        // numbers, so a re-export that changes the file changes the digest.
+        const sourceSha256 = await sha256File(importPath).catch(() => '');
+        origin = {
+          program: conf.origin?.program || '',
+          version: conf.origin?.version || '',
+          method: conf.origin?.method || '',
+          sourceSha256,
+        };
         this.emit({
           type: 'queue-output',
           queueId: queue.id,
           nodeId: task.nodeId,
-          text: `Imported ensemble ${imported.ensemblePath}`,
+          // The origin is printed once, next to the file it describes: a reader
+          // of the log then knows what the numbers are before seeing them.
+          text: `Imported ensemble ${imported.ensemblePath} (${energyUnit}${energyMethod ? `, ${energyMethod}` : ''}${sourceSha256 ? `, sha256 ${sourceSha256.slice(0, 12)}…` : ''})`
+            + (origin.program ? ` from ${origin.program}${origin.version ? ` ${origin.version}` : ''}` : '; origin not recorded'),
         });
       } else if (queue.options.dryRun) {
         const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
@@ -1395,10 +1441,26 @@ export class QueueManager {
         temperature: conf.temperature,
         spreadThresholdKcal: conf.spreadThresholdKcal,
         selectedConformerId: conf.selectedConformerId,
+        energyUnit,
+        energyMethod: conf.generator === 'import' ? energyMethod : '',
       });
       if (ranked.error) throw new Error(ranked.error);
 
-      const summary = ensembleSummary(ranked, { generator: source, method: conf.method });
+      // Issue #129: a generated ensemble names what ran here (crest, or the
+      // labelled dry-run fixture); an imported one keeps only what was declared.
+      const recordedOrigin = origin || {
+        program: source,
+        version: '',
+        method: conf.method || '',
+        sourceSha256: '',
+      };
+      const summary = ensembleSummary(ranked, {
+        generator: source,
+        method: conf.method,
+        origin: recordedOrigin,
+        energyUnit,
+        energyMethod,
+      });
       summary.generatedAt = new Date().toISOString();
       const summaryPath = path.join(dir, 'conformers.json');
       await writeJsonAtomic(summaryPath, summary);
@@ -1438,9 +1500,25 @@ export class QueueManager {
     }
     const atoms = parsed.frames[0].atoms;
     await fsp.writeFile(path.join(dir, 'member.xyz'), xyzText(atoms, `${member.parentTitle || member.parentId} · ${member.id} · fanned out`), 'utf8');
+    // Issues #129/#130: the member's own record repeats the ensemble's origin
+    // and the unit its energy is in, so a branch folder read on its own does
+    // not have to guess either.
+    const memberEnergy = {
+      energyUnit: member.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
+      energyMethod: String(member.energyMethod || ''),
+    };
+    const memberOrigin = {
+      program: String(member.origin?.program || ''),
+      version: String(member.origin?.version || ''),
+      method: String(member.origin?.method || ''),
+      sourceSha256: String(member.origin?.sourceSha256 || ''),
+    };
     const summary = {
       generator: String(member.generator || ''),
       method: String(member.method || ''),
+      ...memberEnergy,
+      origin: memberOrigin,
+      mixedEnergies: false,
       count: 1,
       total: 1,
       spreadKcal: Number.isFinite(member.spreadKcal) ? member.spreadKcal : null,
@@ -1463,7 +1541,9 @@ export class QueueManager {
       members: [{
         id: member.id,
         rank: Number.isInteger(member.rank) ? member.rank : 1,
-        energyEh: member.energyEh,
+        energyEh: memberEnergy.energyUnit === 'hartree' ? (member.energyEh ?? null) : null,
+        energyKcal: memberEnergy.energyUnit === 'kcal/mol' ? (member.energyKcal ?? null) : null,
+        ...memberEnergy,
         relativeKcal: member.relativeKcal,
         population: member.population,
         rmsdToLowest: 0,
@@ -1474,7 +1554,9 @@ export class QueueManager {
       }],
       selected: {
         id: member.id,
-        energyEh: member.energyEh,
+        energyEh: memberEnergy.energyUnit === 'hartree' ? (member.energyEh ?? null) : null,
+        energyKcal: memberEnergy.energyUnit === 'kcal/mol' ? (member.energyKcal ?? null) : null,
+        ...memberEnergy,
         relativeKcal: member.relativeKcal,
         population: member.population,
         protomer: member.protomer,

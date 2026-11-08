@@ -52,6 +52,10 @@ import {
 } from './outputFields.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
+  conformerEnergyLabel,
+  conformerOriginLabel,
+  conformerOriginShort,
+  conformerTableCaption,
   formatPopulation,
   formatRelativeKcal,
 } from '../shared/conformers.js';
@@ -467,11 +471,15 @@ function nodeFoot(node) {
   }
   if (node.type === 'condition') return { left: `unknown → ${node.condition.unknown.replace('-', ' ')}`, right: '2 branches' };
   if (node.type === 'conformers') {
-    const method = node.settings.generator === 'crest'
-      ? `CREST ${node.settings.method === 'gfnff' ? 'GFN-FF' : 'GFN2'}`
-      : 'imported ensemble';
+    // Issue 129: the footer names what produced the ensemble — an imported
+    // file's declared program, or the CREST method that ran here.
+    const origin = node.output && typeof node.output === 'object'
+      ? conformerOriginShort(node.output)
+      : (node.settings.generator === 'crest'
+        ? `CREST ${node.settings.method === 'gfnff' ? 'GFN-FF' : 'GFN2'}`
+        : 'imported ensemble');
     const chosen = node.output?.selectedId || '';
-    return { left: method, right: chosen ? `using ${chosen}` : 'no choice' };
+    return { left: origin, right: chosen ? `using ${chosen}` : 'no choice' };
   }
   if (node.type === 'loop') return { left: `until ${node.loop.until}`, right: `×${node.loop.maxAttempts}` };
   if (node.type === 'merge') return { left: `policy: ${node.merge.policy}`, right: 'join' };
@@ -614,9 +622,12 @@ function resultFacts(node) {
     const top = Array.isArray(output.members) && output.members.length
       ? Math.max(...output.members.map((member) => Number(member.population) || 0))
       : null;
+    // Issue 130: the card says what unit the absolute energies are in. The
+    // spread is kcal/mol either way; the unit and method name the members.
+    const energy = conformerEnergyLabel(output);
     return {
       main: `${output.count} of ${output.total} kept${spread}`,
-      sub: top ? `top population ${(top * 100).toFixed(1)}%` : '',
+      sub: top ? `${energy} · top ${(top * 100).toFixed(1)}%` : energy,
       tone: 'ok',
     };
   }
@@ -2131,9 +2142,13 @@ function conformersInspector(node) {
   const summaryLine = output
     ? `${output.count} of ${output.total} kept${Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(2)} kcal/mol` : ''}`
     : 'no ensemble yet';
+  // Issues 129/130: the caption names the absolute energy unit and its
+  // method, and the provenance line names what produced the ensemble.
+  const caption = output ? conformerTableCaption(output) : '';
+  const provenanceLine = output ? conformerOriginLabel(output) : '';
   const rows = members.length
     ? `<table class="batch-table">
-        <thead><tr><th>Member</th><th>ΔE</th><th>Pop.</th><th>RMSD</th><th></th></tr></thead>
+        <thead><tr><th>Member</th><th>ΔE (kcal/mol)</th><th>Pop.</th><th>RMSD</th><th></th></tr></thead>
         <tbody>${members.map((member) => `<tr${member.kept ? '' : ' class="is-muted"'}>
           <td>${esc(member.id)}${member.protomer ? ` · ${esc(member.protomer)}` : ''}</td>
           <td>${formatRelativeKcal(member.relativeKcal)}</td>
@@ -2153,8 +2168,9 @@ function conformersInspector(node) {
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${selected
       ? `using ${esc(selected.id)} · ${formatRelativeKcal(selected.relativeKcal)} kcal/mol · ${formatPopulation(selected.population)}`
       : 'no member chosen'}</span></div>
+    ${provenanceLine ? `<div class="inspector-note" data-conformer-provenance>${esc(provenanceLine)}</div>` : ''}
     ${warningBlock}
-    ${group('Ensemble', summaryLine, true, [rows])}
+    ${group('Ensemble', output ? caption : summaryLine, true, [rows])}
     ${group('Search', s.generator === 'crest' ? 'CREST' : 'imported file', true, [
       `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
         <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
@@ -2171,6 +2187,19 @@ function conformersInspector(node) {
               <button type="button" class="btn small" data-action="pick-ensemble">Choose…</button>
             </div>
           </div>`,
+      // Issues 129/130: an imported file carries energies this app did not
+      // compute, in a unit it did not choose. Both are recorded, not guessed:
+      // an MM energy in kcal/mol is never stored or shown as a Hartree total.
+      ...(s.generator === 'import' ? [
+        `<div class="field"><label>Energies are in</label><select class="select" data-conformer-field="energyUnit">
+          <option value="hartree"${s.energyUnit !== 'kcal/mol' ? ' selected' : ''}>Hartree</option>
+          <option value="kcal/mol"${s.energyUnit === 'kcal/mol' ? ' selected' : ''}>kcal/mol</option>
+        </select></div>`,
+        `<div class="field"><label>Energy method</label><input class="input" data-conformer-field="energyMethod" value="${esc(s.energyMethod || '')}" placeholder="MMFF94" maxlength="40"></div>`,
+        `<div class="field"><label>Produced by</label><input class="input" data-conformer-field="originProgram" value="${esc(s.origin?.program || '')}" placeholder="program name" maxlength="40"></div>`,
+        `<div class="field"><label>Program version</label><input class="input" data-conformer-field="originVersion" value="${esc(s.origin?.version || '')}" placeholder="e.g. 26.1" maxlength="40"></div>`,
+        `<div class="field full"><label>Producing method / settings</label><input class="input" data-conformer-field="originMethod" value="${esc(s.origin?.method || '')}" placeholder="e.g. MMFF94, 15 kJ/mol window" maxlength="60"></div>`,
+      ] : []),
       `<div class="field"><label>Energy window (kcal/mol)</label><input class="input" type="number" min="0" max="100" step="0.5" data-conformer-field="energyWindowKcal" value="${esc(s.energyWindowKcal)}"></div>`,
       `<div class="field"><label>RMSD threshold (Å)</label><input class="input" type="number" min="0.01" max="10" step="0.05" data-conformer-field="rmsdThreshold" value="${esc(s.rmsdThreshold)}"></div>`,
       `<div class="field"><label>Keep at most</label><input class="input" type="number" min="1" max="200" data-conformer-field="maxConformers" value="${esc(s.maxConformers)}"></div>`,
@@ -2561,6 +2590,9 @@ function addBlock(type) {
       id, type: 'conformers', kind: 'Conformers', title: 'Conformer ensemble', state: 'ready', ...position,
       settings: {
         ...DEFAULT_CONFORMER_SETTINGS,
+        // A fresh origin per block: the default is one frozen object, and two
+        // blocks must not share the provenance they declare.
+        origin: { ...DEFAULT_CONFORMER_SETTINGS.origin },
         charge: state.project.molecule.charge,
         multiplicity: state.project.molecule.multiplicity,
       },
@@ -6192,7 +6224,12 @@ function applyConformerField(target) {
   if (!node || node.type !== 'conformers') return;
   const key = target.dataset.conformerField;
   const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity'];
-  if (numeric.includes(key)) {
+  // Issue 129: the declared provenance lives in a nested `origin` object, so
+  // the flat `settings[key] = value` path cannot write it.
+  const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
+  if (originField) {
+    node.settings.origin = { ...(node.settings.origin || {}), [originField]: String(target.value || '') };
+  } else if (numeric.includes(key)) {
     const bounds = {
       energyWindowKcal: [0, 100], rmsdThreshold: [0.01, 10], maxConformers: [1, 200],
       temperature: [1, 1000], spreadThresholdKcal: [0, 50], charge: [-10, 10], multiplicity: [1, 10],

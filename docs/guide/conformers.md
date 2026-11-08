@@ -33,6 +33,49 @@ project geometry.
 The app never bundles CREST. If the generator is `crest` and no executable is configured, the
 queue refuses to start and says so; it does not fabricate an ensemble.
 
+## Imported ensembles: what the block records
+
+An imported ensemble is not a result this app computed. The block therefore records where it came
+from, and says so on the card, in the inspector and in the ensemble table's caption:
+
+- **origin** — `program`, `version` and `method` as declared on the block, plus `sourceSha256`, the
+  SHA-256 digest of the file's bytes taken when the block ran. The declared fields are written by
+  you; the hash is written by the queue and cannot be typed in.
+- the ensemble summary in the project carries the same origin, so the claim survives save/load and
+  does not depend on the queue folder. The ensemble's own `generator` is `import`; a CREST search
+  records `crest` (and a dry run `fixture`) instead.
+
+What it proves: *this file, with these bytes, produced this table*, and that you have stated which
+program and method produced the file. What it does **not** prove: that the file is what you say it
+is. The digest fixes the bytes, not the provenance — anyone can type `Spartan` in the program box,
+and the app has no way to check a file written by another program. The hash is also not a signature:
+re-exporting the same conformers changes it. Report the origin as the source's claim, not as this
+app's verification.
+
+An imported ensemble keeps `gfn2` out of its provenance: `method` on the block is the conformer
+*search* method and applies to CREST only. The method that produced an imported file's energies is
+`energyMethod` (free text, e.g. `MMFF94`), and it is shown next to the unit.
+
+## Energy units (Hartree vs kcal/mol)
+
+An imported file may carry absolute energies in Hartree (an SCF or xTB total) or in kcal/mol (an MM
+force-field energy). The two are different claims: `−0.00064 Ha` looks like a molecular total energy,
+and comparing it with an SCF result is meaningless. Set **Energies are in** to match the file before
+running the block.
+
+- `energyUnit` is `hartree` (the default, and what every file written before this field existed
+  meant) or `kcal/mol`; `energyMethod` names what produced the numbers.
+- A `kcal/mol` member stores its energy in `energyKcal` and leaves `energyEh` **null** — the number
+  is never moved into a field that names the other unit. `relativeKcal` keeps its meaning in both
+  cases: kcal/mol relative to the lowest member, which is what the window, the populations and the
+  spread all use.
+- The only conversion in the code is explicit: `HARTREE_KCAL` (627.5094740631) turns a Hartree
+  difference into kcal/mol for the ΔE column. Nothing is converted *into* Hartree.
+- An ensemble whose members disagree on unit or method is **flagged, not averaged**: the block
+  reports `mixedEnergies`, prints *mixed energy units/methods — not averaged*, and reports neither
+  populations nor a spread, because a Boltzmann average over an MM and an SCF energy would be a
+  number no method supports. The members stay visible, with their own unit and method.
+
 ## Settings
 
 | Setting | Default | Effect |

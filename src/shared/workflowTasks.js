@@ -111,6 +111,15 @@ export function conformerSettingsFor(node) {
     selectedConformerId: String(source.selectedConformerId || ''),
     importPath: String(source.importPath || ''),
     fanOut: pick('fanOut') === true,
+    // Issues #129/#130: what an imported file is, and what its energies are.
+    // Passed through as declared — the queue records it, it does not guess it.
+    energyUnit: pick('energyUnit') === 'kcal/mol' ? 'kcal/mol' : 'hartree',
+    energyMethod: String(source.energyMethod || ''),
+    origin: {
+      program: String(source.origin?.program || ''),
+      version: String(source.origin?.version || ''),
+      method: String(source.origin?.method || ''),
+    },
   };
 }
 
@@ -1179,7 +1188,11 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
         parentTitle: node.title,
         generator: ensemble.generator,
         method: ensemble.method,
-        energyEh: member.energyEh,
+        energyEh: member.energyEh ?? null,
+        energyKcal: member.energyKcal ?? null,
+        energyUnit: member.energyUnit || ensemble.energyUnit || 'hartree',
+        energyMethod: member.energyMethod || ensemble.energyMethod || '',
+        origin: ensemble.origin || null,
         relativeKcal: member.relativeKcal,
         population: member.population,
         protomer: member.protomer,
