@@ -1919,17 +1919,12 @@ function installStyles(doc) {
  * module. It only uses the existing tokens and adds no second design system.
  */
 const RESULTS_VIEW_CSS = `
-.run-console.has-results {
-  width: min(980px, calc(100vw - 36px));
-  height: min(940px, calc(100vh - 70px));
-  max-height: min(940px, calc(100vh - 70px));
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) minmax(200px, 42%);
-}
-.run-console.has-results .run-body { min-height: 0; overflow-y: auto; }
+/* Results are a section of the console now (Setup · Queue · Results), so a
+   finished run must not blow the window up to a 980 × 940 hero: the console
+   keeps its bounded size and the results pane scrolls inside it. */
+/* No width override: the console is one size whatever section is open. */
 .run-results {
   min-height: 0; overflow-y: auto; padding: 12px 14px 14px;
-  border-top: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
 }
 .results-panel { display: flex; flex-direction: column; gap: 10px; font-size: var(--text-size-xs); color: var(--text-primary); }

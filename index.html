@@ -243,27 +243,32 @@
     <div class="run-config run-pane" data-pane="setup">
       <label class="run-check"><input type="checkbox" id="run-dry" checked> Dry run (fixture output)</label>
       <div class="run-field"><label for="run-exe" id="run-exe-label">Gaussian 16 executable</label><div class="run-path"><input id="run-exe" placeholder="C:\\G16W\\g16.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-gaussian">Browse</button></div></div>
-      <div class="run-field"><label for="run-crest">CREST executable (conformer blocks)</label><div class="run-path"><input id="run-crest" placeholder="C:\\crest\\crest.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-crest">Browse</button></div></div>
+      <div class="run-field"><label for="run-crest" title="CREST executable (conformer blocks)">CREST executable</label><div class="run-path"><input id="run-crest" placeholder="C:\\crest\\crest.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-crest">Browse</button></div></div>
       <div class="run-field"><label for="run-scratch">Scratch directory</label><input id="run-scratch" placeholder="defaults to the run directory" spellcheck="false" autocomplete="off"></div>
       <div class="run-field"><label for="run-max-parallel">Parallel tasks</label><input id="run-max-parallel" type="number" min="1" max="64" step="1" value="1" title="How many independent tasks may run at once; a barrier still waits for every record"></div>
-      <div class="run-actions">
-        <button class="btn small" data-action="preflight">Preflight</button>
+      <details class="run-tools">
+        <summary>Tools</summary>
+        <div class="run-actions">
+          <button class="btn small" data-action="preflight">Preflight</button>
+          <button class="btn small" id="verify-run" data-action="verify-run" disabled>Verify input</button>
+          <button class="btn small" data-action="export-run-bundle" title="Write methods.md, manifest.json and the run files to a new folder">Export run bundle</button>
+          <button class="btn small" data-action="export-run-format" title="Convert this run into a format other software reads">Export as…</button>
+          <select id="run-export-format" class="btn small" aria-label="Format to export the run in" title="Frames for a viewer, SDF for an editor, JCAMP for spectroscopy software">
+            <option value="extxyz">extxyz (frames)</option>
+            <option value="xyz">xyz (frames)</option>
+            <option value="sdf">sdf (structure)</option>
+            <option value="jcamp:ir">JCAMP (IR)</option>
+            <option value="jcamp:raman">JCAMP (Raman)</option>
+            <option value="jcamp:uv">JCAMP (UV/Vis)</option>
+          </select>
+        </div>
+      </details>
+      <p class="run-hint" id="run-hint">Dry run writes a synthetic fixture log and evaluates the parser. Uncheck to launch the engine executable.</p>
+      <div class="run-primary">
         <button class="btn primary small" data-action="run-workflow" title="Queue every block of the active flow">Run workflow</button>
         <button class="btn small" data-action="run-selected">Run selected block</button>
-        <button class="btn small" id="verify-run" data-action="verify-run" disabled>Verify input</button>
-        <button class="btn small" data-action="export-run-bundle" title="Write methods.md, manifest.json and the run files to a new folder">Export run bundle</button>
-        <select id="run-export-format" class="btn small" aria-label="Format to export the run in" title="Frames for a viewer, SDF for an editor, JCAMP for spectroscopy software">
-          <option value="extxyz">extxyz (frames)</option>
-          <option value="xyz">xyz (frames)</option>
-          <option value="sdf">sdf (structure)</option>
-          <option value="jcamp:ir">JCAMP (IR)</option>
-          <option value="jcamp:raman">JCAMP (Raman)</option>
-          <option value="jcamp:uv">JCAMP (UV/Vis)</option>
-        </select>
-        <button class="btn small" data-action="export-run-format" title="Convert this run into a format other software reads">Export as…</button>
         <button class="btn small danger" id="cancel-run" data-action="cancel-run" disabled>Stop</button>
       </div>
-      <p class="run-hint" id="run-hint">Dry run writes a synthetic fixture log and evaluates the parser. Uncheck to launch the engine executable.</p>
     </div>
     <div class="run-output-wrap run-pane" data-pane="setup">
       <div class="run-output-head"><span>Output</span><span id="run-path"></span></div>
