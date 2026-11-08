@@ -205,17 +205,25 @@ describe('conformer workflow wiring', () => {
 describe('conformer fan-out (#80)', () => {
   const fanOutProject = (output = selection(), settings = { fanOut: true }) => conformerProject({ output, settings });
 
-  it('refuses a single run downstream of a fanned-out branch', () => {
-    // `conf -> opt -> freq`: the frequency block would wait for both members and
-    // then run once on the project geometry. Silently dropping the ensemble is
-    // the failure fan-out exists to prevent, so the plan must refuse.
+  it('propagates the fan-out through a downstream chain (#87)', () => {
+    // `conf -> opt -> freq`: the frequency must run once per member, not once
+    // on the project geometry after both optimisations finish.
     const project = fanOutProject();
     project.nodes.push({
       id: 'freq', type: 'calc', title: 'Frequency', state: 'ready', x: 400, y: 0,
       settings: defaultSettings({ jobType: 'Freq' }), output: null, checkpointFrom: null,
     });
     project.edges.push({ id: 'e2', from: 'opt', to: 'freq', type: 'dependency' });
-    expect(() => buildWorkflowPlan(project)).toThrow(/would run once but 2 fanned-out branches feed it/);
+    const plan = buildWorkflowPlan(project);
+    expect(plan.tasks.map((task) => task.nodeId)).toEqual([
+      'conf~c1', 'conf~c2', 'opt~c1', 'opt~c2', 'freq~c1', 'freq~c2',
+    ]);
+    expect(plan.edges.map((edge) => `${edge.from}->${edge.to}`)).toEqual([
+      'conf~c1->opt~c1',
+      'conf~c2->opt~c2',
+      'opt~c1->freq~c1',
+      'opt~c2->freq~c2',
+    ]);
   });
 
   it('lets a merge block collect the fanned-out branches', () => {
