@@ -18,7 +18,9 @@ import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from './validityChec
 import { LIMITS } from './projectSchema.js';
 import {
   activeFlow,
+  datasetById,
   edgesOfFlow,
+  enabledRecords,
   flowById,
   nodesOfFlow,
   scopeFor,
@@ -533,6 +535,9 @@ export function buildWorkflowPlan(project, { flowId = null } = {}) {
     const records = scope ? scope.records : [null];
 
     if (node.type === 'input') {
+      // An input block is the *source* of a scope, so `scopeFor` finds nothing
+      // upstream of it; its records come straight from the dataset it names.
+      const bound = datasetById(project, node.input?.datasetId);
       tasks.push({
         nodeId: node.id,
         type: 'input',
@@ -542,8 +547,8 @@ export function buildWorkflowPlan(project, { flowId = null } = {}) {
         flowId: flowKey,
         input: {
           datasetId: node.input?.datasetId || '',
-          datasetTitle: scope?.dataset?.title || '',
-          records: (scope?.records || []).map((record) => ({ id: record.id, label: record.label || record.id })),
+          datasetTitle: bound?.title || '',
+          records: enabledRecords(bound).map((record) => ({ id: record.id, label: record.label || record.id })),
         },
       });
       idsFor.set(node.id, [node.id]);
@@ -875,7 +880,7 @@ function calculationTask(project, node, {
     ...(fanOut ? { fanOut } : {}),
     ...(emissionFor ? { emission: emissionFor } : {}),
     ...(built.conformer ? { conformer: built.conformer } : {}),
-    ...(record ? { record: { id: record.id, label: record.label || record.id } } : {}),
+    ...(record ? { record: { id: record.id, label: record.label || record.id, charge: record.charge, multiplicity: record.multiplicity } } : {}),
   };
 }
 
@@ -1016,6 +1021,6 @@ export function conformerSearchTask(project, node, record = null) {
         ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
         : [],
     },
-    ...(record ? { record: { id: record.id, label: record.label || record.id } } : {}),
+    ...(record ? { record: { id: record.id, label: record.label || record.id, charge: record.charge, multiplicity: record.multiplicity } } : {}),
   };
 }

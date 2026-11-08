@@ -14,7 +14,11 @@
  *     blocks dependents instead of letting them run on stale inputs.
  */
 
-export const ORDERING_EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch']);
+/**
+ * `barrier` orders across records (RFC 0001): the plan already expanded it to
+ * every source-record → consumer pair, so here it is an ordinary predecessor.
+ */
+export const ORDERING_EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch', 'barrier']);
 
 export const TERMINAL_STATUSES = Object.freeze([
   'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
@@ -94,8 +98,15 @@ function findCycle(candidates, incoming, outgoing) {
   return null;
 }
 
-/** Next task that may start now, in stable task order. Null when none is ready. */
-export function nextReadyTask(tasks, edges) {
+/**
+ * Next task that may start now, in stable task order. Null when none is ready.
+ *
+ * `skip` holds task ids already started but not yet marked running (RFC 0001:
+ * a parallel drain launches several tasks before any of them has woken up).
+ * Skipping them here — rather than filtering the task list — keeps their
+ * successors correctly blocked until they finish.
+ */
+export function nextReadyTask(tasks, edges, skip = null) {
   const byId = new Map(tasks.map((task) => [task.nodeId, task]));
   const prerequisites = new Map(tasks.map((task) => [task.nodeId, []]));
   for (const edge of orderingEdges(edges)) {
@@ -103,6 +114,7 @@ export function nextReadyTask(tasks, edges) {
   }
   for (const task of tasks) {
     if (task.status !== 'pending') continue;
+    if (skip && skip.has(task.nodeId)) continue;
     const ready = prerequisites.get(task.nodeId).every((id) => isSatisfied(byId.get(id).status));
     if (ready) return task;
   }
@@ -137,17 +149,33 @@ export function blockedPendingTasks(tasks, edges) {
  * Queue status once nothing is runnable:
  *   null          → work remains that is neither runnable nor blocked (keep running)
  *   completed     → every task completed or skipped
- *   failed        → at least one task failed
+ *   partial       → some records finished and some failed (RFC 0001)
+ *   failed        → at least one task failed and nothing succeeded
  *   needs-review  → gates failed or control-flow nodes blocked
  *   cancelled     → cancelled with no failures
+ *
+ * `partial` exists because a family run that lost three records of two hundred
+ * is neither a pass nor a failure, and collapsing it into either would misreport
+ * the chemistry that did compute.
  */
 export function finalStatus(tasks) {
   const statuses = tasks.map((task) => task.status);
   if (statuses.length === 0) return 'completed';
   if (statuses.some((status) => !isTerminal(status))) return null;
-  if (statuses.includes('failed')) return 'failed';
+  const succeeded = statuses.filter((status) => status === 'completed').length;
+  // `cancelled` is its own verdict; only a real failure (or an interrupted
+  // run, which the old contract also reported as failed) makes a queue fail.
+  const recordScoped = tasks.some((task) => task && task.recordId);
+  // In a family run a gate failure is one record's outcome, so it feeds the same
+  // partial/failed decision as a crash. In a single-molecule graph it stays
+  // needs-review, exactly as before.
+  const failed = statuses.filter((status) => status === 'failed' || status === 'interrupted'
+    || (recordScoped && status === 'needs-review')).length;
+  // `partial` is a record-family verdict: a graph that lost one block and ran
+  // another is still a failed graph. A dataset run that lost three records of
+  // two hundred is neither a pass nor a failure.
+  if (failed > 0) return recordScoped && succeeded > 0 ? 'partial' : 'failed';
   if (statuses.includes('needs-review') || statuses.includes('blocked')) return 'needs-review';
   if (statuses.includes('cancelled')) return 'cancelled';
-  if (statuses.includes('interrupted')) return 'failed';
   return 'completed';
 }

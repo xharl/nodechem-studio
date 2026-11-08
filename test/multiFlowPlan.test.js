@@ -102,7 +102,7 @@ describe('RFC 0001 — a dataset expands into one task per enabled record', () =
     });
     const plan = buildWorkflowPlan(p);
     const m2 = plan.tasks.find((task) => task.nodeId === 'sp~m2');
-    expect(m2.record).toEqual({ id: 'm2', label: 'two' });
+    expect(m2.record).toEqual({ id: 'm2', label: 'two', charge: -1, multiplicity: 2 });
     // The Gaussian molecule block is the bare "charge multiplicity" line.
     expect(m2.inputText).toMatch(/^-1 2$/m);
     const m1 = plan.tasks.find((task) => task.nodeId === 'sp~m1');

@@ -12,6 +12,7 @@ import { ladderVerdict } from '../../src/shared/methodLadder.js';
 import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
 import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
+import { LIMITS } from '../../src/shared/projectSchema.js';
 import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
 import { CrestRunner } from './crestRunner.js';
 import {
@@ -32,7 +33,7 @@ const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
 // The first character is alphanumeric so `.`/`..` can never escape targetDir.
 const SAFE_ARTIFACT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,123}$/;
 const MAX_INPUT_BYTES = 2 * 1024 * 1024;
-const MAX_TASKS = 500;
+const MAX_TASKS = LIMITS.planTasks;
 
 // CREST resolves a relative input against its working directory, so the search
 // input is staged inside the task folder under this name and argv names only the
@@ -44,7 +45,7 @@ const TASK_STATUSES = new Set([
   'pending', 'running', 'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
 ]);
 
-const TASK_TYPES = new Set(['calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note']);
+const TASK_TYPES = new Set(['input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note']);
 
 function queueIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -251,11 +252,66 @@ function conformerTaskRecord(raw, nodeId) {
   };
 }
 
+/**
+ * RFC 0001: the flow and record a task belongs to, plus the dataset payload an
+ * input block carries. Kept in one place so the conformer path cannot forget it.
+ */
+function scopeRecord(raw) {
+  const text = (value) => (typeof value === 'string' && value ? oneLine(value, 64) : null);
+  const record = raw?.record && typeof raw.record === 'object'
+    ? {
+      id: text(raw.record.id) || '',
+      label: oneLine(raw.record.label, 200) || text(raw.record.id) || '',
+      charge: Number.isInteger(Number(raw.record.charge)) ? Number(raw.record.charge) : null,
+      multiplicity: Number.isInteger(Number(raw.record.multiplicity)) ? Number(raw.record.multiplicity) : null,
+    }
+    : null;
+  const input = raw?.input && typeof raw.input === 'object'
+    ? {
+      datasetId: text(raw.input.datasetId) || '',
+      datasetTitle: oneLine(raw.input.datasetTitle, 160) || '',
+      records: Array.isArray(raw.input.records)
+        ? raw.input.records.slice(0, LIMITS.records).map((entry) => ({
+          id: text(entry?.id) || '',
+          label: oneLine(entry?.label, 200) || text(entry?.id) || '',
+        })).filter((entry) => entry.id)
+        : [],
+    }
+    : null;
+  return {
+    flowId: text(raw?.flowId),
+    recordId: text(raw?.recordId),
+    record: record && record.id ? record : null,
+    input,
+  };
+}
+
+const OUTPUT_KIND_SET = new Set(['html', 'csv', 'json', 'zip']);
+const OUTPUT_PATH_SAFE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/** The artifact an output block writes (RFC 0001). Paths are project-relative. */
+function outputRecord(raw) {
+  const kind = OUTPUT_KIND_SET.has(raw?.kind) ? raw.kind : 'zip';
+  const artifactPath = typeof raw?.path === 'string' && OUTPUT_PATH_SAFE.test(raw.path) && !raw.path.split('/').includes('..')
+    ? raw.path
+    : (kind === 'zip' ? 'project.zip' : `reports/report.${kind}`);
+  return {
+    kind,
+    path: artifactPath,
+    include: raw?.include === 'record' ? 'record' : 'records',
+    bundle: oneLine(raw?.bundle, 120) || 'project.zip',
+    manifest: raw?.manifest !== false,
+    notes: oneLine(raw?.notes, 2000),
+  };
+}
+
 function taskRecord(raw, index) {
   const nodeId = String(raw?.nodeId || '');
   if (!SAFE_ID.test(nodeId)) throw new Error(`Task ${index + 1} has an invalid node id.`);
   const executable = Boolean(raw?.executable);
-  if (TASK_TYPES.has(raw?.type) && raw.type === 'conformers') return conformerTaskRecord(raw, nodeId);
+  if (TASK_TYPES.has(raw?.type) && raw.type === 'conformers') {
+    return { ...conformerTaskRecord(raw, nodeId), ...scopeRecord(raw) };
+  }
   const engineId = String(raw?.engine || 'gaussian');
   const engine = engineFor(engineId);
   const argv = Array.isArray(raw?.argv) ? raw.argv.map(String) : null;
@@ -416,6 +472,8 @@ function taskRecord(raw, index) {
     startedAt: null,
     finishedAt: null,
     inputText,
+    ...scopeRecord(raw),
+    ...(raw?.output && typeof raw.output === 'object' ? { output: outputRecord(raw.output) } : {}),
   };
 }
 
@@ -626,6 +684,8 @@ export class QueueManager {
     const executable = String(options.executable || '').trim();
     const crestExecutable = String(options.crestExecutable || '').trim();
     const scratchDir = String(options.scratchDir || '').trim();
+    // RFC 0001: 1 keeps the sequential drain every existing queue had.
+    const maxParallel = Math.max(1, Math.min(Number(options.maxParallel) || 1, LIMITS.maxParallel));
     const needsCalcEngine = tasks.some((task) => task.executable && task.type === 'calc');
     // A fanned-out member task carries an ensemble that is already stored in the
     // project; no CREST binary is needed to materialise it (#80).
@@ -656,6 +716,7 @@ export class QueueManager {
       currentTaskId: null,
       reason: null,
       options: { dryRun, executable: dryRun ? null : executable, crestExecutable: dryRun ? null : crestExecutable, scratchDir },
+      maxParallel,
       edges,
       tasks,
       // Method ladders: one verdict per ladder group, evaluated when every rung
@@ -675,6 +736,7 @@ export class QueueManager {
         : this.inputPath(id, task.nodeId);
       await fsp.writeFile(inputPath, task.inputText, 'utf8');
     }
+    await this.writeRecordFiles(queue);
     this.queues.set(id, queue);
     await this.persist(queue);
     this.publish(queue, 'queue-started');
@@ -830,9 +892,79 @@ export class QueueManager {
     return changed;
   }
 
+  /**
+   * One queued task, whatever its kind.
+   *
+   * Issue #101: a calculation planned before its conformer block produced an
+   * ensemble carries `pendingInput` and no input text; it fails with the
+   * planner's reason instead of running on the project geometry.
+   */
+  async executeTask(queue, task) {
+    if (task.pendingInput) {
+      task.status = 'failed';
+      task.error = task.pendingInput.reason
+        || `"${task.title}" has no selected conformer. Run the ensemble and choose a member before running it.`;
+      task.finishedAt = new Date().toISOString();
+      await this.persist(queue);
+      this.publish(queue);
+      return;
+    }
+    if (task.type === 'conformers') return this.runConformers(queue, task);
+    return this.runTask(queue, task);
+  }
+
+  /** Last-resort handler: a task that throws outside its own error handling. */
+  async failTask(queue, task, error) {
+    if (!task) return;
+    if (task.status === 'running' || task.status === 'pending') task.status = 'failed';
+    task.error = oneLine(error?.message || String(error), 400) || 'The task failed without a message.';
+    task.finishedAt = new Date().toISOString();
+    await this.persist(queue);
+    this.publish(queue);
+  }
+
+  /**
+   * One small file per dataset record, beside the queue snapshot.
+   *
+   * A run knows its record from `run.json`; these files make the queue folder
+   * self-describing even when the project that planned it is not at hand, which
+   * is what a shared or archived run needs.
+   */
+  async writeRecordFiles(queue) {
+    const records = new Map();
+    for (const task of queue.tasks) {
+      if (!task.recordId || records.has(task.recordId)) continue;
+      records.set(task.recordId, {
+        id: task.recordId,
+        label: task.record?.label || task.recordId,
+        charge: Number.isInteger(task.record?.charge) ? task.record.charge : null,
+        multiplicity: Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : null,
+        source: task.record?.source || null,
+      });
+    }
+    if (records.size === 0) return;
+    const dir = path.join(this.queueDir(queue.id), 'records');
+    await fsp.mkdir(dir, { recursive: true });
+    for (const record of records.values()) {
+      await writeJsonAtomic(path.join(dir, `${record.id}.json`), record);
+    }
+  }
+
+  /**
+   * Run the queue.
+   *
+   * RFC 0001: up to `queue.maxParallel` executable tasks are in flight at once.
+   * The default is 1, which is exactly the sequential drain every earlier build
+   * had; a barrier is enforced by the plan's edges, not by this loop, so a
+   * parallel queue cannot run a stage before its fence is satisfied.
+   * Control-flow nodes stay inline: they are decisions over already-finished
+   * tasks, not work.
+   */
   async drain(queue) {
     if (this.loops.has(queue.id)) return;
     this.loops.add(queue.id);
+    const degree = Math.max(1, Math.min(Number(queue.maxParallel) || 1, LIMITS.maxParallel));
+    const inFlight = new Map();
     try {
       while (queue.status === 'running') {
         const blocked = blockedPendingTasks(queue.tasks, queue.edges);
@@ -849,34 +981,58 @@ export class QueueManager {
           this.publish(queue);
         }
 
-        const task = nextReadyTask(queue.tasks, queue.edges);
-        if (!task) break;
-
-        // Issue #101: this calculation was planned before its conformer block
-        // produced an ensemble. Its input cannot be rebuilt from the queue — the
-        // task carries no input text — so fail it with the planner's reason. A
-        // queue task must never run on the project geometry instead.
-        if (task.pendingInput) {
-          task.status = 'failed';
-          task.error = task.pendingInput.reason
-            || `"${task.title}" has no selected conformer. Run the ensemble and choose a member before running it.`;
-          task.finishedAt = new Date().toISOString();
-          await this.persist(queue);
-          this.publish(queue);
-          continue;
+        let started = 0;
+        let progressed = false;
+        while (queue.status === 'running') {
+          const task = nextReadyTask(queue.tasks, queue.edges, inFlight);
+          if (!task) break;
+          // Issue #101: a pending-input block is not a control node; it fails
+          // with the planner's reason before anything is spawned.
+          if (task.pendingInput) {
+            await this.executeTask(queue, task);
+            progressed = true;
+            continue;
+          }
+          if (!task.executable) {
+            await this.runControl(queue, task);
+            progressed = true;
+            continue;
+          }
+          if (inFlight.size >= degree) break;
+          started += 1;
+          progressed = true;
+          const running = this.executeTask(queue, task)
+            .catch((error) => this.failTask(queue, task, error))
+            .finally(() => inFlight.delete(task.nodeId));
+          inFlight.set(task.nodeId, running);
         }
 
-        if (!task.executable) {
-          await this.runControl(queue, task);
-          continue;
+        // Nothing running and nothing startable: either the queue is done, or a
+        // control node has just made some branches unreachable. That second case
+        // must be marked blocked before the verdict is computed, or a routed
+        // graph ends with pending tasks and no reason.
+        if (inFlight.size === 0) {
+          if (started === 0 && !progressed) {
+            const late = blockedPendingTasks(queue.tasks, queue.edges);
+            for (const item of late) {
+              const task = queue.tasks.find((entry) => entry.nodeId === item.nodeId);
+              if (task && task.status === 'pending') {
+                task.status = 'blocked';
+                task.reason = item.reason;
+                task.finishedAt = new Date().toISOString();
+              }
+            }
+            if (late.length > 0) {
+              await this.persist(queue);
+              this.publish(queue);
+              continue;
+            }
+            break;
+          }
+          if (started === 0) continue;
         }
+        if (inFlight.size > 0) await Promise.race(inFlight.values());
 
-        if (task.type === 'conformers') {
-          await this.runConformers(queue, task);
-          continue;
-        }
-
-        await this.runTask(queue, task);
         const spinChanged = await this.evaluateSpins(queue);
         const reactionChanged = await this.evaluateReactions(queue);
         if (await this.evaluateLadders(queue) || spinChanged || reactionChanged) {
@@ -884,6 +1040,9 @@ export class QueueManager {
           this.publish(queue);
         }
       }
+      // A pause or a cancellation leaves work behind; let it settle before the
+      // final status is computed, so a task cannot flip the verdict afterwards.
+      await Promise.all([...inFlight.values()]);
 
       if (queue.status !== 'running') return;
       const status = finalStatus(queue.tasks);
@@ -1340,6 +1499,18 @@ export class QueueManager {
   }
 
   async runControl(queue, task) {
+    // RFC 0001: an input block is a declaration, not work. It completes at once
+    // and records how many records the flow is iterating over; its geometry and
+    // chemistry already travelled with every downstream task.
+    if (task.type === 'input') {
+      const count = Array.isArray(task.input?.records) ? task.input.records.length : 0;
+      this.setTaskOutcome(task, 'completed',
+        `dataset "${task.input?.datasetId || ''}" · ${count} record${count === 1 ? '' : 's'}`);
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+      return;
+    }
     if (task.type === 'condition') {
       await this.runCondition(queue, task);
       return;
