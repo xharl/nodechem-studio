@@ -255,7 +255,6 @@ const project = {
 const state = {
   project,
   selected: { type: 'project', id: null },
-  inspectorMode: 'dock',
   inspectorHidden: false,
   inspectorWide: false,
   zoom: 0.94,
@@ -4033,17 +4032,6 @@ function toggleOverflow() {
   if (!menu.hidden) menu.querySelector('button')?.focus();
 }
 
-function syncModeButtons() {
-  $$('[data-inspector-mode]').forEach((button) => {
-    button.classList.toggle('is-active', button.dataset.inspectorMode === state.inspectorMode);
-  });
-  const wide = $('.proto-btn[data-action="toggle-wide"]');
-  if (wide) {
-    wide.textContent = state.inspectorWide ? 'Compact inspector' : 'Wide inspector';
-    wide.classList.toggle('is-active', state.inspectorWide);
-  }
-}
-
 function handleAction(action, element) {
   switch (action) {
     case 'toggle-overflow': toggleOverflow(); break;
@@ -4054,7 +4042,7 @@ function handleAction(action, element) {
     case 'fit': fitGraph(); break;
     case 'close-inspector': state.inspectorHidden = true; renderInspector(); break;
     case 'open-inspector': state.inspectorHidden = false; renderInspector(); break;
-    case 'toggle-wide': state.inspectorWide = !state.inspectorWide; renderInspector(); syncModeButtons(); break;
+    case 'toggle-wide': state.inspectorWide = !state.inspectorWide; renderInspector(); break;
     case 'duplicate-node':
       if (state.selected.type === 'node') duplicateNode(state.selected.id);
       break;
@@ -4160,13 +4148,6 @@ function onDocumentClick(event) {
   const modalButton = event.target.closest('[data-open-modal]');
   if (modalButton) {
     if (modalButton.dataset.openModal === 'molecule') openMoleculeDrawer();
-  }
-
-  const modeButton = event.target.closest('[data-inspector-mode]');
-  if (modeButton) {
-    state.inspectorMode = modeButton.dataset.inspectorMode;
-    $('#app').dataset.inspector = state.inspectorMode;
-    syncModeButtons();
   }
 
   const blockButton = event.target.closest('[data-block]');
@@ -4461,7 +4442,6 @@ function wireEvents() {
     if (!node) return;
     state.inspectorWide = true;
     selectNode(node.dataset.nodeId);
-    syncModeButtons();
   });
 
   nodesEl().addEventListener('keydown', (event) => {
@@ -4591,7 +4571,6 @@ function init() {
   openStartupProject().finally(offerDraftRestore);
   refreshHistory();
   setZoom(state.zoom);
-  syncModeButtons();
   wireEvents();
   installResultsView({ desktop });
   installCloseGuard();

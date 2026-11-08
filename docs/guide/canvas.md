@@ -97,9 +97,10 @@ argv. See [Engines](engines.md#which-settings-belong-to-which-engine).
 
 ## Layout controls
 
-The bottom-left **View** bar switches the inspector between **Docked** and **Overlay**, and offers
-**Wide inspector** and **Molecule drawer** shortcuts. Below it, the run console docks to the bottom
-of the window; the canvas keeps its own zoom (**−**, **+**, **Fit** and a percentage readout).
+The inspector is docked on the right at every width; below 1150 px it floats inside the window
+instead of taking a column, and below 820 px it becomes a bottom sheet. Its header carries the
+**compact/wide** toggle (⇤ / ⇥), and the topbar's **Molecule** button opens the molecule and
+defaults drawer. The canvas keeps its own zoom (**−**, **+**, **Fit** and a percentage readout).
 
 ## Keyboard
 
