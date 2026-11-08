@@ -1,0 +1,5 @@
+# Fixtures are read byte-for-byte by parsers that were written against the
+# committed text. A Windows checkout that converts their line endings changed
+# what a test saw: the WFX refusal cases built their input by matching "\n" and
+# silently became no-ops, so the package job failed on a commit CI passed.
+test/fixtures/** -text

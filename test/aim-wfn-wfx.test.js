@@ -21,7 +21,11 @@ import {
  * position-coded (0.01, 0.02, …) so a permutation can be seen.
  */
 
-const read = (name) => readFileSync(`test/fixtures/aim/${name}`, 'utf8');
+// Windows checkouts convert line endings (core.autocrlf), and several cases
+// below build their refusal fixtures by matching `\n` in this text: a CRLF copy
+// made those replacements miss and the refusal never fired, so the packaging job
+// failed on the same commit CI passed. Read fixtures as LF on every platform.
+const read = (name) => readFileSync(`test/fixtures/aim/${name}`, 'utf8').replace(/\r\n/g, '\n');
 const THREE_LINE = read('water-3line-gaussian.wfn');
 const FIVE_LINE = read('water-5line-mep-gaussian.wfn');
 const LABELLED = read('water-3line-labelled.wfn');
