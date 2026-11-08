@@ -774,6 +774,14 @@ function restoreDraft(draft) {
   toast('Draft restored. Save it to keep it.');
 }
 
+/**
+ * "1 block · 2 connections" — a bare count reads wrong at one, and the status
+ * bar is the first place a template-created project is described.
+ */
+function countLabel(count, singular, pluralForm = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
 function updateCounts() {
   const counts = { passed: 0, ready: 0, review: 0, blocked: 0 };
   state.project.nodes.forEach((node) => {
@@ -791,7 +799,7 @@ function updateCounts() {
   const count = $('#canvas-count');
   if (count) {
     const loops = state.project.edges.filter((edge) => edge.type === 'loop').length;
-    count.textContent = `${state.project.nodes.length} blocks · ${state.project.edges.length} connections${loops ? ` · ${loops} loop` : ''}`;
+    count.textContent = `${countLabel(state.project.nodes.length, 'block')} · ${countLabel(state.project.edges.length, 'connection')}${loops ? ` · ${countLabel(loops, 'loop')}` : ''}`;
   }
   const message = $('#status-message');
   if (message) {
@@ -909,7 +917,7 @@ function renderProjectInspector() {
   return `${inspectorHead(
     'Project',
     state.project.name,
-    `${nodes.length} blocks · ${state.project.edges.length} connections${loopCount ? ` · ${loopCount} loop` : ''}`,
+    `${countLabel(nodes.length, 'block')} · ${countLabel(state.project.edges.length, 'connection')}${loopCount ? ` · ${countLabel(loopCount, 'loop')}` : ''}`,
   )}
   <div class="inspector-scroll">
     <section class="section">
@@ -1870,9 +1878,14 @@ function updateNodeDrag(event) {
 
 function endNodeDrag() {
   if (!state.drag) return;
+  const moved = state.drag.moved === true;
   const el = document.querySelector(`.node[data-node-id="${state.drag.id}"]`);
   el?.classList.remove('is-dragging');
   state.drag = null;
+  // Dragging writes node.x/node.y but no other handler re-evaluates the dirty
+  // state, so without this a moved graph would stay "saved": no draft, and the
+  // close guard would let it go without asking.
+  if (moved) refreshDirty();
 }
 
 function startPan(event) {
@@ -2240,7 +2253,7 @@ function validateGraph() {
     const warningText = warnings.length
       ? ` · ${warnings.length} warning${warnings.length === 1 ? '' : 's'}`
       : '';
-    state.statusMessage = `Structure valid${warningText} · ${state.project.nodes.length} blocks · ${state.project.edges.length} connections · ${conditions} condition${conditions === 1 ? '' : 's'} · ${loops} loop${loops === 1 ? '' : 's'}. Branch and loop execution is planned.`;
+    state.statusMessage = `Structure valid${warningText} · ${countLabel(state.project.nodes.length, 'block')} · ${countLabel(state.project.edges.length, 'connection')} · ${countLabel(conditions, 'condition')} · ${countLabel(loops, 'loop')}. Branch and loop execution is planned.`;
     toast(warnings.length
       ? `Structure valid with ${warnings.length} warning${warnings.length === 1 ? '' : 's'}.`
       : 'Structure valid. Branch and loop execution is planned.');
@@ -2892,7 +2905,7 @@ function handleQueueEvent(event) {
   if (event.type === 'queue-started') {
     const queuedEngine = event.queue.tasks.find((task) => task.engine)?.engine
       || state.project?.defaults?.engine;
-    setStatusMessage(`Workflow running · ${event.queue.tasks.length} blocks · ${runEngineLabel(queuedEngine, { dryRun: event.queue.options?.dryRun })}`);
+    setStatusMessage(`Workflow running · ${countLabel(event.queue.tasks.length, 'block')} · ${runEngineLabel(queuedEngine, { dryRun: event.queue.options?.dryRun })}`);
   }
   if (event.type === 'queue-done') {
     const verdict = event.queue.status;
