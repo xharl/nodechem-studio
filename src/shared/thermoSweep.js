@@ -236,3 +236,48 @@ export function thermoCsv(rows, { includeModes = false } = {}) {
   }
   return `${lines.join('\n')}\n`;
 }
+
+/**
+ * Boltzmann populations over a set of conformers or states.
+ *
+ * Each entry needs a Gibbs energy at the same level of theory; the ensemble
+ * free energy is `−RT ln Σ exp(−ΔG_i/RT)` relative to the lowest member. The
+ * numbers are only as meaningful as the assumption that the entries are
+ * conformers of one species at one level — the caller states that, the panel
+ * prints it, and nothing here infers it.
+ */
+export function ensembleThermo(records, { temperatureK = STANDARD_TEMPERATURE_K } = {}) {
+  const T = Number(temperatureK);
+  if (!finite(T) || T <= 0) throw new Error('Temperature must be a positive number of kelvin.');
+  const usable = (Array.isArray(records) ? records : [])
+    .filter((record) => finite(record?.gibbsHartree));
+  if (usable.length < 2) {
+    return {
+      available: false,
+      temperatureK: T,
+      reason: `An ensemble needs at least two free energies; ${usable.length} usable record(s) were supplied.`,
+      entries: [],
+    };
+  }
+  const lowest = Math.min(...usable.map((record) => record.gibbsHartree));
+  const rtKcal = (R_J_PER_MOL_K * T) / JOULES_PER_KCAL;
+  const weights = usable.map((record) => Math.exp(-(((record.gibbsHartree - lowest) * HARTREE_TO_KCAL_PER_MOL) / rtKcal)));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  const ensembleRelativeKcal = -rtKcal * Math.log(total);
+  const entries = usable.map((record, index) => ({
+    id: record.id || `entry-${index + 1}`,
+    label: record.label || record.id || `Entry ${index + 1}`,
+    gibbsHartree: record.gibbsHartree,
+    relativeKcalPerMol: (record.gibbsHartree - lowest) * HARTREE_TO_KCAL_PER_MOL,
+    population: weights[index] / total,
+  }));
+  return {
+    available: true,
+    temperatureK: T,
+    standardState: { temperatureK: STANDARD_TEMPERATURE_K, pressureAtm: STANDARD_PRESSURE_ATM },
+    entries,
+    ensembleRelativeKcalPerMol: ensembleRelativeKcal,
+    ensembleHartree: lowest + ensembleRelativeKcal / HARTREE_TO_KCAL_PER_MOL,
+    spreadKcalPerMol: entries[entries.length - 1].relativeKcalPerMol,
+  };
+}

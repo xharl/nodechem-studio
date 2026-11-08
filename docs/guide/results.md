@@ -130,6 +130,27 @@ only through the translational partition function, and the code proves it: dropp
 When the output lacks the constants the result is `{ available: false, missing: [...] }`. There is no
 fallback to the printed table, because a table at 298.15 K is not an answer about 350 K.
 
+### In the app
+
+A run whose output carries those constants gets a **Thermochemistry** card with a workbench:
+
+- **T / K** and **p / atm** inputs, defaulting to the printed conditions;
+- six switches — zero-point, translational, rotational, vibrational thermal, pV = RT, −TΔS — so each
+  contribution can be read on its own;
+- an itemised table whose footer is `Σ correction to G` in kcal/mol and the resulting `G` in hartree;
+- **Export CSV**, generated from the same data object as the table, so the file and the screen cannot
+  disagree (three decimals, same term labels, plus T, p and the standard state);
+- a **Conformer ensemble** picker: select two or more finished runs that report a free energy and get
+  Boltzmann populations and the ensemble free energy at the current temperature.
+
+Two statements stay on the card wherever the numbers go: the standard state of the *printed* table
+(298.15 K, 1 atm), and that electronic excitation is not modelled — the electronic partition function
+is the ground-state degeneracy, as in Gaussian's own table.
+
+The ensemble is a calculation over runs you select; it assumes they are conformers of one species at
+one level of theory and says so. Nothing in the app generates conformers yet — see the conformer
+issue.
+
 ## NMR shieldings
 
 

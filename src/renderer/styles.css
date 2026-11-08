@@ -733,6 +733,19 @@ kbd {
 .molecule-row span { display: block; margin-top: 2px; color: var(--faint); font-size: 9.5px; }
 .card .btn { margin-top: 9px; width: 100%; }
 
+/* Thermochemistry workbench (#70): controls, itemised table, ensemble picker. */
+.thermo-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; font-size: 10.5px; color: var(--muted); }
+.thermo-controls label { display: inline-flex; align-items: center; gap: 5px; }
+.thermo-controls input[type="number"] { width: 78px; }
+.thermo-controls .thermo-term { white-space: nowrap; }
+.thermo-controls .btn { margin-top: 0; width: auto; }
+.thermo-table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin: 6px 0; }
+.thermo-table th, .thermo-table td { padding: 4px 6px; border-bottom: 1px solid rgba(148, 163, 184, .1); text-align: left; }
+.thermo-table td.num, .thermo-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.thermo-table tfoot th { border-top: 1px solid rgba(148, 163, 184, .25); font-weight: 600; }
+.thermo-ensemble-picker { display: grid; gap: 4px; margin: 8px 0; font-size: 10.5px; }
+.thermo-ensemble-picker label { display: flex; gap: 6px; align-items: center; }
+
 .kv { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 10.5px; color: var(--muted); }
 .kv + .kv { border-top: 1px solid rgba(148, 163, 184, .07); }
 .kv code { color: #c4cee0; font: 10px var(--mono); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

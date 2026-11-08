@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('desktop', {
   runTask: (payload) => ipcRenderer.invoke('gaussian:run', payload),
   cancelRun: (runId) => ipcRenderer.invoke('gaussian:cancel', runId),
   listRuns: () => ipcRenderer.invoke('runs:list'),
+  saveText: (payload) => ipcRenderer.invoke('text:save', payload),
   verifyRun: (runId) => ipcRenderer.invoke('runs:verify', runId),
   exportRunBundle: (runId) => ipcRenderer.invoke('runs:export-bundle', runId),
   exportDataset: (format) => ipcRenderer.invoke('runs:export-dataset', format),

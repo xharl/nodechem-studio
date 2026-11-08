@@ -20,6 +20,7 @@ import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 import { pathBarrier, profileSvg, profilePoints } from '../shared/reactionPath.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
+import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -286,6 +287,97 @@ function energyCard(parsed, flags) {
   return card('Energy', kv(rows) + caveatHtml(flags, 'The final energy'));
 }
 
+/** The six terms the workbench can switch on and off, in display order. */
+const THERMO_TERMS = Object.freeze([
+  { id: 'zero-point', label: 'Zero-point energy' },
+  { id: 'translational', label: 'Translational (3kT/2)' },
+  { id: 'rotational', label: 'Rotational (3RT/2)' },
+  { id: 'vibrational', label: 'Vibrational thermal' },
+  { id: 'pv', label: 'pV = RT' },
+  { id: 'entropy', label: '−TΔS' },
+]);
+
+/**
+ * One source for the on-screen table and the CSV, so the export cannot drift
+ * from what the panel shows.
+ */
+export function thermoTableData(parsed, { temperatureK = 298.15, pressureAtm = 1, enabled = null } = {}) {
+  const active = enabled || new Set(THERMO_TERMS.map((term) => term.id));
+  let result;
+  try {
+    result = thermoAt(parsed, { temperatureK, pressureAtm });
+  } catch (error) {
+    return { available: false, reason: error.message, terms: [], totalKcalPerMol: null };
+  }
+  if (!result.available) {
+    return {
+      available: false,
+      reason: `Not recomputed: this output has no ${result.missing.join(', ')}.`,
+      missing: result.missing,
+      terms: [],
+      totalKcalPerMol: null,
+    };
+  }
+  const terms = result.terms
+    .filter((term) => active.has(term.id))
+    .map((term) => ({ id: term.id, label: term.label, kcalPerMol: term.kcalPerMol }));
+  const totalKcalPerMol = terms.reduce((sum, term) => sum + term.kcalPerMol, 0);
+  return {
+    available: true,
+    temperatureK: result.temperatureK,
+    pressureAtm: result.pressureAtm,
+    standardState: result.standardState,
+    geometry: result.geometry,
+    entropyCalPerMolK: result.totals.entropyCalPerMolK,
+    terms,
+    totalKcalPerMol,
+    gibbsHartree: result.absolute.electronicEnergyHartree === null
+      ? null
+      : result.absolute.electronicEnergyHartree + totalKcalPerMol / 627.5094740631,
+  };
+}
+
+function thermoWorkbenchHtml(parsed, options) {
+  const data = thermoTableData(parsed, options);
+  if (!data.available) {
+    return `<p class="results-missing" data-field="thermo-workbench">${esc(data.reason)}</p>`;
+  }
+  const rows = data.terms.map((term) => '<tr>'
+    + `<td>${esc(term.label)}</td>`
+    + `<td>${term.kcalPerMol < 0 ? '−' : ''}${Math.abs(term.kcalPerMol).toFixed(3)}</td>`
+    + '</tr>').join('');
+  return '<table class="thermo-table" data-field="thermo-workbench">'
+    + '<thead><tr><th>Term</th><th class="num">kcal mol⁻¹</th></tr></thead>'
+    + `<tbody>${rows}</tbody>`
+    + '<tfoot>'
+    + `<tr><th>Σ correction to G</th><th class="num">${data.totalKcalPerMol < 0 ? '−' : ''}${Math.abs(data.totalKcalPerMol).toFixed(3)}</th></tr>`
+    + `<tr><th>G = E<sub>elec</sub> + Σ / Eh</th><th class="num">${data.gibbsHartree === null ? MISSING_TEXT : data.gibbsHartree.toFixed(6)}</th></tr>`
+    + '</tfoot></table>'
+    + `<p class="results-note">RRHO at ${esc(String(data.temperatureK))} K and ${esc(String(data.pressureAtm))} atm, `
+    + `recomputed from the mass, rotational constants, symmetry number (${esc(String(data.geometry))}) and frequencies. `
+    + 'Standard state for the printed table: 298.15 K, 1 atm. Electronic excitation is not modelled.</p>';
+}
+
+function ensembleTableHtml(rows, { temperatureK = 298.15, selected = [] } = {}) {
+  const chosen = rows.filter((row) => selected.includes(row.id));
+  const result = ensembleThermo(chosen, { temperatureK });
+  if (!result.available) {
+    return `<p class="results-missing" data-field="thermo-ensemble">${esc(result.reason)}</p>`;
+  }
+  const body = result.entries.map((entry) => '<tr>'
+    + `<td>${esc(entry.label)}</td>`
+    + `<td class="num">${entry.relativeKcalPerMol.toFixed(3)}</td>`
+    + `<td class="num">${(entry.population * 100).toFixed(1)} %</td>`
+    + '</tr>').join('');
+  return '<table class="thermo-table" data-field="thermo-ensemble">'
+    + '<thead><tr><th>Run</th><th class="num">ΔG / kcal mol⁻¹</th><th class="num">Population</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`
+    + `<p class="results-note">Boltzmann populations at ${esc(String(temperatureK))} K · ensemble G `
+    + `= lowest + ${result.ensembleRelativeKcalPerMol.toFixed(3)} kcal mol⁻¹. `
+    + 'This assumes the selected runs are conformers of one species at one level of theory; '
+    + 'nothing checks that assumption for you.</p>';
+}
+
 function thermochemistryCard(parsed, flags) {
   const thermo = isObject(parsed?.thermochemistry) ? parsed.thermochemistry : {};
   // Gaussian writes `zeroPointEnergyHartree`; the canonical engine-neutral
@@ -309,9 +401,30 @@ function thermochemistryCard(parsed, flags) {
     temperature === null ? null : `${temperature.toFixed(2)} K`,
     pressure === null ? null : `${pressure.toFixed(5)} atm`,
   ].filter(Boolean).join(' · ');
+  const defaultTemperature = temperature === null ? 298.15 : temperature;
+  const defaultPressure = pressure === null ? 1 : pressure;
+  // The workbench only appears when the output carries what the partition
+  // function needs; otherwise the card above already says "not reported".
+  const workbench = Array.isArray(thermo.rotationalConstantsGHz) && finite(thermo.molecularMassAmu) !== null
+    ? '<div class="thermo-workbench" data-role="thermo-workbench">'
+      + '<div class="thermo-controls">'
+      + `<label>T / K <input type="number" data-thermo-temperature value="${esc(String(defaultTemperature))}" step="0.01" min="1"></label>`
+      + `<label>p / atm <input type="number" data-thermo-pressure value="${esc(String(defaultPressure))}" step="0.01" min="0.0001"></label>`
+      + THERMO_TERMS.map((term) => `<label class="thermo-term"><input type="checkbox" data-thermo-term="${esc(term.id)}" checked> ${esc(term.label)}</label>`).join('')
+      + '<button type="button" class="btn small" data-thermo-export>Export CSV</button>'
+      + '</div>'
+      + `<div data-field="thermo-workbench-holder">${thermoWorkbenchHtml(parsed, {
+        temperatureK: defaultTemperature, pressureAtm: defaultPressure,
+      })}</div>`
+      + '<h4>Conformer ensemble</h4>'
+      + '<div data-field="thermo-ensemble-picker"><p class="results-note">Pick two or more finished runs to compute Boltzmann populations.</p></div>'
+      + '<div data-field="thermo-ensemble-holder"></div>'
+      + '</div>'
+    : '';
   return card('Thermochemistry', kv(rows)
     + (conditions ? `<p class="results-note" data-field="thermo-conditions">${esc(conditions)}</p>` : '')
-    + caveatHtml(flags, 'Thermochemistry'));
+    + workbench
+    + caveatHtml(flags, 'Thermochemistry'), workbench ? 'is-wide' : '');
 }
 
 function frequenciesCard(parsed, flags) {
@@ -857,6 +970,7 @@ export function installResultsView({
     container.hidden = false;
     consoleEl?.classList.add('has-results');
     mountCompareBar(record);
+    mountThermoEnsemble();
   };
 
   /**
@@ -876,15 +990,100 @@ export function installResultsView({
       fwhmPpm: Number(value('[data-nmr-fwhm]')) > 0 ? Number(value('[data-nmr-fwhm]')) : 0.1,
     });
   };
+  /**
+   * The thermochemistry workbench: T, p and the term switches recompute the
+   * table in place, and the CSV is generated from the same data object the
+   * table is rendered from.
+   */
+  let ensembleRows = [];
+  const thermoControls = () => {
+    const value = (selector) => container.querySelector(selector)?.value ?? '';
+    const temperatureK = Number(value('[data-thermo-temperature]'));
+    const pressureAtm = Number(value('[data-thermo-pressure]'));
+    const boxes = [...container.querySelectorAll('[data-thermo-term]')];
+    return {
+      temperatureK: temperatureK > 0 ? temperatureK : 298.15,
+      pressureAtm: pressureAtm > 0 ? pressureAtm : 1,
+      enabled: new Set(boxes.filter((box) => box.checked).map((box) => box.dataset.thermoTerm)),
+    };
+  };
+  const selectedEnsemble = () => [...container.querySelectorAll('[data-ensemble-run]')]
+    .filter((box) => box.checked)
+    .map((box) => box.value);
+  const rerenderThermo = () => {
+    const parsed = currentRecord?.parsed;
+    const options = thermoControls();
+    const holder = container.querySelector('[data-field="thermo-workbench-holder"]');
+    if (parsed && holder) holder.innerHTML = thermoWorkbenchHtml(parsed, options);
+    const ensemble = container.querySelector('[data-field="thermo-ensemble-holder"]');
+    if (!ensemble) return;
+    const selected = selectedEnsemble();
+    ensemble.innerHTML = selected.length === 0
+      ? ''
+      : ensembleTableHtml(ensembleRows, { temperatureK: options.temperatureK, selected });
+  };
+  const exportThermoCsv = async () => {
+    const parsed = currentRecord?.parsed;
+    if (!parsed) return;
+    const data = thermoTableData(parsed, thermoControls());
+    if (!data.available) return;
+    const csv = [
+      'term,kcal_per_mol',
+      ...data.terms.map((term) => `"${term.label.replace(/"/g, '""')}",${term.kcalPerMol.toFixed(3)}`),
+      `"Σ correction to G",${data.totalKcalPerMol.toFixed(3)}`,
+      `"G / Eh",${data.gibbsHartree === null ? '' : data.gibbsHartree.toFixed(6)}`,
+      `"T / K",${data.temperatureK}`,
+      `"p / atm",${data.pressureAtm}`,
+      `"standard state T / K",${data.standardState.temperatureK}`,
+      `"standard state p / atm",${data.standardState.pressureAtm}`,
+    ].join('\n') + '\n';
+    if (desktop?.saveText) {
+      await desktop.saveText({ suggestedName: `thermochemistry-${text(currentRecord?.id) || 'run'}.csv`, text: csv });
+    }
+  };
+  const mountThermoEnsemble = async () => {
+    const picker = container.querySelector('[data-field="thermo-ensemble-picker"]');
+    if (!picker || !desktop?.listRuns) return;
+    let runs = [];
+    try {
+      runs = await desktop.listRuns();
+    } catch {
+      return;
+    }
+    ensembleRows = (Array.isArray(runs) ? runs : [])
+      .filter((run) => Number.isFinite(run?.parsed?.thermochemistry?.freeEnergyHartree))
+      .slice(0, 12)
+      .map((run) => ({
+        id: run.id,
+        label: `${run.id}${run.title ? ` · ${run.title}` : ''}`,
+        gibbsHartree: run.parsed.thermochemistry.freeEnergyHartree,
+      }));
+    if (ensembleRows.length < 2) {
+      picker.innerHTML = '<p class="results-missing">No two finished runs report a free energy, so no ensemble can be built.</p>';
+      return;
+    }
+    picker.innerHTML = '<div class="thermo-ensemble-picker">'
+      + ensembleRows.map((row) => `<label><input type="checkbox" data-ensemble-run value="${esc(row.id)}"> ${esc(row.label)}</label>`).join('')
+      + '</div>';
+    rerenderThermo();
+  };
+
   container.addEventListener('input', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+    if (target.matches('[data-thermo-temperature], [data-thermo-pressure], [data-thermo-term], [data-ensemble-run]')) rerenderThermo();
   });
   container.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+    if (target.matches('[data-thermo-temperature], [data-thermo-pressure], [data-thermo-term], [data-ensemble-run]')) rerenderThermo();
+  });
+  container.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('[data-thermo-export]')) exportThermoCsv();
   });
 
   /**

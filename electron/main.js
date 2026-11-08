@@ -691,6 +691,24 @@ app.whenReady().then(async () => {
   ipcMain.handle('gaussian:run', (_event, payload) => runManager.start(payload));
   ipcMain.handle('gaussian:cancel', (_event, runId) => runManager.cancel(runId));
   ipcMain.handle('runs:list', () => runManager.list());
+  /**
+   * Save a text artifact the renderer produced (the thermochemistry CSV). The
+   * main process owns the dialog and the write; the renderer never touches the
+   * filesystem.
+   */
+  ipcMain.handle('text:save', async (_event, payload) => {
+    const textValue = typeof payload?.text === 'string' ? payload.text : '';
+    if (!textValue) return { canceled: true };
+    const suggested = path.basename(String(payload?.suggestedName || 'export.txt')).replace(/[^A-Za-z0-9._-]/g, '_');
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save export',
+      defaultPath: path.join(app.getPath('documents'), suggested),
+      filters: [{ name: 'Comma-separated values', extensions: ['csv'] }, { name: 'All files', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    await fsp.writeFile(result.filePath, textValue, 'utf8');
+    return { canceled: false, path: result.filePath };
+  });
   ipcMain.handle('runs:verify', (_event, runId) => runManager.verify(runId));
   ipcMain.handle('runs:export-bundle', (_event, runId) => exportRunBundle(runId));
   ipcMain.handle('runs:export-dataset', (_event, format) => exportDataset(format));
