@@ -31,6 +31,14 @@ import {
 import { parseStructure } from '../shared/structureImport.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from '../shared/validityChecks.js';
 import {
+  createHistory,
+  canUndo,
+  canRedo,
+  recordSnapshot,
+  redoStep,
+  undoStep,
+} from '../shared/editHistory.js';
+import {
   OPT_CONVERGENCE_OPTIONS,
   TS_FORCE_CONSTANT_OPTIONS,
   checkTsForceConstants,
@@ -246,6 +254,7 @@ const state = {
   draftBaseline: null,
   draftTimer: null,
   dirty: null,
+  history: null,
   run: {
     id: null,
     status: 'idle',
@@ -590,6 +599,7 @@ function updateSavePill(dirty) {
 function refreshDirty() {
   const dirty = state.savedSnapshot === null || JSON.stringify(state.project) !== state.savedSnapshot;
   updateSavePill(dirty);
+  syncEditHistory();
   if (dirty !== state.dirty) {
     state.dirty = dirty;
     desktop?.setDirty?.(dirty);
@@ -598,6 +608,76 @@ function refreshDirty() {
   // know a draft may be stale. The debounce coalesces a burst of edits (a drag,
   // a slider) into a single write; nothing is written once the project is clean.
   if (dirty) scheduleDraftSave();
+}
+
+/* ── Undo / redo ──────────────────────────────────────────── */
+
+/**
+ * One JSON snapshot per committed edit. `refreshDirty` is the funnel every
+ * mutation already passes through, so recording here cannot miss an edit — and
+ * a render that changes nothing produces no step.
+ */
+function syncEditHistory() {
+  const snapshot = JSON.stringify(state.project);
+  if (!state.history) {
+    state.history = createHistory(snapshot);
+  } else {
+    state.history = recordSnapshot(state.history, snapshot);
+  }
+  updateHistoryButtons();
+}
+
+function resetEditHistory() {
+  state.history = createHistory(JSON.stringify(state.project));
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  const undo = $('#undo-btn');
+  const redo = $('#redo-btn');
+  if (undo) undo.disabled = !canUndo(state.history);
+  if (redo) redo.disabled = !canRedo(state.history);
+}
+
+function applyHistorySnapshot(snapshot) {
+  if (typeof snapshot !== 'string') return;
+  try {
+    state.project = JSON.parse(snapshot);
+  } catch {
+    toast('That history step could not be restored.');
+    return;
+  }
+  state.selected = { type: 'project', id: null };
+  state.connecting = null;
+  state.keyboardConnect = null;
+  const name = $('#project-name-text');
+  if (name) name.textContent = state.project.name || 'Untitled project';
+  renderGraph();
+  renderInspector();
+  updateCounts();
+  updateRunConsoleCopy();
+}
+
+function undoEdit() {
+  const step = undoStep(state.history);
+  if (!step.snapshot) {
+    toast('Nothing to undo.');
+    return;
+  }
+  state.history = step.history;
+  applyHistorySnapshot(step.snapshot);
+  toast('Undone.');
+}
+
+function redoEdit() {
+  const step = redoStep(state.history);
+  if (!step.snapshot) {
+    toast('Nothing to redo.');
+    return;
+  }
+  state.history = step.history;
+  applyHistorySnapshot(step.snapshot);
+  toast('Redone.');
 }
 
 function markProjectSaved(filePath) {
@@ -760,6 +840,7 @@ function restoreDraft(draft) {
   state.project = parsed.project;
   state.selected = { type: 'project', id: null };
   state.projectPath = draft.filePath || null;
+  state.history = null;
   dismissDraftBar();
   // A restored draft is by definition unsaved work: without this the save pill
   // would claim the project is saved and the close guard would let it go.
@@ -2954,6 +3035,7 @@ function applyOpenedProject(result) {
   }
   state.project = result.project;
   state.selected = { type: 'project', id: null };
+  state.history = null;
   markProjectSaved(result.path);
   const name = $('#project-name-text');
   if (name) name.textContent = state.project.name || 'Untitled project';
@@ -3100,6 +3182,7 @@ function applyTemplateProject(templateId) {
   state.connecting = null;
   state.keyboardConnect = null;
   state.paletteOpen = false;
+  state.history = null;
   // markProjectSaved(null) clears the path (Save becomes Save As) and snapshots
   // the freshly built project, so it opens clean and the dirty flag clears.
   markProjectSaved(null);
@@ -3399,6 +3482,8 @@ function handleAction(action, element) {
     case 'copy-diagnostics': copyDiagnostics(); break;
     case 'save-diagnostics': saveDiagnostics(); break;
     case 'open-project': openProject(); break;
+    case 'undo': undoEdit(); break;
+    case 'redo': redoEdit(); break;
     case 'new-project': openNewProject(); break;
     case 'template-discard':
       if (state.drawer?.type === 'template') {
@@ -3658,6 +3743,19 @@ function wireEvents() {
   });
 
   document.addEventListener('keydown', (event) => {
+    const mod = event.metaKey || event.ctrlKey;
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || '')
+      || event.target?.isContentEditable === true;
+    if (mod && !event.altKey && !typing && event.key.toLowerCase() === 'z') {
+      event.preventDefault();
+      if (event.shiftKey) redoEdit(); else undoEdit();
+      return;
+    }
+    if (mod && !event.altKey && !typing && event.key.toLowerCase() === 'y') {
+      event.preventDefault();
+      redoEdit();
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
       togglePalette(true);

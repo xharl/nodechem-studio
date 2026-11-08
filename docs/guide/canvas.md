@@ -105,6 +105,8 @@ of the window; the canvas keeps its own zoom (**−**, **+**, **Fit** and a perc
 | Key | Action |
 | --- | --- |
 | `Ctrl`/`Cmd`+`K` | Open the block palette and search |
+| `Ctrl`/`Cmd`+`Z` | Undo the last project edit |
+| `Ctrl`/`Cmd`+`Shift`+`Z` or `Ctrl`/`Cmd`+`Y` | Redo |
 | `Esc` | Close the drawer, overflow menu, palette or run console — or cancel a pending connection |
 | `Enter` / `Space` | On a focused block: select it. On a focused port: start a connection, then finish it on the target block |
 | `Tab` | Move focus between blocks and ports |
