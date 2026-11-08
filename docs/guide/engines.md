@@ -28,8 +28,9 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
 - **Validity checks** — the six pre/post-run checks in [Results](results.md#validity-checks).
 - **Effective core potentials.** A basis with an ECP (def2 or SDD for any element above krypton)
   written for a heavy atom becomes a `GenECP` route with the basis and pseudopotential blocks
-  appended after the molecule. This build ships def2-SVP and SDD (Basis Set Exchange "Stuttgart RSC
-  1997") for Ag, Pd, Pt and Au, taken verbatim from the Basis Set Exchange; the run records which
+  appended after the molecule. This build ships def2-SVP for Ag, Pd, I, Pt and Au, and SDD (Basis Set
+  Exchange "Stuttgart RSC 1997") for Ag, Pd, Pt and Au, taken verbatim from the Basis Set
+  Exchange; the run records which
   library and checksum it used. Asking for an element without bundled data is a validation error —
   the app refuses to write a `GenECP` route that Gaussian would reject — and a light-element job is
   written byte-for-byte as before. LANL2DZ is offered as a name but carries no bundled data, so a

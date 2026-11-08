@@ -415,7 +415,19 @@ describe('method / basis compatibility', () => {
     expect(result.evidence.issues[0].kind).toBe('ecp-missing');
   });
 
-  it('passes a heavy element in an ECP basis', () => {
+  it('passes a heavy element in an ECP basis whose data ships', () => {
+    const result = checkMethodBasisCompatibility({
+      settings: { method: 'B3LYP', basis: 'SDD', dispersion: '' },
+      molecule: {
+        charge: 0,
+        multiplicity: 1,
+        coords: [{ element: 'Pd', x: 0, y: 0, z: 0 }, { element: 'H', x: 2.0, y: 0, z: 0 }],
+      },
+    });
+    expect(result.status).toBe('pass');
+  });
+
+  it('fails an ECP basis whose data does not ship, instead of passing it silently', () => {
     const result = checkMethodBasisCompatibility({
       settings: { method: 'B3LYP', basis: 'SDD', dispersion: '' },
       molecule: {
@@ -424,7 +436,8 @@ describe('method / basis compatibility', () => {
         coords: [{ element: 'I', x: 0, y: 0, z: 0 }, { element: 'H', x: 2.0, y: 0, z: 0 }],
       },
     });
-    expect(result.status).toBe('pass');
+    expect(result.status).toBe('fail');
+    expect(result.evidence.issues.some((issue) => issue.kind === 'ecp-data-missing')).toBe(true);
   });
 
   it('warns when a built-in-dispersion functional also gets GD3BJ', () => {
