@@ -156,6 +156,27 @@ describe('conformer workflow wiring', () => {
 describe('conformer fan-out (#80)', () => {
   const fanOutProject = (output = selection(), settings = { fanOut: true }) => conformerProject({ output, settings });
 
+  it('refuses a single run downstream of a fanned-out branch', () => {
+    // `conf -> opt -> freq`: the frequency block would wait for both members and
+    // then run once on the project geometry. Silently dropping the ensemble is
+    // the failure fan-out exists to prevent, so the plan must refuse.
+    const project = fanOutProject();
+    project.nodes.push({
+      id: 'freq', type: 'calc', title: 'Frequency', state: 'ready', x: 400, y: 0,
+      settings: defaultSettings({ jobType: 'Freq' }), output: null, checkpointFrom: null,
+    });
+    project.edges.push({ id: 'e2', from: 'opt', to: 'freq', type: 'dependency' });
+    expect(() => buildWorkflowPlan(project)).toThrow(/would run once but 2 fanned-out branches feed it/);
+  });
+
+  it('lets a merge block collect the fanned-out branches', () => {
+    const project = fanOutProject();
+    project.nodes.push({ id: 'm1', type: 'merge', title: 'Merge members', state: 'ready', x: 400, y: 0, merge: { policy: 'all' } });
+    project.edges.push({ id: 'e2', from: 'opt', to: 'm1', type: 'dependency' });
+    const plan = buildWorkflowPlan(project);
+    expect(plan.edges.filter((edge) => edge.to === 'm1')).toHaveLength(2);
+  });
+
   it('expands the block and its calculation into one task per retained member', () => {
     const plan = buildWorkflowPlan(fanOutProject());
     expect(plan.tasks.map((task) => task.nodeId)).toEqual(['conf~c1', 'conf~c2', 'opt~c1', 'opt~c2']);
