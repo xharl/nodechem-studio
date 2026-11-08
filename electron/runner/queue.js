@@ -1,17 +1,20 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   blockedPendingTasks,
   finalStatus,
   nextReadyTask,
   topologicalOrder,
 } from '../../src/shared/workflowGraph.js';
+import { artifactFor } from '../../src/shared/artifactExport.js';
 import { conditionFields, evaluateCondition } from '../../src/shared/controlFlow.js';
 import { engineFor } from '../../src/shared/engines/index.js';
 import { ladderVerdict } from '../../src/shared/methodLadder.js';
 import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
 import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
+import { LIMITS } from '../../src/shared/projectSchema.js';
 import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
 import { CrestRunner } from './crestRunner.js';
 import {
@@ -32,7 +35,7 @@ const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
 // The first character is alphanumeric so `.`/`..` can never escape targetDir.
 const SAFE_ARTIFACT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,123}$/;
 const MAX_INPUT_BYTES = 2 * 1024 * 1024;
-const MAX_TASKS = 500;
+const MAX_TASKS = LIMITS.planTasks;
 
 // CREST resolves a relative input against its working directory, so the search
 // input is staged inside the task folder under this name and argv names only the
@@ -44,7 +47,7 @@ const TASK_STATUSES = new Set([
   'pending', 'running', 'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
 ]);
 
-const TASK_TYPES = new Set(['calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note']);
+const TASK_TYPES = new Set(['input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note']);
 
 function queueIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -59,6 +62,28 @@ async function writeJsonAtomic(filePath, value) {
 
 function oneLine(value, max = 200) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+}
+
+/** The hash a manifest entry records; computed here, never in a pure module. */
+function sha256Hex(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+/**
+ * Resolve an artifact path under a root and refuse anything that escapes it.
+ *
+ * `path.resolve` lets an absolute entry replace the root — exactly the case the
+ * prefix check catches — and a `..` segment climbs out. Both are refused rather
+ * than "cleaned": a path that leaves the output folder is a mistake, not a name.
+ */
+export function resolveArtifactPath(root, relative) {
+  const base = path.resolve(root);
+  const target = path.resolve(base, String(relative || ''));
+  const prefix = base.endsWith(path.sep) ? base : base + path.sep;
+  if (target !== base && !target.startsWith(prefix)) {
+    throw new Error(`Artifact path "${relative}" escapes the artifact root "${base}".`);
+  }
+  return target;
 }
 
 /**
@@ -251,11 +276,73 @@ function conformerTaskRecord(raw, nodeId) {
   };
 }
 
+/**
+ * RFC 0001: the flow and record a task belongs to, plus the dataset payload an
+ * input block carries. Kept in one place so the conformer path cannot forget it.
+ */
+function scopeRecord(raw) {
+  const text = (value) => (typeof value === 'string' && value ? oneLine(value, 64) : null);
+  const record = raw?.record && typeof raw.record === 'object'
+    ? {
+      id: text(raw.record.id) || '',
+      label: oneLine(raw.record.label, 200) || text(raw.record.id) || '',
+      charge: Number.isInteger(Number(raw.record.charge)) ? Number(raw.record.charge) : null,
+      multiplicity: Number.isInteger(Number(raw.record.multiplicity)) ? Number(raw.record.multiplicity) : null,
+    }
+    : null;
+  const input = raw?.input && typeof raw.input === 'object'
+    ? {
+      datasetId: text(raw.input.datasetId) || '',
+      datasetTitle: oneLine(raw.input.datasetTitle, 160) || '',
+      records: Array.isArray(raw.input.records)
+        ? raw.input.records.slice(0, LIMITS.records).map((entry) => ({
+          id: text(entry?.id) || '',
+          label: oneLine(entry?.label, 200) || text(entry?.id) || '',
+        })).filter((entry) => entry.id)
+        : [],
+    }
+    : null;
+  return {
+    flowId: text(raw?.flowId),
+    recordId: text(raw?.recordId),
+    record: record && record.id ? record : null,
+    input,
+  };
+}
+
+const OUTPUT_KIND_SET = new Set(['html', 'csv', 'json', 'zip']);
+const OUTPUT_PATH_SAFE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/** The artifact an output block writes (RFC 0001). Paths are project-relative. */
+function outputRecord(raw) {
+  const kind = OUTPUT_KIND_SET.has(raw?.kind) ? raw.kind : 'zip';
+  const requested = typeof raw?.path === 'string' ? raw.path : '';
+  // An explicit path is a commitment: refuse one that could leave the output
+  // folder instead of silently writing somewhere else under a fallback name.
+  const segments = requested.split('/');
+  if (requested && (!OUTPUT_PATH_SAFE.test(requested)
+    || segments.some((segment) => segment === '..' || segment === '.'))) {
+    throw new Error(`Output block path "${requested}" must be relative and stay inside the output folder.`);
+  }
+  const artifactPath = requested
+    || (kind === 'zip' ? 'project.zip' : `reports/report.${kind}`);
+  return {
+    kind,
+    path: artifactPath,
+    include: raw?.include === 'record' ? 'record' : 'records',
+    bundle: oneLine(raw?.bundle, 120) || 'project.zip',
+    manifest: raw?.manifest !== false,
+    notes: oneLine(raw?.notes, 2000),
+  };
+}
+
 function taskRecord(raw, index) {
   const nodeId = String(raw?.nodeId || '');
   if (!SAFE_ID.test(nodeId)) throw new Error(`Task ${index + 1} has an invalid node id.`);
   const executable = Boolean(raw?.executable);
-  if (TASK_TYPES.has(raw?.type) && raw.type === 'conformers') return conformerTaskRecord(raw, nodeId);
+  if (TASK_TYPES.has(raw?.type) && raw.type === 'conformers') {
+    return { ...conformerTaskRecord(raw, nodeId), ...scopeRecord(raw) };
+  }
   const engineId = String(raw?.engine || 'gaussian');
   const engine = engineFor(engineId);
   const argv = Array.isArray(raw?.argv) ? raw.argv.map(String) : null;
@@ -416,6 +503,8 @@ function taskRecord(raw, index) {
     startedAt: null,
     finishedAt: null,
     inputText,
+    ...scopeRecord(raw),
+    ...(raw?.output && typeof raw.output === 'object' ? { output: outputRecord(raw.output) } : {}),
   };
 }
 
@@ -441,9 +530,15 @@ function publicQueue(queue) {
 }
 
 export class QueueManager {
-  constructor({ queuesRoot, runManager, emit }) {
+  constructor({ queuesRoot, runManager, emit, artifactsRoot = null }) {
     this.queuesRoot = queuesRoot;
     this.runManager = runManager;
+    // RFC 0001: the CLI points this at the folder the user named (`--out`), so
+    // `reports/…` and `manifest.json` land beside `queues/`. The desktop app
+    // omits it and keeps artifacts inside the queue folder.
+    this.artifactsRoot = typeof artifactsRoot === 'string' && artifactsRoot.trim()
+      ? path.resolve(artifactsRoot)
+      : null;
     this.emitExternal = emit || (() => {});
     this.queues = new Map();
     this.loops = new Set();
@@ -626,6 +721,8 @@ export class QueueManager {
     const executable = String(options.executable || '').trim();
     const crestExecutable = String(options.crestExecutable || '').trim();
     const scratchDir = String(options.scratchDir || '').trim();
+    // RFC 0001: 1 keeps the sequential drain every existing queue had.
+    const maxParallel = Math.max(1, Math.min(Number(options.maxParallel) || 1, LIMITS.maxParallel));
     const needsCalcEngine = tasks.some((task) => task.executable && task.type === 'calc');
     // A fanned-out member task carries an ensemble that is already stored in the
     // project; no CREST binary is needed to materialise it (#80).
@@ -649,6 +746,10 @@ export class QueueManager {
     const queue = {
       id,
       projectName: oneLine(payload.projectName, 200) || 'Untitled workflow',
+      // RFC 0001: the flow this queue ran. Without it an archived queue cannot
+      // say which tab it belonged to once the project has several.
+      flowId: oneLine(payload.flowId || options.flowId, 64) || null,
+      flowTitle: oneLine(payload.flowTitle || options.flowTitle, 200) || null,
       status: 'running',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -656,6 +757,7 @@ export class QueueManager {
       currentTaskId: null,
       reason: null,
       options: { dryRun, executable: dryRun ? null : executable, crestExecutable: dryRun ? null : crestExecutable, scratchDir },
+      maxParallel,
       edges,
       tasks,
       // Method ladders: one verdict per ladder group, evaluated when every rung
@@ -675,6 +777,7 @@ export class QueueManager {
         : this.inputPath(id, task.nodeId);
       await fsp.writeFile(inputPath, task.inputText, 'utf8');
     }
+    await this.writeRecordFiles(queue);
     this.queues.set(id, queue);
     await this.persist(queue);
     this.publish(queue, 'queue-started');
@@ -830,12 +933,102 @@ export class QueueManager {
     return changed;
   }
 
+  /**
+   * One queued task, whatever its kind.
+   *
+   * Issue #101: a calculation planned before its conformer block produced an
+   * ensemble carries `pendingInput` and no input text; it fails with the
+   * planner's reason instead of running on the project geometry.
+   */
+  async executeTask(queue, task) {
+    if (task.pendingInput) {
+      task.status = 'failed';
+      task.error = task.pendingInput.reason
+        || `"${task.title}" has no selected conformer. Run the ensemble and choose a member before running it.`;
+      task.finishedAt = new Date().toISOString();
+      await this.persist(queue);
+      this.publish(queue);
+      return;
+    }
+    if (task.type === 'conformers') return this.runConformers(queue, task);
+    return this.runTask(queue, task);
+  }
+
+  /** Last-resort handler: a task that throws outside its own error handling. */
+  async failTask(queue, task, error) {
+    if (!task) return;
+    if (task.status === 'running' || task.status === 'pending') task.status = 'failed';
+    task.error = oneLine(error?.message || String(error), 400) || 'The task failed without a message.';
+    task.finishedAt = new Date().toISOString();
+    await this.persist(queue);
+    this.publish(queue);
+  }
+
+  /**
+   * One small file per dataset record, beside the queue snapshot.
+   *
+   * A run knows its record from `run.json`; these files make the queue folder
+   * self-describing even when the project that planned it is not at hand, which
+   * is what a shared or archived run needs.
+   */
+  async writeRecordFiles(queue) {
+    const records = new Map();
+    for (const task of queue.tasks) {
+      if (!task.recordId || records.has(task.recordId)) continue;
+      records.set(task.recordId, {
+        id: task.recordId,
+        label: task.record?.label || task.recordId,
+        charge: Number.isInteger(task.record?.charge) ? task.record.charge : null,
+        multiplicity: Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : null,
+        source: task.record?.source || null,
+      });
+    }
+    if (records.size === 0) return;
+    const dir = path.join(this.queueDir(queue.id), 'records');
+    await fsp.mkdir(dir, { recursive: true });
+    for (const record of records.values()) {
+      await writeJsonAtomic(path.join(dir, `${record.id}.json`), record);
+    }
+  }
+
+  /**
+   * An output block waits for every upstream task to settle — any terminal
+   * status, not only success — or, when it is wired to nothing, for every
+   * calculation in its flow. That is what lets a partial family still produce
+   * a report naming the records that failed.
+   */
+  outputReady(queue, task) {
+    const terminal = new Set(['completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted']);
+    const sources = queue.edges
+      .filter((edge) => edge.to === task.nodeId && edge.type !== 'loop')
+      .map((edge) => queue.tasks.find((entry) => entry.nodeId === edge.from))
+      .filter(Boolean);
+    if (sources.length > 0) return sources.every((source) => terminal.has(String(source.status)));
+    const runs = queue.tasks.filter((entry) => entry.type === 'calc' || entry.type === 'conformers');
+    return runs.every((entry) => terminal.has(String(entry.status)));
+  }
+
+  /**
+   * Run the queue.
+   *
+   * RFC 0001: up to `queue.maxParallel` executable tasks are in flight at once.
+   * The default is 1, which is exactly the sequential drain every earlier build
+   * had; a barrier is enforced by the plan's edges, not by this loop, so a
+   * parallel queue cannot run a stage before its fence is satisfied.
+   * Control-flow nodes stay inline: they are decisions over already-finished
+   * tasks, not work.
+   */
   async drain(queue) {
     if (this.loops.has(queue.id)) return;
     this.loops.add(queue.id);
+    const degree = Math.max(1, Math.min(Number(queue.maxParallel) || 1, LIMITS.maxParallel));
+    const inFlight = new Map();
     try {
       while (queue.status === 'running') {
-        const blocked = blockedPendingTasks(queue.tasks, queue.edges);
+        // An output block is exempt from the ordinary block cascade: a failed
+        // record must still be reported, not silently remove the artifact.
+        const blocked = blockedPendingTasks(queue.tasks, queue.edges)
+          .filter((item) => queue.tasks.find((entry) => entry.nodeId === item.nodeId)?.type !== 'output');
         for (const item of blocked) {
           const task = queue.tasks.find((entry) => entry.nodeId === item.nodeId);
           if (task && task.status === 'pending') {
@@ -849,34 +1042,78 @@ export class QueueManager {
           this.publish(queue);
         }
 
-        const task = nextReadyTask(queue.tasks, queue.edges);
-        if (!task) break;
-
-        // Issue #101: this calculation was planned before its conformer block
-        // produced an ensemble. Its input cannot be rebuilt from the queue — the
-        // task carries no input text — so fail it with the planner's reason. A
-        // queue task must never run on the project geometry instead.
-        if (task.pendingInput) {
-          task.status = 'failed';
-          task.error = task.pendingInput.reason
-            || `"${task.title}" has no selected conformer. Run the ensemble and choose a member before running it.`;
-          task.finishedAt = new Date().toISOString();
-          await this.persist(queue);
-          this.publish(queue);
-          continue;
+        let started = 0;
+        let progressed = false;
+        while (queue.status === 'running') {
+          // Hold an output block until its whole upstream has settled, even
+          // when it has no ordering edge to wait on.
+          const skip = new Set(inFlight.keys());
+          for (const entry of queue.tasks) {
+            if (entry.type === 'output' && entry.status === 'pending' && !this.outputReady(queue, entry)) {
+              skip.add(entry.nodeId);
+            }
+          }
+          let task = nextReadyTask(queue.tasks, queue.edges, skip);
+          if (!task) {
+            // A collector whose upstream failed is ready by the queue's own
+            // rule even though `nextReadyTask` cannot see it as satisfied.
+            const collector = queue.tasks.find((entry) => entry.type === 'output'
+              && entry.status === 'pending' && !skip.has(entry.nodeId) && this.outputReady(queue, entry));
+            if (collector) {
+              await this.runControl(queue, collector);
+              progressed = true;
+              continue;
+            }
+            break;
+          }
+          // Issue #101: a pending-input block is not a control node; it fails
+          // with the planner's reason before anything is spawned.
+          if (task.pendingInput) {
+            await this.executeTask(queue, task);
+            progressed = true;
+            continue;
+          }
+          if (!task.executable) {
+            await this.runControl(queue, task);
+            progressed = true;
+            continue;
+          }
+          if (inFlight.size >= degree) break;
+          started += 1;
+          progressed = true;
+          const running = this.executeTask(queue, task)
+            .catch((error) => this.failTask(queue, task, error))
+            .finally(() => inFlight.delete(task.nodeId));
+          inFlight.set(task.nodeId, running);
         }
 
-        if (!task.executable) {
-          await this.runControl(queue, task);
-          continue;
+        // Nothing running and nothing startable: either the queue is done, or a
+        // control node has just made some branches unreachable. That second case
+        // must be marked blocked before the verdict is computed, or a routed
+        // graph ends with pending tasks and no reason.
+        if (inFlight.size === 0) {
+          if (started === 0 && !progressed) {
+            const late = blockedPendingTasks(queue.tasks, queue.edges)
+              .filter((item) => queue.tasks.find((entry) => entry.nodeId === item.nodeId)?.type !== 'output');
+            for (const item of late) {
+              const task = queue.tasks.find((entry) => entry.nodeId === item.nodeId);
+              if (task && task.status === 'pending') {
+                task.status = 'blocked';
+                task.reason = item.reason;
+                task.finishedAt = new Date().toISOString();
+              }
+            }
+            if (late.length > 0) {
+              await this.persist(queue);
+              this.publish(queue);
+              continue;
+            }
+            break;
+          }
+          if (started === 0) continue;
         }
+        if (inFlight.size > 0) await Promise.race(inFlight.values());
 
-        if (task.type === 'conformers') {
-          await this.runConformers(queue, task);
-          continue;
-        }
-
-        await this.runTask(queue, task);
         const spinChanged = await this.evaluateSpins(queue);
         const reactionChanged = await this.evaluateReactions(queue);
         if (await this.evaluateLadders(queue) || spinChanged || reactionChanged) {
@@ -884,6 +1121,9 @@ export class QueueManager {
           this.publish(queue);
         }
       }
+      // A pause or a cancellation leaves work behind; let it settle before the
+      // final status is computed, so a task cannot flip the verdict afterwards.
+      await Promise.all([...inFlight.values()]);
 
       if (queue.status !== 'running') return;
       const status = finalStatus(queue.tasks);
@@ -1339,7 +1579,259 @@ export class QueueManager {
     });
   }
 
+  /**
+   * Where an output block writes. A queue without an explicit root keeps its
+   * artifacts inside the queue folder, so a desktop run remains one directory.
+   */
+  artifactsRootFor(queue) {
+    return this.artifactsRoot || path.resolve(path.join(this.queueDir(queue.id), 'artifacts'));
+  }
+
+  /**
+   * The executable tasks an output block collects: its ancestors in the plan,
+   * in plan order. An output block wired to nothing still reports the runs of
+   * its own flow — an empty artifact would hide the family that actually ran.
+   */
+  artifactEntries(queue, task) {
+    const collects = (entry) => entry && (entry.type === 'calc' || entry.type === 'conformers');
+    const seen = new Set();
+    const stack = queue.edges
+      .filter((edge) => edge.to === task.nodeId && edge.type !== 'loop')
+      .map((edge) => edge.from);
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      for (const edge of queue.edges) {
+        if (edge.to === id && edge.type !== 'loop') stack.push(edge.from);
+      }
+    }
+    const entries = queue.tasks.filter((entry) => seen.has(entry.nodeId) && collects(entry));
+    if (entries.length > 0) return entries;
+    return queue.tasks.filter((entry) => collects(entry)
+      && (!entry.flowId || !task.flowId || entry.flowId === task.flowId));
+  }
+
+  /** Dataset record metadata from the queue snapshot, in plan order. */
+  recordInfoFor(queue) {
+    const info = new Map();
+    for (const task of queue.tasks) {
+      if (!task.recordId || info.has(task.recordId)) continue;
+      info.set(task.recordId, {
+        id: task.recordId,
+        label: task.record?.label || task.recordId,
+        charge: Number.isInteger(task.record?.charge) ? task.record.charge : null,
+        multiplicity: Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : null,
+      });
+    }
+    return [...info.values()];
+  }
+
+  /**
+   * The `run.json` for every task that got as far as a run folder. A failed
+   * block without one is simply absent: the report names the failure and does
+   * not invent a result.
+   */
+  async readRunRecords(entries) {
+    const records = {};
+    for (const task of entries) {
+      if (!task.runDir) continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const record = JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
+        if (task.runId) records[task.runId] = record;
+        if (task.nodeId && !records[task.nodeId]) records[task.nodeId] = record;
+      } catch {
+        // Missing or unreadable: leave it out rather than fail the whole artifact.
+      }
+    }
+    return records;
+  }
+
+  /**
+   * Bundle contents for a `zip` output: the queue snapshot, the record files
+   * and each finished run's run.json/input/output. Hashes are computed here and
+   * written as `SHA256SUMS` plus a small `manifest.json` inside the archive.
+   */
+  async bundleFiles(queue, entries, recordId = null) {
+    const files = [];
+    const add = async (name, filePath) => {
+      try {
+        files.push({ name, bytes: await fsp.readFile(filePath) });
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+      }
+    };
+
+    await add('queue.json', path.join(this.queueDir(queue.id), 'queue.json'));
+    const recordsDir = path.join(this.queueDir(queue.id), 'records');
+    const recordFiles = await fsp.readdir(recordsDir).catch(() => []);
+    for (const fileName of recordFiles.sort()) {
+      if (!fileName.endsWith('.json')) continue;
+      if (recordId && fileName !== `${recordId}.json`) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await add(`records/${fileName}`, path.join(recordsDir, fileName));
+    }
+
+    for (const task of entries) {
+      if (!task.runDir) continue;
+      const base = `flows/${task.flowId || 'main'}/records/${task.recordId || 'record'}/runs/${task.runId || task.nodeId}`;
+      const names = new Set(['run.json']);
+      if (task.inputName) names.add(task.inputName);
+      if (task.outputName) names.add(task.outputName);
+      for (const name of names) {
+        // eslint-disable-next-line no-await-in-loop
+        await add(`${base}/${name}`, path.join(task.runDir, name));
+      }
+    }
+
+    const manifest = {
+      kind: 'nodechem-studio.artifact-bundle',
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      queueId: queue.id,
+      flowId: (queue.tasks.find((task) => task.flowId) || {}).flowId || null,
+      files: files.map((file) => ({
+        name: file.name,
+        bytes: file.bytes.length,
+        sha256: sha256Hex(file.bytes),
+      })),
+    };
+    files.push({
+      name: 'SHA256SUMS',
+      bytes: manifest.files.map((file) => `${file.sha256}  ${file.name}`).join('\n') + '\n',
+    });
+    files.push({ name: 'manifest.json', bytes: `${JSON.stringify(manifest, null, 2)}\n` });
+    return files;
+  }
+
+  /**
+   * Append one entry to `<artifactsRoot>/manifest.json`. The manifest is a JSON
+   * array so a reader can verify each artifact without trusting the app; the
+   * write is atomic, like every queue snapshot.
+   */
+  async appendArtifactEntry(root, entry) {
+    const file = path.join(root, 'manifest.json');
+    let manifest = [];
+    try {
+      const parsed = JSON.parse(await fsp.readFile(file, 'utf8'));
+      if (Array.isArray(parsed)) manifest = parsed;
+      else if (parsed && Array.isArray(parsed.artifacts)) manifest = parsed.artifacts;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+    manifest.push(entry);
+    await fsp.mkdir(root, { recursive: true });
+    await writeJsonAtomic(file, manifest);
+    return manifest;
+  }
+
+  /** Build, write and manifest one artifact. Returns the manifest entry. */
+  async writeOutputArtifact(queue, task, output, {
+    entries, records, recordInfo, recordId = null, include = 'records',
+  }) {
+    const root = this.artifactsRootFor(queue);
+    const generatedAt = new Date().toISOString();
+    const files = output.kind === 'zip'
+      ? await this.bundleFiles(queue, entries, recordId)
+      : null;
+    const artifact = artifactFor({ ...output, include }, {
+      queue,
+      records,
+      entries,
+      recordId,
+      recordInfo,
+      files,
+      generatedAt,
+      appVersion: this.runManager?.appInfo?.version || null,
+      flowId: task.flowId || null,
+    });
+    const target = resolveArtifactPath(root, artifact.path);
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    await fsp.writeFile(target, artifact.bytes);
+    const entry = {
+      path: artifact.path,
+      sha256: sha256Hex(artifact.bytes),
+      bytes: artifact.bytes.length,
+      kind: output.kind,
+      flowId: task.flowId || null,
+      generatedAt,
+      queueId: queue.id,
+    };
+    await this.appendArtifactEntry(root, entry);
+    return entry;
+  }
+
+  /**
+   * An output block is a collector, not a stage: it runs once every upstream
+   * task is terminal — including a failed record — and reports what exists.
+   * Blocking it on a failed record would leave a partial family with no report,
+   * which is the opposite of the continue-and-report policy.
+   */
+  async runOutput(queue, task) {
+    const output = task.output && typeof task.output === 'object' ? task.output : {};
+    const include = output.include === 'record' ? 'record' : 'records';
+    const entries = this.artifactEntries(queue, task);
+    const records = await this.readRunRecords(entries);
+    const recordInfo = this.recordInfoFor(queue);
+    const written = [];
+    try {
+      if (include === 'record') {
+        const groups = new Map();
+        for (const entry of entries) {
+          if (!entry.recordId) continue;
+          if (!groups.has(entry.recordId)) groups.set(entry.recordId, []);
+          groups.get(entry.recordId).push(entry);
+        }
+        // A record whose blocks were all blocked still gets a named, empty
+        // artifact rather than disappearing from the set.
+        for (const info of recordInfo) {
+          if (!groups.has(info.id)) groups.set(info.id, []);
+        }
+        if (groups.size === 0) {
+          written.push(await this.writeOutputArtifact(queue, task, output, {
+            entries, records, recordInfo, recordId: null, include,
+          }));
+        } else {
+          for (const [recordId, group] of groups) {
+            // eslint-disable-next-line no-await-in-loop
+            written.push(await this.writeOutputArtifact(queue, task, output, {
+              entries: group, records, recordInfo, recordId, include,
+            }));
+          }
+        }
+      } else {
+        written.push(await this.writeOutputArtifact(queue, task, output, {
+          entries, records, recordInfo, include,
+        }));
+      }
+      const detail = written.length === 1
+        ? `${written[0].path} · ${written[0].bytes} bytes · sha256 ${written[0].sha256.slice(0, 16)}…`
+        : `${written.length} artifacts: ${written.slice(0, 3).map((entry) => entry.path).join(', ')}`
+          + `${written.length > 3 ? ` and ${written.length - 3} more` : ''}`;
+      this.setTaskOutcome(task, 'completed', oneLine(`wrote ${detail}`, 400));
+    } catch (error) {
+      // The OS message is the useful one (ENOSPC, EACCES); keep it verbatim.
+      this.setTaskOutcome(task, 'failed', oneLine(error?.message || String(error), 400));
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
   async runControl(queue, task) {
+    // RFC 0001: an input block is a declaration, not work. It completes at once
+    // and records how many records the flow is iterating over; its geometry and
+    // chemistry already travelled with every downstream task.
+    if (task.type === 'input') {
+      const count = Array.isArray(task.input?.records) ? task.input.records.length : 0;
+      this.setTaskOutcome(task, 'completed',
+        `dataset "${task.input?.datasetId || ''}" · ${count} record${count === 1 ? '' : 's'}`);
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+      return;
+    }
     if (task.type === 'condition') {
       await this.runCondition(queue, task);
       return;
@@ -1354,8 +1846,13 @@ export class QueueManager {
       const inputs = this.incomingSources(queue, task.nodeId).length;
       const policy = task.merge?.policy || 'all';
       this.setTaskOutcome(task, 'completed', `merged ${inputs} input(s), policy ${policy} (readiness waits for all)`);
+    } else if (task.type === 'output') {
+      // RFC 0001: an output block writes a real artifact (csv/json/html/zip)
+      // under the artifact root and records its SHA-256 in the manifest.
+      await this.runOutput(queue, task);
+      return;
     } else {
-      this.setTaskOutcome(task, 'blocked', 'output bundling is not implemented yet (GN-008)');
+      this.setTaskOutcome(task, 'blocked', 'this control block has no runtime');
     }
     await this.persist(queue);
     this.publish(queue);

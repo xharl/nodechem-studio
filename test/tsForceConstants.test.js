@@ -1,4 +1,11 @@
 import { describe, it, expect } from 'vitest';
+
+/**
+ * Schema v2 names the flow in an error path (`flows[0].nodes[1]…`); assert the
+ * block-local suffix so the check does not hinge on the flow's position.
+ */
+const pathEndsWith = (actual, suffix) => typeof actual === 'string'
+  && (actual === suffix || actual.endsWith(`.${suffix}`));
 import { readFileSync } from 'node:fs';
 import { routeFor } from '../src/shared/gaussianInput.js';
 import {
@@ -173,7 +180,7 @@ describe('issue #15 — project validation', () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].path).toBe('nodes[1].settings.forceConstants');
+    expect(pathEndsWith(result.errors[0].path, 'nodes[1].settings.forceConstants')).toBe(true);
     expect(result.errors[0].message).toMatch(/no checkpoint hand-off/);
   });
 
@@ -187,7 +194,7 @@ describe('issue #15 — project validation', () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors).toHaveLength(1);
-    expect(result.errors[0].path).toBe('nodes[1].settings.forceConstants');
+    expect(pathEndsWith(result.errors[0].path, 'nodes[1].settings.forceConstants')).toBe(true);
     expect(result.errors[0].message).toContain('"Reactant optimization"');
     expect(result.errors[0].message).toMatch(/Freq or Opt=CalcFC/);
   });
@@ -214,7 +221,7 @@ describe('issue #15 — project validation', () => {
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0].path).toBe('nodes[0].settings.forceConstants');
+    expect(pathEndsWith(result.warnings[0].path, 'nodes[0].settings.forceConstants')).toBe(true);
     expect(result.warnings[0].message).toMatch(/estimated initial Hessian/);
   });
 
@@ -295,7 +302,7 @@ describe('issue #15 — project validation', () => {
     ]));
 
     expect(result.ok).toBe(true);
-    expect(result.warnings.some((warning) => warning.path === 'nodes[0].settings.customKeywords')).toBe(true);
+    expect(result.warnings.some((warning) => pathEndsWith(warning.path, 'nodes[0].settings.customKeywords'))).toBe(true);
   });
 });
 
@@ -525,7 +532,7 @@ describe('issue #16 — project validation', () => {
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0].path).toBe('nodes[1].settings.jobType');
+    expect(pathEndsWith(result.warnings[0].path, 'nodes[1].settings.jobType')).toBe(true);
     expect(result.warnings[0].message).toContain('"Reactant optimization"');
     expect(result.warnings[0].message).toMatch(/default convergence/);
   });
@@ -554,7 +561,7 @@ describe('issue #16 — project validation', () => {
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0].path).toBe('nodes[0].settings.grid');
+    expect(pathEndsWith(result.warnings[0].path, 'nodes[0].settings.grid')).toBe(true);
     expect(result.warnings[0].message).toContain('Integral=Fine');
   });
 

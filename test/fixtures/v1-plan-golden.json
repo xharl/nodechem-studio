@@ -1,0 +1,149 @@
+{
+  "apn-fluorescence.ncs": {
+    "tasks": [
+      {
+        "id": "apn-opt",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "9804c162f2a2aca9"
+      },
+      {
+        "id": "apn-freq",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "7367e9be0c49ae66"
+      },
+      {
+        "id": "apn-td-toluene",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "503cad99086bc96f"
+      },
+      {
+        "id": "apn-td-thf",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "f998832ce58f5cc5"
+      },
+      {
+        "id": "apn-td-dcm",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "441668de30d01955"
+      },
+      {
+        "id": "apn-td-dmso",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "84f5f00bfc8c9412"
+      },
+      {
+        "id": "apn-td-meoh",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "14c79fb075108d0b"
+      },
+      {
+        "id": "apn-note",
+        "type": "note",
+        "executable": false,
+        "inputHash": "e3b0c44298fc1c14"
+      }
+    ],
+    "edges": [
+      "apn-opt->apn-freq:checkpoint",
+      "apn-freq->apn-td-toluene:checkpoint",
+      "apn-freq->apn-td-thf:checkpoint",
+      "apn-freq->apn-td-dcm:checkpoint",
+      "apn-freq->apn-td-dmso:checkpoint",
+      "apn-freq->apn-td-meoh:checkpoint"
+    ]
+  },
+  "emission.ncs": {
+    "tasks": [
+      {
+        "id": "em-s1-opt",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "eba3fdcc222561b2"
+      },
+      {
+        "id": "em-td",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "1890885f576e05d7"
+      },
+      {
+        "id": "em-note",
+        "type": "note",
+        "executable": false,
+        "inputHash": "e3b0c44298fc1c14"
+      }
+    ],
+    "edges": [
+      "em-s1-opt->em-td:checkpoint"
+    ]
+  },
+  "opt-freq.ncs": {
+    "tasks": [
+      {
+        "id": "of-opt",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "975de74d4caa728f"
+      },
+      {
+        "id": "of-freq",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "c49b9a1bd2cd6b88"
+      }
+    ],
+    "edges": [
+      "of-opt->of-freq:dependency"
+    ]
+  },
+  "single-point.ncs": {
+    "tasks": [
+      {
+        "id": "sp-energy",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "ebc2eb3671619741"
+      }
+    ],
+    "edges": []
+  },
+  "ts-search.ncs": {
+    "tasks": [
+      {
+        "id": "ts-react-opt",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "975de74d4caa728f"
+      },
+      {
+        "id": "ts-opt",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "c24ebe8bf7cc3f43"
+      },
+      {
+        "id": "ts-freq",
+        "type": "calc",
+        "executable": true,
+        "inputHash": "06fd160e39f5e958"
+      },
+      {
+        "id": "ts-route-note",
+        "type": "note",
+        "executable": false,
+        "inputHash": "e3b0c44298fc1c14"
+      }
+    ],
+    "edges": [
+      "ts-react-opt->ts-opt:dependency",
+      "ts-opt->ts-freq:checkpoint"
+    ]
+  }
+}

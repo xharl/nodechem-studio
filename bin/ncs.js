@@ -13,6 +13,7 @@
  *   2  the project does not validate, or a task cannot be built
  *   3  a run finished but its gates failed (queue reached needs-review)
  *   4  a run or the queue failed outright
+ *   5  the queue is partial (some records failed) or a merge conflicted
  */
 
 import fs from 'node:fs/promises';
@@ -21,7 +22,9 @@ import process from 'node:process';
 
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
+import { flowById } from '../src/shared/flows.js';
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
+import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
 import { convertFchk, convertParsed, convertStructure } from '../src/shared/converters/index.js';
@@ -31,15 +34,17 @@ import { parseCube } from '../src/shared/cubeFile.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 
-const EXIT = Object.freeze({ ok: 0, usage: 1, invalid: 2, gate: 3, engine: 4, conflict: 5 });
-const TERMINAL = new Set(['completed', 'failed', 'needs-review', 'blocked', 'cancelled']);
+const EXIT = Object.freeze({ ok: 0, usage: 1, invalid: 2, gate: 3, engine: 4, conflict: 5, partial: 5 });
+const TERMINAL = new Set(['completed', 'failed', 'needs-review', 'partial', 'blocked', 'cancelled']);
 
 const USAGE = `ncs — headless NodeChem Studio
 
   ncs validate <project.ncs> [--json]
   ncs build-input <project.ncs> --node <id> [--out <file>]
-  ncs run <project.ncs> --out <dir> [--dry-run] [--executable <path>] [--crest <path>]
+  ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
+      [--max-parallel N] [--executable <path>] [--crest <path>]
       [--timeout <seconds>] [--json]
+  ncs report <out-dir> [--flow <id>] [--out <file>]
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
   ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
@@ -48,7 +53,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs cache <file.ncsr> --inspect [--json]
 
 Exit codes: 0 success, 2 invalid project, 3 gate failure, 4 engine failure,
-5 merge conflict.
+5 partial queue (some records failed) or merge conflict.
 `;
 
 function fail(message, code = EXIT.usage) {
@@ -165,11 +170,54 @@ async function commandRun({ positional, flags }) {
 
   let plan;
   try {
-    plan = buildWorkflowPlan(result.project);
+    // RFC 0001: `--flow` selects a flow; without it the project's active flow
+    // runs, exactly as the app's Run button does.
+    if (flags.flow !== undefined && typeof flags.flow !== 'string') {
+      fail('--flow needs a flow id.', EXIT.usage);
+    }
+    if (flags.record !== undefined && typeof flags.record !== 'string') {
+      fail('--record needs a record id.', EXIT.usage);
+    }
+    if (flags['max-parallel'] !== undefined && typeof flags['max-parallel'] !== 'string') {
+      fail('--max-parallel needs a positive integer.', EXIT.usage);
+    }
+    const requestedFlow = typeof flags.flow === 'string' ? String(flags.flow) : null;
+    if (requestedFlow && !flowById(result.project, requestedFlow)) {
+      fail(`no flow "${requestedFlow}" in ${file}.`, EXIT.invalid);
+    }
+    plan = buildWorkflowPlan(result.project, { flowId: requestedFlow || result.project.activeFlowId || null });
   } catch (error) {
     fail(error.message, EXIT.invalid);
   }
-  const { tasks, edges: plannedEdges } = plan;
+  let { tasks, edges: plannedEdges } = plan;
+
+  // RFC 0001: one record's subgraph plus the control blocks that collect it.
+  // Control blocks have no `recordId`, so they are kept; edges to dropped tasks
+  // are dropped with them.
+  if (typeof flags.record === 'string') {
+    const recordId = String(flags.record);
+    if (!plan.tasks.some((task) => task.recordId === recordId)) {
+      fail(`no record "${recordId}" in flow "${plan.flowId}".`, EXIT.invalid);
+    }
+    const kept = new Set(plan.tasks
+      .filter((task) => !task.recordId || task.recordId === recordId)
+      .map((task) => task.nodeId));
+    tasks = plan.tasks.filter((task) => kept.has(task.nodeId));
+    plannedEdges = plan.edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to));
+  }
+
+  // RFC 0001: the project's runner.maxParallel is the default; the flag wins.
+  // The queue clamps the value to its own limit.
+  const projectParallel = Number(result.project.runner?.maxParallel);
+  let maxParallel = Number.isFinite(projectParallel) && projectParallel >= 1
+    ? Math.trunc(projectParallel) : 1;
+  if (flags['max-parallel'] !== undefined) {
+    const requested = Number(flags['max-parallel']);
+    if (!Number.isInteger(requested) || requested < 1) {
+      fail('--max-parallel needs a positive integer.', EXIT.usage);
+    }
+    maxParallel = requested;
+  }
 
   const runsRoot = path.join(outDir, 'runs');
   const queuesRoot = path.join(outDir, 'queues');
@@ -186,11 +234,18 @@ async function commandRun({ positional, flags }) {
     queuesRoot,
     runManager,
     emit: (event) => events.push(event),
+    // `--out` is the folder the user named: output blocks write `reports/…`
+    // and `manifest.json` beside `queues/`, not inside the queue folder.
+    artifactsRoot: outDir,
   });
   await queueManager.init();
 
   const started = await queueManager.start({
     projectName: result.project.name || path.basename(file),
+    // The queue names the flow it ran, so `ncs report` can title each section
+    // after the tab it came from instead of repeating the project name.
+    flowId: plan.flowId || null,
+    flowTitle: flowById(result.project, plan.flowId)?.title || null,
     tasks,
     edges: plannedEdges,
     options: {
@@ -200,6 +255,7 @@ async function commandRun({ positional, flags }) {
       // calculation block needs its engine; the queue fails by name otherwise.
       crestExecutable: flags.crest ? String(flags.crest) : '',
       scratchDir: '',
+      maxParallel,
     },
   }).catch((error) => fail(`queue did not start: ${error.message}`, EXIT.engine));
 
@@ -219,10 +275,17 @@ async function commandRun({ positional, flags }) {
     fail(`the queue did not finish within ${timeoutSeconds}s (status: ${queue?.status || 'unknown'}).`, EXIT.engine);
   }
 
+  // A project may declare combined reports (`reports[]`). They are written from
+  // the queues this run left behind, so `ncs run` alone produces the document —
+  // no second command, and no stale report from an earlier run.
+  const declared = await emitDeclaredReports(result.project, outDir)
+    .catch((error) => fail(`declared report: ${error.message}`, EXIT.invalid));
+
   const summary = {
     queueId,
     status: queue.status,
     outDir,
+    reports: declared,
     ladders: queue.ladders || {},
     spins: queue.spins || {},
     runs: await Promise.all((queue.tasks || []).map(async (task) => {
@@ -240,14 +303,174 @@ async function commandRun({ positional, flags }) {
   };
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 
-  // A run whose gates failed did compute something; a run that errored did
-  // not. The two exit codes must not be confused: 3 means "the result exists
-  // but does not meet the requested criteria", 4 means "nothing usable".
+  // A partial queue is its own outcome (RFC 0001): some records finished, some
+  // did not. It must win over the engine/gate codes so CI can tell "3 of 200
+  // failed" from "nothing ran" (4) and from "results exist but need review" (3).
   const gateFailed = summary.runs.filter((run) => run.gates === 'fail' || run.status === 'needs-review');
   const engineFailed = summary.runs.filter((run) => !gateFailed.includes(run)
     && (run.error || run.status === 'failed' || run.status === 'cancelled'));
+  if (queue.status === 'partial') process.exit(EXIT.partial);
   if (engineFailed.length > 0) process.exit(EXIT.engine);
   if (gateFailed.length > 0 || queue.status === 'needs-review') process.exit(EXIT.gate);
+  process.exit(EXIT.ok);
+}
+
+/** A queue's flow, read from its tasks (the queue record predates `flowId`). */
+function queueFlowId(queue) {
+  const task = (Array.isArray(queue?.tasks) ? queue.tasks : []).find((entry) => entry?.flowId);
+  return task?.flowId || queue?.flowId || 'main';
+}
+
+/** Dataset record metadata from a stored queue, for report labels. */
+function queueRecordInfo(queue) {
+  const info = new Map();
+  for (const task of Array.isArray(queue?.tasks) ? queue.tasks : []) {
+    if (!task.recordId || info.has(task.recordId)) continue;
+    info.set(task.recordId, {
+      id: task.recordId,
+      label: task.record?.label || task.recordId,
+      charge: Number.isInteger(task.record?.charge) ? task.record.charge : null,
+      multiplicity: Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : null,
+    });
+  }
+  return [...info.values()];
+}
+
+/** Read every `run.json` a queue points at, keyed by run id and node id. */
+async function queueRunRecords(queue) {
+  const records = {};
+  for (const task of Array.isArray(queue?.tasks) ? queue.tasks : []) {
+    if (!task.runDir) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const record = JSON.parse(await fs.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
+      if (task.runId) records[task.runId] = record;
+      if (task.nodeId && !records[task.nodeId]) records[task.nodeId] = record;
+    } catch {
+      // A run folder without run.json is reported as a failure, not guessed.
+    }
+  }
+  return records;
+}
+
+/**
+ * `ncs report` — rebuild the HTML report from the last queue on disk.
+ *
+ * With one flow, the output is the same self-contained document an output block
+ * writes. With several flows in the folder (or without `--flow`), the newest
+ * queue per flow is combined into one report with an index that names failed
+ * and partial records; `--flow` restricts it to one flow.
+ */
+/**
+ * The report model of the newest queue of each flow under `outDir`.
+ *
+ * `flows` narrows the selection to the flows a `reports[]` entry names; a
+ * single `flow` does the same for `ncs report --flow`. A flow with no queue is
+ * simply absent: the report describes what ran.
+ */
+async function collectReportModels(outDir, { flow = null, flows = null } = {}) {
+  const queuesDir = path.join(outDir, 'queues');
+  let entries;
+  try {
+    entries = await fs.readdir(queuesDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const queues = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const queue = JSON.parse(await fs.readFile(path.join(queuesDir, entry.name, 'queue.json'), 'utf8'));
+      if (queue?.id) queues.push(queue);
+    } catch {
+      // An unreadable queue is skipped; a later one may still be reportable.
+    }
+  }
+
+  // Newest first, then one per flow: the report describes the latest run of
+  // each flow, not an arbitrary mix of attempts.
+  queues.sort((a, b) => String(b.createdAt || b.id).localeCompare(String(a.createdAt || a.id)));
+  const wanted = flow ? new Set([String(flow)])
+    : Array.isArray(flows) && flows.length > 0 ? new Set(flows.map(String)) : null;
+  const selected = new Map();
+  for (const queue of queues) {
+    const flowId = queueFlowId(queue);
+    if (wanted && !wanted.has(flowId)) continue;
+    if (!selected.has(flowId)) selected.set(flowId, queue);
+  }
+
+  const generatedAt = new Date().toISOString();
+  const models = [];
+  for (const [flowId, queue] of selected) {
+    // eslint-disable-next-line no-await-in-loop
+    models.push(buildWorkflowReport({ ...queue, flowId }, await queueRunRecords(queue), {
+      generatedAt,
+      appVersion: 'cli',
+      recordInfo: queueRecordInfo(queue),
+    }));
+  }
+  return models;
+}
+
+/**
+ * Write every `reports[]` entry the project declares, after a run. The path is
+ * project-relative and must stay inside the output folder, like an output
+ * block's; a bad path is a run error, not a silent skip.
+ */
+async function emitDeclaredReports(project, outDir) {
+  const entries = (Array.isArray(project?.reports) ? project.reports : [])
+    .filter((entry) => entry && entry.kind === 'html');
+  const written = [];
+  for (const entry of entries) {
+    const relative = String(entry.path || '').trim();
+    const segments = relative.split('/');
+    if (!relative || relative.startsWith('/') || /^[A-Za-z]:/.test(relative)
+      || segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      throw new Error(`Report "${entry.id || relative}" path must be relative and stay inside the output folder.`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const models = await collectReportModels(outDir, { flows: entry.flows });
+    if (models.length === 0) continue;
+    const html = buildCombinedReportHtml(models, {
+      title: entry.title || `Project report — ${project.name || ''}`.trim(),
+      generatedAt: new Date().toISOString(),
+    });
+    const target = path.resolve(outDir, relative);
+    // eslint-disable-next-line no-await-in-loop
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    // eslint-disable-next-line no-await-in-loop
+    await fs.writeFile(target, html, 'utf8');
+    written.push({ id: entry.id || relative, path: relative, bytes: Buffer.byteLength(html) });
+  }
+  return written;
+}
+
+async function commandReport({ positional, flags }) {
+  const [outArg] = positional;
+  if (!outArg) fail('report needs an output directory.');
+  const outDir = path.resolve(outArg);
+  const wantedFlow = typeof flags.flow === 'string' ? String(flags.flow) : null;
+  const models = await collectReportModels(outDir, { flow: wantedFlow });
+  if (models.length === 0) {
+    fail(wantedFlow
+      ? `no queue for flow "${wantedFlow}" under ${outDir}.`
+      : `no readable queue.json under ${path.join(outDir, 'queues')}.`, EXIT.invalid);
+  }
+  const generatedAt = new Date().toISOString();
+  const html = models.length === 1
+    ? workflowReportHtml(models[0])
+    : buildCombinedReportHtml(models, {
+      title: `Project report — ${models[0].queue.projectName || path.basename(outDir)}`,
+      generatedAt,
+    });
+  // `--out` is the user's path: unlike an artifact declared inside a project,
+  // it is not confined to the output folder — the caller asked for it by name.
+  const outFile = path.resolve(String(flags.out || path.join(outDir, 'reports', 'index.html')));
+  await fs.mkdir(path.dirname(outFile), { recursive: true });
+  await fs.writeFile(outFile, html, 'utf8');
+  process.stdout.write(`${outFile}\n`);
   process.exit(EXIT.ok);
 }
 
@@ -443,6 +666,7 @@ const handlers = {
   validate: commandValidate,
   'build-input': commandBuildInput,
   run: commandRun,
+  report: commandReport,
   diff: commandDiff,
   merge: commandMerge,
   convert: commandConvert,

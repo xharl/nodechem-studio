@@ -1,6 +1,6 @@
 # NodeChem Studio project format
 
-Status: normative for `schemaVersion: 1`. This document is the contract between
+Status: normative for `schemaVersion: 2`. This document is the contract between
 the app and anything that reads or writes a project file.
 
 ## 1. File identity
@@ -41,9 +41,13 @@ every error carries a JSON path (`nodes[3].settings.basis`).
 
 ## 3. Versioning
 
-- `schemaVersion` is currently `1`.
+- `schemaVersion` is currently `2`.
 - A file with no `schemaVersion`, or `0`, is treated as v0.1 and migrated by
   filling documented defaults; the result reports `migrated: true`.
+- A **v1** file (a single top-level `nodes`/`edges` graph) migrates by wrapping
+  that graph in a flow called `main`. Nothing else changes: task ids, run
+  folder names and bundle names are identical, so a v1 project plans exactly as
+  it did before.
 - A file with a version **above** the build's `SCHEMA_VERSION` is rejected with
   an "update NodeChem Studio" message. The app never guesses at a newer format.
 - Unknown keys are warnings, not errors, so a forward-compatible reader can
@@ -57,10 +61,20 @@ Top level, all six keys required after normalization:
 | --- | --- | --- |
 | `schemaVersion` | integer | `1` |
 | `name` | string | ≤ 200 chars, defaults to `Untitled project` |
-| `molecule` | object | see below |
+| `molecule` | object | see below; the geometry a flow without an `input` block runs on |
 | `defaults` | object | project-wide route defaults |
-| `nodes[]` | array | workflow blocks |
-| `edges[]` | array | connections between blocks |
+| `runner` | object | `{ maxParallel }`, 1–64, default 1 (sequential) |
+| `datasets[]` | array | named record sets; ≤ 64 (see 4.1) |
+| `flows[]` | array | one graph per flow; 1–32 (see 4.2) |
+| `reports[]` | array | combined HTML reports across flows; ≤ 16 (see 4.5) |
+| `activeFlowId` | string | the flow the app shows; must name a flow |
+
+The file no longer carries a top-level `nodes`/`edges` pair: the graph lives in
+`flows[]`. `project.nodes` and `project.edges` still exist **in memory** as
+aliases of the active flow, so every reader that predates flows keeps working;
+`stringifyProject()` drops them on save. A file that carries both (an in-memory
+object written by hand) is read with the top-level pair as the active flow's
+graph.
 
 `molecule`:
 
@@ -92,7 +106,8 @@ Type-specific payloads:
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
 | `merge` | `merge { policy, notes }` |
-| `output` | `output { bundle, manifest, notes }` |
+| `input` | `input { datasetId, recordFilter { field, equals } }` — starts iteration (4.3) |
+| `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
 | `note` | `note { text }` |
 
 `calc.settings` accepts exactly these keys — anything else is dropped:
@@ -177,9 +192,103 @@ the same block fanned over two different ensembles. Fan-out does not yet propaga
 `conformers → opt → freq` needs issue #87; until then it is refused, not run on the wrong geometry.
 
 `edges[]` — `id`, `from`, `to`, `type` (`dependency`, `checkpoint`, `branch`,
-`loop`), plus `branch` (`true`/`false`) on branch edges. Self-edges, duplicate
-ids, unknown endpoints and ordinary cycles are rejected; `loop` edges are the
-documented way to express a retry cycle.
+`loop`, `barrier`), plus `branch` (`true`/`false`) on branch edges. Self-edges,
+duplicate ids, unknown endpoints and ordinary cycles are rejected; `loop` edges
+are the documented way to express a retry cycle. `barrier` is the stage fence
+(4.3).
+
+### 4.1 `datasets[]`
+
+A dataset is a named, ordered set of molecule records that an `input` block
+iterates. It lives in the project file, so a project is still one document.
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `id` | string | 1–64 chars, `[A-Za-z0-9][A-Za-z0-9._-]*`, unique in the project |
+| `title` | string | display name |
+| `source` | object | `{ kind: 'file' or 'inline', path, format }`; `format` is `sdf`, `xyz`, `csv` or `json`; `path` is relative and has no `..` |
+| `fields` | object | optional column mapping `{ label, charge, multiplicity }` read from the file's properties |
+| `records[]` | array | at most 2 000, each `{ id, label, charge, multiplicity, coords[], enabled }` |
+| `notes` | string | at most 2 000 chars |
+
+A record's `id` uses the node-id grammar because it becomes a task-id segment.
+`coords[]` uses the molecule atom shape (`{ element, x, y, z }`, at most 1 000
+atoms) and is required: a record with no geometry cannot run and is a
+validation error. `charge` (-10 to 10) and `multiplicity` (1 to 10) default to 0
+and 1. `enabled: false` keeps the record in the file but out of every run, which
+is how a family member is skipped without deleting it.
+
+### 4.2 `flows[]`
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `id` | string | 1–64 chars, unique; `main` for a migrated v1 project |
+| `title` | string | display name; the flow tab |
+| `nodes[]` | array | the node types above, plus `input` |
+| `edges[]` | array | endpoints must belong to this flow |
+
+Node ids are unique **within a flow**, so two flows may both contain a block
+called `opt`. Edges, `checkpointFrom` and `loop.target` never cross a flow
+boundary. A flow with no executable block is not a validation error; the
+planner refuses it when someone tries to run it.
+
+### 4.3 Iteration, task ids and `barrier`
+
+A block **downstream of an `input` block** runs once per **enabled** record of
+that block's dataset. The dataset is the loop; there is no separate "for each"
+block. Task ids carry the record as a second `~` segment, and a conformer member
+adds a third:
+
+| Flow | Task ids |
+| --- | --- |
+| no `input` block (every v1 project) | `opt` |
+| `input` then `opt` | `opt~m1`, `opt~m2` |
+| `input` then `conformers` (fan-out) then `opt` | `opt~m2~c1` |
+
+A record's `charge` and `multiplicity` are used unless the block sets a value
+that differs from the schema default (0 / 1); the default is not treated as an
+explicit override, because `defaultSettings()` writes it on every block. The
+record's `coords` replace the project geometry for that record's runs.
+
+`input.recordFilter` narrows the family without editing the dataset:
+`{ "field": "label", "equals": "enol-3" }` runs that record alone. The field is
+one of `id`, `label`, `charge`, `multiplicity`; `charge` and `multiplicity`
+compare as numbers, the others as trimmed strings. An empty `field` or `equals`
+means "every enabled record" — the default — and an unknown field is refused at
+plan time rather than silently matching nothing.
+
+Edge semantics under iteration:
+
+| Type | Expansion |
+| --- | --- |
+| `dependency` | record to record (`opt~m1` to `freq~m1`); an unscoped block broadcasts (single source) or collects (single consumer) |
+| `checkpoint` | the same record and, when fanned out, the same member |
+| `barrier` | the **cross product**: every source record orders every consumer record, so `freq` to `sp` means no `sp` starts before *every* `freq` is terminal |
+| `branch`, `loop` | unchanged |
+
+A block fed by two different datasets is refused at plan time: there is no
+honest pairing between two record sets. A plan is capped at 5 000 tasks, and the
+refusal names the product (`60 records × the blocks they feed`).
+
+### 4.4 `output` blocks
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `kind` | enum | `html`, `csv`, `json`, `zip`; **no PDF** |
+| `path` | string | project-relative artifact path inside the output folder; the extension must match `kind`; no `..` |
+| `include` | enum | `records` (one artifact for the whole family, default) or `record` (one per record, `-<recordId>` before the extension) |
+| `bundle` | string | v1 compatibility: the zip name when `kind` is `zip` |
+| `manifest` | boolean | append the artifact's SHA-256 to the run manifest |
+| `notes` | string | at most 2 000 chars |
+
+### 4.5 `reports[]`
+
+A combined HTML report across flows: `{ id, title, kind: 'html', flows: [flowId], path }`.
+Per-flow reports are written by `output` blocks; `reports[]` only adds the
+document that stitches flows together. `ncs run` writes every `reports[]` entry
+after the queue settles, from the queues that run left behind — no second
+command. The path is relative to the output folder and may not contain `..`.
+Failed and partial records are named in its index, never hidden.
 
 ## 5. Limits
 
@@ -190,6 +299,11 @@ documented way to express a retry cycle.
 | Edges | 4 000 |
 | Fragments | 64 |
 | Atoms | 1 000 |
+| Records per dataset | 2 000 |
+| Datasets | 64 |
+| Flows | 32 |
+| Planned tasks | 5 000 |
+| `runner.maxParallel` | 64 |
 | Errors reported | 100 |
 | Warnings reported | 200 |
 

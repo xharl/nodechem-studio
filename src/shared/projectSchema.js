@@ -5,18 +5,33 @@
  * before a project is rendered, and by the renderer when it saves.
  *
  * Contract:
- *   - `schemaVersion: 1` is the current on-disk format.
+ *   - `schemaVersion: 2` is the current on-disk format: a project carries
+ *     `flows[]` (one graph each) and `datasets[]` (record sets an `input` block
+ *     iterates). A v1 project (single `nodes`/`edges` graph) migrates by
+ *     wrapping that graph in a flow called `main`; its plans, task ids and run
+ *     folders are byte-identical.
  *   - A project written before versioning (no `schemaVersion`, or 0) is
- *     treated as v0.1 and migrated into v1 by filling documented defaults.
+ *     treated as v0.1 and migrated by filling documented defaults.
  *   - A project from a newer build is rejected, never guessed at.
  *   - Validation collects every error with a JSON path; it does not throw.
  *   - The normalized project is canonical: the same input always yields the
  *     same key order, so a save/reopen round-trip is byte-stable.
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 import { isElementSymbol } from './elements.js';
+import {
+  DEFAULT_FLOW_ID,
+  GRAPH_ID_RE,
+  RECORD_ID_RE,
+  attachGraphAliases,
+  edgesOfFlow,
+  enabledRecords,
+  flowsOf,
+  isPlainObject as isPlainObjectValue,
+  nodesOfFlow,
+} from './flows.js';
 import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
@@ -53,12 +68,18 @@ export const LIMITS = Object.freeze({
   edges: 4000,
   fragments: 64,
   atoms: 1000,
+  // RFC 0001: a dataset may hold a family, but not an unbounded one, and the
+  // plan it expands into is capped too (records × blocks).
+  records: 2000,
+  flows: 32,
+  planTasks: 5000,
+  maxParallel: 64,
   errorsReported: 100,
   warningsReported: 200,
 });
 
 export const NODE_TYPES = Object.freeze([
-  'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note',
+  'input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note',
 ]);
 
 /** States a project file may carry. Queue states are reserved for GN-003. */
@@ -66,7 +87,11 @@ export const NODE_STATES = Object.freeze([
   'ready', 'running', 'passed', 'review', 'blocked', 'failed', 'skipped', 'cancelled', 'interrupted',
 ]);
 
-export const EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch', 'loop']);
+/**
+ * RFC 0001: `barrier` orders one block after another across the whole record
+ * set ("finish the step"), while `dependency` is a per-record hand-off.
+ */
+export const EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch', 'loop', 'barrier']);
 export const BRANCHES = Object.freeze(['true', 'false']);
 export const JOB_TYPES = Object.freeze([
   'Opt', 'Opt Freq', 'Opt=TS', 'Freq', 'IRC', 'SP', 'Scan', 'NMR',
@@ -90,10 +115,27 @@ export const MERGE_POLICIES = Object.freeze(['all', 'any']);
 export const GEOMETRY_SOURCES = Object.freeze(['demo', 'imported', 'manual']);
 export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'mol2', 'pdb', 'pdbqt', 'cjson', 'gjf', 'com', 'log']);
 
+/** RFC 0001: what an output block writes. HTML is the report format; no PDF. */
+export const OUTPUT_KINDS = Object.freeze(['html', 'csv', 'json', 'zip']);
+/** `records` = one artifact for the whole dataset, `record` = one per record. */
+export const OUTPUT_INCLUDES = Object.freeze(['records', 'record']);
+export const DATASET_FORMATS = Object.freeze(['sdf', 'xyz', 'csv', 'json']);
+export const DATASET_SOURCES = Object.freeze(['file', 'inline']);
+
+const OUTPUT_EXTENSIONS = Object.freeze({ html: '.html', csv: '.csv', json: '.json', zip: '.zip' });
+const DEFAULT_OUTPUT_PATHS = Object.freeze({
+  html: 'reports/report.html',
+  csv: 'reports/dataset.csv',
+  json: 'reports/dataset.json',
+  zip: 'project.zip',
+});
+
 const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
 const OUTPUT_NAME = /^[A-Za-z0-9._-]{1,124}\.(out|log)$/i;
 const BUNDLE_NAME = /^[^<>:"/\\|?*\u0000-\u001f]{1,120}\.zip$/i;
+/** RFC 0001: a project-relative artifact path, no traversal, no absolute root. */
+const ARTIFACT_PATH = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 const PORT = /^[A-Za-z0-9_-]{1,24}$/;
 const NUMERIC = /^\d+(\.\d+)?$/;
 
@@ -109,6 +151,7 @@ const JOB_KINDS = {
 };
 
 const TYPE_KINDS = {
+  input: 'Input',
   conformers: 'Conformers',
   condition: 'If',
   loop: 'Loop',
@@ -118,6 +161,7 @@ const TYPE_KINDS = {
 };
 
 const TYPE_LABELS = {
+  input: 'Dataset input',
   calc: 'Calculation',
   conformers: 'Conformer ensemble',
   condition: 'Condition',
@@ -127,9 +171,10 @@ const TYPE_LABELS = {
   note: 'Note',
 };
 
-const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'name', 'molecule', 'defaults', 'nodes', 'edges']);
+const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'name', 'molecule', 'defaults', 'runner', 'datasets', 'flows', 'reports', 'activeFlowId', 'nodes', 'edges']);
 const NODE_COMMON_KEYS = new Set(['id', 'type', 'kind', 'title', 'state', 'x', 'y']);
 const NODE_TYPE_KEYS = {
+  input: new Set(['input']),
   calc: new Set(['settings', 'output', 'checkpointFrom']),
   conformers: new Set(['settings', 'output']),
   condition: new Set(['condition']),
@@ -262,7 +307,7 @@ function warnUnknown(c, source, allowed, path) {
   for (const key of Object.keys(source)) {
     if (allowed.has(key)) continue;
     const keyPath = path ? `${path}.${key}` : key;
-    c.warn(keyPath, 'is not part of schema version 1 and will be dropped on save.');
+    c.warn(keyPath, 'is not part of this schema version and will be dropped on save.');
   }
 }
 
@@ -573,19 +618,19 @@ function normalizeConformerOutput(c, raw, path, legacy) {
   };
 }
 
-function normalizeCoords(c, raw, legacy) {
+function normalizeCoords(c, raw, legacy, basePath = 'molecule.coords') {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
-    c.error('molecule.coords', 'must be an array of atoms.');
+    c.error(basePath, 'must be an array of atoms.');
     return [];
   }
   if (raw.length > LIMITS.atoms) {
-    c.error('molecule.coords', `must contain at most ${LIMITS.atoms} atoms.`);
+    c.error(basePath, `must contain at most ${LIMITS.atoms} atoms.`);
     return [];
   }
   const atoms = [];
   raw.forEach((atom, index) => {
-    const path = `molecule.coords[${index}]`;
+    const path = `${basePath}[${index}]`;
     if (!isPlainObject(atom)) {
       c.error(path, 'must be an object with element, x, y and z.');
       return;
@@ -972,8 +1017,8 @@ function normalizeOutputRef(c, raw, path, legacy) {
   };
 }
 
-function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian') {
-  const path = `nodes[${index}]`;
+function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePath = 'nodes') {
+  const path = `${basePath}[${index}]`;
   if (!isPlainObject(raw)) {
     c.error(path, 'must be an object.');
     return null;
@@ -1057,17 +1102,50 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian') {
 
   if (type === 'output') {
     const source = requiredObject(c, raw.output, `${path}.output`, legacy, {});
-    warnUnknown(c, source, new Set(['bundle', 'manifest', 'notes']), `${path}.output`);
-    const bundle = readString(c, source.bundle, `${path}.output.bundle`, { legacy, fallback: 'project.zip', max: 120 }) || 'project.zip';
-    if (!BUNDLE_NAME.test(bundle)) {
+    warnUnknown(c, source, new Set(['kind', 'path', 'include', 'bundle', 'manifest', 'notes']), `${path}.output`);
+    const kind = readEnum(c, source.kind, OUTPUT_KINDS, `${path}.output.kind`, { legacy, fallback: 'zip' });
+    const bundleName = readString(c, source.bundle, `${path}.output.bundle`, { legacy, fallback: 'project.zip', max: 120 }) || 'project.zip';
+    if (!BUNDLE_NAME.test(bundleName)) {
       c.error(`${path}.output.bundle`, 'must be a .zip file name without path separators.');
+    }
+    // RFC 0001: `path` is the artifact this block writes; a v1 file has no path
+    // and keeps meaning "the zip named by `bundle`".
+    const fallbackPath = kind === 'zip' ? bundleName : DEFAULT_OUTPUT_PATHS[kind];
+    const artifactPath = readString(c, source.path, `${path}.output.path`, { legacy, fallback: fallbackPath, max: 160 }) || fallbackPath;
+    if (!ARTIFACT_PATH.test(artifactPath) || artifactPath.split('/').includes('..')) {
+      c.error(`${path}.output.path`, 'must be a relative path inside the output folder, without "..".');
+    } else if (!artifactPath.toLowerCase().endsWith(OUTPUT_EXTENSIONS[kind])) {
+      c.error(`${path}.output.path`, `must end in ${OUTPUT_EXTENSIONS[kind]} for a ${kind} output.`);
     }
     return {
       ...common,
       output: {
-        bundle,
+        kind,
+        path: artifactPath,
+        include: readEnum(c, source.include, OUTPUT_INCLUDES, `${path}.output.include`, { legacy, fallback: 'records' }),
+        bundle: bundleName,
         manifest: readBoolean(c, source.manifest, `${path}.output.manifest`, { legacy, fallback: true }),
         notes: readString(c, source.notes, `${path}.output.notes`, { legacy, fallback: '', max: 2000 }),
+      },
+    };
+  }
+
+  if (type === 'input') {
+    const source = requiredObject(c, raw.input, `${path}.input`, legacy, {});
+    warnUnknown(c, source, new Set(['datasetId', 'recordFilter']), `${path}.input`);
+    const datasetId = readString(c, source.datasetId, `${path}.input.datasetId`, { legacy, fallback: '', max: 64, required: true });
+    if (datasetId && !GRAPH_ID_RE.test(datasetId)) {
+      c.error(`${path}.input.datasetId`, 'must be a dataset id: letters, digits, dot, underscore or dash.');
+    }
+    const filterRaw = isPlainObject(source.recordFilter) ? source.recordFilter : {};
+    return {
+      ...common,
+      input: {
+        datasetId,
+        recordFilter: {
+          field: readString(c, filterRaw.field, `${path}.input.recordFilter.field`, { legacy, fallback: '', max: 64 }),
+          equals: readString(c, filterRaw.equals, `${path}.input.recordFilter.equals`, { legacy, fallback: '', max: 200 }),
+        },
       },
     };
   }
@@ -1090,19 +1168,19 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian') {
   };
 }
 
-function normalizeEdges(c, raw, nodeIds, legacy) {
+function normalizeEdges(c, raw, nodeIds, legacy, basePath = 'edges') {
   if (!Array.isArray(raw)) {
-    c.error('edges', 'must be an array.');
+    c.error(basePath, 'must be an array.');
     return [];
   }
   if (raw.length > LIMITS.edges) {
-    c.error('edges', `must contain at most ${LIMITS.edges} connections.`);
+    c.error(basePath, `must contain at most ${LIMITS.edges} connections.`);
     return [];
   }
   const seen = new Set();
   const edges = [];
   raw.forEach((edge, index) => {
-    const path = `edges[${index}]`;
+    const path = `${basePath}[${index}]`;
     if (!isPlainObject(edge)) {
       c.error(path, 'must be an object.');
       return;
@@ -1149,6 +1227,295 @@ function normalizeEdges(c, raw, nodeIds, legacy) {
     edges.push(normalized);
   });
   return edges;
+}
+
+/* ── Flows, datasets, runner, reports (RFC 0001) ─────────── */
+
+function normalizeGraphNodes(c, raw, legacy, projectEngine, basePath) {
+  if (!Array.isArray(raw)) {
+    c.error(basePath, 'must be an array of nodes.');
+    return [];
+  }
+  if (raw.length > LIMITS.nodes) {
+    c.error(basePath, `must contain at most ${LIMITS.nodes} nodes.`);
+  }
+  const ids = new Set();
+  const nodes = [];
+  raw.slice(0, LIMITS.nodes).forEach((nodeRaw, index) => {
+    const node = normalizeNode(c, nodeRaw, index, legacy, projectEngine, basePath);
+    if (!node) return;
+    if (ids.has(node.id)) {
+      c.error(`${basePath}[${index}].id`, `duplicate node id "${node.id}".`);
+      return;
+    }
+    ids.add(node.id);
+    nodes.push(node);
+  });
+  return nodes;
+}
+
+function normalizeFlow(c, raw, index, legacy, projectEngine) {
+  const path = `flows[${index}]`;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be an object.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['id', 'title', 'nodes', 'edges']), path);
+  const id = readString(c, raw.id, `${path}.id`, { legacy, fallback: '', max: 64, required: true });
+  if (id && !GRAPH_ID_RE.test(id)) {
+    c.error(`${path}.id`, 'must be a flow id: letters, digits, dot, underscore or dash, starting with a letter or digit.');
+  }
+  const nodes = normalizeGraphNodes(c, raw.nodes, legacy, projectEngine, `${path}.nodes`);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const edges = normalizeEdges(c, raw.edges, nodeIds, legacy, `${path}.edges`);
+  return {
+    id: id || `flow${index + 1}`,
+    title: readString(c, raw.title, `${path}.title`, { legacy, fallback: 'Workflow', max: 120 }) || 'Workflow',
+    nodes,
+    edges,
+  };
+}
+
+function normalizeDatasetRecord(c, raw, datasetPath, index, legacy) {
+  const path = `${datasetPath}.records[${index}]`;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be an object.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['id', 'label', 'charge', 'multiplicity', 'coords', 'enabled', 'source']), path);
+  const id = readString(c, raw.id, `${path}.id`, { legacy, fallback: '', max: 64, required: true });
+  if (!id || !RECORD_ID_RE.test(id)) {
+    c.error(`${path}.id`, 'must be a record id: letters, digits, dot, underscore or dash, starting with a letter or digit.');
+    return null;
+  }
+  const coords = normalizeCoords(c, raw.coords, legacy, `${path}.coords`);
+  if (coords.length === 0) {
+    c.error(`${path}.coords`, 'must contain at least one atom: a record without a geometry cannot run.');
+  }
+  return {
+    id,
+    label: readString(c, raw.label, `${path}.label`, { legacy, fallback: id, max: 200 }) || id,
+    charge: readInteger(c, raw.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
+    multiplicity: readInteger(c, raw.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
+    coords,
+    enabled: readBoolean(c, raw.enabled, `${path}.enabled`, { legacy, fallback: true, optional: true }),
+  };
+}
+
+function normalizeDataset(c, raw, index, legacy) {
+  const path = `datasets[${index}]`;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be an object.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['id', 'title', 'source', 'fields', 'records', 'notes']), path);
+  const id = readString(c, raw.id, `${path}.id`, { legacy, fallback: '', max: 64, required: true });
+  if (!id || !GRAPH_ID_RE.test(id)) {
+    c.error(`${path}.id`, 'must be a dataset id: letters, digits, dot, underscore or dash, starting with a letter or digit.');
+    return null;
+  }
+  const source = isPlainObject(raw.source) ? raw.source : {};
+  warnUnknown(c, source, new Set(['kind', 'path', 'format']), `${path}.source`);
+  const kind = readEnum(c, source.kind, DATASET_SOURCES, `${path}.source.kind`, { legacy, fallback: 'file' });
+  const sourcePath = readString(c, source.path, `${path}.source.path`, { legacy, fallback: '', max: 300 });
+  if (kind === 'file') {
+    if (!sourcePath) c.error(`${path}.source.path`, 'is required for a file dataset.');
+    else if (!ARTIFACT_PATH.test(sourcePath) || sourcePath.split('/').includes('..')) {
+      c.error(`${path}.source.path`, 'must be a relative path, without "..".');
+    }
+  }
+  const fields = isPlainObject(raw.fields) ? raw.fields : {};
+  warnUnknown(c, fields, new Set(['label', 'charge', 'multiplicity']), `${path}.fields`);
+
+  const recordsRaw = raw.records;
+  const records = [];
+  if (recordsRaw !== undefined && recordsRaw !== null) {
+    if (!Array.isArray(recordsRaw)) {
+      c.error(`${path}.records`, 'must be an array of records.');
+    } else if (recordsRaw.length > LIMITS.records) {
+      c.error(`${path}.records`, `must contain at most ${LIMITS.records} records.`);
+    } else {
+      const seen = new Set();
+      recordsRaw.slice(0, LIMITS.records).forEach((recordRaw, recordIndex) => {
+        const record = normalizeDatasetRecord(c, recordRaw, path, recordIndex, legacy);
+        if (!record) return;
+        if (seen.has(record.id)) {
+          c.error(`${path}.records[${recordIndex}].id`, `duplicate record id "${record.id}".`);
+          return;
+        }
+        seen.add(record.id);
+        records.push(record);
+      });
+    }
+  }
+  if (kind === 'inline' && records.length === 0) {
+    c.error(`${path}.records`, 'must contain at least one record for an inline dataset.');
+  }
+  return {
+    id,
+    title: readString(c, raw.title, `${path}.title`, { legacy, fallback: id, max: 160 }) || id,
+    source: {
+      kind,
+      path: kind === 'file' ? sourcePath : '',
+      format: readEnum(c, source.format, DATASET_FORMATS, `${path}.source.format`, { legacy, fallback: 'sdf' }),
+    },
+    fields: {
+      label: readString(c, fields.label, `${path}.fields.label`, { legacy, fallback: '', max: 64 }),
+      charge: readString(c, fields.charge, `${path}.fields.charge`, { legacy, fallback: '', max: 64 }),
+      multiplicity: readString(c, fields.multiplicity, `${path}.fields.multiplicity`, { legacy, fallback: '', max: 64 }),
+    },
+    records,
+    notes: readString(c, raw.notes, `${path}.notes`, { legacy, fallback: '', max: 2000 }),
+  };
+}
+
+function normalizeDatasets(c, raw, legacy, ids) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    c.error('datasets', 'must be an array.');
+    return [];
+  }
+  if (raw.length > 64) c.error('datasets', 'must contain at most 64 datasets.');
+  const datasets = [];
+  raw.slice(0, 64).forEach((datasetRaw, index) => {
+    const dataset = normalizeDataset(c, datasetRaw, index, legacy);
+    if (!dataset) return;
+    if (ids.has(dataset.id)) {
+      c.error(`datasets[${index}].id`, `duplicate dataset id "${dataset.id}".`);
+      return;
+    }
+    ids.add(dataset.id);
+    datasets.push(dataset);
+  });
+  return datasets;
+}
+
+function normalizeRunner(c, raw, legacy) {
+  const source = raw === undefined || raw === null ? {} : raw;
+  if (!isPlainObject(source)) {
+    c.error('runner', 'must be an object.');
+    return { maxParallel: 1 };
+  }
+  warnUnknown(c, source, new Set(['maxParallel']), 'runner');
+  return {
+    // RFC 0001: 1 keeps the sequential drain every existing project has.
+    maxParallel: readOptionalInteger(c, source.maxParallel, 'runner.maxParallel', {
+      fallback: 1, min: 1, max: LIMITS.maxParallel,
+    }),
+  };
+}
+
+function normalizeReports(c, raw, legacy, flows) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    c.error('reports', 'must be an array.');
+    return [];
+  }
+  if (raw.length > 16) c.error('reports', 'must contain at most 16 combined reports.');
+  const ids = new Set();
+  const reports = [];
+  raw.slice(0, 16).forEach((reportRaw, index) => {
+    const path = `reports[${index}]`;
+    if (!isPlainObject(reportRaw)) {
+      c.error(path, 'must be an object.');
+      return;
+    }
+    warnUnknown(c, reportRaw, new Set(['id', 'title', 'kind', 'flows', 'path']), path);
+    const id = readString(c, reportRaw.id, `${path}.id`, { legacy, fallback: '', max: 64, required: true });
+    if (!id || !GRAPH_ID_RE.test(id)) {
+      c.error(`${path}.id`, 'must be a report id: letters, digits, dot, underscore or dash.');
+      return;
+    }
+    if (ids.has(id)) {
+      c.error(`${path}.id`, `duplicate report id "${id}".`);
+      return;
+    }
+    ids.add(id);
+    const flowIds = Array.isArray(reportRaw.flows) ? reportRaw.flows : [];
+    const resolved = [];
+    flowIds.forEach((flowId, flowIndex) => {
+      if (typeof flowId !== 'string' || !flows.some((flow) => flow.id === flowId)) {
+        c.error(`${path}.flows[${flowIndex}]`, `references unknown flow "${String(flowId)}".`);
+        return;
+      }
+      resolved.push(flowId);
+    });
+    if (resolved.length === 0) c.error(`${path}.flows`, 'must name at least one flow.');
+    const artifactPath = readString(c, reportRaw.path, `${path}.path`, { legacy, fallback: 'reports/index.html', max: 160 }) || 'reports/index.html';
+    if (!ARTIFACT_PATH.test(artifactPath) || artifactPath.split('/').includes('..')) {
+      c.error(`${path}.path`, 'must be a relative path inside the output folder, without "..".');
+    } else if (!artifactPath.toLowerCase().endsWith('.html')) {
+      c.error(`${path}.path`, 'must end in .html.');
+    }
+    reports.push({
+      id,
+      title: readString(c, reportRaw.title, `${path}.title`, { legacy, fallback: id, max: 160 }) || id,
+      kind: 'html',
+      flows: resolved,
+      path: artifactPath,
+    });
+  });
+  return reports;
+}
+
+/**
+ * Per-flow integrity: references stay inside the flow, an input block names a
+ * dataset that exists and has a runnable record, and a barrier joins real work.
+ */
+function validateFlow(c, flow, index, datasets, legacy) {
+  const path = `flows[${index}]`;
+  const byId = new Map(flow.nodes.map((node) => [node.id, node]));
+
+  flow.nodes.forEach((node, nodeIndex) => {
+    const nodePath = `${path}.nodes[${nodeIndex}]`;
+    if (node.type === 'calc' && node.checkpointFrom) {
+      const source = byId.get(node.checkpointFrom);
+      if (!source) {
+        c.error(`${nodePath}.checkpointFrom`, `references unknown node "${node.checkpointFrom}".`);
+        node.checkpointFrom = null;
+      } else if (source.type !== 'calc') {
+        c.error(`${nodePath}.checkpointFrom`, `must reference a calculation node, not a ${source.type} node.`);
+        node.checkpointFrom = null;
+      }
+    }
+    if (node.type === 'loop' && node.loop.target) {
+      const target = byId.get(node.loop.target);
+      if (!target) {
+        c.error(`${nodePath}.loop.target`, `references unknown node "${node.loop.target}".`);
+        node.loop.target = '';
+      } else if (target.type !== 'calc') {
+        c.error(`${nodePath}.loop.target`, `must target a calculation node, not a ${target.type} node.`);
+        node.loop.target = '';
+      }
+    }
+    if (node.type === 'input') {
+      const dataset = datasets.find((entry) => entry.id === node.input.datasetId) || null;
+      if (!dataset) {
+        c.error(`${nodePath}.input.datasetId`, `references unknown dataset "${node.input.datasetId}".`);
+      } else if (enabledRecords(dataset).length === 0) {
+        c.error(`${nodePath}.input`, `dataset "${dataset.id}" has no enabled record; import or enable at least one.`);
+      }
+    }
+    if (node.type !== 'calc') return;
+    const checkpointEdge = flow.edges.find((edge) => edge.to === node.id && edge.type === 'checkpoint');
+    const upstream = checkpointEdge ? byId.get(checkpointEdge.from) || null : null;
+    const { errors, warnings } = checkTsForceConstants({ settings: node.settings, upstream });
+    errors.forEach((message) => c.error(`${nodePath}.settings.forceConstants`, message));
+    warnings.forEach((message) => c.warn(`${nodePath}.settings.forceConstants`, message));
+    optConvergenceWarnings(node.settings)
+      .forEach((message) => c.warn(`${nodePath}.settings.grid`, message));
+    freqGeometryWarnings({ settings: node.settings, upstream })
+      .forEach((message) => c.warn(`${nodePath}.settings.jobType`, message));
+  });
+
+  flow.edges.forEach((edge, edgeIndex) => {
+    if (edge.type !== 'barrier') return;
+    const from = byId.get(edge.from);
+    const to = byId.get(edge.to);
+    if (from?.type === 'note' || to?.type === 'note') {
+      c.error(`${path}.edges[${edgeIndex}]`, 'a barrier must join work, not a note.');
+    }
+  });
 }
 
 /* ── Public API ───────────────────────────────────────────── */
@@ -1222,99 +1589,81 @@ export function validateProject(raw) {
   warnUnknown(c, raw, TOP_LEVEL_KEYS, '');
 
   const rawVersion = raw.schemaVersion;
-  let migrated = false;
   let schemaVersion = SCHEMA_VERSION;
   if (rawVersion === undefined || rawVersion === null || rawVersion === 0) {
-    migrated = true;
     schemaVersion = 0;
   } else if (!Number.isInteger(rawVersion) || rawVersion < 0) {
     c.error('schemaVersion', 'must be a positive integer.');
   } else if (rawVersion > SCHEMA_VERSION) {
     c.error('schemaVersion',
       `project uses schema version ${rawVersion}, but this build supports up to ${SCHEMA_VERSION}. Update NodeChem Studio to open it.`);
+  } else {
+    schemaVersion = rawVersion;
   }
 
-  const legacy = migrated;
-
-  if (!Array.isArray(raw.nodes)) {
-    c.error('nodes', 'must be an array of nodes.');
-  } else if (raw.nodes.length > LIMITS.nodes) {
-    c.error('nodes', `must contain at most ${LIMITS.nodes} nodes.`);
-  }
-
-  const nodeIds = new Set();
-  const nodes = [];
+  // v0 fills defaults; v1 is wrapped in a flow. Neither rewrites a task id, a
+  // run folder or a bundle name, so an existing project plans identically.
+  const migrated = schemaVersion < SCHEMA_VERSION;
+  const legacy = schemaVersion === 0;
   const projectEngine = projectEngineOf(raw.defaults);
-  const nodesRaw = Array.isArray(raw.nodes) ? raw.nodes.slice(0, LIMITS.nodes) : [];
-  nodesRaw.forEach((nodeRaw, index) => {
-    const node = normalizeNode(c, nodeRaw, index, legacy, projectEngine);
-    if (!node) return;
-    if (nodeIds.has(node.id)) {
-      c.error(`nodes[${index}].id`, `duplicate node id "${node.id}".`);
-      return;
+
+  const datasetIds = new Set();
+  const datasets = normalizeDatasets(c, raw.datasets, legacy, datasetIds);
+
+  const flows = [];
+  const rawFlows = Array.isArray(raw.flows) && raw.flows.length > 0 ? raw.flows : null;
+  if (rawFlows) {
+    if (rawFlows.length > LIMITS.flows) {
+      c.error('flows', `must contain at most ${LIMITS.flows} flows.`);
     }
-    nodeIds.add(node.id);
-    nodes.push(node);
-  });
-
-  const edges = normalizeEdges(c, raw.edges, nodeIds, legacy);
-
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  nodes.forEach((node, index) => {
-    if (node.type === 'calc' && node.checkpointFrom) {
-      const source = byId.get(node.checkpointFrom);
-      if (!source) {
-        c.error(`nodes[${index}].checkpointFrom`, `references unknown node "${node.checkpointFrom}".`);
-        node.checkpointFrom = null;
-      } else if (source.type !== 'calc') {
-        c.error(`nodes[${index}].checkpointFrom`, `must reference a calculation node, not a ${source.type} node.`);
-        node.checkpointFrom = null;
+    // A caller may hand back the in-memory shape, where `nodes`/`edges` are the
+    // active flow's graph (renderer state, history snapshot). Those arrays are
+    // authoritative for that flow; the file itself never carries both.
+    const activeRawId = typeof raw.activeFlowId === 'string' && raw.activeFlowId ? raw.activeFlowId : rawFlows[0].id;
+    const withActiveGraph = (flowRaw) => {
+      if (!isPlainObject(flowRaw) || flowRaw.id !== activeRawId || !Array.isArray(raw.nodes)) return flowRaw;
+      return { ...flowRaw, nodes: raw.nodes, ...(Array.isArray(raw.edges) ? { edges: raw.edges } : {}) };
+    };
+    rawFlows.slice(0, LIMITS.flows).map(withActiveGraph).forEach((flowRaw, index) => {
+      const flow = normalizeFlow(c, flowRaw, index, legacy, projectEngine);
+      if (!flow) return;
+      if (flows.some((entry) => entry.id === flow.id)) {
+        c.error(`flows[${index}].id`, `duplicate flow id "${flow.id}".`);
+        return;
       }
-    }
-    if (node.type === 'loop' && node.loop.target) {
-      const target = byId.get(node.loop.target);
-      if (!target) {
-        c.error(`nodes[${index}].loop.target`, `references unknown node "${node.loop.target}".`);
-        node.loop.target = '';
-      } else if (target.type !== 'calc') {
-        c.error(`nodes[${index}].loop.target`, `must target a calculation node, not a ${target.type} node.`);
-        node.loop.target = '';
-      }
-    }
-  });
+      flows.push(flow);
+    });
+    if (flows.length === 0) c.error('flows', 'must contain at least one flow.');
+  } else {
+    const nodes = normalizeGraphNodes(c, raw.nodes, legacy, projectEngine, 'nodes');
+    const nodeIds = new Set(nodes.map((node) => node.id));
+    const edges = normalizeEdges(c, raw.edges, nodeIds, legacy);
+    flows.push({ id: DEFAULT_FLOW_ID, title: 'Workflow', nodes, edges });
+  }
 
-  // Issue #15: a transition-state search must say where its curvature comes
-  // from. ReadFC is only valid when a checkpoint edge points at a job that
-  // actually writes force constants; the estimated-Hessian default warns but
-  // never blocks.
-  // Issue #16: warn when the integration grid overrides the UltraFine default
-  // for a DFT optimization at tight convergence, and when a frequency job reads
-  // a geometry from an optimization left at Gaussian's default convergence.
-  nodes.forEach((node, index) => {
-    if (node.type !== 'calc') return;
-    const checkpointEdge = edges.find((edge) => edge.to === node.id && edge.type === 'checkpoint');
-    const upstream = checkpointEdge ? byId.get(checkpointEdge.from) || null : null;
-    const { errors, warnings } = checkTsForceConstants({ settings: node.settings, upstream });
-    errors.forEach((message) => c.error(`nodes[${index}].settings.forceConstants`, message));
-    warnings.forEach((message) => c.warn(`nodes[${index}].settings.forceConstants`, message));
-    optConvergenceWarnings(node.settings)
-      .forEach((message) => c.warn(`nodes[${index}].settings.grid`, message));
-    freqGeometryWarnings({ settings: node.settings, upstream })
-      .forEach((message) => c.warn(`nodes[${index}].settings.jobType`, message));
-  });
+  flows.forEach((flow, index) => validateFlow(c, flow, index, datasets, legacy));
+
+  let activeFlowId = readString(c, raw.activeFlowId, 'activeFlowId', {
+    legacy, fallback: flows[0]?.id || DEFAULT_FLOW_ID, max: 64,
+  }) || flows[0]?.id || DEFAULT_FLOW_ID;
+  if (!flows.some((flow) => flow.id === activeFlowId)) activeFlowId = flows[0]?.id || DEFAULT_FLOW_ID;
 
   const project = {
     schemaVersion: SCHEMA_VERSION,
     name: readString(c, raw.name, 'name', { legacy, fallback: 'Untitled project', max: 200 }) || 'Untitled project',
     molecule: normalizeMolecule(c, raw.molecule, legacy),
     defaults: normalizeDefaults(c, raw.defaults, legacy),
-    nodes,
-    edges,
+    runner: normalizeRunner(c, raw.runner, legacy),
+    datasets,
+    flows,
+    reports: normalizeReports(c, raw.reports, legacy, flows),
+    activeFlowId,
   };
+  // `project.nodes` / `project.edges` are enumerable aliases of the active
+  // flow, so every existing reader (renderer, planner, tests) sees the graph it
+  // always saw; `stringifyProject` drops the aliases from the file.
+  attachGraphAliases(project);
 
-  // Issue #25: pre-run validity checks. They need the normalised molecule and
-  // the checkpoint hand-offs, so they run after the graph is built. Only
-  // blocking failures become validation errors.
   const validity = evaluateProjectValidity(c, {
     nodes: project.nodes,
     molecule: project.molecule,
@@ -1354,11 +1703,24 @@ export function parseProjectText(text) {
   return validateProject(data);
 }
 
+/**
+ * The file view of a normalized project.
+ *
+ * `nodes`/`edges` are in-memory aliases of the active flow (RFC 0001); writing
+ * them too would duplicate the graph and let the two copies drift. A v2 file
+ * carries `flows[]` only.
+ */
+export function projectFileView(project) {
+  if (!isPlainObject(project)) return project;
+  const { nodes, edges, ...rest } = project;
+  return rest;
+}
+
 /** Canonical serialization: validate, normalize, then pretty-print. */
 export function stringifyProject(raw) {
   const result = validateProject(raw);
   if (!result.ok) return { ...result, text: null };
-  return { ...result, text: `${JSON.stringify(result.project, null, 2)}\n` };
+  return { ...result, text: `${JSON.stringify(projectFileView(result.project), null, 2)}\n` };
 }
 
 function failure(path, message) {

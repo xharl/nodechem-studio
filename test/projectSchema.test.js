@@ -12,6 +12,13 @@ import {
   validateProject,
 } from '../src/shared/projectSchema.js';
 
+/**
+ * In schema v2 an error path names the flow (`flows[0].nodes[0].title`); the
+ * block-local suffix is what a test should assert, so a flow rename cannot
+ * silently weaken the check.
+ */
+const hasErrorAt = (result, suffix) => result.errors.some((error) => error.path === suffix || error.path.endsWith(`.${suffix}`));
+
 /** The exact v0.1 project object seeded by src/renderer/app.js (no schemaVersion). */
 function legacyProject() {
   const settings = (overrides = {}) => ({
@@ -152,7 +159,7 @@ function calcNode(overrides = {}) {
 }
 
 describe('project schema v1 — legacy migration', () => {
-  it('accepts the seeded v0.1 project and stamps schemaVersion 1', () => {
+  it('accepts the seeded v0.1 project and stamps the current schemaVersion', () => {
     const result = validateProject(legacyProject());
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
@@ -254,7 +261,7 @@ describe('project schema v1 — canonical serialization', () => {
   it('is byte-stable across a save/reopen round-trip', () => {
     const first = stringifyProject(legacyProject());
     expect(first.ok).toBe(true);
-    expect(first.text.startsWith('{\n  "schemaVersion": 1,')).toBe(true);
+    expect(first.text.startsWith(`{\n  "schemaVersion": ${SCHEMA_VERSION},`)).toBe(true);
     expect(first.text.endsWith('\n')).toBe(true);
 
     const reopened = parseProjectText(first.text);
@@ -301,7 +308,7 @@ describe('project schema v1 — canonical serialization', () => {
       },
       {
         id: 'out-1', type: 'output', kind: 'Output', title: 'Project output', state: 'ready', x: 600, y: 200,
-        output: { bundle: 'project.zip', manifest: true, notes: '' },
+        output: { kind: 'zip', path: 'project.zip', include: 'records', bundle: 'project.zip', manifest: true, notes: '' },
       },
       {
         id: 'note-1', type: 'note', kind: 'Note', title: 'Note', state: 'ready', x: 600, y: 360,
@@ -332,7 +339,7 @@ describe('project schema v1 — graph validation', () => {
     raw.nodes[0].id = 'bad id/../x';
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'nodes[0].id')).toBe(true);
+    expect(hasErrorAt(result, 'nodes[0].id')).toBe(true);
   });
 
   it('rejects edges to unknown nodes and self edges', () => {
@@ -354,7 +361,7 @@ describe('project schema v1 — graph validation', () => {
     ];
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'edges[0].branch')).toBe(true);
+    expect(hasErrorAt(result, 'edges[0].branch')).toBe(true);
     expect(result.errors.some((error) => error.message.includes('duplicates the dependency connection'))).toBe(true);
   });
 
@@ -380,7 +387,7 @@ describe('project schema v1 — graph validation', () => {
       raw.nodes[0].x = value;
       const result = validateProject(raw);
       expect(result.ok, `x=${value}`).toBe(false);
-      expect(result.errors.some((error) => error.path === 'nodes[0].x')).toBe(true);
+      expect(hasErrorAt(result, 'nodes[0].x')).toBe(true);
     }
   });
 
@@ -389,7 +396,7 @@ describe('project schema v1 — graph validation', () => {
     raw.nodes = Array.from({ length: 2001 }, (_, index) => ({ ...raw.nodes[0], id: `n-${index}` }));
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'nodes')).toBe(true);
+    expect(hasErrorAt(result, 'nodes')).toBe(true);
   });
 });
 
@@ -450,10 +457,10 @@ describe('project schema v1 — settings and gates', () => {
 
     const badBundle = validateProject(projectWithNode({
       id: 'out-1', type: 'output', kind: 'Output', title: 'Project output', state: 'ready', x: 0, y: 0,
-      output: { bundle: '../../escape.zip', manifest: true, notes: '' },
+      output: { kind: 'zip', path: '../../escape.zip', include: 'records', bundle: '../../escape.zip', manifest: true, notes: '' },
     }));
     expect(badBundle.ok).toBe(false);
-    expect(badBundle.errors.some((error) => error.path === 'nodes[0].output.bundle')).toBe(true);
+    expect(hasErrorAt(badBundle, 'nodes[0].output.bundle')).toBe(true);
   });
 });
 
@@ -463,21 +470,21 @@ describe('project schema v1 — v1 files are strict', () => {
     delete project.nodes[0].title;
     const result = validateProject(project);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'nodes[0].title')).toBe(true);
+    expect(hasErrorAt(result, 'nodes[0].title')).toBe(true);
   });
 
   it('rejects a v1 node with an unknown node type', () => {
     const project = projectWithNode(calcNode({ type: 'shortcut' }));
     const result = validateProject(project);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'nodes[0].type')).toBe(true);
+    expect(hasErrorAt(result, 'nodes[0].type')).toBe(true);
   });
 
   it('rejects an unknown node state', () => {
     const project = projectWithNode(calcNode({ state: 'exploded' }));
     const result = validateProject(project);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'nodes[0].state')).toBe(true);
+    expect(hasErrorAt(result, 'nodes[0].state')).toBe(true);
   });
 
   it('warns about unknown fields but still validates', () => {
@@ -485,7 +492,8 @@ describe('project schema v1 — v1 files are strict', () => {
     project.nodes[0].annotation = 'from a future build';
     const result = validateProject(project);
     expect(result.ok).toBe(true);
-    expect(result.warnings.some((warning) => warning.path === 'nodes[0].annotation')).toBe(true);
+    expect(result.warnings.some((warning) => warning.path === 'nodes[0].annotation'
+      || warning.path.endsWith('.nodes[0].annotation'))).toBe(true);
   });
 });
 
@@ -588,7 +596,7 @@ describe('project molecule geometry', () => {
     project.molecule.coords[0].element = 'Xx';
     const result = validateProject(project);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'molecule.coords[0].element')).toBe(true);
+    expect(hasErrorAt(result, 'molecule.coords[0].element')).toBe(true);
   });
 
   it('rejects imported geometry with no atoms', () => {
@@ -596,7 +604,7 @@ describe('project molecule geometry', () => {
     project.molecule.geometry = { source: 'imported', file: 'x.xyz', format: 'xyz' };
     const result = validateProject(project);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'molecule.coords')).toBe(true);
+    expect(hasErrorAt(result, 'molecule.coords')).toBe(true);
   });
 
   it('rejects a coordinate outside the finite range', () => {
@@ -604,7 +612,7 @@ describe('project molecule geometry', () => {
     project.molecule.coords[1].y = 1e9;
     const result = validateProject(project);
     expect(result.ok).toBe(false);
-    expect(result.errors.some((error) => error.path === 'molecule.coords[1].y')).toBe(true);
+    expect(hasErrorAt(result, 'molecule.coords[1].y')).toBe(true);
   });
 
   it('accepts manual geometry with atoms', () => {
@@ -643,7 +651,8 @@ describe('project schema v1 — engine-specific solvation models (#102)', () => 
   it('rejects a Gaussian solvation model on an xTB block with a precise message', () => {
     const result = validateProject(xtbProject({ solvationModel: 'PCM' }));
     expect(result.ok).toBe(false);
-    const error = result.errors.find((item) => item.path === 'nodes[0].settings.solvationModel');
+    const error = result.errors.find((item) => item.path === 'nodes[0].settings.solvationModel'
+      || item.path.endsWith('.nodes[0].settings.solvationModel'));
     expect(error).toBeDefined();
     expect(error.message).toContain('"PCM"');
     expect(error.message).toContain('Gaussian-only');
