@@ -21,6 +21,8 @@ If you are new, read these in order:
 1. [Install](install.md) — get the app onto a machine, and learn where it keeps its files.
 2. [Your first project](first-project.md) — open the seeded project, run the dry run, read the result.
 3. [The canvas](canvas.md) — blocks, connections, the inspector, and what the node colours mean.
+3b. [Flows, datasets and stages](flows.md) — several graphs in one project, a family of molecules
+   through the same blocks, and the barrier that waits for a whole stage.
 4. [Engines](engines.md) — choose Gaussian 16 or xTB, and know which settings belong to which.
 4b. [Conformers and protomers](conformers.md) — search or import an ensemble, then choose the shape a
    later block runs.
