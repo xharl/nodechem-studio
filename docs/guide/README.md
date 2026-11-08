@@ -4,13 +4,14 @@ NodeChem Studio is a desktop app for building and running computational-chemistr
 graph. You place calculation blocks on a canvas, connect them, and run either the whole workflow or
 a single block. Each run writes a folder you can inspect, hash and hand to someone else.
 
-It drives three engines:
+It drives four engines:
 
 | Engine | Licence | What it is |
 | --- | --- | --- |
 | **Gaussian 16** | Commercial, licensed separately by Gaussian, Inc. | DFT and wavefunction calculations with explicit basis sets |
 | **xTB** (GFN0/GFN1/GFN2/GFN-FF) | Open source, LGPL | Fast semi-empirical and force-field calculations |
 | **ORCA** 5/6 | Free for academic use, licensed separately by FACCTs | DFT and wavefunction calculations from a simple `.inp` |
+| **Psi4** 1.4+ | Open source, LGPL-3.0 | DFT, wavefunction and SAPT calculations from a Psithon `.dat` script |
 
 The app never bundles any engine. It drives an installation you already have.
 
@@ -21,7 +22,7 @@ If you are new, read these in order:
 1. [Install](install.md) — get the app onto a machine, and learn where it keeps its files.
 2. [Your first project](first-project.md) — open the seeded project, run the dry run, read the result.
 3. [The canvas](canvas.md) — blocks, connections, the inspector, and what the node colours mean.
-4. [Engines](engines.md) — choose Gaussian 16 or xTB, and know which settings belong to which.
+4. [Engines](engines.md) — choose Gaussian 16, xTB, ORCA or Psi4, and know which settings belong to which.
 4b. [Conformers and protomers](conformers.md) — search or import an ensemble, then choose the shape a
    later block runs.
 5. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.

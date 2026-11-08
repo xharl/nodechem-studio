@@ -19,6 +19,7 @@ const EXECUTABLE_LABEL = Object.freeze({
   gaussian: 'Gaussian 16 executable',
   xtb: 'xTB executable',
   orca: 'ORCA executable',
+  psi4: 'Psi4 executable',
 });
 
 const EXECUTABLE_PLACEHOLDER = Object.freeze({
@@ -27,12 +28,14 @@ const EXECUTABLE_PLACEHOLDER = Object.freeze({
   // ORCA's parallel driver must be called by its full path, so the example is a
   // path and not a bare name.
   orca: '/opt/orca/orca or C:\\ORCA\\orca.exe',
+  psi4: '/opt/conda/bin/psi4 or C:\\Psi4\\bin\\psi4.exe',
 });
 
 const DRY_RUN_HINT = Object.freeze({
   gaussian: `${FIXTURE_HINT} Uncheck to launch the licensed Gaussian 16 installation.`,
   xtb: `${FIXTURE_HINT} Uncheck to run the xTB executable.`,
   orca: `${FIXTURE_HINT} Uncheck to run the ORCA driver.`,
+  psi4: `${FIXTURE_HINT} Uncheck to run the Psi4 interpreter.`,
 });
 
 /** Label above the executable field — the engine named is the one that runs. */
@@ -72,6 +75,9 @@ export function checkpointHandoffNote(engineId) {
   if (id === 'orca') {
     return 'Stages the upstream <code>.gbw</code> in this run folder and adds '
       + '<code>%moinp</code> to this task; an ORCA edge cannot read a Gaussian <code>.chk</code>.';
+  }
+  if (id === 'psi4') {
+    return 'Psi4 blocks have no checkpoint file; a Psi4 step reads the upstream geometry instead.';
   }
   return 'Adds <code>%OldChk</code>, <code>Geom=Checkpoint</code> and <code>Guess=Read</code> to this task.';
 }

@@ -38,6 +38,17 @@ import {
   orcaMethodBlock,
   parseOrcaOutput,
 } from './orca.js';
+import {
+  PSI4_CAPABILITIES,
+  PSI4_ENGINE_ID,
+  buildPsi4Input,
+  classifyPsi4Termination,
+  isSafePsi4InputName,
+  isSafePsi4OutputName,
+  makePsi4FixtureOutput,
+  parsePsi4Output,
+  psi4MethodBlock,
+} from './psi4.js';
 
 const GAUSSIAN_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 const GAUSSIAN_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
@@ -162,10 +173,39 @@ export const ORCA_ENGINE = Object.freeze({
   classify: classifyOrcaTermination,
 });
 
+export const PSI4_ENGINE = Object.freeze({
+  id: PSI4_ENGINE_ID,
+  label: PSI4_CAPABILITIES.label,
+  capabilities: PSI4_CAPABILITIES,
+
+  acceptsInputName: isSafePsi4InputName,
+  acceptsOutputName: isSafePsi4OutputName,
+
+  buildInput: buildPsi4Input,
+  methodBlock: psi4MethodBlock,
+  parse: parsePsi4Output,
+
+  /**
+   * Psi4 leaves no restart file this app can hand to another block. Returning a
+   * name keeps the generic task builder working; no checkpoint edge is offered
+   * for a Psi4 block, and the queue refuses one that a stale project carries.
+   */
+  checkpointArtifact({ nodeId = 'task' } = {}) {
+    return `${nodeId}.chk`;
+  },
+
+  makeFixture({ imaginary = 0 } = {}) {
+    return makePsi4FixtureOutput({ imaginary });
+  },
+
+  classify: classifyPsi4Termination,
+});
+
 export const ENGINES = Object.freeze({
   gaussian: GAUSSIAN_ENGINE,
   xtb: XTB_ENGINE,
   orca: ORCA_ENGINE,
+  psi4: PSI4_ENGINE,
 });
 
 export const ENGINE_IDS = Object.freeze(Object.keys(ENGINES));

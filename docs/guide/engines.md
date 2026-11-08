@@ -1,6 +1,6 @@
 # Engines
 
-NodeChem Studio drives three calculation engines. The engine is resolved per block: a calculation
+NodeChem Studio drives four calculation engines. The engine is resolved per block: a calculation
 block that names its own engine (inspector → **Engine**) runs on that engine, and a block that leaves
 the field at **Project default** follows **Molecule → Defaults**. A saved project keeps whatever it
 saved; the app never switches an engine behind your back, and a block that never set the field keeps
@@ -316,6 +316,77 @@ Two parser choices are deliberate:
 If **Dispersion** is set to `None`, the builder writes no dispersion keyword. ORCA 6 may then apply
 its own default (D4 for many functionals), so record the `Dispersion correction` line in the log
 before comparing energies across engines; the manifest records only the keyword the builder wrote.
+
+## Psi4 — open source, LGPL-3.0
+
+Psi4 is an open-source electronic-structure package. In this app it gives you:
+
+- **Methods**: HF, B3LYP, PBE0, M06-2X, ωB97X-D, B97-D, MP2, CCSD, CCSD(T) and SAPT0.
+- **Bases**: def2-SVP/TZVP/QZVP, 6-31G(d), 6-31G(d,p), 6-311++G(d,p), cc-pVDZ/TZVP/QZVP and
+  aug-cc-pVDZ.
+- **Job types**: `SP`, `Opt`, `Freq` and `Opt Freq` — the last writes `optimize(...)` followed by
+  `frequencies(...)` in one script.
+- **SAPT0** on a dimer, with the interaction energy split into electrostatics, exchange, induction
+  and dispersion.
+
+Psi4's input is **code** (Psithon, a Python dialect), which is why this engine's builder is stricter
+than the others: every line of the script is written by the app, and a project field is never
+interpolated as a statement. A title containing a quote lands in a `#` comment, not in a call.
+
+What a Psi4 block will **not** do in this build, each refused by name rather than dropped:
+
+- **Implicit solvation** — Psi4 core has no PCM/SMD; that needs PCMSolver and a separate setup.
+- **TD-DFT excited states**, **NMR shieldings**, **NBO populations** and **transition-state
+  searches** — not written by this builder yet.
+- **A separate dispersion correction** — Psi4 takes D3 through the functional name, so choose
+  ωB97X-D or B97-D instead of a `-D3BJ` field.
+- **Gaussian grid keywords and custom routes** — no equivalent is guessed.
+- **Frequencies at CCSD/CCSD(T)** — Psi4 has no analytic Hessian there; run the frequency at DFT
+  or MP2 level.
+- **Checkpoint hand-off** — Psi4 leaves no restart file this app can hand to another block; a
+  downstream block reads the upstream geometry instead.
+
+Two things the parser does deliberately, because a Psi4 log can mislead:
+
+- **SAPT reports an interaction energy, not a total energy.** The result therefore carries no
+  `finalEnergy`; the numbers live under `extras.sapt` in mEh, kcal/mol and kJ/mol. Putting a
+  monomer-pair interaction in the same field as a molecular energy would invite the wrong comparison.
+- **`Psi4 exiting successfully` is about the process, not the science.** Psi4 prints it even when an
+  optimisation inside the run failed with `Could not converge geometry optimization`. The run record
+  reports the optimisation as incomplete and lets the gates decide; the termination line is not a
+  pass.
+
+### Setting up Psi4
+
+1. Install Psi4 1.4 or newer (conda-forge is the usual route) so a `psi4` executable exists
+   (`psi4.exe` on Windows). Psi4 needs `PSIDATADIR` to find its basis sets; a conda installation
+   sets it from its launcher.
+2. Set **Molecule → Defaults → Engine** to `Psi4`, then choose method and basis. The geometry comes
+   from the **Structure** tab.
+3. In **Run**, select the `psi4` executable with **Browse**.
+4. **Preflight** checks the platform, that the executable exists and is named `psi4`, that it is
+   runnable on Linux/macOS, and warns when `PSIDATADIR` is not set in the environment.
+5. **Run it.** The app spawns `psi4 <task>.dat` and captures **stdout** as `<task>.out`, which is
+   what `psi4 job.dat > job.out` gives you. stderr stays out of that file and is recorded under
+   `provenance.psi4.stderr`. Threads come from the block's `nproc` through `OMP_NUM_THREADS` and
+   `MKL_NUM_THREADS`.
+
+An error termination (`Psi4 encountered an error. Buy a developer more coffee!`) is recorded as
+failed, and so is a run that printed nothing at all — the record quotes stderr in that case.
+
+### What this build proves about the Psi4 parser
+
+The parser is tested against **real Psi4 output files** kept in
+`test/fixtures/real/psi4-*.out`: eight complete logs from Psi4's own test suite and RMG-Py, covering
+HF, B3LYP frequencies with thermochemistry, two optimisations (one converged, one that is not), MP2,
+CCSD, SAPT0 and a PSIO error termination. The version range is Psi4 1.1rc3 – 1.4a1.
+
+**No Psi4 binary was run for this build**, so the runner is exercised against a stand-in driver
+script that prints those fixtures, an error banner, or nothing. That proves the spawn, capture,
+thread and cancellation paths — not that a Psi4 1.9 installation prints these blocks byte-for-byte.
+The first real run should be a water single point: compare `@RKS Final Energy:` and
+`Psi4 exiting successfully`, and if a block shape has changed, the parser reports the value as
+`unknown` rather than guessing.
 
 ## Which settings belong to which engine
 

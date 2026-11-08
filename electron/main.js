@@ -286,6 +286,11 @@ const EXECUTABLE_DIALOG = Object.freeze({
     windowsDefault: () => 'C:\\xtb\\bin\\xtb.exe',
     windowsFilter: 'xTB executable',
   },
+  psi4: {
+    title: 'Locate the Psi4 executable',
+    windowsDefault: () => 'C:\\Psi4\\bin\\psi4.exe',
+    windowsFilter: 'Psi4 for Windows',
+  },
   orca: {
     title: 'Locate the ORCA driver',
     windowsDefault: () => 'C:\\ORCA\\orca.exe',
@@ -298,7 +303,8 @@ async function chooseExecutable(config = {}) {
   const copy = EXECUTABLE_DIALOG[engine.id] || EXECUTABLE_DIALOG.gaussian;
   const posixDefault = engine.id === 'xtb' ? '/usr/local/bin/xtb'
     : engine.id === 'orca' ? '/opt/orca/orca'
-      : defaultGaussianExecutablePath(process.platform);
+      : engine.id === 'psi4' ? '/opt/conda/bin/psi4'
+        : defaultGaussianExecutablePath(process.platform);
   const result = await dialog.showOpenDialog(mainWindow, {
     title: copy.title,
     defaultPath: process.platform === 'win32' ? copy.windowsDefault() : posixDefault,

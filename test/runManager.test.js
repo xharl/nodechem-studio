@@ -376,6 +376,7 @@ describe('RunManager engine selection', () => {
     expect(manager.runnerFor(ENGINES.gaussian).constructor.name).toMatch(/GaussianRunner/);
     expect(manager.runnerFor(ENGINES.xtb).constructor.name).toMatch(/XtbRunner/);
     expect(manager.runnerFor(ENGINES.orca).constructor.name).toMatch(/OrcaRunner/);
-    expect(() => manager.runnerFor({ id: 'psi4', label: 'Psi4' })).toThrow(/has no runner/);
+    expect(manager.runnerFor(ENGINES.psi4).constructor.name).toMatch(/Psi4Runner/);
+    expect(() => manager.runnerFor({ id: 'nwchem', label: 'NWChem' })).toThrow(/has no runner/);
   });
 });

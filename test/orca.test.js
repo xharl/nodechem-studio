@@ -73,7 +73,7 @@ afterEach(async () => {
 
 describe('ORCA engine registry', () => {
   it('registers ORCA alongside Gaussian and xTB', () => {
-    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb', 'orca']);
+    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb', 'orca', 'psi4']);
     expect(isEngineId('orca')).toBe(true);
     expect(engineFor('orca').id).toBe('orca');
     expect(engineOrDefault('orca').label).toBe('ORCA 6');

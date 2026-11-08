@@ -28,7 +28,7 @@ const molecule = (overrides = {}) => ({ charge: 0, multiplicity: 1, coords: WATE
 
 describe('xTB engine registry', () => {
   it('registers every engine and falls back to Gaussian for an unknown id', () => {
-    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb', 'orca']);
+    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb', 'orca', 'psi4']);
     expect(isEngineId('xtb')).toBe(true);
     expect(engineOrDefault('pyscf').id).toBe('gaussian');
     expect(() => engineFor('pyscf')).toThrow(/Unknown engine/);
