@@ -58,8 +58,37 @@ const FIELDS = Object.freeze([
   { key: 'numberOfBetaElectrons', label: 'Number of beta electrons', type: 'I', kind: 'integer' },
   { key: 'atomicNumbers', label: 'Atomic numbers', type: 'I', kind: 'integerArray' },
   { key: 'coordinatesBohr', label: 'Current cartesian coordinates', type: 'R', kind: 'realArray' },
-  { key: 'orbitalEnergies', label: 'Orbital Energies', type: 'R', kind: 'realArray' },
-  { key: 'orbitalEnergiesBeta', label: 'Orbital Energies, spin 2', type: 'R', kind: 'realArray' },
+  // Gaussian writes the alpha set as `Alpha Orbital Energies` and the beta set
+  // as `Beta Orbital Energies`. Older readers (and some third-party writers)
+  // use `Orbital Energies` / `Orbital Energies, spin 2`; both spellings are
+  // accepted so a real Gaussian fchk reports its energies instead of going
+  // silently missing.
+  {
+    key: 'orbitalEnergies',
+    label: 'Alpha Orbital Energies',
+    aliases: ['Orbital Energies'],
+    type: 'R',
+    kind: 'realArray',
+  },
+  {
+    key: 'orbitalEnergiesBeta',
+    label: 'Beta Orbital Energies',
+    aliases: ['Orbital Energies, spin 2'],
+    type: 'R',
+    kind: 'realArray',
+  },
+  // #111 follow-up: the basis and the molecular orbitals, which the Molden
+  // writer needs. A record without them still parses; the writer refuses.
+  { key: 'shellTypes', label: 'Shell types', type: 'I', kind: 'integerArray' },
+  { key: 'primitivesPerShell', label: 'Number of primitives per shell', type: 'I', kind: 'integerArray' },
+  { key: 'shellToAtomMap', label: 'Shell to atom map', type: 'I', kind: 'integerArray' },
+  { key: 'primitiveExponents', label: 'Primitive exponents', type: 'R', kind: 'realArray' },
+  { key: 'contractionCoefficients', label: 'Contraction coefficients', type: 'R', kind: 'realArray' },
+  { key: 'spContractionCoefficients', label: 'P(S=P) Contraction coefficients', type: 'R', kind: 'realArray' },
+  { key: 'alphaMOCoefficients', label: 'Alpha MO coefficients', type: 'R', kind: 'realArray' },
+  { key: 'betaMOCoefficients', label: 'Beta MO coefficients', type: 'R', kind: 'realArray' },
+  { key: 'pureDShells', label: 'Pure/Cartesian d shells', type: 'I', kind: 'integer' },
+  { key: 'pureFShells', label: 'Pure/Cartesian f shells', type: 'I', kind: 'integer' },
   { key: 'mullikenCharges', label: 'Mulliken Charges', type: 'R', kind: 'realArray' },
   { key: 'espCharges', label: 'ESP Charges', type: 'R', kind: 'realArray' },
   { key: 'totalEnergyHartree', label: 'Total Energy', type: 'R', kind: 'real' },
@@ -108,6 +137,7 @@ function locate(lines, label) {
     const array = /^([IR])\s+N\s*=\s*(\d+)$/i.exec(trimmed);
     if (array) {
       return {
+        label,
         line: index + 1,
         start: index,
         type: array[1].toUpperCase(),
@@ -117,6 +147,7 @@ function locate(lines, label) {
     const scalar = /^([IR])\s+(\S+)$/i.exec(trimmed);
     if (scalar) {
       return {
+        label,
         line: index + 1,
         start: index,
         type: scalar[1].toUpperCase(),
@@ -194,28 +225,31 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
   const parsed = { format: 'fchk', found, missing, warnings };
 
   for (const field of FIELDS) {
-    const located = locate(lines, field.label);
+    const located = [field.label, ...(field.aliases || [])]
+      .map((label) => locate(lines, label))
+      .find(Boolean) || null;
     if (!located) {
       missing.push(field.key);
       continue;
     }
+    const shown = located.label || field.label;
     if (located.type !== field.type) {
-      warnings.push(`Field "${field.label}" is written as ${located.type} where the format specifies ${field.type}; it was read as written.`);
+      warnings.push(`Field "${shown}" is written as ${located.type} where the format specifies ${field.type}; it was read as written.`);
     }
     if (field.kind === 'integer' || field.kind === 'real') {
       if (located.count !== undefined) {
         // An `N=` header on a scalar field means the file is not laid out the
         // way the label list says; reading the first value would be a guess.
-        throw new FchkFormatError(`Line ${located.line}: field "${field.label}" is an array in this file, but the reader expects one value.`);
+        throw new FchkFormatError(`Line ${located.line}: field "${shown}" is an array in this file, but the reader expects one value.`);
       }
       parsed[field.key] = field.kind === 'integer'
-        ? integerToken(located.value, located.line, field.label)
-        : numberToken(located.value, located.line, field.label);
+        ? integerToken(located.value, located.line, shown)
+        : numberToken(located.value, located.line, shown);
     } else {
       if (located.count === undefined) {
-        throw new FchkFormatError(`Line ${located.line}: field "${field.label}" carries one value in this file, but the reader expects an array.`);
+        throw new FchkFormatError(`Line ${located.line}: field "${shown}" carries one value in this file, but the reader expects an array.`);
       }
-      parsed[field.key] = readArray(lines, located, field);
+      parsed[field.key] = readArray(lines, located, { ...field, label: shown });
     }
     found.push(field.key);
   }
@@ -248,6 +282,49 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
     throw new FchkFormatError(
       `"Current cartesian coordinates" has ${parsed.coordinatesBohr.length} values for ${atomCount} atoms (expected ${atomCount * 3}).`,
     );
+  }
+
+  // Basis/MO cross-checks: a length that disagrees means the reader and the
+  // file disagree about the layout, which is exactly when a Molden export would
+  // write coefficients against the wrong shell.
+  const shells = parsed.shellTypes;
+  if (Array.isArray(shells)) {
+    const prims = parsed.primitivesPerShell;
+    const map = parsed.shellToAtomMap;
+    if (Array.isArray(prims) && prims.length !== shells.length) {
+      throw new FchkFormatError(`"Number of primitives per shell" has ${prims.length} entries for ${shells.length} shells.`);
+    }
+    if (Array.isArray(map) && map.length !== shells.length) {
+      throw new FchkFormatError(`"Shell to atom map" has ${map.length} entries for ${shells.length} shells.`);
+    }
+    const totalPrimitives = Array.isArray(prims) ? prims.reduce((sum, value) => sum + value, 0) : null;
+    if (totalPrimitives !== null && Array.isArray(parsed.primitiveExponents)
+      && parsed.primitiveExponents.length !== totalPrimitives) {
+      throw new FchkFormatError(
+        `"Primitive exponents" has ${parsed.primitiveExponents.length} values but the shells need ${totalPrimitives}.`,
+      );
+    }
+    if (totalPrimitives !== null && Array.isArray(parsed.contractionCoefficients)
+      && parsed.contractionCoefficients.length !== totalPrimitives) {
+      throw new FchkFormatError(
+        `"Contraction coefficients" has ${parsed.contractionCoefficients.length} values but the shells need ${totalPrimitives}.`,
+      );
+    }
+    if (Array.isArray(map) && atomCount !== null) {
+      for (const index of map) {
+        if (index < 1 || index > atomCount) {
+          throw new FchkFormatError(`"Shell to atom map" points at atom ${index}; the file has ${atomCount}.`);
+        }
+      }
+    }
+  }
+  if (Array.isArray(parsed.alphaMOCoefficients) && Number.isInteger(parsed.numberOfBasisFunctions)) {
+    const nbf = parsed.numberOfBasisFunctions;
+    if (nbf > 0 && parsed.alphaMOCoefficients.length % nbf !== 0) {
+      throw new FchkFormatError(
+        `"Alpha MO coefficients" has ${parsed.alphaMOCoefficients.length} values, which is not a whole number of ${nbf}-function orbitals.`,
+      );
+    }
   }
 
   if (parsed.numberOfAlphaElectrons !== undefined && parsed.numberOfBetaElectrons !== undefined

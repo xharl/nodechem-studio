@@ -3,7 +3,7 @@
 NodeChem's parsers answer "what did the calculation report". Exporting answers a different
 question: "how do I get this into the program that will draw it, fit it, or cite it".
 
-`ncs convert` writes four formats, each chosen because a real tool reads it:
+`ncs convert` writes five formats, each chosen because a real tool reads it:
 
 | Format | Carries | Read by |
 | --- | --- | --- |
@@ -11,12 +11,14 @@ question: "how do I get this into the program that will draw it, fit it, or cite
 | `xyz` | every geometry, no metadata columns | nearly everything |
 | `sdf` (V2000) | one structure **and its bond table** | RDKit, Open Babel, ChemDraw, Avogadro |
 | `jcamp` (`.jdx`) | one spectrum with units and axis limits in the header | Mnova, Origin, spectroscopy tooling |
+| `molden` | one structure, its basis and its orbitals | Molden, Avogadro, MacMolPlt, Multiwfn (Molden2AIM), Jmol |
 
 ```bash
 ncs convert run.log --format extxyz --out run.extxyz
 ncs convert run.log --format jcamp --spectrum raman --out raman.jdx
 ncs convert ligand.mol2 --format sdf --out ligand.sdf
 ncs convert project.ncs --format xyz --out geometry.xyz
+ncs convert job.fchk --format molden --out job.molden
 ```
 
 Add `--json` for a machine-readable summary: format, output path, byte count and the notes the
@@ -82,10 +84,37 @@ record (`cache.file`, `cache.frames`, `cache.bytes`). A dry run writes none: its
 fixture, and a binary file beside it would outlive the label that says so. When a log has no
 trajectory, the record says why (`cache.skipped`) instead of writing an empty file.
 
+## Molden: why it starts from a checkpoint, not a log
+
+A log has energies and geometries. Molden needs the **basis functions** and the **MO coefficients**,
+and only a formatted checkpoint carries them — so `ncs convert job.fchk --format molden` is the only
+path, and pointing `--format molden` at a log is refused with that sentence rather than writing a
+file whose orbitals are empty.
+
+What the writer does with a checkpoint:
+
+- **Atoms in Angstrom, exponents in atomic units.** The format wants Angstrom in `[Atoms]` and atomic
+  units in `[GTO]`; the checkpoint stores Bohr, so the coordinates are converted and the primitives
+  are not.
+- **`sp` shells are split.** Gaussian stores one shell for the s and p parts of a contracted shell;
+  the writer emits a bare `s` and a bare `p` with the same exponents. The function order (s, then
+  x, y, z) is unchanged, and readers that mishandle a two-coefficient `sp` line still read the same
+  basis.
+- **Coefficients are passed through.** Gaussian and Molden order the functions the same way for
+  s/p and for Cartesian shells, and both use the 0, +1, −1, +2, −2 ordering for spherical d/f/g.
+  Reordering would need a convention table that, if wrong, corrupts every orbital.
+- **An unsupported shell is an error.** Molden has no `h`; a checkpoint with one is refused instead
+  of dropping six functions and shifting every coefficient after them.
+- **Spherical or Cartesian is stated, not assumed.** `[5D]`, `[7F]` and `[9G]` are written when the
+  checkpoint's shell types say pure functions, and a basis that mixes both for the same angular
+  momentum is refused because one marker cannot express it.
+
+Verified against a real Gaussian 16 checkpoint (`test/fixtures/fchk/`) and read back by **iodata**, an
+independent Molden implementation: 60 basis functions, 60 orbitals, MO energies within 5·10⁻⁷ Eh and
+coefficients within 5·10⁻⁹ of the checkpoint, 70 electrons.
+
 ## What is not written yet
 
-- **Molden.** It needs basis functions and MO coefficients, which the `.fchk` reader does not expose
-  yet. A Molden writer built on a guess would put the orbitals in the wrong shells.
 - **A binary run cache.** Cube text is several times the size of the array it holds; the reader caps
   a cube at 4 M voxels and 64 MB of text for that reason.
 - **Export from the window.** The CLI writes files; the results panel has no export button yet
@@ -94,7 +123,7 @@ trajectory, the record says why (`cache.skipped`) instead of writing an empty fi
 ## Next
 
 - [Wavefunctions: cubes and formatted checkpoints](wavefunction.md) — what the two wavefunction
-  files hold, and why Molden is not written yet.
+  files hold.
 - [Results and analysis](results.md) — the numbers a run reports before export.
 - [Command line](cli.md) — the rest of `ncs`.
 

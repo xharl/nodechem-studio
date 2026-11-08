@@ -24,7 +24,8 @@ import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
-import { convertParsed, convertStructure } from '../src/shared/converters/index.js';
+import { convertFchk, convertParsed, convertStructure } from '../src/shared/converters/index.js';
+import { parseFchk } from '../src/shared/fchk.js';
 import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
 import { parseCube } from '../src/shared/cubeFile.js';
 import { RunManager } from '../electron/runner/runManager.js';
@@ -41,7 +42,7 @@ const USAGE = `ncs — headless NodeChem Studio
       [--timeout <seconds>] [--json]
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
-  ncs convert <input> --format <extxyz|xyz|sdf|jcamp> [--spectrum ir|raman|uv]
+  ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
       [--out <file>] [--json]
   ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
   ncs cache <file.ncsr> --inspect [--json]
@@ -318,7 +319,7 @@ async function commandConvert({ positional, flags }) {
   const [input] = positional;
   if (!input) fail('convert needs an input file.');
   const formatId = String(flags.format || '').trim();
-  if (!formatId) fail('convert needs --format <extxyz|xyz|sdf|jcamp>.');
+  if (!formatId) fail('convert needs --format <extxyz|xyz|sdf|jcamp|molden>.');
   const file = path.resolve(input);
 
   try {
@@ -331,6 +332,12 @@ async function commandConvert({ positional, flags }) {
       if (!Array.isArray(coords) || coords.length === 0) fail('this project has no molecule to export.');
       converted = convertStructure({ atoms: coords, bonds: parsed?.molecule?.bonds }, formatId, {
         title: parsed?.name || path.basename(file, extension),
+      });
+    } else if (extension === '.fchk' || extension === '.fch') {
+      // Molden is the one format that needs the basis and the MO coefficients,
+      // and a formatted checkpoint is where they live.
+      converted = convertFchk(parseFchk(text), formatId, {
+        title: path.basename(file, extension),
       });
     } else if (extension === '.log' || extension === '.out') {
       const parsed = parseGaussianOutput(text);

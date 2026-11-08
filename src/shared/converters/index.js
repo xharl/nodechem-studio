@@ -13,12 +13,12 @@
  *   sdf     a structure plus its bond table; refuses when the record has none
  *   jcamp   spectra as data rather than a picture, with units in the header
  *
- * What is deliberately absent: Molden. It needs basis functions and MO
- * coefficients, which the fchk reader does not expose yet, and this project
- * does not write a format it cannot round-trip.
+ *   molden  structure plus basis plus orbitals, from a formatted checkpoint
+ *           (the only format here that cannot come from a log)
  */
 
 import { broadenedSpectrum } from '../spectrum.js';
+import { moldenFromFchk } from './molden.js';
 import { writeExtxyz } from './extxyz.js';
 import { writeJcampDx } from './jcampDx.js';
 import { writeSdf } from './sdf.js';
@@ -38,6 +38,9 @@ export const CONVERT_FORMATS = Object.freeze([
   },
   {
     id: 'jcamp', label: 'JCAMP-DX', extension: 'jdx', mediaType: 'chemical/x-jcamp-dx', kind: 'spectrum',
+  },
+  {
+    id: 'molden', label: 'Molden', extension: 'molden', mediaType: 'chemical/x-molden', kind: 'wavefunction',
   },
 ]);
 
@@ -167,6 +170,12 @@ export function convertParsed(parsed, formatId, { spectrum = 'ir', title = '', d
   if (!format) {
     throw new ConversionError(`unknown format "${formatId}"; expected one of ${CONVERT_FORMATS.map((entry) => entry.id).join(', ')}.`);
   }
+  if (format.kind === 'wavefunction') {
+    throw new ConversionError(
+      'Molden needs basis functions and MO coefficients, which a log does not carry. '
+      + 'Export the job\'s .fchk and convert that instead.',
+    );
+  }
 
   if (format.kind === 'spectrum') {
     const chosen = spectrumFromParsed(parsed, spectrum, { fwhmEv });
@@ -227,6 +236,30 @@ export function convertParsed(parsed, formatId, { spectrum = 'ir', title = '', d
   };
 }
 
+/**
+ * Convert a parsed formatted checkpoint.
+ *
+ * Only Molden takes this path today: it is the one format that needs the basis
+ * and the orbital coefficients, and the fchk is where they are.
+ */
+export function convertFchk(fchk, formatId, { title = '' } = {}) {
+  const format = formatById(formatId);
+  if (!format) {
+    throw new ConversionError(`unknown format "${formatId}"; expected one of ${CONVERT_FORMATS.map((entry) => entry.id).join(', ')}.`);
+  }
+  if (format.id !== 'molden') {
+    throw new ConversionError(`${format.id} is not written from a checkpoint; convert a structure file or a run instead.`);
+  }
+  const written = moldenFromFchk(fchk, { title });
+  return {
+    format: format.id,
+    extension: format.extension,
+    mediaType: format.mediaType,
+    text: written.text,
+    notes: written.notes,
+  };
+}
+
 /** Convert an already-imported structure record (atoms, optional 1-based bonds). */
 export function convertStructure(structure, formatId, { title = '' } = {}) {
   const format = formatById(formatId);
@@ -237,6 +270,9 @@ export function convertStructure(structure, formatId, { title = '' } = {}) {
   if (!atoms) throw new ConversionError('the structure has no atoms.');
   if (format.kind === 'spectrum') {
     throw new ConversionError(`${format.id} is a spectrum format; a structure has no spectrum.`);
+  }
+  if (format.kind === 'wavefunction') {
+    throw new ConversionError(`${format.id} needs basis functions and orbitals; convert a formatted checkpoint instead.`);
   }
   if (format.id === 'sdf') {
     const bonds = bondsOf(structure);

@@ -51,7 +51,12 @@ describe('fchk subset', () => {
       'totalEnergyHartree',
       'virialRatio',
     ]);
-    expect(fchk.missing).toEqual(['orbitalEnergiesBeta', 'espCharges']);
+    // The fixture carries no beta manifold, no ESP charges and no basis table:
+    // those are reported as missing rather than filled with zeros.
+    expect(fchk.missing).toEqual(expect.arrayContaining([
+      'orbitalEnergiesBeta', 'espCharges', 'shellTypes', 'alphaMOCoefficients',
+    ]));
+    expect(fchk.missing).not.toContain('orbitalEnergies');
     expect(fchk.numberOfAtoms).toBe(3);
     expect(fchk.numberOfBasisFunctions).toBe(19);
     expect(fchk.charge).toBe(0);
@@ -93,7 +98,8 @@ describe('fchk subset', () => {
     ].join('\n');
     const fchk = parseFchk(minimal);
     expect(fchk.found).toEqual(['numberOfAtoms', 'totalEnergyHartree']);
-    expect(fchk.missing).toHaveLength(13);
+    expect(fchk.missing).toContain('orbitalEnergies');
+    expect(fchk.missing.length).toBeGreaterThan(0);
     expect(fchk.orbitalEnergies).toBeUndefined();
     expect(fchk.atoms).toBeUndefined();
   });

@@ -177,8 +177,8 @@ describe('jcamp-dx — spectra as data', () => {
 });
 
 describe('the conversion surface', () => {
-  it('names the four formats it writes', () => {
-    expect(CONVERT_FORMATS.map((entry) => entry.id)).toEqual(['extxyz', 'xyz', 'sdf', 'jcamp']);
+  it('names the formats it writes', () => {
+    expect(CONVERT_FORMATS.map((entry) => entry.id)).toEqual(['extxyz', 'xyz', 'sdf', 'jcamp', 'molden']);
     expect(formatById('nope')).toBeNull();
   });
 
@@ -198,7 +198,9 @@ describe('the conversion surface', () => {
   });
 
   it('refuses a format it does not write', () => {
-    expect(() => convertParsed(optimisation, 'molden')).toThrow(/unknown format/);
+    expect(() => convertParsed(optimisation, 'cif')).toThrow(/unknown format/);
+    // Molden is a format the app writes, just not from a log.
+    expect(() => convertParsed(optimisation, 'molden')).toThrow(/needs basis functions and MO coefficients/);
   });
 
   it('converts an imported structure without a parsed run', () => {
