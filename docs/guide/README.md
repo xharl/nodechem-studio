@@ -29,6 +29,8 @@ Reference pages:
 
 - [Troubleshooting](troubleshooting.md) — symptom, cause, action.
 - [FAQ](faq.md) — short answers to the questions testers ask first.
+- [Output corpus](parser-corpus.md) — the real Gaussian logs the parser is tested against, and the
+  gaps it does not cover yet.
 - [Privacy and licensing](privacy-and-licensing.md) — what leaves the machine (nothing) and what
   the licence does and does not grant.
 
@@ -46,9 +48,11 @@ Three things, because a wrong claim in a chemistry tool is expensive:
 - **Dry run is a fixture.** Wherever the docs say "dry run", they mean a synthetic file headed
   `FIXTURE OUTPUT`. It exercises the parser and the queue. It is never a calculation, and no number
   from it is a chemical result.
-- **Unverified paths are named as unverified.** No licensed Gaussian run has been recorded by the
-  project's automated tests, and no xTB binary ships with the app. The docs say so where it matters
-  instead of implying a validated pipeline.
+- **Unverified paths are named as unverified.** The parser is tested against real Gaussian 09 and
+  Gaussian 16 outputs published in public repositories (see
+  [Output corpus](parser-corpus.md)), but the project has never run Gaussian itself and no xTB
+  binary ships with the app. The docs say so where it matters instead of implying a validated
+  pipeline.
 - **Nothing is reported that the output did not contain.** The results panel prints
   `not reported` for a missing value, and the docs describe that behaviour rather than smoothing
   over it.
