@@ -182,6 +182,13 @@ export function buildGaussianInput({
       + `${settings.jobType} cannot carry a TD keyword.`);
   }
 
+  // Raman activities ride on the frequency keyword, so a job without a
+  // frequency has nowhere to put them (#76).
+  if (settings.raman === true && !/Freq/i.test(String(settings.jobType || 'Opt'))) {
+    throw new Error('Raman activities need a frequency job: choose Freq or Opt Freq, or turn Raman off. '
+      + `${settings.jobType || 'Opt'} would silently drop the keyword.`);
+  }
+
   const charge = finiteNumber(molecule.charge ?? settings.charge ?? 0, 'Charge', { min: -10, max: 10 });
   if (!Number.isInteger(charge)) throw new Error('Charge must be an integer.');
   const multiplicity = finiteNumber(

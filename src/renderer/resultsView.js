@@ -22,6 +22,8 @@ import { ircGate, pathBarrier, profileSvg, profilePoints, scanExtremum, scanSurf
 import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
 import { mountSuperposition } from './superpositionCard.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
+import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
+import { overlayPolyline, parseMeasuredSpectrum, scaleToSpectrum } from '../shared/overlay.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 
 const MISSING_TEXT = 'not reported';
@@ -781,6 +783,61 @@ function nmrSectionHtml(nmr, { nucleus = '1H', referencePpm = null, fwhmPpm = 0.
   return figure + table;
 }
 
+/**
+ * Raman (#76). The y axis is the printed activity in Å⁴/amu, not a scattering
+ * cross-section: converting to one needs the excitation wavelength and a
+ * Boltzmann population factor that the log does not carry.
+ */
+function ramanCard(parsed, flags) {
+  const modes = parsed?.raman;
+  if (!Array.isArray(modes) || modes.length === 0) return '';
+  const withActivity = modes.filter((mode) => Number.isFinite(mode.ramanActivity));
+  if (withActivity.length === 0) return '';
+  const body = '<p class="results-note">Per-mode Raman scattering activities as printed by Gaussian '
+    + `(Å⁴/amu), with the depolarisation ratio for plane- and unpolarised incident light. `
+    + 'The curve below is the <em>activity</em> broadened with a Lorentzian of the stated FWHM: it is not a '
+    + 'scattering cross-section, which would need the excitation wavelength and a population factor.</p>'
+    + '<div class="nmr-controls">'
+    + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-raman-fwhm value="12"></label>'
+    + '<label>Measured CSV <input type="file" accept=".csv,.txt,text/csv,text/plain" data-raman-overlay></label>'
+    + '</div>'
+    + `<div data-field="raman-figure">${ramanSectionHtml(modes, { fwhmCm: 12 })}</div>`
+    + caveatHtml(flags, 'These activities');
+  return card('Raman', body, 'is-wide');
+}
+
+/** The figure and the per-mode table, recomputed when a control changes. */
+export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '' } = {}) {
+  const spectrum = ramanSpectrum(modes, { fwhmCm });
+  if (!spectrum) return '<p class="results-missing">No Raman activity was printed, so there is nothing to plot.</p>';
+  const simulated = ramanPolyline(spectrum);
+  const scaled = measured ? scaleToSpectrum(measured, { peakIntensity: 1 }) : null;
+  const overlay = scaled
+    ? overlayPolyline(scaled, { minX: spectrum.minCm, maxX: spectrum.maxCm, maxY: 1 })
+    : '';
+  const figure = '<figure class="results-spectrum" data-field="raman-spectrum">'
+    + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated Raman spectrum">'
+    + (overlay ? `<polyline points="${overlay}" class="spectrum-curve is-overlay" opacity="0.45"/>` : '')
+    + `<polyline points="${simulated}" class="spectrum-curve"/>`
+    + '</svg>'
+    + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(modes.length)} modes · `
+    + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
+    + (scaled ? ` · measured series “${esc(overlayName || 'imported')}” scaled by ×${esc(scaled.scale.toPrecision(4))} to match the strongest simulated peak` : '')
+    + '</figcaption>'
+    + '</figure>';
+
+  const rows = spectrum.peaks.map((peak, index) => '<tr>'
+    + `<td>${esc(index + 1)}</td>`
+    + `<td>${esc(peak.wavenumber.toFixed(4))}</td>`
+    + `<td>${esc(peak.ramanActivity.toFixed(4))}</td>`
+    + `<td>${peak.depolarizationPlane === null ? MISSING_TEXT : esc(peak.depolarizationPlane.toFixed(4))}</td>`
+    + '</tr>').join('');
+  const table = '<table class="results-table" data-field="raman-modes">'
+    + '<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th><th>Activity / Å⁴ amu⁻¹</th><th>Depolarisation (plane)</th></tr></thead>'
+    + `<tbody>${rows}</tbody></table>`;
+  return figure + table;
+}
+
 function methodsCard(record) {
   let result;
   try {
@@ -958,6 +1015,7 @@ export function resultsPanelHtml(record) {
     reactionPathCard(record, parsed, flags),
     trajectoryCard(parsed, flags),
     nmrCard(parsed, flags),
+    ramanCard(parsed, flags),
     chargesCard(parsed, flags),
     t1Card(parsed, flags),
     resourcesCard(parsed, flags),
@@ -1072,6 +1130,22 @@ export function installResultsView({
   const selectedEnsemble = () => [...container.querySelectorAll('[data-ensemble-run]')]
     .filter((box) => box.checked)
     .map((box) => box.value);
+  /**
+   * Raman (#76): the FWHM and the measured overlay both redraw from the same
+   * parsed mode list. The imported series is held here, not re-read from the
+   * file input, so changing the FWHM keeps it.
+   */
+  let ramanMeasured = null;
+  let ramanOverlayName = '';
+  const rerenderRaman = () => {
+    const modes = currentRecord?.parsed?.raman;
+    const holder = container.querySelector('[data-field="raman-figure"]');
+    if (!modes || !holder) return;
+    const raw = container.querySelector('[data-raman-fwhm]')?.value ?? '';
+    const fwhmCm = Number(raw) > 0 ? Number(raw) : 12;
+    holder.innerHTML = ramanSectionHtml(modes, { fwhmCm, measured: ramanMeasured, overlayName: ramanOverlayName });
+  };
+
   const rerenderThermo = () => {
     const parsed = currentRecord?.parsed;
     const options = thermoControls();
@@ -1134,12 +1208,28 @@ export function installResultsView({
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+    if (target.matches('[data-raman-fwhm]')) rerenderRaman();
     if (target.matches('[data-thermo-temperature], [data-thermo-pressure], [data-thermo-term], [data-ensemble-run]')) rerenderThermo();
   });
   container.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+    if (target.matches('[data-raman-fwhm]')) rerenderRaman();
+    if (target.matches('[data-raman-overlay]') && target.files && target.files[0]) {
+      const file = target.files[0];
+      const reader = new FileReader();
+      reader.onload = () => {
+        ramanMeasured = parseMeasuredSpectrum(String(reader.result || ''));
+        ramanOverlayName = file.name;
+        rerenderRaman();
+        if (!ramanMeasured) {
+          const holder = container.querySelector('[data-field="raman-figure"]');
+          if (holder) holder.insertAdjacentHTML('afterbegin', '<p class="results-missing">That file has no two-column numeric rows, so nothing was overlayed.</p>');
+        }
+      };
+      reader.readAsText(file);
+    }
     if (target.matches('[data-thermo-temperature], [data-thermo-pressure], [data-thermo-term], [data-ensemble-run]')) rerenderThermo();
   });
   container.addEventListener('click', (event) => {
@@ -1441,6 +1531,8 @@ const RESULTS_VIEW_CSS = `
 .results-spectrum svg { width: 100%; max-width: 420px; height: auto; display: block; }
 .spectrum-axis { stroke: var(--tone-blue-76a); stroke-width: 1; }
 .spectrum-curve { fill: none; stroke: var(--tone-blue-124); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.spectrum-curve.is-overlay { stroke: var(--kind-condition); stroke-width: 1.2; stroke-dasharray: 2.5 1.6; }
+.nmr-controls input[type="file"] { width: auto; max-width: 220px; padding: 2px; }
 .spectrum-label { fill: var(--text-tertiary); font-size: var(--text-size-xs); font-family: var(--font-mono); }
 .profile-peak { fill: var(--tone-blue-124); stroke: var(--tone-blue-20); stroke-width: 1; }
 .nmr-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 8px; font-size: var(--text-size-xs); color: var(--text-secondary); }

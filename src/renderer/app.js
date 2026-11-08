@@ -1260,6 +1260,19 @@ function calcInspector(node) {
     </div></div>`,
   ].join(''));
 
+  // Raman (#76) is a modifier of the frequency keyword, so the switch only
+  // appears where a frequency job exists to carry it.
+  const frequencyJob = /Freq/i.test(String(s.jobType || ''));
+  const ramanGroup = group('Raman', s.raman ? 'activities on' : 'off', s.raman, [
+    switchRow('Raman activities', 'adds =Raman to the frequency keyword', 'raman', s.raman, { disabled: !frequencyJob }),
+    '<div class="field full"><span class="inspector-note">'
+      + (frequencyJob
+        ? 'Gaussian prints the Raman activity (Å<sup>4</sup>/amu) and the depolarisation ratios with the modes. '
+          + 'The results panel plots the <em>activity</em>, not a scattering cross-section.'
+        : 'Requires a frequency job: choose Freq or Opt Freq. The input builder refuses the keyword otherwise.')
+      + '</span></div>',
+  ].join(''));
+
   const gates = s.gates;
   const gatesGroup = group('Gates', `${[gates.thermo, gates.finalEnergy, gates.imaginary !== null, gates.scf].filter(Boolean).length} active`, true, [
     switchRow('Normal termination', 'always required', 'termination', true, { gate: true, disabled: true }),
@@ -1333,6 +1346,7 @@ function calcInspector(node) {
     ${jobGroup}
     ${isXtb ? xtbGroup : methodGroup}
     ${isXtb ? '' : excitedGroup}
+    ${isXtb ? '' : ramanGroup}
     ${isXtb ? xtbSolvationGroup : gaussianSolvationGroup}
     ${moleculeGroup}
     ${gatesGroup}

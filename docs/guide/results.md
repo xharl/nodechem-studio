@@ -188,8 +188,29 @@ no universal TMS number. The card therefore starts in absolute mode; entering a 
 used. Without one, the figure says *absolute shielding*, because it is not a spectrum in ppm shift.
 
 Broadening is a Lorentzian with a FWHM you set in the card (default 0.10 ppm) and the caption always
-states it, along with the number of nuclei in the trace. Raman activities, VCD/ROA rotational
-strengths and conformer-weighted spectra are not implemented.
+states it, along with the number of nuclei in the trace. VCD/ROA rotational strengths and
+conformer-weighted spectra are not implemented; see the Raman section below for what is.
+
+## Raman activities
+
+Turn on **Raman** in a frequency block's inspector (it adds `=Raman` to the frequency keyword:
+`Freq=Raman`, `Opt Freq=Raman`). The block is refused on a non-frequency job and on an xTB block,
+because neither can carry the keyword.
+
+The **Raman** card lists, per mode, the frequency, the scattering activity in **Å⁴/amu** and the
+depolarisation ratio for plane-polarised light, exactly as Gaussian prints them.
+
+The figure is the **activity** broadened with a Lorentzian whose FWHM you set in cm⁻¹ (default 12),
+normalised to the strongest peak. It is *not* a scattering cross-section: converting activities to a
+measured intensity needs the excitation wavelength, a temperature-dependent population factor and the
+collection geometry, none of which the log carries. The caption names the quantity, the units, the
+FWHM and the normalisation so the figure cannot be read as something it is not.
+
+**Overlay a measured spectrum.** Drop a two-column file (`wavenumber intensity`, comma, semicolon, tab
+or space separated, header lines and `#` comments skipped) into the card. The measured series is drawn
+dashed behind the simulation, scaled so its strongest point matches the simulated maximum, and the
+caption prints the factor that was applied — an overlay whose heights were silently rescaled would
+invite a comparison that is not available.
 
 ## Reaction paths and scans
 

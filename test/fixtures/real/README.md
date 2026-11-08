@@ -24,3 +24,4 @@ at the closing dashes (the relaxed scan ends at its last parameter row).
 
 Attribution: the source repositories are public; the excerpts are reproduced for
 parser testing only. Gaussian itself is licensed separately by Gaussian, Inc.
+| `g16-h2o-raman.out` | `exa-analytics/exatomic` (`exatomic/static/gaussian/g16-h2o-321g-freq.out`), G16, `Freq=Raman` on water | Raman activities 11.4937 / 95.6630 / 44.0813 Å⁴/amu and both depolarisation ratios; the file contains the short and the long layout of the same table |

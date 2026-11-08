@@ -18,6 +18,7 @@ import { ELEMENTS } from './elements.js';
 import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { parseShieldings } from './nmr.js';
 import { animatableModes, parseNormalModes } from './normalModes.js';
+import { attachRaman, parseRamanActivities } from './raman.js';
 import { parseTrajectory } from './trajectory.js';
 import { summarizeValidity } from './validityChecks.js';
 
@@ -1024,6 +1025,13 @@ function parseLink(section, index) {
     records,
   };
   const frequencyBlocks = parseFrequencyBlocks(lines, startLine);
+  // Raman rows (#76) sit inside the same frequency section. They are attached
+  // to the modes rather than summarised, because the spectrum needs every
+  // mode, not the ten lowest.
+  const raman = attachRaman(
+    (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
+    parseRamanActivities(lines.join('\n')),
+  );
   const convergenceRecords = parseConvergenceRecords(lines, startLine);
   const error = parseErrorCause(lines);
   const stepNumbers = lines
@@ -1053,6 +1061,7 @@ function parseLink(section, index) {
     steps,
     optimization,
     frequencies: summarizeFrequencies(frequencyBlocks),
+    raman: raman.some((mode) => mode.ramanActivity !== null) ? raman : null,
     frequencyBlocks,
     thermochemistry: parseThermochemistry(joined, lines),
     finalEnergy: parseFinalEnergy(joined, scf),
@@ -1223,6 +1232,14 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     : parsedTrajectory;
   const parsedModes = parseNormalModes(text);
   const normalModes = parsedModes ? animatableModes(parsedModes) : null;
+  // Raman rows come from the same frequency section the summary was built
+  // from, so they are attached to that section's modes and never to another
+  // link's.
+  const ramanModes = attachRaman(
+    (frequencyLink?.frequencyBlocks?.at(-1)?.values || []).map((wavenumber) => ({ wavenumber })),
+    parseRamanActivities(text),
+  );
+  const raman = ramanModes.some((mode) => mode.ramanActivity !== null) ? ramanModes : null;
 
   return {
     status,
@@ -1236,6 +1253,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     geometry,
     finalGeometry: geometry.final,
     frequencies,
+    raman,
     thermochemistry,
     finalEnergy,
     spinContamination,

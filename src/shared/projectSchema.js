@@ -128,7 +128,7 @@ const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'spinSweep', 'referenceNodeId',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'spinSweep', 'referenceNodeId',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads', 'engine',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -177,6 +177,7 @@ export function defaultSettings(overrides = {}) {
     // A method ladder is opt-in; `null` means "this block is a normal block".
     ladder: null,
     stableOpt: false,
+    raman: false,
     // A spin-state sweep enumerates multiplicities for the same system.
     spinSweep: null,
     // The block whose free energy is the reactant of this path, if declared.
@@ -613,6 +614,9 @@ function normalizeSettings(c, raw, path, legacy) {
     forceConstants: readEnum(c, source.forceConstants, TS_FORCE_CONSTANT_IDS, `${path}.forceConstants`, { legacy, fallback: DEFAULT_TS_FORCE_CONSTANTS }),
     // A wavefunction stability optimisation (`Stable=Opt`) is opt-in.
     stableOpt: readBoolean(c, source.stableOpt, `${path}.stableOpt`, { legacy, fallback: false, optional: true }),
+    // Raman activities (#76): a flag on the frequency keyword, off by default so
+    // an existing project keeps emitting exactly the route it did before.
+    raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),
     spinSweep: normalizeSpinSweep(c, source.spinSweep, `${path}.spinSweep`, legacy),
     // The block whose free energy is the reactant in a ΔG‡ for this path. It
     // is declared, never inferred from the graph.

@@ -182,9 +182,15 @@ export function jobKeywordFor(settings = {}) {
   }
   // `Opt` and `Opt Freq` (a frequency after the optimization) take the flag in
   // the same keyword: `Opt=Tight Freq`, never `Opt=Tight Opt Freq`.
+  // Raman activities are a flag on the frequency keyword, not a job of their
+  // own: `Freq=Raman`, and `Opt Freq=Raman` for a frequency after an
+  // optimisation (#76).
+  const raman = settings.raman === true;
+  if (jobType === 'Freq') return raman ? 'Freq=Raman' : 'Freq';
   if (jobType === 'Opt' || jobType === 'Opt Freq') {
     const [head, ...rest] = jobType.split(/\s+/);
-    return [convergence ? `${head}=${convergence}` : head, ...rest].join(' ');
+    const tail = rest.map((token) => (raman && token === 'Freq' ? 'Freq=Raman' : token));
+    return [convergence ? `${head}=${convergence}` : head, ...tail].join(' ');
   }
   return jobType;
 }

@@ -876,6 +876,7 @@ function checkEngineSettings({ settings, engine }) {
       ['TD-DFT triplets', Number(source.tdTriplets) > 0 ? String(source.tdTriplets) : ''],
       ['Stable=Opt', source.stableOpt === true ? 'true' : ''],
       ['The NMR job type', text(source.jobType) === 'NMR' ? 'NMR' : ''],
+      ['Raman activities', source.raman === true ? 'true' : ''],
     ].find(([, value]) => value !== '');
     if (offender) {
       return {
