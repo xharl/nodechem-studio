@@ -104,6 +104,28 @@ describe('report figures', () => {
     expect(contour.caption).toContain('plane');
   });
 
+  it('projects an isosurface when meshes are supplied', () => {
+    // Two triangles, positions and normals per vertex in triangle order.
+    const positions = new Float32Array([
+      0, 0, 0, 1, 0, 0, 0, 1, 0,
+      1, 0, 0, 1, 1, 0, 0, 1, 0,
+    ]);
+    const normals = new Float32Array([
+      0, 0, 1, 0, 0, 1, 0, 0, 1,
+      0, 0, 1, 0, 0, 1, 0, 0, 1,
+    ]);
+    const { queue, records } = oneTask();
+    const model = buildWorkflowReport(queue, records, {
+      generatedAt: '2026-11-08T12:11:00.000Z',
+      figureLevel: 'surfaces',
+      surfaces: { freq: { iso: 0.02, meshes: [{ positions, normals, sign: 1 }] } },
+    });
+    const entry = (model.figures.byTask.freq || []).find((item) => item.key === 'surface');
+    expect(entry).toBeTruthy();
+    expect(entry.caption).toContain('iso 0.020');
+    expect(workflowReportHtml(model)).toContain('data-figure="surface"');
+  });
+
   it('refuses to draw a rotated cube as an axis-aligned plane', () => {
     const { queue, records } = oneTask();
     const model = buildWorkflowReport(queue, records, {

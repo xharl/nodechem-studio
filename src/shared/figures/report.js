@@ -20,6 +20,7 @@ import { broadenSticks, fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd, spectru
 import { orbitalLevelsFigure } from './levels.js';
 import { convergenceFigure } from './convergence.js';
 import { contourFigure, sliceOf } from './contour.js';
+import { surfaceFigure } from './surface.js';
 
 const IR_FWHM = 12;
 
@@ -123,7 +124,7 @@ function convergenceFigureFor(parsed) {
  * @param {string} options.level         'basic' | 'surfaces'
  * @returns {Array<{key:string, figure:object|null, reason?:string}>}
  */
-export function taskFigures(record, { volume = null, level = 'basic' } = {}) {
+export function taskFigures(record, { volume = null, surfaces = null, level = 'basic' } = {}) {
   const parsed = isObject(record?.parsed) ? record.parsed : {};
   const entries = [
     ['ir', irFigure(parsed)],
@@ -137,6 +138,17 @@ export function taskFigures(record, { volume = null, level = 'basic' } = {}) {
   ];
 
   const figures = entries.map(([key, figure]) => ({ key, figure: figure || null }));
+
+  if (surfaces && Array.isArray(surfaces.meshes) && surfaces.meshes.length > 0) {
+    const drawn = surfaceFigure({
+      meshes: surfaces.meshes, iso: surfaces.iso ?? null, field: 'ψ isosurface', units: 'au',
+    });
+    figures.push(drawn
+      ? { key: 'surface', figure: drawn }
+      : { key: 'surface', figure: null, reason: 'the isosurface has too many triangles to draw as vector output' });
+  } else if (level === 'surfaces') {
+    figures.push({ key: 'surface', figure: null, reason: 'no cube file in the run folder' });
+  }
 
   if (level === 'surfaces' || level === 'basic') {
     if (volume && volume.axisAligned === false) {

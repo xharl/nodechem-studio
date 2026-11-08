@@ -130,7 +130,8 @@ The report may carry figures, and each one is a claim with its parameters attach
 | Orbital levels (α, β) | `parsed.orbitals.manifolds`, converted to eV at 27.2114 eV/Ha | `basic` |
 | Convergence | `parsed.trajectory` step energies | `basic` |
 | Correlation (computed vs reference) | benchmark rows | `basic` |
-| Contour slice of a cube | a `.cube` **inside the task's run folder** | `basic` when present, else `surfaces` |
+| Contour slice of a cube | a `.cube` **inside the task's run folder** | `basic` when present |
+| Projected isosurface | the same cube, meshed at 10 % of its largest \|ψ\| and projected from a fixed isometric angle | `surfaces` |
 
 Rules, enforced in code and asserted in `test/reportFigures.test.js`:
 

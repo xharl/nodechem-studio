@@ -153,7 +153,7 @@ const FIGURE_BUDGET_BYTES = 5 * 1024 * 1024;
 
 function buildFigures({
   queue = {}, tasks = [], rows = [], recordMap = {}, figureLevel = 'basic', volumes = null,
-  budgetBytes = FIGURE_BUDGET_BYTES,
+  surfaces = null, budgetBytes = FIGURE_BUDGET_BYTES,
 }) {
   const level = figureLevel === 'none' ? 'none' : (figureLevel === 'surfaces' ? 'surfaces' : 'basic');
   const result = { level, dag: null, byTask: {}, dropped: [], bytes: 0 };
@@ -182,7 +182,11 @@ function buildFigures({
     if (!record) continue;
     let entries;
     try {
-      entries = taskFigures(record, { level, volume: volumes ? volumes[nodeId] || null : null });
+      entries = taskFigures(record, {
+        level,
+        volume: volumes ? volumes[nodeId] || null : null,
+        surfaces: surfaces ? surfaces[nodeId] || null : null,
+      });
     } catch (error) {
       entries = [{ key: 'figures', figure: null, reason: `figure build failed: ${error.message}` }];
     }
@@ -345,6 +349,7 @@ export function buildWorkflowReport(queue, records = {}, {
   includeImported = false,
   figureLevel = 'basic',
   volumes = null,
+  surfaces = null,
   figureBudgetBytes = FIGURE_BUDGET_BYTES,
 } = {}) {
   const source = queue && typeof queue === 'object' ? queue : {};
@@ -534,6 +539,7 @@ export function buildWorkflowReport(queue, records = {}, {
     recordMap,
     figureLevel,
     volumes,
+    surfaces,
     budgetBytes: figureBudgetBytes,
   });
 
