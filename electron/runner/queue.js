@@ -54,25 +54,61 @@ function queueIdFor(date = new Date()) {
   return `${stamp}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Windows rename errors that a repeat can clear; anything else is a real fault. */
+const RENAME_RETRY_CODES = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY']);
+/** 10/50/200/500/1000 ms: bounded at ~1.8 s, then a direct write, then a throw. */
+const RENAME_RETRY_DELAYS_MS = Object.freeze([10, 50, 200, 500, 1000]);
+/**
+ * No single filesystem call may hang the write chain. A real-time virus
+ * scanner that holds the target open makes `rename` stall rather than fail on
+ * Windows; without a bound that turns into a queue that silently stops
+ * persisting, which is what a durability test then sees as a timeout with no
+ * error attached.
+ */
+const WRITE_CALL_TIMEOUT_MS = 5000;
+
+function withWriteTimeout(promise, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${label} did not complete within ${WRITE_CALL_TIMEOUT_MS} ms`);
+      error.code = 'ETIMEDOUT';
+      error.writeTimeout = true;
+      reject(error);
+    }, WRITE_CALL_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function writeJsonAtomic(filePath, value) {
+  const data = `${JSON.stringify(value, null, 2)}\n`;
   const temp = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-  await fsp.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  // Windows refuses the rename while anything holds the target open — an
-  // indexer, a virus scanner, or a test that is about to delete the directory.
-  // `fs.rm` retries for the same reason; the write has to as well, otherwise a
-  // transient EPERM/EBUSY loses the snapshot instead of waiting it out.
-  const retryable = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY']);
-  for (let attempt = 0; ; attempt += 1) {
+  await fsp.writeFile(temp, data, 'utf8');
+  let lastError = null;
+  for (let attempt = 0; attempt <= RENAME_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
-      await fsp.rename(temp, filePath);
+      await withWriteTimeout(fsp.rename(temp, filePath), 'rename');
       return;
     } catch (error) {
-      if (!retryable.has(error?.code) || attempt >= 5) {
-        await fsp.rm(temp, { force: true }).catch(() => {});
-        throw error;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+      lastError = error;
+      const retryable = error?.writeTimeout === true || RENAME_RETRY_CODES.has(error?.code);
+      if (!retryable) break;
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      if (delay !== undefined) await new Promise((resolve) => setTimeout(resolve, delay));
     }
+  }
+  // A direct overwrite is the fallback that works where a rename cannot: it
+  // needs no delete of the existing entry, which is the operation Windows
+  // refuses while another handle holds the file.
+  try {
+    await withWriteTimeout(fsp.writeFile(filePath, data, 'utf8'), 'direct write');
+    await fsp.rm(temp, { force: true }).catch(() => {});
+    return;
+  } catch {
+    await fsp.rm(temp, { force: true }).catch(() => {});
+    const reason = lastError?.code || lastError?.message || 'unknown cause';
+    throw new Error(`could not write ${path.basename(filePath)} after `
+      + `${RENAME_RETRY_DELAYS_MS.length + 1} rename attempts and a direct write (${reason})`);
   }
 }
 

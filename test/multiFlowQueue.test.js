@@ -265,7 +265,10 @@ describe('RFC 0001 — the barrier holds the stage until every record clears it'
     const started = await queueManager.start({
       projectName: 'barrier', tasks: plan.tasks, edges: plan.edges, options: { executable: exe, scratchDir: '', maxParallel: 2 },
     });
-    await waitFor(async () => settled(await queueManager.get(started.id)), { label: 'barrier completion' });
+    // Windows under load has lost this 20 s bet once: the fence still held,
+    // the machine was simply slower than the poll. Patience, not a relaxed
+    // assertion — the ordering check below is unchanged.
+    await waitFor(async () => settled(await queueManager.get(started.id)), { timeout: 25000, label: 'barrier completion' });
 
     // Every opt ends before any sp starts: that is what the fence means.
     const lastOptEnd = Math.max(...factory.meter.order

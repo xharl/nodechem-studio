@@ -849,3 +849,25 @@ describe('QueueManager — imported ensemble paths', () => {
       .toBe(path.join(base, 'other', 'ensemble.xyz'));
   });
 });
+
+describe('QueueManager — a write that cannot land', () => {
+  // Windows stalls the rename when another handle holds the file; the write
+  // used to hang there with no error at all. Whatever the cause, a snapshot
+  // that cannot be written must surface as a named failure, never as a queue
+  // that silently stops persisting.
+  it('names the file instead of hanging or throwing a bare errno', async () => {
+    const { base, queueManager } = await makeStack();
+    const qm = new QueueManager({
+      queuesRoot: path.join(base, 'queues-blocked'),
+      runManager: queueManager.runManager,
+      emit: () => {},
+    });
+    managers.push(qm);
+    // A directory where the snapshot goes: neither the rename nor the direct
+    // write can succeed, and neither error is retryable, so this reaches the
+    // final throw without waiting out the backoff.
+    await fsp.mkdir(path.join(base, 'queues-blocked', 'blocked', 'queue.json'), { recursive: true });
+    await expect(qm.persist({ id: 'blocked', tasks: [] }))
+      .rejects.toThrow(/could not write queue\.json/);
+  });
+});
