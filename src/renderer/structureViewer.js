@@ -624,6 +624,8 @@ export function createStructureViewer(canvas, options = {}) {
     if (width > 220) {
       context.fillStyle = '#64748b';
       context.fillText(`mode ${modeIndex + 1}/${modes.frequencies.length}`, 10, 23);
+      // The amplitude is the peak atomic displacement of the drawing, in Å.
+      context.fillText(`amplitude ${amplitude.toFixed(2)} Å`, 10, 38);
     }
   }
 

@@ -17,6 +17,7 @@ import { dispersionSupport } from './dispersion.js';
 import { ELEMENTS } from './elements.js';
 import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { parseShieldings } from './nmr.js';
+import { animatableModes, parseNormalModes } from './normalModes.js';
 import { summarizeValidity } from './validityChecks.js';
 
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
@@ -1205,6 +1206,11 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   const reactionPath = parseIrcSummary(text);
   const scan = parseScanSummary(text);
   const nmr = parseShieldings(text);
+  // Normal-mode vectors: only the modes whose displacement block is complete are
+  // offered for animation, and the count of the rest is kept so the viewer can
+  // say what it is not showing.
+  const parsedModes = parseNormalModes(text);
+  const normalModes = parsedModes ? animatableModes(parsedModes) : null;
 
   return {
     status,
@@ -1227,6 +1233,14 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     reactionPath,
     scan,
     nmr,
+    normalModes,
+    normalModesMeta: parsedModes
+      ? {
+        modeCount: parsedModes.modeCount,
+        incomplete: parsedModes.incomplete,
+        atomCount: parsedModes.atomCount,
+      }
+      : null,
     charges,
     t1Diagnostic: t1Link ? t1Link.t1Diagnostic : null,
     resources: resourcesLink ? resourcesLink.resources : emptyResources(),
