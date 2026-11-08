@@ -10,6 +10,7 @@ import {
   isTsJob,
   jobKeywordFor,
 } from './tsForceConstants.js';
+import { basisNameFor, ecpMissingMessage, ecpRequirement } from './ecp.js';
 
 export const DEMO_WATER = [
   { element: 'O', x: 0.000000, y: 0.000000, z: 0.117300 },
@@ -73,9 +74,10 @@ export function tdKeywordFor(settings = {}) {
   return `TD=(NStates=${states}${suffix})`;
 }
 
-export function routeFor(settings = {}) {
+export function routeFor(settings = {}, { basisName = null } = {}) {
   const values = routeValues(settings);
-  const tokens = [`#p ${values.functional}/${values.basis} ${values.job}`];
+  const basis = basisName || values.basis;
+  const tokens = [`#p ${values.functional}/${basis} ${values.job}`];
   if (values.dispersion) tokens.push(`EmpiricalDispersion=${values.dispersion}`);
   if (values.scf) tokens.push(`SCF=${values.scf}`);
   if (values.grid) tokens.push(`Integral=${values.grid}`);
@@ -151,6 +153,8 @@ export function buildGaussianInput({
 
   const coords = Array.isArray(molecule.coords) ? molecule.coords : [];
   if (coords.length === 0) throw new Error('A molecule with Cartesian coordinates is required.');
+  const ecp = ecpRequirement({ basis: settings.basis, elements: coords.map((atom) => atom.element) });
+  if (ecp.missing.length > 0) throw new Error(ecpMissingMessage(ecp));
   const coordinateLines = coords.map((atom, index) => {
     const element = oneLine(atom.element);
     if (!/^[A-Z][a-z]?$/.test(element)) throw new Error(`Atom ${index + 1} has an invalid element symbol.`);
@@ -175,7 +179,7 @@ export function buildGaussianInput({
     `%NProcShared=${nproc}`,
     `%Chk=${checkpoint}`,
   ];
-  let route = routeFor(settings);
+  let route = routeFor(settings, { basisName: basisNameFor(settings.basis, ecp) });
   if (oldCheckpoint) {
     if (!SAFE_NAME.test(oldCheckpoint) || !/\.chk$/i.test(oldCheckpoint)) {
       throw new Error('Checkpoint hand-off must be a safe .chk basename.');
@@ -195,6 +199,12 @@ export function buildGaussianInput({
   lines.push(...coordinateLines);
   lines.push('');
   lines.push('');
+  // The basis and ECP blocks follow the molecule specification, in the
+  // Gaussian94 layout the Basis Set Exchange exports.
+  if (ecp.needed) {
+    lines.push(ecp.blocks);
+    lines.push('');
+  }
   return lines.join('\n');
 }
 

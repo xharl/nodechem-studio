@@ -62,6 +62,7 @@
  */
 
 import { atomicNumber } from './elements.js';
+import { ecpMissingMessage, ecpRequirement } from './ecp.js';
 import { hasBuiltinDispersion } from './routePresets.js';
 
 export const CHECK_STATUS = Object.freeze({
@@ -648,6 +649,7 @@ export function checkMethodBasisCompatibility({ settings = {}, molecule = {} } =
   const elements = [...new Set(atoms.map((atom) => atom.element).filter(Boolean))];
   const heavy = elements.filter((element) => (atomicNumber(element) || 0) >= ECP_REQUIRED_FROM_Z);
   const ecpBasis = isEcpBasis(basis);
+  const ecpData = ecpRequirement({ basis, elements });
   const geometryKnown = elements.length > 0;
   const issues = [];
   const evidence = {
@@ -667,6 +669,17 @@ export function checkMethodBasisCompatibility({ settings = {}, molecule = {} } =
       severity: CHECK_SEVERITY.ERROR,
       message: `Basis ${basis} has no all-electron definition for ${heavy.join(', ')}; without an ECP the route has no `
         + 'functions for those atoms. Use LANL2DZ, SDD or a def2 basis.',
+    });
+  }
+
+  // An ECP basis is only usable when the pseudopotential data comes with it.
+  // def2-SVP for palladium is a GenECP job; without the block, Gaussian reads a
+  // route it cannot satisfy and the run fails at link 301.
+  if (ecpData.needed && ecpData.missing.length > 0) {
+    issues.push({
+      kind: 'ecp-data-missing',
+      severity: CHECK_SEVERITY.ERROR,
+      message: ecpMissingMessage(ecpData),
     });
   }
 

@@ -8,6 +8,7 @@ import { isFile, sha256File, sha256Text } from './hashing.js';
 import { evaluateGates, outputEvidence } from '../../src/shared/gaussianOutput.js';
 import { makeFixtureOutput } from '../../src/shared/fixtureOutput.js';
 import { methodBlockFor } from '../../src/shared/gaussianInput.js';
+import { ecpFromInput } from '../../src/shared/ecp.js';
 import { normaliseAppInfo, provenanceKindFor } from '../../src/shared/provenance.js';
 import { engineFor, DEFAULT_ENGINE_ID } from '../../src/shared/engines/index.js';
 import { xtbSolvationFromArgv } from '../../src/shared/engines/xtb.js';
@@ -111,6 +112,7 @@ export class RunManager {
     }
 
     const settings = payload.settings && typeof payload.settings === 'object' ? payload.settings : null;
+    const ecp = engine.id === 'gaussian' ? ecpFromInput(inputText) : null;
     const argv = Array.isArray(payload.argv) ? payload.argv.map(String) : null;
     const jobType = settings ? String(settings.jobType || '').trim() || null : null;
     // Issue #39: the method block belongs to the engine that ran. A Gaussian
@@ -151,6 +153,7 @@ export class RunManager {
         // does not have to parse argv to know the model and solvent. Gaussian
         // records keep their existing shape.
         ...(engine.id === 'xtb' ? { solvation: xtbSolvationFromArgv(argv) } : {}),
+        ...(ecp ? { ecp } : {}),
         input: { name: payload.inputName, bytes: inputBytes },
         output: null,
       },

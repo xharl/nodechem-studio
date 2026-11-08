@@ -9,6 +9,7 @@ import {
   DEMO_WATER,
   tdKeywordFor,
 } from '../shared/gaussianInput.js';
+import { basisNameFor, ecpRequirement } from '../shared/ecp.js';
 import {
   DRAFT_KEY,
   DRAFT_VERSION,
@@ -290,7 +291,11 @@ function kindForJob(jobType) {
 }
 
 function routeShort(settings) {
-  return `${settings.method}/${settings.basis} ${jobKeywordFor(settings)}`;
+  // The preview must show the route that will be written: a heavy element with
+  // an ECP basis becomes GenECP and carries a basis/ECP block after the atoms.
+  const coords = state.project?.molecule?.coords || [];
+  const ecp = ecpRequirement({ basis: settings.basis, elements: coords.map((atom) => atom.element) });
+  return `${settings.method}/${basisNameFor(settings.basis, ecp)} ${jobKeywordFor(settings)}`;
 }
 
 function routeFull(settings) {

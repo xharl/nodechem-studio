@@ -26,6 +26,14 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
 - **Checkpoint hand-offs** between blocks (`%OldChk` plus `Geom=Check` and `Guess=Read`).
 - **Thermochemistry** from a frequency job, read out of the log.
 - **Validity checks** — the six pre/post-run checks in [Results](results.md#validity-checks).
+- **Effective core potentials.** A basis with an ECP (def2 for any element above krypton) written for
+  a heavy atom becomes a `GenECP` route with the basis and pseudopotential blocks appended after the
+  molecule. This build ships the def2-SVP orbital basis and ECP for Ag, Pd, Pt and Au, taken verbatim
+  from the Basis Set Exchange; the run records which library and checksum it used. Asking for an
+  element without bundled data is a validation error — the app refuses to write a `GenECP` route that
+  Gaussian would reject — and a light-element job is written byte-for-byte as before. SDD and
+  LANL2DZ are offered as names but carry no bundled data, so a heavy-element job with them is
+  blocked with the same message until their blocks are added.
 
 Gaussian is **licensed separately by Gaussian, Inc.**; the Apache 2.0 licence of this repository
 grants no rights to it. The app cannot run Gaussian without a licensed installation on the same
