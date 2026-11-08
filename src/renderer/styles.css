@@ -377,7 +377,7 @@ kbd {
   --kind: var(--kind-calc);
   position: absolute;
   width: 216px;
-  height: 112px;
+  height: 132px;
   border: 1px solid var(--tone-blue-44);
   border-radius: 12px;
   background: linear-gradient(165deg, var(--tone-blue-37) 0%, var(--tone-blue-30) 60%, var(--tone-blue-26) 100%);
@@ -463,7 +463,7 @@ kbd {
 }
 .node-status i { width: 5px; height: 5px; border-radius: 50%; background: var(--state); }
 .node-title {
-  padding: 8px 12px 0;
+  padding: 6px 12px 0;
   font-size: var(--text-size-sm);
   font-weight: 620;
   letter-spacing: -.005em;
@@ -473,7 +473,7 @@ kbd {
   text-overflow: ellipsis;
 }
 .node-route {
-  padding: 5px 12px 0;
+  padding: 4px 12px 0;
   color: var(--tone-blue-66);
   font: var(--text-size-xs)/1.4 var(--font-mono);
   white-space: nowrap;
@@ -1289,8 +1289,10 @@ kbd {
   right: 18px;
   bottom: 58px;
   z-index: 80;
-  width: min(760px, calc(100vw - 36px));
-  max-height: min(560px, calc(100vh - 130px));
+  /* Bounded so the canvas stays usable beside it: the console is a working
+     overlay, not a second application. */
+  width: min(640px, calc(100vw - 36px));
+  max-height: min(520px, calc(100vh - 170px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1524,3 +1526,103 @@ kbd {
 .constraint-add .select { flex: 1 1 auto; }
 .qst-status { color: var(--text-tertiary); font-size: var(--text-size-xs); }
 .qst-status.bad { color: var(--kind-condition); }
+
+/* ── Live workbench: results on cards, flow state, run-mode chips ─────────
+   The workbench should answer "what did this block produce, and what is
+   running" without a click. Motion is limited to a running indicator and
+   colour transitions; nothing bounces, nothing loops for decoration. */
+
+.node-result {
+  position: absolute;
+  left: 12px; right: 12px; top: 80px;
+  display: flex; align-items: baseline; gap: 7px;
+  overflow: hidden; white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-size-xs);
+  line-height: 1.2;
+  letter-spacing: -.01em;
+  color: var(--tone-blue-90);
+  font-variant-numeric: tabular-nums;
+}
+.node-result-main { color: var(--tone-blue-118); font-weight: 600; }
+.node-result-sub { color: var(--tone-blue-60); overflow: hidden; text-overflow: ellipsis; }
+.node-result.is-ok .node-result-main { color: var(--state-passed); }
+.node-result.is-bad .node-result-main { color: var(--state-review); }
+.node-result.is-warn .node-result-main { color: var(--kind-condition); }
+
+/* A running block: a thin indeterminate rail, and a soft ring, no bounce. */
+.node-progress {
+  position: absolute; left: 10px; right: 10px; top: 5px; height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--state) 45%, var(--state) 55%, transparent 100%);
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation: node-sweep 1.15s linear infinite;
+  opacity: .85;
+}
+@keyframes node-sweep {
+  from { background-position: -45% 0; }
+  to { background-position: 145% 0; }
+}
+.node.is-running {
+  border-color: color-mix(in srgb, var(--state) 55%, var(--tone-blue-44));
+  box-shadow: inset 3px 0 0 var(--state), 0 0 0 1px color-mix(in srgb, var(--state) 22%, transparent), 0 10px 26px var(--tone-neutral-3a);
+}
+.node.is-queued { border-style: dashed; }
+@media (prefers-reduced-motion: reduce) {
+  .node-progress { animation: none; background-position: 50% 0; }
+  .flow-tab.is-running .flow-dot { animation: none; }
+}
+
+/* Flow tabs carry their flow's state, not just its name. */
+.flow-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--tone-blue-60);
+  flex: 0 0 auto;
+}
+.flow-tab.is-ready .flow-dot { background: var(--state-ready); }
+.flow-tab.is-passed .flow-dot { background: var(--state-passed); }
+.flow-tab.is-review .flow-dot { background: var(--state-review); }
+.flow-tab.is-blocked .flow-dot { background: var(--state-blocked); }
+.flow-tab.is-running .flow-dot {
+  background: var(--state-ready);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--state-ready) 22%, transparent);
+  animation: flow-pulse 1.6s ease-in-out infinite;
+}
+@keyframes flow-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+
+/* Run-console header chips: engine, mode, progress. */
+.run-chip {
+  display: inline-flex; align-items: center; height: 20px;
+  padding: 0 8px; border-radius: 999px;
+  border: 1px solid var(--tone-blue-71a);
+  background: var(--tone-blue-24);
+  color: var(--text-tertiary);
+  font: var(--text-size-xs)/1 var(--font-mono);
+  letter-spacing: .04em; text-transform: uppercase;
+  white-space: nowrap;
+}
+.run-chip.is-dry {
+  border-color: color-mix(in srgb, var(--kind-condition) 45%, transparent);
+  color: var(--kind-condition);
+  background: color-mix(in srgb, var(--kind-condition) 12%, transparent);
+}
+.run-chip.is-progress { font-variant-numeric: tabular-nums; }
+.run-chip.is-progress.is-live { color: var(--state-ready); border-color: color-mix(in srgb, var(--state-ready) 40%, transparent); }
+
+/* Status bar: which engines this machine can launch. */
+.engine-chips { display: inline-flex; align-items: center; gap: 9px; margin-right: 4px; }
+.engine-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+.engine-chip i { width: 5px; height: 5px; border-radius: 50%; background: var(--tone-blue-60); }
+.engine-chip.is-ok i { background: var(--state-passed); }
+.engine-chip.is-missing { color: var(--kind-condition); }
+.engine-chip.is-missing i { background: var(--kind-condition); }

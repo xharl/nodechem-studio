@@ -171,6 +171,7 @@
         </div>
         <div class="status-message" id="status-message">Structure valid · acyclic · no local job has been run</div>
         <div class="status-right">
+          <span class="engine-chips" id="engine-chips" title="Engine binaries found on PATH"></span>
           <span class="mock-tag" id="app-version-status">local runner</span>
           <span class="kbd-hint" id="kbd-hint"><kbd>⌘</kbd><kbd>K</kbd> search blocks</span>
         </div>
@@ -225,7 +226,13 @@
 <aside class="run-console" id="run-console" hidden aria-label="Local run console">
   <header class="run-head">
     <div class="run-head-copy"><span class="run-eyebrow">Local runner</span><strong id="run-title">No run yet</strong></div>
-    <div class="run-head-actions"><span class="run-state" id="run-state">idle</span><button class="icon-btn" data-action="close-run-console" aria-label="Close run console">×</button></div>
+    <div class="run-head-actions">
+      <span class="run-chip" id="run-engine" title="Engine of the selected block">—</span>
+      <span class="run-chip" id="run-mode" title="Dry run writes fixture output, not chemistry">real</span>
+      <span class="run-chip is-progress" id="run-progress" hidden>0/0</span>
+      <span class="run-state" id="run-state">idle</span>
+      <button class="icon-btn" data-action="close-run-console" aria-label="Close run console">×</button>
+    </div>
   </header>
   <div class="run-body">
     <div class="run-config">
