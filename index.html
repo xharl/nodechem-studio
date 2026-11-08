@@ -223,7 +223,7 @@
   </section>
 </template>
 
-<aside class="run-console" id="run-console" hidden aria-label="Local run console">
+<aside class="run-console" id="run-console" data-pane="setup" hidden aria-label="Local run console">
   <header class="run-head">
     <div class="run-head-copy"><span class="run-eyebrow">Local runner</span><strong id="run-title">No run yet</strong></div>
     <div class="run-head-actions">
@@ -234,8 +234,13 @@
       <button class="icon-btn" data-action="close-run-console" aria-label="Close run console">×</button>
     </div>
   </header>
+  <nav class="run-tabs" id="run-tabs" role="tablist" aria-label="Run console sections">
+    <button type="button" class="run-tab is-active" role="tab" aria-selected="true" data-run-tab="setup">Setup</button>
+    <button type="button" class="run-tab" role="tab" aria-selected="false" data-run-tab="queue">Queue<span class="run-tab-badge" id="run-tab-queue-badge" hidden>0/0</span></button>
+    <button type="button" class="run-tab" role="tab" aria-selected="false" data-run-tab="results">Results<span class="run-tab-dot" id="run-tab-results-dot" hidden></span></button>
+  </nav>
   <div class="run-body">
-    <div class="run-config">
+    <div class="run-config run-pane" data-pane="setup">
       <label class="run-check"><input type="checkbox" id="run-dry" checked> Dry run (fixture output)</label>
       <div class="run-field"><label for="run-exe" id="run-exe-label">Gaussian 16 executable</label><div class="run-path"><input id="run-exe" placeholder="C:\\G16W\\g16.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-gaussian">Browse</button></div></div>
       <div class="run-field"><label for="run-crest">CREST executable (conformer blocks)</label><div class="run-path"><input id="run-crest" placeholder="C:\\crest\\crest.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-crest">Browse</button></div></div>
@@ -243,7 +248,8 @@
       <div class="run-field"><label for="run-max-parallel">Parallel tasks</label><input id="run-max-parallel" type="number" min="1" max="64" step="1" value="1" title="How many independent tasks may run at once; a barrier still waits for every record"></div>
       <div class="run-actions">
         <button class="btn small" data-action="preflight">Preflight</button>
-        <button class="btn primary small" data-action="run-selected">Run selected block</button>
+        <button class="btn primary small" data-action="run-workflow" title="Queue every block of the active flow">Run workflow</button>
+        <button class="btn small" data-action="run-selected">Run selected block</button>
         <button class="btn small" id="verify-run" data-action="verify-run" disabled>Verify input</button>
         <button class="btn small" data-action="export-run-bundle" title="Write methods.md, manifest.json and the run files to a new folder">Export run bundle</button>
         <select id="run-export-format" class="btn small" aria-label="Format to export the run in" title="Frames for a viewer, SDF for an editor, JCAMP for spectroscopy software">
@@ -259,7 +265,7 @@
       </div>
       <p class="run-hint" id="run-hint">Dry run writes a synthetic fixture log and evaluates the parser. Uncheck to launch the engine executable.</p>
     </div>
-    <div class="run-output-wrap">
+    <div class="run-output-wrap run-pane" data-pane="setup">
       <div class="run-output-head"><span>Output</span><span id="run-path"></span></div>
       <pre class="run-output" id="run-output">Select a calculation block, then run.</pre>
       <div class="run-gates" id="run-gates"></div>
@@ -269,7 +275,7 @@
         <ul class="queue-list" id="run-history"><li class="queue-empty">No runs recorded yet.</li></ul>
       </div>
     </div>
-    <section class="run-queue-panel" aria-label="Workflow queue">
+    <section class="run-queue-panel run-pane" data-pane="queue" aria-label="Workflow queue">
       <div class="run-queue-head">
         <span>Workflow queue</span>
         <span class="run-state" id="queue-state">idle</span>
@@ -285,7 +291,7 @@
       <section class="run-records" id="run-records" hidden aria-label="Per-record results"></section>
     </section>
   </div>
-  <section class="run-results" id="run-results" hidden aria-label="Parsed results"></section>
+  <section class="run-results run-pane" id="run-results" data-pane="results" hidden aria-label="Parsed results"></section>
 </aside>
 
 <div class="toast" id="toast" hidden></div>

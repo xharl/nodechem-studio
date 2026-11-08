@@ -59,6 +59,7 @@ import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/tem
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import { buildOrcaInput } from '../shared/engines/orca.js';
 import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../shared/engines/psi4.js';
+import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
@@ -1193,10 +1194,11 @@ function renderDraftBar(draft) {
   bar.id = 'draft-bar';
   bar.setAttribute('role', 'status');
   bar.style.cssText = [
+    // Bottom-left keeps it clear of the run console (right) and the canvas HUD
+    // (top-left); it is a prompt to answer, not a banner to read past.
     'position:fixed',
-    'top:64px',
-    'left:50%',
-    'transform:translateX(-50%)',
+    'bottom:52px',
+    'left:18px',
     'z-index:190',
     'display:flex',
     'align-items:center',
@@ -3325,6 +3327,18 @@ function openSettingsDrawer() {
   });
 }
 
+/** Every dataset record in the project, flattened with its dataset's title. */
+function projectDatasetRecords() {
+  const datasets = Array.isArray(state.project?.datasets) ? state.project.datasets : [];
+  const records = [];
+  for (const dataset of datasets) {
+    for (const record of Array.isArray(dataset.records) ? dataset.records : []) {
+      records.push({ ...record, datasetId: dataset.id, datasetTitle: dataset.title || dataset.id });
+    }
+  }
+  return { datasets, records };
+}
+
 function openMoleculeDrawer(tab = 'structure') {
   state.drawer = {
     type: 'molecule',
@@ -3385,6 +3399,7 @@ function renderDrawer() {
   // handling; only the body renderer is different.
   if (drawer.type === 'template') {
     renderTemplateChooser();
+    placeModal();
     return;
   }
   if (drawer.type === 'batch') {
@@ -3392,9 +3407,14 @@ function renderDrawer() {
     return;
   }
   const draft = drawer.draft;
+  const drawerDatasets = projectDatasetRecords();
   const tabs = drawer.type === 'settings'
     ? []
-    : [['structure', 'Structure'], ['fragments', 'Charge & fragments']];
+    : [
+      ['structure', 'Structure'],
+      ['fragments', 'Charge & fragments'],
+      ...(drawerDatasets.records.length > 1 ? [['records', `Records ${drawerDatasets.records.length}`]] : []),
+    ];
   const activeTab = drawer.type === 'settings' ? 'defaults' : drawer.tab;
   const coords = Array.isArray(draft.coords) ? draft.coords : [];
   const atoms = coords.length ? coords : DEMO_WATER;
@@ -3404,7 +3424,9 @@ function renderDrawer() {
   if (activeTab === 'structure') {
     const sourceLabel = draft.geometry.source === 'imported' && draft.coords.length
       ? `${esc(draft.geometry.file || 'imported file')} · ${esc(draft.geometry.format || 'structure')}`
-      : 'No structure imported yet — the demo water below is what the project would calculate.';
+      : draft.coords.length
+        ? `Coordinates stored in the project file${draft.geometry.file ? ` · ${esc(draft.geometry.file)}` : ''}`
+        : 'No structure imported yet — the demo water below is what the project would calculate.';
     body = `
       <div class="molecule-grid">
         <div class="molecule-pane">
@@ -3453,6 +3475,71 @@ function renderDrawer() {
         </div>
       </div>
       <div class="callout green"><strong>Project-level structure.</strong> Every calculation block builds its input from these coordinates; each block keeps its own charge, multiplicity, method, basis and gates.</div>`;
+  } else if (activeTab === 'records') {
+    const records = drawerDatasets.records;
+    const peekIndex = Math.min(Math.max(0, Number(drawer.peekIndex) || 0), Math.max(0, records.length - 1));
+    const peek = records[peekIndex] || null;
+    const enabled = records.filter((record) => record.enabled !== false);
+    const elements = new Set();
+    for (const record of records) for (const symbol of compositionOf(record.coords || []).keys()) elements.add(symbol);
+    const charges = records.map((record) => Number(record.charge) || 0);
+    const multiplicities = records.map((record) => Number(record.multiplicity) || 1);
+    const chargeRange = charges.length ? (Math.min(...charges) === Math.max(...charges)
+      ? `${charges[0]}`
+      : `${Math.min(...charges)} … ${Math.max(...charges)}`) : '–';
+    const multiplicityRange = multiplicities.length ? (Math.min(...multiplicities) === Math.max(...multiplicities)
+      ? `${multiplicities[0]}`
+      : `${Math.min(...multiplicities)} … ${Math.max(...multiplicities)}`) : '–';
+    const atomCounts = records.map((record) => (record.coords || []).length);
+    const atomRange = atomCounts.length
+      ? (Math.min(...atomCounts) === Math.max(...atomCounts) ? `${atomCounts[0]}` : `${Math.min(...atomCounts)} … ${Math.max(...atomCounts)}`)
+      : '–';
+    const peekAtoms = peek?.coords || [];
+    const peekMass = massOf(peekAtoms);
+    body = `
+      <div class="records-summary">
+        <div class="records-stat"><span>Records</span><strong>${records.length}</strong></div>
+        <div class="records-stat"><span>Enabled</span><strong>${enabled.length}</strong></div>
+        <div class="records-stat"><span>Atoms</span><strong>${atomRange}</strong></div>
+        <div class="records-stat"><span>Charge</span><strong>${esc(chargeRange)}</strong></div>
+        <div class="records-stat"><span>Multiplicity</span><strong>${esc(multiplicityRange)}</strong></div>
+        <div class="records-stat"><span>Elements</span><strong>${esc([...elements].sort().join(' ')) || '–'}</strong></div>
+      </div>
+      <div class="records-layout">
+        <div class="records-table-wrap">
+          <table class="records-table">
+            <thead><tr><th>#</th><th>Record</th><th>Formula</th><th>Atoms</th><th>Charge</th><th>Mult</th><th>Runs</th></tr></thead>
+            <tbody>
+              ${records.map((record, index) => `
+                <tr class="records-row${index === peekIndex ? ' is-active' : ''}${record.enabled === false ? ' is-disabled' : ''}" data-record-peek="${index}" tabindex="0">
+                  <td class="num">${index + 1}</td>
+                  <td class="record-label">${esc(record.label || record.id || `record ${index + 1}`)}</td>
+                  <td class="mono">${esc(formulaOf(record.coords || []) || '–')}</td>
+                  <td class="num">${(record.coords || []).length}</td>
+                  <td class="num">${esc(record.charge ?? 0)}</td>
+                  <td class="num">${esc(record.multiplicity ?? 1)}</td>
+                  <td class="num">${record.enabled === false ? 'off' : 'on'}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+          <p class="field-hint">A flow's input block runs one task per enabled record. Select a row to inspect it; nothing here changes the dataset.</p>
+        </div>
+        <div class="records-peek">
+          ${peek
+    ? `<div class="section-label">${esc(peek.label || peek.id || `record ${peekIndex + 1}`)} <span class="group-meta">${esc(peek.datasetTitle)}</span></div>
+            <div class="molecule-preview">${moleculePreviewSvg(peekAtoms)}</div>
+            <div class="card records-facts">
+              <div class="kv"><span>Formula</span><code>${esc(formulaOf(peekAtoms) || '–')}</code></div>
+              <div class="kv"><span>Mass</span><code>${peekMass === null ? '–' : `${peekMass.toFixed(2)} u`}</code></div>
+              <div class="kv"><span>Atoms</span><code>${peekAtoms.length}</code></div>
+              <div class="kv"><span>Charge</span><code>${esc(peek.charge ?? 0)}</code></div>
+              <div class="kv"><span>Multiplicity</span><code>${esc(peek.multiplicity ?? 1)}</code></div>
+            </div>
+            <button type="button" class="btn small" data-action="load-record" data-record-index="${peekIndex}">Load into editor</button>
+            <p class="field-hint">The editor writes the project molecule; the dataset record itself is untouched.</p>`
+    : '<p class="field-hint">This dataset has no records.</p>'}
+        </div>
+      </div>`;
   } else if (activeTab === 'fragments') {
     body = `
       <div class="form-grid">
@@ -3533,6 +3620,7 @@ function renderDrawer() {
       <button type="button" class="btn" data-modal-close>Cancel</button>
       <button type="button" class="btn primary" data-action="save-molecule">Save changes</button>
     </div>`;
+  placeModal();
 }
 
 function saveMolecule() {
@@ -3942,7 +4030,12 @@ function openRunConsole() {
   const consoleEl = $('#run-console');
   if (!consoleEl) return;
   consoleEl.hidden = false;
+  // A fresh console starts following the run, not a section picked last time.
+  state.runPanePinned = false;
+  const results = $('#run-results');
+  setRunPane(results && !results.hidden ? 'results' : 'setup');
   updateRunConsoleCopy();
+  updateRunTabBadges();
   $('#run-state').focus?.();
   if (!desktop) {
     $('#run-hint').textContent = BROWSER_PREVIEW_CONSOLE_HINT;
@@ -3953,6 +4046,55 @@ function openRunConsole() {
 function closeRunConsole() {
   const consoleEl = $('#run-console');
   if (consoleEl) consoleEl.hidden = true;
+}
+
+/* ── Run console sections ─────────────────────────────────── */
+
+/**
+ * The console is one window with three jobs: configure a run, watch the queue,
+ * read the result. Showing all of them at once made every one of them cramped,
+ * so they are tabs and the app switches to the one the moment belongs to.
+ */
+function setRunPane(pane, { user = false } = {}) {
+  const consoleEl = $('#run-console');
+  if (!consoleEl) return;
+  const allowed = ['setup', 'queue', 'results'];
+  const next = allowed.includes(pane) ? pane : 'setup';
+  if (user) state.runPanePinned = true;
+  consoleEl.dataset.pane = next;
+  for (const tab of document.querySelectorAll('#run-tabs [data-run-tab]')) {
+    const active = tab.dataset.runTab === next;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', String(active));
+  }
+}
+
+/** Auto-switch only while the user has not pinned a section by clicking one. */
+function autoRunPane(pane) {
+  if (state.runPanePinned) return;
+  setRunPane(pane);
+}
+
+/** Badges: task progress on Queue, a dot on Results when a table is shown. */
+function updateRunTabBadges() {
+  const badge = $('#run-tab-queue-badge');
+  if (badge) {
+    const tasks = Array.isArray(state.queue?.tasks) ? state.queue.tasks : [];
+    const total = tasks.length;
+    const done = tasks.filter((task) => ['completed', 'failed', 'skipped', 'blocked', 'cancelled'].includes(task.status)).length;
+    badge.hidden = total === 0;
+    badge.textContent = `${done}/${total}`;
+  }
+  const dot = $('#run-tab-results-dot');
+  const results = $('#run-results');
+  const hasResults = Boolean(results && !results.hidden);
+  if (dot) dot.hidden = !hasResults;
+  const resultsTab = document.querySelector('[data-run-tab="results"]');
+  if (resultsTab) {
+    resultsTab.classList.toggle('is-disabled', !hasResults);
+    resultsTab.setAttribute('aria-disabled', String(!hasResults));
+    resultsTab.title = hasResults ? 'Parsed results of the last run' : 'No parsed results yet — run a block';
+  }
 }
 
 function setRunState(status, label) {
@@ -4427,6 +4569,7 @@ function handleRunEvent(event) {
     renderRunGates(record.gates?.gates || [], record.gates?.validity || null);
     mountThermochemistryView($('#run-thermo'), record.parsed, { engine: record.engine });
     attachParsedRun(record, state.run.nodeId);
+    autoRunPane('results');
     $('#cancel-run')?.setAttribute('disabled', '');
     const verdict = record.gates?.overall || 'unknown';
     const validityVerdict = record.gates?.validity?.overall || null;
@@ -4530,6 +4673,7 @@ function applyQueue(queue) {
   syncNodeStatesFromQueue(queue);
   renderQueue();
   updateRunProgressChip();
+  updateRunTabBadges();
   // While a queue owns the console, the header shows the queue's state: a
   // finished single run must not read 'COMPLETED' over a draining workflow.
   const queueStatus = String(queue.status || '');
@@ -4805,6 +4949,8 @@ function handleQueueEvent(event) {
   applyQueue(event.queue);
   attachQueueEnsembles(event.queue);
   if (event.type === 'queue-started') {
+    state.runPanePinned = false;
+    setRunPane('queue');
     const queuedEngine = event.queue.tasks.find((task) => task.engine)?.engine
       || state.project?.defaults?.engine;
     const records = groupTasksByRecord(event.queue.tasks);
@@ -4814,6 +4960,7 @@ function handleQueueEvent(event) {
   if (event.type !== 'queue-done') scheduleAttachParsed(event.queue);
   if (event.type === 'queue-done') {
     const verdict = event.queue.status;
+    autoRunPane('results');
     appendRunOutput(`\nWorkflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
     setStatusMessage(`Workflow ${verdict}${event.queue.reason ? ` · ${event.queue.reason}` : ''}`);
     attachQueueParsed(event.queue).catch(() => {});
@@ -5767,6 +5914,34 @@ function onDocumentClick(event) {
   const flowTab = event.target.closest('[data-flow-id]');
   if (flowTab) switchFlow(flowTab.dataset.flowId);
 
+  const runTab = event.target.closest('[data-run-tab]');
+  if (runTab) {
+    const disabled = runTab.classList.contains('is-disabled');
+    if (!disabled) setRunPane(runTab.dataset.runTab, { user: true });
+    else if (runTab.dataset.runTab === 'results') toast('No parsed results yet — run a block or a workflow.');
+  }
+
+  const recordRow = event.target.closest('[data-record-peek]');
+  if (recordRow && state.drawer) {
+    state.drawer.peekIndex = Number(recordRow.dataset.recordPeek) || 0;
+    renderDrawer();
+  }
+
+  const loadRecord = event.target.closest('[data-action="load-record"]');
+  if (loadRecord && state.drawer) {
+    const { records } = projectDatasetRecords();
+    const record = records[Number(loadRecord.dataset.recordIndex) || 0];
+    if (record && Array.isArray(record.coords) && record.coords.length) {
+      state.drawer.draft.coords = record.coords.map((atom) => ({ ...atom }));
+      state.drawer.draft.charge = Number.isInteger(record.charge) ? record.charge : state.drawer.draft.charge;
+      state.drawer.draft.multiplicity = Number.isInteger(record.multiplicity) ? record.multiplicity : state.drawer.draft.multiplicity;
+      state.drawer.draft.geometry = { source: 'manual', file: '', format: '' };
+      state.drawer.tab = 'structure';
+      renderDrawer();
+      toast(`${record.label || record.id} loaded into the editor — save to apply.`);
+    }
+  }
+
   const drawerTab = event.target.closest('[data-drawer-tab]');
   if (drawerTab && state.drawer) {
     state.drawer.tab = drawerTab.dataset.drawerTab;
@@ -6050,10 +6225,122 @@ function onDocumentInput(event) {
   }
 }
 
+/* ── Draggable modal windows ──────────────────────────────── */
+
+const MODAL_POS_KEY = 'nodechem-studio.modal-pos';
+
+/**
+ * The drawer is a window, not a sheet: its position belongs to the user.
+ *
+ * The panel still opens where the CSS puts it (top-right, out of the canvas'
+ * way) until the user drags it; after that the position is remembered for the
+ * session and across launches. A double-click on the header restores the
+ * default anchor, so a window can never be lost off-screen.
+ */
+function readStoredModalPos() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(MODAL_POS_KEY) || 'null');
+    return saved && Number.isFinite(saved.x) && Number.isFinite(saved.y) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeModalPos(pos) {
+  try {
+    localStorage.setItem(MODAL_POS_KEY, JSON.stringify(pos));
+  } catch {
+    // Position is a convenience, not state the app depends on.
+  }
+}
+
+/** True when the window is too small for a floating panel (full-screen sheet). */
+function modalDragDisabled() {
+  return window.innerWidth <= 520;
+}
+
+function applyModalPos(modal, pos) {
+  const width = modal.offsetWidth || 420;
+  const maxX = Math.max(8, window.innerWidth - width - 8);
+  // Keep the header reachable even if the body is taller than the viewport.
+  const maxY = Math.max(8, window.innerHeight - 64);
+  const x = Math.min(Math.max(8, Math.round(pos.x)), maxX);
+  const y = Math.min(Math.max(8, Math.round(pos.y)), maxY);
+  modal.style.left = `${x}px`;
+  modal.style.top = `${y}px`;
+  modal.style.right = 'auto';
+  modal.classList.add('is-floating');
+  return { x, y };
+}
+
+/** Re-apply the remembered position after every re-render of the drawer. */
+function placeModal() {
+  const modal = $('#modal');
+  if (!modal || modalDragDisabled()) return;
+  const pos = state.modalPos || readStoredModalPos();
+  if (!pos) return;
+  state.modalPos = applyModalPos(modal, pos);
+}
+
+function beginModalDrag(event) {
+  const head = event.target?.closest?.('.modal-head');
+  if (!head || modalDragDisabled()) return;
+  if (event.target.closest('button, input, select, textarea, a')) return;
+  const modal = $('#modal');
+  if (!modal) return;
+  const rect = modal.getBoundingClientRect();
+  state.modalPos = applyModalPos(modal, { x: rect.left, y: rect.top });
+  state.modalDrag = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+  document.body.classList.add('is-dragging-modal');
+  event.preventDefault();
+}
+
+function moveModalDrag(event) {
+  if (!state.modalDrag) return;
+  const modal = $('#modal');
+  if (!modal) return;
+  state.modalPos = applyModalPos(modal, {
+    x: event.clientX - state.modalDrag.offsetX,
+    y: event.clientY - state.modalDrag.offsetY,
+  });
+}
+
+function endModalDrag() {
+  if (!state.modalDrag) return;
+  state.modalDrag = null;
+  document.body.classList.remove('is-dragging-modal');
+  if (state.modalPos) storeModalPos(state.modalPos);
+}
+
+/** Double-click the header to return the window to its default anchor. */
+function resetModalPosition() {
+  const modal = $('#modal');
+  if (!modal) return;
+  modal.classList.remove('is-floating');
+  modal.style.left = '';
+  modal.style.top = '';
+  modal.style.right = '';
+  state.modalPos = null;
+  try {
+    localStorage.removeItem(MODAL_POS_KEY);
+  } catch {
+    // nothing to clear
+  }
+}
+
 function wireEvents() {
   document.addEventListener('click', onDocumentClick);
   document.addEventListener('change', onDocumentChange);
   document.addEventListener('input', onDocumentInput);
+  // Window dragging: delegated, because the drawer's header is re-rendered
+  // every time its draft changes.
+  document.addEventListener('pointerdown', beginModalDrag);
+  document.addEventListener('pointermove', moveModalDrag);
+  document.addEventListener('pointerup', endModalDrag);
+  document.addEventListener('pointercancel', endModalDrag);
+  document.addEventListener('dblclick', (event) => {
+    if (event.target?.closest?.('.modal-head') && !event.target.closest('button, input, select')) resetModalPosition();
+  });
 
   const modal = $('#modal');
   modal?.addEventListener('keydown', (event) => {
