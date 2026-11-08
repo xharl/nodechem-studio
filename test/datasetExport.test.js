@@ -163,8 +163,8 @@ describe('dataset JSON', () => {
     expect(json.rowCount).toBe(0);
   });
 
-  it('is at version 2 now that the wavefunction columns exist', () => {
-    expect(DATASET_SCHEMA_VERSION).toBe(2);
+  it('is at version 3 now that the method-sensitivity columns exist', () => {
+    expect(DATASET_SCHEMA_VERSION).toBe(3);
   });
 });
 
@@ -238,7 +238,8 @@ describe('wavefunction columns', () => {
     expect(labels.slice(0, 2)).toEqual(['run_id', 'finished_at']);
     expect(labels).toContain('output_sha256');
     expect(labels.indexOf('output_sha256')).toBeLessThan(labels.indexOf('fchk_sha256'));
-    expect(labels[labels.length - 1]).toBe('unpaired_electrons');
+    expect(labels[labels.length - 1]).toBe('ladder_cbs_form');
+    expect(labels.indexOf('conformer_population')).toBeLessThan(labels.indexOf('conformer_ensemble_spread_kcal'));
     // The frontier-orbital columns belong to the log reader (#81); this change
     // must not add a second `homo_ev` beside them.
     expect(labels.filter((label) => label === 'homo_ev')).toHaveLength(1);
@@ -263,5 +264,68 @@ describe('wavefunction columns', () => {
     const cells = csv.split('\n')[1].split(',');
     const index = DATASET_CSV_COLUMNS.findIndex((column) => column.key === 'gapEv');
     expect(cells[index]).toBe('');
+  });
+});
+
+describe('method-sensitivity columns (#96)', () => {
+  const withSensitivity = () => record({
+    conformer: {
+      nodeId: 'conf', id: 'c2', relativeKcal: 3.4, population: 0.06,
+      spreadKcal: 3.4, temperatureK: 298.15,
+    },
+    ladder: {
+      id: 'sp',
+      spreadKcal: 1.24,
+      spreadOver: '2 rungs (def2-TZVP → def2-QZVP)',
+      cbs: {
+        available: true,
+        energyHartree: -76.312345,
+        form: 'Helgaker two-point (SCF X^-5, correlation X^-3)',
+        spread: { kcal: 1.24, over: '2 rungs (def2-TZVP → def2-QZVP)' },
+      },
+    },
+  });
+
+  it('writes the spread beside the conformer value it qualifies', () => {
+    const row = runRow(withSensitivity());
+    expect(row.conformerSpreadKcal).toBe(3.4);
+    expect(row.conformerTemperatureK).toBe(298.15);
+    expect(row.ladderSpreadKcal).toBe(1.24);
+    expect(row.ladderSpreadOver).toMatch(/def2-TZVP/);
+  });
+
+  it('writes the CBS estimate and names the extrapolation form in the CSV', () => {
+    const row = runRow(withSensitivity());
+    expect(row.ladderCbsHartree).toBeCloseTo(-76.312345, 9);
+    expect(row.ladderCbsSpreadKcal).toBe(1.24);
+    expect(row.ladderCbsForm).toMatch(/Helgaker two-point/);
+    const csv = datasetCsv([row]);
+    const header = csv.split('\n')[0];
+    expect(header).toContain('conformer_ensemble_spread_kcal');
+    expect(header).toContain('ladder_spread_kcal');
+    expect(header).toContain('ladder_cbs_hartree');
+    expect(header).toContain('ladder_cbs_form');
+    expect(csv).toContain('Helgaker two-point');
+  });
+
+  it('leaves every method-sensitivity cell empty when the run carries neither block', () => {
+    const row = runRow(record());
+    for (const key of [
+      'conformerSpreadKcal', 'conformerTemperatureK', 'ladderSpreadKcal', 'ladderSpreadOver',
+      'ladderCbsHartree', 'ladderCbsSpreadKcal', 'ladderCbsForm',
+    ]) expect(row[key], key).toBeNull();
+  });
+
+  it('never writes a CBS number for an unavailable extrapolation', () => {
+    const row = runRow(record({
+      ladder: {
+        id: 'sp',
+        spreadKcal: 1.24,
+        cbs: { available: false, reason: 'a second rung is required', energyHartree: null },
+      },
+    }));
+    expect(row.ladderCbsHartree).toBeNull();
+    expect(row.ladderCbsForm).toBeNull();
+    expect(row.ladderSpreadKcal).toBe(1.24);
   });
 });

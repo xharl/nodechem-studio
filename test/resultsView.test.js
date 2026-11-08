@@ -503,3 +503,90 @@ describe('results surface — HTML escaping', () => {
     expect(html).toContain('&lt;i&gt;C&lt;/i&gt;');
   });
 });
+
+describe('results surface — method sensitivity (#96)', () => {
+  const ladder = {
+    id: 'sp',
+    status: 'pass',
+    spreadKcal: 1.24,
+    spreadOver: '2 rungs (def2-TZVP → def2-QZVP)',
+    entries: [
+      { label: 'Rung 1', method: 'MP2', basis: 'def2-TZVP', energyHartree: -76.2197, relativeKcalPerMol: 0 },
+      { label: 'Rung 2', method: 'MP2', basis: 'def2-QZVP', energyHartree: -76.2672, relativeKcalPerMol: 29.8 },
+    ],
+    cbs: {
+      available: true,
+      form: 'Helgaker two-point (SCF X^-5, correlation X^-3)',
+      energyHartree: -76.3,
+      exponents: { scf: 5, correlation: 3 },
+      pair: {
+        lower: { label: 'Rung 1', basis: 'def2-TZVP', x: 3 },
+        upper: { label: 'Rung 2', basis: 'def2-QZVP', x: 4 },
+      },
+      spread: { kcal: 1.24, over: '2 rungs (def2-TZVP → def2-QZVP)' },
+    },
+  };
+  const ensemble = {
+    available: true,
+    label: 'ensemble-averaged',
+    temperatureK: 298.15,
+    memberCount: 2,
+    converged: false,
+    spreadKcal: 3.4,
+    observables: [{
+      key: 'energyHartree',
+      label: 'Energy',
+      unit: 'Eh',
+      weightedMean: -76.395,
+      unweightedMean: -76.396,
+      spread: 0.01,
+      over: '2 retained conformers',
+      converged: false,
+    }],
+  };
+
+  it('shows the ladder spread and the CBS value with the form and the pair', () => {
+    const html = resultsPanelHtml({ id: 'run-1', status: 'completed', engine: 'gaussian', parsed: {}, ladder });
+    expect(field(html, 'ladder-spread')).toContain('1.24 kcal/mol');
+    expect(field(html, 'ladder-spread')).toContain('2 rungs (def2-TZVP → def2-QZVP)');
+    expect(field(html, 'ladder-cbs')).toContain('Helgaker two-point');
+    expect(field(html, 'ladder-cbs')).toContain('-76.30000000 Eh');
+    expect(field(html, 'ladder-cbs')).toContain('def2-TZVP → def2-QZVP');
+  });
+
+  it('prints not reported with the missing rung named when extrapolation is refused', () => {
+    const refused = {
+      ...ladder,
+      cbs: {
+        available: false,
+        reason: 'a second rung is required; only Rung 1 (def2-TZVP) was supplied',
+      },
+    };
+    const html = resultsPanelHtml({ id: 'run-1', status: 'completed', engine: 'gaussian', parsed: {}, ladder: refused });
+    expect(field(html, 'ladder-cbs')).toContain('not reported');
+    expect(field(html, 'ladder-cbs')).toContain('second rung is required');
+    expect(field(html, 'ladder-cbs')).toContain('def2-TZVP');
+  });
+
+  it('labels an ensemble average and shows its spread, with the unweighted value when not converged', () => {
+    const html = resultsPanelHtml({ id: 'run-1', status: 'completed', engine: 'gaussian', parsed: {}, ensemble });
+    expect(field(html, 'ensemble-label')).toBe('ensemble-averaged');
+    expect(field(html, 'ensemble-temperature')).toContain('298.15 K');
+    expect(field(html, 'ensemble-spread')).toContain('0.01 Eh over 2 retained conformers');
+    expect(field(html, 'ensemble-value')).toContain('-76.395000');
+    expect(field(html, 'ensemble-unweighted')).toContain('-76.396000');
+  });
+
+  it('shows the retained-ensemble spread beside a conformer run value', () => {
+    const html = resultsPanelHtml({
+      id: 'run-c2',
+      status: 'completed',
+      engine: 'gaussian',
+      parsed: {},
+      conformer: { nodeId: 'conf', id: 'c2', relativeKcal: 3.4, population: 0.06, spreadKcal: 3.4, count: 4 },
+    });
+    expect(field(html, 'conformer-spread')).toContain('3.40 kcal/mol');
+    expect(field(html, 'conformer-spread')).toContain('4');
+    expect(field(html, 'conformer-population')).toContain('6.0%');
+  });
+});

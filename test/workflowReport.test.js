@@ -205,6 +205,139 @@ describe('workflow report HTML', () => {
   });
 });
 
+describe('method sensitivity in the report (#96)', () => {
+  const HARTREE_KCAL = 627.5094740631;
+  const scfAt = () => -76;
+  const corrAt = (x) => -0.3 + 2.0 * x ** -3;
+  const totalAt = (x) => scfAt(x) + corrAt(x);
+
+  const cbsQueue = () => ({
+    id: 'q-cbs',
+    projectName: 'CBS',
+    status: 'completed',
+    tasks: [
+      { nodeId: 'sp.r1', title: 'MP2 — def2-TZVP', type: 'calc', status: 'completed', runId: 'r1' },
+      { nodeId: 'sp.r2', title: 'MP2 — def2-QZVP', type: 'calc', status: 'completed', runId: 'r2' },
+    ],
+    ladders: {
+      sp: {
+        status: 'pass',
+        toleranceKcal: 3,
+        spreadKcal: (totalAt(3) - totalAt(4)) * HARTREE_KCAL,
+        reason: 'Spread is within tolerance.',
+        entries: [
+          { id: 'sp.r1', label: 'Rung 1', energyHartree: totalAt(3), relativeKcalPerMol: 0 },
+          { id: 'sp.r2', label: 'Rung 2', energyHartree: totalAt(4), relativeKcalPerMol: (totalAt(4) - totalAt(3)) * HARTREE_KCAL },
+        ],
+      },
+    },
+  });
+  const cbsRecords = () => ({
+    r1: {
+      id: 'r1',
+      provenance: { jobType: 'SP', method: { functional: 'MP2', basis: 'def2-TZVP' } },
+      parsed: { finalEnergy: { hartree: totalAt(3) }, scf: { energyHartree: scfAt(3) } },
+    },
+    r2: {
+      id: 'r2',
+      provenance: { jobType: 'SP', method: { functional: 'MP2', basis: 'def2-QZVP' } },
+      parsed: { finalEnergy: { hartree: totalAt(4) }, scf: { energyHartree: scfAt(4) } },
+    },
+  });
+
+  it('computes a CBS estimate from the ladder and names the form, the exponents and the pair', () => {
+    const model = buildWorkflowReport(cbsQueue(), cbsRecords());
+    const ladder = model.ladders[0];
+    expect(ladder.cbs.available).toBe(true);
+    expect(ladder.cbs.form).toMatch(/Helgaker two-point/);
+    expect(ladder.cbs.exponents).toEqual({ correlation: 3 });
+    expect(ladder.cbs.energyHartree).toBeCloseTo(-76.3, 9);
+    expect(ladder.cbs.pair.lower.basis).toBe('def2-TZVP');
+    expect(ladder.cbs.pair.upper.basis).toBe('def2-QZVP');
+    expect(ladder.entries.map((entry) => entry.method)).toEqual(['MP2', 'MP2']);
+    expect(ladder.entries.map((entry) => entry.basis)).toEqual(['def2-TZVP', 'def2-QZVP']);
+
+    const html = workflowReportHtml(model);
+    expect(html).toContain('CBS estimate');
+    expect(html).toContain('Helgaker two-point');
+    expect(html).toContain('def2-TZVP → def2-QZVP');
+    expect(html).toContain('-76.30000000');
+    expect(html).toMatch(/spread [0-9.]+ kcal\/mol over 2 rungs/);
+  });
+
+  it('prints not reported and names the missing rung when the ladder has only one', () => {
+    const queue = cbsQueue();
+    queue.tasks = queue.tasks.slice(0, 1);
+    queue.ladders.sp.entries = queue.ladders.sp.entries.slice(0, 1);
+    queue.ladders.sp.status = 'unknown';
+    const model = buildWorkflowReport(queue, cbsRecords());
+    expect(model.ladders[0].cbs.available).toBe(false);
+    expect(model.ladders[0].cbs.reason).toMatch(/second rung/);
+    const html = workflowReportHtml(model);
+    expect(html).toContain('CBS not reported');
+    expect(html).toMatch(/second rung is required/);
+  });
+
+  const conformerQueue = () => ({
+    id: 'q-ensemble',
+    projectName: 'Ensemble',
+    status: 'completed',
+    tasks: [
+      { nodeId: 'conf', title: 'Conformer ensemble', type: 'conformers', status: 'completed', conformers: { temperature: 298.15 } },
+      {
+        nodeId: 'opt~c1', title: 'Optimise — c1', type: 'calc', status: 'completed', runId: 'run-c1',
+        conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c1', relativeKcal: 0, population: 0.94, protomer: '' },
+        fanOut: { conformerId: 'conf', memberId: 'c1' },
+      },
+      {
+        nodeId: 'opt~c2', title: 'Optimise — c2', type: 'calc', status: 'completed', runId: 'run-c2',
+        conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c2', relativeKcal: 3.4, population: 0.06, protomer: '' },
+        fanOut: { conformerId: 'conf', memberId: 'c2' },
+      },
+    ],
+  });
+  const conformerRecords = () => ({
+    'run-c1': {
+      parsed: { finalEnergy: { hartree: -76.4 }, orbitals: { alpha: { gapEv: 5.0 } } },
+    },
+    'run-c2': {
+      parsed: { finalEnergy: { hartree: -76.3946 }, orbitals: { alpha: { gapEv: 4.6 } } },
+    },
+  });
+
+  it('reports the Boltzmann population table and the ensemble-averaged observables with their spread', () => {
+    const model = buildWorkflowReport(conformerQueue(), conformerRecords());
+    const ensemble = model.conformers[0];
+    expect(ensemble.members.map((member) => member.population)).toEqual([0.94, 0.06]);
+    expect(ensemble.ensemble.available).toBe(true);
+    expect(ensemble.ensemble.label).toBe('ensemble-averaged');
+    expect(ensemble.ensemble.temperatureK).toBe(298.15);
+    const energy = ensemble.ensemble.observables.find((entry) => entry.key === 'energyHartree');
+    expect(energy.weightedMean).toBeCloseTo(0.94 * -76.4 + 0.06 * -76.3946, 10);
+    expect(energy.spread).toBeCloseTo(0.0054, 10);
+    expect(energy.over).toMatch(/2 retained conformers/);
+    const gap = ensemble.ensemble.observables.find((entry) => entry.key === 'gapEv');
+    expect(gap.weightedMean).toBeCloseTo(0.94 * 5.0 + 0.06 * 4.6, 10);
+    expect(gap.unit).toBe('eV');
+
+    const html = workflowReportHtml(model);
+    expect(html).toContain('ensemble-averaged');
+    expect(html).toContain('94%');
+    expect(html).toContain('Population');
+    expect(html).toMatch(/spread [0-9.]+ eV over 2 retained conformers/);
+  });
+
+  it('does not weight a group with a missing member energy', () => {
+    const records = conformerRecords();
+    records['run-c2'].parsed.finalEnergy.hartree = null;
+    const model = buildWorkflowReport(conformerQueue(), records);
+    expect(model.conformers[0].ensemble.available).toBe(false);
+    expect(model.conformers[0].ensemble.reason).toMatch(/energy/);
+    const html = workflowReportHtml(model);
+    expect(html).toContain('not ensemble-averaged');
+  });
+});
+
 describe('method ladders in the report', () => {
   it('prints one spread table per ladder and its verdict', async () => {
     const { buildWorkflowReport, workflowReportHtml } = await import('../src/shared/workflowReport.js');

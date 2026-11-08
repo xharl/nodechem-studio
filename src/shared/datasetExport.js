@@ -62,10 +62,21 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'mullikenChargeDeviation', label: 'mulliken_charge_deviation' },
   { key: 'spinMultiplicity', label: 'spin_multiplicity' },
   { key: 'unpairedElectrons', label: 'unpaired_electrons' },
+  // Issue #96: a value that came from an ensemble or a method ladder carries
+  // its spread beside it. The columns are appended so an existing spreadsheet
+  // template keeps its positions; an absent block is an empty cell, never a
+  // zero and never a "0.00" that would read as a measured spread.
+  { key: 'conformerSpreadKcal', label: 'conformer_ensemble_spread_kcal' },
+  { key: 'conformerTemperatureK', label: 'conformer_ensemble_temperature_k' },
+  { key: 'ladderSpreadKcal', label: 'ladder_spread_kcal' },
+  { key: 'ladderSpreadOver', label: 'ladder_spread_over' },
+  { key: 'ladderCbsHartree', label: 'ladder_cbs_hartree' },
+  { key: 'ladderCbsSpreadKcal', label: 'ladder_cbs_spread_kcal' },
+  { key: 'ladderCbsForm', label: 'ladder_cbs_form' },
 ]);
 
-/** Version 2 added the wavefunction columns; existing keys and order are unchanged. */
-export const DATASET_SCHEMA_VERSION = 2;
+/** Version 3 added the method-sensitivity columns; existing keys are unchanged. */
+export const DATASET_SCHEMA_VERSION = 3;
 
 function text(value) {
   return value === null || value === undefined ? null : String(value);
@@ -104,6 +115,13 @@ export function runRow(record) {
   };
   const cube = wavefunction.cube && typeof wavefunction.cube === 'object' ? wavefunction.cube : null;
   const fchk = wavefunction.fchk && typeof wavefunction.fchk === 'object' ? wavefunction.fchk : null;
+  // Issue #96: a run may carry the ladder it belonged to and the conformer
+  // ensemble it was expanded from. Neither block is invented here; absent
+  // metadata stays an empty cell.
+  const ladder = run.ladder && typeof run.ladder === 'object' ? run.ladder : {};
+  const ladderCbs = ladder.cbs && typeof ladder.cbs === 'object' ? ladder.cbs : {};
+  const ensemble = run.ensemble && typeof run.ensemble === 'object' ? run.ensemble : {};
+  const cbsReported = ladderCbs.available === true;
   // Derived blocks are present but may be `{ok: false, reason}`. Only a
   // computed value reaches a cell; "not computable" is an empty cell, and the
   // reason lives in the run record.
@@ -156,6 +174,13 @@ export function runRow(record) {
     mullikenChargeDeviation: num(charge?.deviation),
     spinMultiplicity: integer(spin?.multiplicity),
     unpairedElectrons: integer(spin?.unpairedElectrons),
+    conformerSpreadKcal: num(conformer.spreadKcal),
+    conformerTemperatureK: num(conformer.temperatureK ?? ensemble.temperatureK),
+    ladderSpreadKcal: num(ladder.spreadKcal),
+    ladderSpreadOver: text(ladder.spreadOver),
+    ladderCbsHartree: cbsReported ? num(ladderCbs.energyHartree) : null,
+    ladderCbsSpreadKcal: cbsReported ? num(ladderCbs.spread?.kcal ?? ladderCbs.spreadKcal) : null,
+    ladderCbsForm: cbsReported ? text(ladderCbs.form) : null,
   };
 }
 

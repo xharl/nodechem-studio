@@ -347,6 +347,160 @@ export function formatPopulation(value) {
   return percent >= 10 ? `${percent.toFixed(0)}%` : `${percent.toFixed(1)}%`;
 }
 
+/* ── Boltzmann-weighted observables (issue #96) ─────────────────
+ *
+ * A conformer ensemble answers a different question from a single geometry:
+ * the observable is a population-weighted mean, not the value of the lowest
+ * member. This section only weights an ensemble that was actually retained:
+ * every member must carry the population `rankEnsemble` assigned, and those
+ * populations must sum to one. A missing population is a refusal, never a
+ * silent re-normalisation over whichever members happened to have a value.
+ */
+
+/** Observables the parser already produces per conformer, and their units. */
+export const ENSEMBLE_OBSERVABLES = Object.freeze({
+  energyHartree: { label: 'Energy', unit: 'Eh', digits: 8 },
+  gibbsHartree: { label: 'Gibbs free energy', unit: 'Eh', digits: 8 },
+  gapEv: { label: 'HOMO–LUMO gap', unit: 'eV', digits: 3 },
+});
+
+/**
+ * Boltzmann populations for relative energies in kcal/mol.
+ * Returns [] for an empty ensemble, a non-finite energy or a non-positive
+ * temperature: there is no population to report in those cases.
+ */
+export function boltzmannWeights(relativeKcal, temperature = DEFAULT_CONFORMER_SETTINGS.temperature) {
+  if (!Array.isArray(relativeKcal) || relativeKcal.length === 0) return [];
+  const t = Number(temperature);
+  if (!Number.isFinite(t) || t <= 0) return [];
+  const values = relativeKcal.map(Number);
+  if (values.some((value) => !Number.isFinite(value))) return [];
+  const lowest = Math.min(...values);
+  const exponents = values.map((value) => -(value - lowest) / (KB_KCAL * t));
+  const partition = exponents.reduce((sum, value) => sum + Math.exp(value), 0);
+  if (!Number.isFinite(partition) || partition <= 0) return [];
+  return exponents.map((value) => Math.exp(value) / partition);
+}
+
+function formatObservable(value, digits) {
+  return Number.isFinite(value) ? value.toFixed(digits) : null;
+}
+
+/**
+ * Population-weighted observables over a retained ensemble.
+ *
+ * @param {Array<object>} members retained members, each `{ id, population,
+ *   values: { energyHartree?, gibbsHartree?, gapEv? } }`. `population` is the
+ *   Boltzmann weight `rankEnsemble` assigned; it is never recomputed here.
+ * @param {object} [options]
+ * @param {number} [options.temperature] the temperature the populations were
+ *   computed at, printed with the result
+ * @param {string[]} [options.observables] observable keys to average
+ * @returns {object} weighted and unweighted means, min/max spread, weighted
+ *   standard deviation, the population table and an explicit convergence label
+ */
+export function boltzmannWeightedObservables(members, {
+  temperature = DEFAULT_CONFORMER_SETTINGS.temperature,
+  observables = Object.keys(ENSEMBLE_OBSERVABLES),
+} = {}) {
+  const t = Number(temperature);
+  if (!Number.isFinite(t) || t <= 0) {
+    return { available: false, reason: 'a positive temperature is required to label an ensemble average' };
+  }
+  if (!Array.isArray(members) || members.length === 0) {
+    return { available: false, reason: 'the retained ensemble is empty; nothing is weighted' };
+  }
+
+  const populations = [];
+  for (const member of members) {
+    const id = String(member?.id ?? '');
+    const population = Number(member?.population);
+    if (!id) return { available: false, reason: 'a retained member has no id; the population table cannot be built' };
+    if (!Number.isFinite(population) || population <= 0) {
+      return { available: false, reason: `member ${id} has no population; an ensemble that was not retained is never weighted` };
+    }
+    populations.push({ id, population });
+  }
+  const total = populations.reduce((sum, entry) => sum + entry.population, 0);
+  if (Math.abs(total - 1) > 1e-6) {
+    return { available: false, reason: `the populations do not sum to 1 (Σ = ${total.toFixed(6)}); an ensemble that was not retained is never weighted` };
+  }
+
+  const maxPopulation = Math.max(...populations.map((entry) => entry.population));
+  const converged = maxPopulation >= 0.95;
+  const convergence = converged
+    ? `largest retained population ${formatPopulation(maxPopulation)} ≥ 95%; one conformer dominates`
+    : `largest retained population ${formatPopulation(maxPopulation)} < 95%; the unweighted value is shown beside the ensemble average`;
+
+  const averaged = [];
+  const omitted = [];
+  for (const key of Array.isArray(observables) ? observables : []) {
+    const config = ENSEMBLE_OBSERVABLES[key] || { label: key, unit: '', digits: 6 };
+    let missing = null;
+    const values = [];
+    for (let index = 0; index < members.length; index += 1) {
+      const raw = members[index]?.values?.[key];
+      const value = Number(raw);
+      if (raw === null || raw === undefined || !Number.isFinite(value)) {
+        missing = populations[index].id;
+        break;
+      }
+      values.push(value);
+    }
+    if (missing !== null) {
+      omitted.push({ key, reason: `member ${missing} has no ${config.label}` });
+      continue;
+    }
+    const weightedMean = values.reduce((sum, value, index) => sum + populations[index].population * value, 0);
+    const unweightedMean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const weightedStdDev = Math.sqrt(values.reduce(
+      (sum, value, index) => sum + populations[index].population * (value - weightedMean) ** 2,
+      0,
+    ));
+    averaged.push({
+      key,
+      label: config.label,
+      unit: config.unit,
+      weightedMean,
+      unweightedMean,
+      min,
+      max,
+      spread: max - min,
+      weightedStdDev,
+      count: values.length,
+      over: `${values.length} retained conformers`,
+      converged,
+      formattedWeightedMean: formatObservable(weightedMean, config.digits),
+      formattedUnweightedMean: formatObservable(unweightedMean, config.digits),
+      formattedSpread: formatObservable(max - min, config.digits),
+    });
+  }
+
+  if (averaged.length === 0) {
+    return {
+      available: false,
+      reason: `nothing could be averaged: ${omitted.map((entry) => entry.reason).join('; ')}`,
+      omitted,
+    };
+  }
+
+  return {
+    available: true,
+    reason: null,
+    label: 'ensemble-averaged',
+    temperatureK: t,
+    memberCount: populations.length,
+    populations,
+    observables: averaged,
+    omitted,
+    converged,
+    convergence,
+    unweightedFallback: !converged,
+  };
+}
+
 /** The XYZ text a generator is given: the project geometry, one frame. */
 export function xyzText(atoms, comment = '') {
   const lines = [String(atoms.length), String(comment || 'NodeChem Studio conformer search')];

@@ -12,6 +12,9 @@
  *   - the HTML is self-contained: no scripts, no external CSS, no network.
  */
 
+import { cbsExtrapolate } from './cbs.js';
+import { boltzmannWeightedObservables, formatPopulation } from './conformers.js';
+
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
 const MISSING = 'not reported';
@@ -105,6 +108,9 @@ function taskRow(task, record) {
       : null,
     finalEnergyHartree: num(parsed.finalEnergy?.hartree),
     gibbsHartree: num(parsed.thermochemistry?.freeEnergyHartree),
+    // Issue #96: a per-conformer scalar the parser already produced, so the
+    // ensemble table can weight it instead of inventing a second observable.
+    gapEv: num(parsed?.orbitals?.alpha?.gapEv),
     imaginaryCount: Number.isInteger(parsed.frequencies?.imaginaryCount)
       ? parsed.frequencies.imaginaryCount : null,
     elapsedSeconds: num(record?.elapsedSeconds ?? parsed.resources?.elapsedSeconds),
@@ -207,6 +213,18 @@ export function buildWorkflowReport(queue, records = {}, {
     const byNode = task?.nodeId ? recordMap[task.nodeId] : null;
     return taskRow(task || {}, byRun || byNode || null);
   });
+  // Issue #96: the ladder verdict carries only energies, so the report looks
+  // up the row and the run record by node id to recover the level of theory
+  // and the SCF energy the correlation extrapolation needs.
+  const rowByNodeId = new Map(rows.map((row) => [row.nodeId, row]));
+  const recordByNodeId = new Map();
+  for (const task of tasks) {
+    const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+    if (task?.nodeId && record) recordByNodeId.set(task.nodeId, record);
+  }
+  const conformerTaskByNodeId = new Map(
+    tasks.filter((task) => task?.type === 'conformers' && task?.nodeId).map((task) => [task.nodeId, task]),
+  );
 
   const counts = {
     total: rows.length,
@@ -254,15 +272,61 @@ export function buildWorkflowReport(queue, records = {}, {
         status: row.status,
         energyHartree: row.finalEnergyHartree,
         relativeKcalSearch: row.conformer.relativeKcal,
+        // The Boltzmann weight the conformer search assigned. It is shown in
+        // the report because a weighted value without its population table is
+        // a number with the evidence removed.
+        population: row.conformer.population,
+        gapEv: row.gapEv,
+        gibbsHartree: row.gibbsHartree,
         relativeKcalTarget: lowest !== null && Number.isFinite(row.finalEnergyHartree)
           ? (row.finalEnergyHartree - lowest) * HARTREE_KCAL
           : null,
       }));
+      const temperatureK = num(conformerTaskByNodeId.get(id)?.conformers?.temperature);
+      let ensemble;
+      if (!comparable) {
+        ensemble = {
+          available: false,
+          reason: 'this block fed more than one task per member (or several levels), so its rows are not one retained ensemble',
+        };
+      } else if (members.some((member) => !Number.isFinite(member.population))) {
+        ensemble = {
+          available: false,
+          reason: 'a member has no Boltzmann population, so the rows were not one retained ensemble',
+        };
+      } else if (members.some((member) => !Number.isFinite(member.energyHartree))) {
+        ensemble = {
+          available: false,
+          reason: 'a member has no final energy at the target level, so the retained ensemble is incomplete and is not weighted',
+        };
+      } else if (temperatureK === null) {
+        ensemble = {
+          available: false,
+          reason: 'the conformer search temperature is not in the queue record, so the populations cannot be labelled',
+        };
+      } else {
+        ensemble = boltzmannWeightedObservables(
+          members.map((member) => ({
+            id: member.memberId || member.nodeId,
+            population: member.population,
+            values: { energyHartree: member.energyHartree, gibbsHartree: member.gibbsHartree, gapEv: member.gapEv },
+          })),
+          { temperature: temperatureK, observables: ['energyHartree', 'gibbsHartree', 'gapEv'] },
+        );
+        if (ensemble.available) {
+          const energySpread = ensemble.observables.find((entry) => entry.key === 'energyHartree')?.spread;
+          ensemble = {
+            ...ensemble,
+            spreadKcal: Number.isFinite(energySpread) ? energySpread * HARTREE_KCAL : null,
+          };
+        }
+      }
       return {
         id,
         title: group[0].conformer.title || id,
         comparable,
         members,
+        ensemble,
         spreadKcalTarget: lowest !== null ? (Math.max(...energies) - lowest) * HARTREE_KCAL : null,
       };
     });
@@ -326,20 +390,34 @@ export function buildWorkflowReport(queue, records = {}, {
     conformers,
     // One entry per method ladder, with the per-rung energies that produced the
     // verdict. Absent ladders are omitted rather than reported as passed.
+    // Issue #96: each entry also carries the level of theory and SCF energy, so
+    // a basis-set pair can be extrapolated; a ladder that is not such a pair
+    // keeps `cbs.available === false` with the missing input named.
     ladders: Object.entries(source.ladders && typeof source.ladders === 'object' ? source.ladders : {})
-      .map(([id, ladder]) => ({
-        id,
-        status: text(ladder?.status) || 'unknown',
-        toleranceKcal: Number.isFinite(ladder?.toleranceKcal) ? ladder.toleranceKcal : null,
-        spreadKcal: Number.isFinite(ladder?.spreadKcal) ? ladder.spreadKcal : null,
-        reason: text(ladder?.reason),
-        entries: (Array.isArray(ladder?.entries) ? ladder.entries : []).map((entry) => ({
-          id: text(entry?.id),
-          label: text(entry?.label),
-          energyHartree: Number.isFinite(entry?.energyHartree) ? entry.energyHartree : null,
-          relativeKcalPerMol: Number.isFinite(entry?.relativeKcalPerMol) ? entry.relativeKcalPerMol : null,
-        })),
-      })),
+      .map(([id, ladder]) => {
+        const entries = (Array.isArray(ladder?.entries) ? ladder.entries : []).map((entry) => {
+          const row = rowByNodeId.get(entry?.id);
+          const record = recordByNodeId.get(entry?.id);
+          return {
+            id: text(entry?.id),
+            label: text(entry?.label),
+            energyHartree: Number.isFinite(entry?.energyHartree) ? entry.energyHartree : null,
+            relativeKcalPerMol: Number.isFinite(entry?.relativeKcalPerMol) ? entry.relativeKcalPerMol : null,
+            method: row?.method ?? null,
+            basis: row?.basis ?? null,
+            scfEnergyHartree: num(record?.parsed?.scf?.energyHartree),
+          };
+        });
+        return {
+          id,
+          status: text(ladder?.status) || 'unknown',
+          toleranceKcal: Number.isFinite(ladder?.toleranceKcal) ? ladder.toleranceKcal : null,
+          spreadKcal: Number.isFinite(ladder?.spreadKcal) ? ladder.spreadKcal : null,
+          reason: text(ladder?.reason),
+          entries,
+          cbs: cbsExtrapolate(entries),
+        };
+      }),
     spins: Object.entries(source.spins && typeof source.spins === 'object' ? source.spins : {})
       .map(([id, sweep]) => ({
         id,
@@ -541,19 +619,41 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
   )).join('');
 
   // The spread table for each method ladder: the numbers behind the verdict,
-  // including rungs that ran without a parsed energy (shown, not omitted).
+  // including rungs that ran without a parsed energy (shown, not omitted). A
+  // CBS estimate is printed only when the ladder was a usable basis pair; a
+  // refusal names the input that was missing.
   const ladderBlocks = (Array.isArray(model.ladders) ? model.ladders : []).map((ladder) => {
+    const showLevel = ladder.entries.some((entry) => entry.method || entry.basis);
     const rowsHtml = ladder.entries.map((entry) => '<tr>'
       + `<td>${escapeHtml(entry.label || entry.id || MISSING)}</td>`
+      + (showLevel ? `<td>${escapeHtml(entry.method || MISSING)}</td><td>${escapeHtml(entry.basis || MISSING)}</td>` : '')
       + `<td class="num">${escapeHtml(value(entry.energyHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(entry.relativeKcalPerMol, 2))}</td>`
       + '</tr>').join('');
     const statusClass = ladder.status === 'pass' ? 'gates-pass' : ladder.status === 'fail' ? 'gates-fail' : '';
+    const cbs = ladder.cbs;
+    let cbsHtml;
+    if (cbs?.available) {
+      const spreadText = cbs.spread
+        ? `Ladder spread ${value(cbs.spread.kcal, 2)} kcal/mol over ${cbs.spread.over}.`
+        : '';
+      cbsHtml = '<p class="cbs" data-field="ladder-cbs">'
+        + `<strong>CBS estimate: ${escapeHtml(value(cbs.energyHartree, 8))} Eh</strong> — ${escapeHtml(cbs.form)}. `
+        + `Pair ${escapeHtml(cbs.pair.lower.basis)} → ${escapeHtml(cbs.pair.upper.basis)} `
+        + `(X = ${escapeHtml(String(cbs.pair.lower.x))} → ${escapeHtml(String(cbs.pair.upper.x))}); `
+        + `SCF ${escapeHtml(cbs.scfSource)}. `
+        + `<span class="warn-text">${escapeHtml(spreadText)}</span></p>`;
+    } else {
+      cbsHtml = `<p class="warn" data-field="ladder-cbs">CBS not reported: ${escapeHtml(cbs?.reason || 'the ladder record carries no extrapolation input')}</p>`;
+    }
     return `<${sectionHeading}>Method ladder — ${escapeHtml(ladder.id)}</${sectionHeading}>`
       + `<p class="${statusClass}">${escapeHtml(ladder.status)} · spread `
       + `${escapeHtml(value(ladder.spreadKcal, 2))} kcal/mol against a tolerance of `
       + `${escapeHtml(value(ladder.toleranceKcal, 2))} kcal/mol. ${escapeHtml(ladder.reason || '')}</p>`
-      + '<table><thead><tr><th>Rung</th><th class="num">E / Eh</th><th class="num">ΔE / kcal mol⁻¹</th></tr></thead>'
+      + cbsHtml
+      + '<table><thead><tr><th>Rung</th>'
+      + (showLevel ? '<th>Method</th><th>Basis</th>' : '')
+      + '<th class="num">E / Eh</th><th class="num">ΔE / kcal mol⁻¹</th></tr></thead>'
       + `<tbody>${rowsHtml}</tbody></table>`;
   }).join('');
 
@@ -594,20 +694,45 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
   // Conformer ensembles at the target level (#80): one table per fanned-out
   // block. The search ΔE is shown beside the target ΔE so the two levels are
   // never confused, and a member that did not report an energy stays blank.
+  // Issue #96: the retained Boltzmann populations are shown, and the
+  // population-weighted observables appear beside their spread. A group that
+  // was not one retained ensemble is never weighted.
   const conformerBlocks = (Array.isArray(model.conformers) ? model.conformers : []).map((ensemble) => {
     const body = ensemble.members.map((member) => '<tr>'
       + `<td>${escapeHtml(member.memberId || MISSING)}${member.protomer ? ` · ${escapeHtml(member.protomer)}` : ''}</td>`
       + `<td>${escapeHtml(member.status || MISSING)}</td>`
+      + `<td class="num">${escapeHtml(Number.isFinite(member.population) ? formatPopulation(member.population) : MISSING)}</td>`
       + `<td class="num">${escapeHtml(value(member.energyHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(member.relativeKcalSearch, 2))}</td>`
       + `<td class="num">${escapeHtml(value(member.relativeKcalTarget, 2))}</td>`
       + '</tr>').join('');
+    const averaged = ensemble.ensemble;
+    let averagedHtml;
+    if (averaged?.available) {
+      const rows = averaged.observables.map((observable) => '<tr>'
+        + `<td>${escapeHtml(observable.label)}</td>`
+        + `<td class="num" data-field="ensemble-value">${escapeHtml(observable.formattedWeightedMean)} ${escapeHtml(observable.unit)}</td>`
+        + `<td class="num" data-field="ensemble-spread">spread ${escapeHtml(observable.formattedSpread)} ${escapeHtml(observable.unit)} over ${escapeHtml(observable.over)} `
+        + `(weighted SD ${escapeHtml(value(observable.weightedStdDev, observable.unit === 'eV' ? 3 : 8))} ${escapeHtml(observable.unit)})</td>`
+        + `<td class="num" data-field="ensemble-unweighted">${escapeHtml(observable.formattedUnweightedMean)} ${escapeHtml(observable.unit)}</td>`
+        + '</tr>').join('');
+      averagedHtml = '<p class="ensemble" data-field="ensemble-label">'
+        + `<strong>${escapeHtml(averaged.label)}</strong> at ${escapeHtml(String(averaged.temperatureK))} K over `
+        + `${escapeHtml(String(averaged.memberCount))} retained conformers. ${escapeHtml(averaged.convergence)}</p>`
+        + '<table class="ensemble-averages" data-field="ensemble-observables"><thead><tr>'
+        + '<th>Observable</th><th class="num">Ensemble-averaged</th><th class="num">Spread</th>'
+        + `<th class="num">Unweighted${averaged.unweightedFallback ? ' (not converged)' : ''}</th></tr></thead>`
+        + `<tbody>${rows}</tbody></table>`;
+    } else {
+      averagedHtml = `<p class="warn" data-field="ensemble-label">not ensemble-averaged: ${escapeHtml(averaged?.reason || 'the ensemble summary is missing')}</p>`;
+    }
     return `<${sectionHeading}>Conformer ensemble at the target level — ${escapeHtml(ensemble.title || ensemble.id)}</${sectionHeading}>`
       + (ensemble.comparable
         ? `<p>Spread at the target level: <strong>${escapeHtml(value(ensemble.spreadKcalTarget, 2))} kcal/mol</strong>.`
           + ' ΔE is recomputed from the runs\' final energies; the search-level ΔE is shown for comparison only.</p>'
         : '<p class="warn">Not compared: this block fed more than one task per member (or several levels), so a single target-level ΔE would mix different calculations. The rows are listed without one.</p>')
-      + '<table><thead><tr><th>Member</th><th>Status</th><th class="num">E / Eh</th>'
+      + averagedHtml
+      + '<table><thead><tr><th>Member</th><th>Status</th><th class="num">Population</th><th class="num">E / Eh</th>'
       + '<th class="num">ΔE search / kcal mol⁻¹</th><th class="num">ΔE target / kcal mol⁻¹</th></tr></thead>'
       + `<tbody>${body}</tbody></table>`;
   }).join('');
