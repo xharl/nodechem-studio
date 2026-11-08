@@ -26,7 +26,8 @@ below the output shows what the parser actually reported:
 
 - the **engine** that ran, and the run status,
 - the **excited states** table when the job printed a TD record (energy in eV, wavelength, f and
-  the dominant transitions),
+  the dominant transitions), with a simulated UV-Vis curve whose Gaussian broadening is printed
+  as an explicit FWHM — the caption says it is a simulation, not a measured spectrum,
 - the **gate list** with its verdict and evidence,
 - parsed values — termination, SCF energy and cycles, frequencies and the imaginary count, final
   energy, charges, thermochemistry when present,

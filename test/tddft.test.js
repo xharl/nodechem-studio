@@ -9,6 +9,7 @@ import { buildGaussianInput, tdKeywordFor, DEMO_WATER } from '../src/shared/gaus
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { defaultSettings } from '../src/shared/projectSchema.js';
 import { resultsPanelHtml } from '../src/renderer/resultsView.js';
+import { broadenedSpectrum, spectrumPolyline, HC_EV_NM } from '../src/shared/spectrum.js';
 
 const TD_OUT = [
   ' FIXTURE OUTPUT — synthetic, not a real calculation',
@@ -118,5 +119,58 @@ describe('TD results card', () => {
     });
     expect(html).not.toContain('data-field="excited-states"');
     expect(html).not.toContain('Excited states');
+  });
+});
+
+describe('simulated UV-Vis spectrum', () => {
+  const states = [
+    { index: 1, energyEv: 4.0, oscillatorStrength: 0.01, wavelengthNm: HC_EV_NM / 4 },
+    { index: 2, energyEv: 6.2, oscillatorStrength: 0.60, wavelengthNm: HC_EV_NM / 6.2 },
+  ];
+
+  it('peaks at the strongest transition and normalises to 1', () => {
+    const spectrum = broadenedSpectrum(states, { fwhmEv: 0.3 });
+    const peak = spectrum.points.reduce((best, point) => (point.relative > best.relative ? point : best));
+    expect(Math.abs(peak.energyEv - 6.2)).toBeLessThan(0.05);
+    expect(peak.relative).toBeCloseTo(1, 6);
+    expect(spectrum.maxWavelengthNm).toBeGreaterThan(spectrum.minWavelengthNm);
+  });
+
+  it('widens with a larger FWHM', () => {
+    const narrow = broadenedSpectrum(states, { fwhmEv: 0.1 });
+    const wide = broadenedSpectrum(states, { fwhmEv: 0.6 });
+    const above = (spectrum) => spectrum.points.filter((point) => point.relative > 0.5).length;
+    expect(above(wide)).toBeGreaterThan(above(narrow));
+  });
+
+  it('returns null without usable states and rejects a bad FWHM', () => {
+    expect(broadenedSpectrum([])).toBeNull();
+    expect(broadenedSpectrum([{ energyEv: null }])).toBeNull();
+    expect(() => broadenedSpectrum(states, { fwhmEv: 0 })).toThrow(/FWHM/);
+  });
+
+  it('produces polyline coordinates inside the viewBox', () => {
+    const spectrum = broadenedSpectrum(states);
+    const polyline = spectrumPolyline(spectrum, { width: 320, height: 90 });
+    const coords = polyline.split(' ').map((pair) => pair.split(',').map(Number));
+    expect(coords.length).toBe(spectrum.points.length);
+    for (const [x, y] of coords) {
+      expect(x).toBeGreaterThanOrEqual(24);
+      expect(x).toBeLessThanOrEqual(296);
+      expect(y).toBeGreaterThanOrEqual(12);
+      expect(y).toBeLessThanOrEqual(66);
+    }
+  });
+
+  it('states the broadening and the simulation caveat in the card', () => {
+    const html = resultsPanelHtml({
+      status: 'completed',
+      engine: 'gaussian',
+      parsed: parseGaussianOutput(TD_OUT),
+      gates: { overall: 'pass', gates: [] },
+    });
+    expect(html).toContain('data-field="excited-spectrum"');
+    expect(html).toContain('FWHM 0.30 eV');
+    expect(html).toContain('This is a simulation, not a measured spectrum.');
   });
 });

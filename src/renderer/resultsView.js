@@ -17,6 +17,7 @@
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
+import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -490,8 +491,41 @@ function excitedStatesCard(parsed, flags) {
     + (states.length > 20
       ? `<p class="results-missing">Showing the first 20 of ${esc(block.count)} parsed states.</p>`
       : '')
+    + spectrumFigure(states)
     + caveatHtml(flags, 'These excitation energies');
   return card('Excited states', body, 'is-wide');
+}
+
+/**
+ * Simulated UV-Vis curve. The broadening is a stated parameter, not a hidden
+ * default: the caption prints the FWHM and the number of transitions used.
+ */
+function spectrumFigure(states) {
+  let spectrum;
+  try {
+    spectrum = broadenedSpectrum(states);
+  } catch {
+    return '';
+  }
+  if (!spectrum) return '';
+  const polyline = spectrumPolyline(spectrum);
+  if (!polyline) return '';
+  const longNm = spectrum.maxWavelengthNm.toFixed(0);
+  const shortNm = spectrum.minWavelengthNm.toFixed(0);
+  return '<figure class="results-spectrum" data-field="excited-spectrum">'
+    + '<svg viewBox="0 0 320 90" role="img" aria-label="Simulated UV-Vis spectrum">'
+    + '<line x1="24" y1="66" x2="296" y2="66" class="spectrum-axis"/>'
+    + '<line x1="24" y1="12" x2="24" y2="66" class="spectrum-axis"/>'
+    + `<polyline points="${polyline}" class="spectrum-curve"/>`
+    + '<text x="24" y="80" class="spectrum-label">' + esc(longNm) + ' nm</text>'
+    + '<text x="296" y="80" text-anchor="end" class="spectrum-label">' + esc(shortNm) + ' nm</text>'
+    + '<text x="8" y="14" class="spectrum-label">rel.</text>'
+    + '</svg>'
+    + '<figcaption>Simulated UV-Vis · Gaussian broadening, FWHM '
+    + esc(spectrum.fwhmEv.toFixed(2)) + ' eV · ' + esc(spectrum.states.length)
+    + ' transitions · oscillator strengths as computed, intensity relative to the strongest point. '
+    + 'This is a simulation, not a measured spectrum.</figcaption>'
+    + '</figure>';
 }
 
 function methodsCard(record) {
@@ -993,6 +1027,13 @@ const RESULTS_VIEW_CSS = `
 .results-compare-table tr.is-changed td { color: #f0b86e; }
 .results-compare-row-note { display: block; color: var(--faint); font-size: 8px; }
 .results-compare-foot { margin: 0; padding: 5px 9px 7px; color: var(--faint); font-size: 8.5px; }
+
+.results-spectrum { margin: 8px 0 2px; }
+.results-spectrum svg { width: 100%; max-width: 420px; height: auto; display: block; }
+.spectrum-axis { stroke: rgba(148, 163, 184, .35); stroke-width: 1; }
+.spectrum-curve { fill: none; stroke: #a8b8ff; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.spectrum-label { fill: var(--faint); font-size: 7px; font-family: var(--mono); }
+.results-spectrum figcaption { margin-top: 3px; color: var(--faint); font-size: 8.5px; line-height: 1.45; }
 .results-provenance { border-top: 1px solid var(--line); padding-top: 7px; }
 .results-provenance summary {
   cursor: pointer; color: var(--muted); font-size: 9px; letter-spacing: .08em;
