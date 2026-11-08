@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { RunManager } from './runner/runManager.js';
@@ -11,6 +12,7 @@ import { writeClusterExport, importClusterExport } from './runner/clusterFiles.j
 import { writeRunBundle } from './runner/runBundle.js';
 import { isSafeRunId } from '../src/shared/runBundle.js';
 import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
+import { buildDiagnostics } from '../src/shared/diagnostics.js';
 import {
   PROJECT_EXTENSIONS,
   classifySavePath,
@@ -18,7 +20,7 @@ import {
   projectFileName,
   withProjectExtension,
 } from '../src/shared/projectFile.js';
-import { engineOrDefault } from '../src/shared/engines/index.js';
+import { ENGINES, engineOrDefault } from '../src/shared/engines/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -36,6 +38,24 @@ function packagedCommit() {
 }
 
 const APP_COMMIT = String(process.env.GIT_COMMIT || '').trim() || packagedCommit() || 'unknown';
+
+/**
+ * The single description of this build. `app:info` and the diagnostics bundle
+ * must agree; deriving both from one function prevents the About chip and a
+ * bug report from disagreeing about which build produced the problem.
+ */
+function currentAppInfo() {
+  return {
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    node: process.versions.node,
+    chrome: process.versions.chrome,
+    platform: process.platform,
+    arch: process.arch,
+    userData: app.getPath('userData'),
+    commit: APP_COMMIT,
+  };
+}
 
 /** Normalize a CLI/desktop file argument; `%U` may hand us a file:// URL. */
 function projectPathFromArg(arg) {
@@ -374,6 +394,81 @@ async function exportRunBundle(runId) {
   }
 }
 
+/**
+ * Collect the one file a bug report needs. The renderer supplies only its
+ * project summary; the build, platform and run history are read here so a
+ * compromised renderer cannot mislabel the environment. Paths are passed to
+ * the pure builder, which is responsible for replacing them with `~` and
+ * `<userData>` before any text is produced.
+ */
+async function collectDiagnostics(summary = {}) {
+  const info = currentAppInfo();
+  let runs;
+  try {
+    runs = await runManager.list();
+  } catch {
+    // An unreadable runs folder is "not recorded", not an empty history.
+    runs = undefined;
+  }
+  const project = summary && typeof summary === 'object' && !Array.isArray(summary)
+    ? summary.project ?? null
+    : null;
+  return buildDiagnostics({
+    app: {
+      version: info.version,
+      commit: info.commit === 'unknown' ? null : info.commit,
+      electron: info.electron,
+      node: info.node,
+      chrome: info.chrome,
+    },
+    platform: {
+      os: os.type(),
+      release: os.release(),
+      arch: info.arch,
+      home: os.homedir(),
+      userData: info.userData,
+    },
+    engines: Object.values(ENGINES).map((engine) => ({
+      id: engine.id,
+      label: engine.label,
+      inputExtension: engine.capabilities?.inputExtension,
+      outputExtension: engine.capabilities?.outputExtension,
+      restartArtifact: engine.capabilities?.restartArtifact,
+    })),
+    runs,
+    project,
+    generatedAt: new Date().toISOString(),
+  }).markdown;
+}
+
+function diagnosticsFileName(now = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `nodechem-diagnostics-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}.md`;
+}
+
+/** Write exactly the text the user chose to save, at exactly the path they chose. */
+async function saveDiagnostics(text) {
+  const content = typeof text === 'string' ? text : '';
+  if (!content.trim()) {
+    return { saved: false, path: null, error: { message: 'There is no diagnostics text to save.' } };
+  }
+  if (Buffer.byteLength(content, 'utf8') > 2 * 1024 * 1024) {
+    return { saved: false, path: null, error: { message: 'Diagnostics text is larger than 2 MiB.' } };
+  }
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save NodeChem Studio diagnostics',
+    defaultPath: path.join(app.getPath('documents'), diagnosticsFileName()),
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+  });
+  if (result.canceled || !result.filePath) return { saved: false, path: null };
+  try {
+    await fsp.writeFile(result.filePath, content, 'utf8');
+  } catch (error) {
+    return { saved: false, path: result.filePath, error: { message: `Could not write ${result.filePath}: ${error.message}` } };
+  }
+  return { saved: true, path: result.filePath };
+}
+
 app.whenReady().then(async () => {
   runManager = new RunManager({
     runsRoot: path.join(app.getPath('userData'), 'runs'),
@@ -387,16 +482,9 @@ app.whenReady().then(async () => {
   });
   await queueManager.init();
 
-  ipcMain.handle('app:info', () => ({
-    version: app.getVersion(),
-    electron: process.versions.electron,
-    node: process.versions.node,
-    chrome: process.versions.chrome,
-    platform: process.platform,
-    arch: process.arch,
-    userData: app.getPath('userData'),
-    commit: APP_COMMIT,
-  }));
+  ipcMain.handle('app:info', () => currentAppInfo());
+  ipcMain.handle('diagnostics:collect', (_event, summary) => collectDiagnostics(summary));
+  ipcMain.handle('diagnostics:save', (_event, text) => saveDiagnostics(text));
   ipcMain.handle('project:open', openProject);
   ipcMain.handle('project:startup', () => ({ path: startupProjectPath }));
   ipcMain.handle('project:open-path', (_event, filePath) => readProjectFile(filePath));

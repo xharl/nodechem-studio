@@ -3203,6 +3203,112 @@ function closeOverflow() {
   button?.setAttribute('aria-expanded', 'false');
 }
 
+/**
+ * Bug-report helpers. The renderer contributes only the current project's
+ * shape and engine defaults; the main process owns build, platform and run
+ * history. Coordinates and atom data are never placed in this payload, so
+ * there is nothing to redact out later.
+ */
+function validationErrorCountForDiagnostics() {
+  const nodes = state.project?.nodes;
+  if (!Array.isArray(nodes)) return null;
+  const engineId = engineOrDefault(state.project?.defaults?.engine).id;
+  const blocking = new Set(VALIDITY_CHECKS.filter((check) => check.blocking).map((check) => check.id));
+  return nodes
+    .filter((node) => node.type === 'calc')
+    .reduce((count, node) => {
+      const ts = engineId === 'xtb' ? { errors: [] } : tsForceConstantIssues(node);
+      const validity = runValidityChecks({
+        settings: node.settings,
+        molecule: moleculeForNode(node),
+        parsed: null,
+        upstream: validityUpstreamFor(node),
+      }, { phase: 'pre', engine: engineId });
+      const blockingErrors = validity.findings.filter((finding) => (
+        finding.status === CHECK_STATUS.FAIL && blocking.has(finding.id)
+      ));
+      return count + ts.errors.length + blockingErrors.length;
+    }, 0);
+}
+
+function diagnosticsProjectSummary() {
+  const project = state.project || {};
+  const defaults = project.defaults || {};
+  return {
+    project: {
+      name: project.name || null,
+      blockCount: Array.isArray(project.nodes) ? project.nodes.length : null,
+      edgeCount: Array.isArray(project.edges) ? project.edges.length : null,
+      validationErrors: validationErrorCountForDiagnostics(),
+      defaults: {
+        engine: defaults.engine || null,
+        method: defaults.method || null,
+        basis: defaults.basis || null,
+        xtbMethod: defaults.xtbMethod || null,
+        xtbOptLevel: defaults.xtbOptLevel || null,
+        memory: defaults.memory || null,
+        memoryUnit: defaults.memoryUnit || null,
+        nproc: defaults.nproc || null,
+      },
+    },
+  };
+}
+
+/** Clipboard first, a hidden textarea second; both stay entirely local. */
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Permission denied; the fallback may still work.
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const copied = document.execCommand('copy');
+    area.remove();
+    return copied;
+  } catch {
+    return false;
+  }
+}
+
+async function copyDiagnostics() {
+  if (!desktop?.collectDiagnostics) { toast('Open the desktop app to create a diagnostics bundle.'); return; }
+  try {
+    const markdown = await desktop.collectDiagnostics(diagnosticsProjectSummary());
+    const copied = await copyTextToClipboard(markdown);
+    toast(copied ? 'Diagnostics copied' : 'Could not copy diagnostics; use Save diagnostics instead.');
+  } catch (error) {
+    toast(`Could not collect diagnostics: ${error.message}`);
+  }
+}
+
+async function saveDiagnostics() {
+  if (!desktop?.collectDiagnostics || !desktop?.saveDiagnostics) {
+    toast('Open the desktop app to save a diagnostics bundle.');
+    return;
+  }
+  try {
+    const markdown = await desktop.collectDiagnostics(diagnosticsProjectSummary());
+    const result = await desktop.saveDiagnostics(markdown);
+    if (result?.error) { toast(result.error.message); return; }
+    if (result?.saved) {
+      setStatusMessage(`Saved diagnostics to ${result.path}`);
+      toast('Diagnostics saved.');
+    }
+  } catch (error) {
+    toast(`Could not save diagnostics: ${error.message}`);
+  }
+}
+
 function toggleOverflow() {
   const menu = $('#top-overflow');
   const button = $('.overflow-btn');
@@ -3277,6 +3383,8 @@ function handleAction(action, element) {
     case 'export-run-bundle':
       exportRunBundleAction({ desktop, runId: state.run.id, notify: toast });
       break;
+    case 'copy-diagnostics': copyDiagnostics(); break;
+    case 'save-diagnostics': saveDiagnostics(); break;
     case 'open-project': openProject(); break;
     case 'new-project': openNewProject(); break;
     case 'template-discard':

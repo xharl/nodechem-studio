@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
   getInfo: () => ipcRenderer.invoke('app:info'),
+  collectDiagnostics: (payload) => ipcRenderer.invoke('diagnostics:collect', payload),
+  saveDiagnostics: (text) => ipcRenderer.invoke('diagnostics:save', text),
   openProject: () => ipcRenderer.invoke('project:open'),
   startupProject: () => ipcRenderer.invoke('project:startup'),
   openProjectPath: (filePath) => ipcRenderer.invoke('project:open-path', filePath),
