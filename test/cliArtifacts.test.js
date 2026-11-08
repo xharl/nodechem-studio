@@ -31,7 +31,7 @@ async function ncs(args, options = {}) {
   }
 }
 
-function project({ include = 'record', maxParallel = 2 } = {}) {
+function project({ include = 'record', maxParallel = 2, reports = [] } = {}) {
   const records = [
     { id: 'm1', label: 'molecule 1', charge: 0, multiplicity: 1, coords: water, enabled: true },
     { id: 'm2', label: 'molecule 2', charge: 0, multiplicity: 1, coords: water, enabled: true },
@@ -67,7 +67,7 @@ function project({ include = 'record', maxParallel = 2 } = {}) {
         { from: 'opt', to: 'out1', type: 'dependency' },
       ],
     }],
-    reports: [],
+    reports,
     activeFlowId: 'barrier',
   });
   expect(result.errors, JSON.stringify(result.errors)).toEqual([]);
@@ -171,6 +171,41 @@ describe('ncs report', () => {
     expect(html).not.toMatch(/<script/i);
     expect(html).not.toMatch(/https?:\/\//i);
   }, 120000);
+
+  it('writes every reports[] entry the project declares, without a second command', async () => {
+    // RFC 0001 phase 5: a project-level report is part of the run, not an extra
+    // step somebody has to remember.
+    const { dir, file } = await writeProject({
+      include: 'records',
+      reports: [{ id: 'project', title: 'Family project', kind: 'html', flows: ['barrier'], path: 'reports/project.html' }],
+    });
+    const out = path.join(dir, 'declared');
+    const result = await ncs(['run', file, '--out', out, '--dry-run'], { timeout: 120000 });
+    expect(result.code).toBe(0);
+    const summary = JSON.parse(result.stdout);
+    expect(summary.reports).toEqual([{ id: 'project', path: 'reports/project.html', bytes: expect.any(Number) }]);
+    const html = await readFile(path.join(out, 'reports', 'project.html'), 'utf8');
+    expect(html.startsWith('<!doctype html>')).toBe(true);
+    expect(html).toContain('Family project');
+    expect(html).toContain('id="flow-barrier"');
+    expect(html).not.toMatch(/<script/i);
+  }, 120000);
+
+  it('refuses a declared report path that leaves the output folder', async () => {
+    // Two guards, and this exercises the first: the schema will not load a
+    // report whose path climbs out, so the run never starts. The writer's own
+    // check covers a project handed to it in memory, without validation.
+    const { dir } = await writeProject({ include: 'records' });
+    const file = path.join(dir, 'family.ncs');
+    const escaped = path.join(dir, 'escaping.ncs');
+    const parsed = JSON.parse(await readFile(file, 'utf8'));
+    parsed.reports = [{ id: 'escape', title: 'Escape', kind: 'html', flows: ['barrier'], path: '../escaped.html' }];
+    await writeFile(escaped, JSON.stringify(parsed, null, 2), 'utf8');
+    const out = path.join(dir, 'escaping');
+    const result = await ncs(['validate', escaped], { timeout: 60000 });
+    expect(result.code).toBe(2);
+    expect(result.stdout).toContain('relative path inside the output folder');
+  }, 60000);
 
   it('writes to --out and names failed records in the combined index', async () => {
     const { dir, file } = await writeProject();

@@ -141,6 +141,39 @@ export function enabledRecords(dataset) {
   return recordsOf(dataset).filter((record) => record && record.enabled !== false);
 }
 
+/** The record fields an input block may filter on; everything else is refused. */
+export const RECORD_FILTER_FIELDS = Object.freeze(['id', 'label', 'charge', 'multiplicity']);
+
+/**
+ * Does a record pass an input block's `recordFilter`?
+ *
+ * An empty filter (`field` or `equals` blank) passes everything: that is the
+ * default every block is created with, and treating it as "match nothing" would
+ * silently run an empty family. `charge` and `multiplicity` compare as numbers,
+ * so `"1"` matches `1`; `id` and `label` compare as trimmed strings. An unknown
+ * field is an error rather than a filter that matches nothing.
+ */
+export function recordMatchesFilter(record, filter) {
+  const field = String(filter?.field ?? '').trim();
+  const equals = String(filter?.equals ?? '').trim();
+  if (!field || equals === '') return true;
+  if (!RECORD_FILTER_FIELDS.includes(field)) {
+    throw new Error(`A record filter cannot use "${field}"; it filters on ${RECORD_FILTER_FIELDS.join(', ')}.`);
+  }
+  if (field === 'charge' || field === 'multiplicity') {
+    const wanted = Number(equals);
+    if (!Number.isFinite(wanted)) return false;
+    return Number(record?.[field]) === wanted;
+  }
+  return String(record?.[field] ?? '').trim() === equals;
+}
+
+/** The records an input block iterates: enabled, then filtered. */
+export function recordsForInput(input, dataset) {
+  const filter = input?.input?.recordFilter;
+  return enabledRecords(dataset).filter((record) => recordMatchesFilter(record, filter));
+}
+
 export function inputNodesOf(nodes) {
   return (Array.isArray(nodes) ? nodes : []).filter((node) => node?.type === 'input');
 }
@@ -192,7 +225,7 @@ export function scopeFor(project, nodes, edges, node) {
   if (!dataset) {
     throw new Error(`"${input.title || input.id}" references dataset "${input.input?.datasetId || ''}", which is not in this project.`);
   }
-  return { input, dataset, records: enabledRecords(dataset) };
+  return { input, dataset, records: recordsForInput(input, dataset) };
 }
 
 /**

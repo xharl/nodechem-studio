@@ -192,6 +192,48 @@ describe('RFC 0001 — refusals', () => {
     expect(() => buildWorkflowPlan(p)).toThrow(/fed by two datasets/);
   });
 
+  it('iterates only the records an input filter names', () => {
+    // `recordFilter` is the JSON-level way to run one member of a family without
+    // editing the dataset; an empty filter (the default) must still mean "all".
+    const filtered = project({
+      nodes: [
+        { ...input(), input: { datasetId: 'family', recordFilter: { field: 'label', equals: 'two' } } },
+        calc('opt', 'Optimise', 'Opt'),
+      ],
+      edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
+    });
+    expect(buildWorkflowPlan(filtered).tasks.filter((task) => task.type === 'calc').map((task) => task.nodeId))
+      .toEqual(['opt~m2']);
+
+    const byCharge = project({
+      nodes: [
+        { ...input(), input: { datasetId: 'family', recordFilter: { field: 'charge', equals: '-1' } } },
+        calc('opt', 'Optimise', 'Opt'),
+      ],
+      edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
+    });
+    expect(buildWorkflowPlan(byCharge).tasks.filter((task) => task.type === 'calc').map((task) => task.nodeId))
+      .toEqual(['opt~m2']);
+
+    const all = project({
+      nodes: [input(), calc('opt', 'Optimise', 'Opt')],
+      edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
+    });
+    expect(buildWorkflowPlan(all).tasks.filter((task) => task.type === 'calc').map((task) => task.nodeId))
+      .toEqual(['opt~m1', 'opt~m2']);
+  });
+
+  it('refuses a filter on a field a record does not have', () => {
+    const bad = project({
+      nodes: [
+        { ...input(), input: { datasetId: 'family', recordFilter: { field: 'smiles', equals: 'CCO' } } },
+        calc('opt', 'Optimise', 'Opt'),
+      ],
+      edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
+    });
+    expect(() => buildWorkflowPlan(bad)).toThrow(/cannot use "smiles"/);
+  });
+
   it('refuses a plan above the task ceiling and names the product', () => {
     const records = Array.from({ length: 60 }, (_, index) => ({
       id: `r${index}`, label: `r${index}`, charge: 0, multiplicity: 1, coords: water, enabled: true,

@@ -37,7 +37,9 @@ the dataset export. A conformer fan-out inside a record adds a third segment
 A record's charge and multiplicity reach the input unless the block sets a value
 other than the schema default; the record's geometry replaces the project's.
 Disabling a record in the input inspector drops it from the run without deleting
-it from the dataset.
+it from the dataset. For a one-off, a project file can also set the input
+block's `recordFilter` (`field` `id`, `label`, `charge` or `multiplicity`) to run
+a single member without touching the dataset.
 
 ## Stages: the barrier edge
 

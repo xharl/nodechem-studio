@@ -20,7 +20,7 @@ import {
   activeFlow,
   datasetById,
   edgesOfFlow,
-  enabledRecords,
+  recordsForInput,
   flowById,
   nodesOfFlow,
   scopeFor,
@@ -548,7 +548,7 @@ export function buildWorkflowPlan(project, { flowId = null } = {}) {
         input: {
           datasetId: node.input?.datasetId || '',
           datasetTitle: bound?.title || '',
-          records: enabledRecords(bound).map((record) => ({ id: record.id, label: record.label || record.id })),
+          records: recordsForInput(node, bound).map((record) => ({ id: record.id, label: record.label || record.id })),
         },
       });
       idsFor.set(node.id, [node.id]);

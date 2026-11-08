@@ -274,10 +274,17 @@ async function commandRun({ positional, flags }) {
     fail(`the queue did not finish within ${timeoutSeconds}s (status: ${queue?.status || 'unknown'}).`, EXIT.engine);
   }
 
+  // A project may declare combined reports (`reports[]`). They are written from
+  // the queues this run left behind, so `ncs run` alone produces the document —
+  // no second command, and no stale report from an earlier run.
+  const declared = await emitDeclaredReports(result.project, outDir)
+    .catch((error) => fail(`declared report: ${error.message}`, EXIT.invalid));
+
   const summary = {
     queueId,
     status: queue.status,
     outDir,
+    reports: declared,
     ladders: queue.ladders || {},
     spins: queue.spins || {},
     runs: await Promise.all((queue.tasks || []).map(async (task) => {
@@ -353,58 +360,112 @@ async function queueRunRecords(queue) {
  * queue per flow is combined into one report with an index that names failed
  * and partial records; `--flow` restricts it to one flow.
  */
-async function commandReport({ positional, flags }) {
-  const [outArg] = positional;
-  if (!outArg) fail('report needs an output directory.');
-  const outDir = path.resolve(outArg);
+/**
+ * The report model of the newest queue of each flow under `outDir`.
+ *
+ * `flows` narrows the selection to the flows a `reports[]` entry names; a
+ * single `flow` does the same for `ncs report --flow`. A flow with no queue is
+ * simply absent: the report describes what ran.
+ */
+async function collectReportModels(outDir, { flow = null, flows = null } = {}) {
   const queuesDir = path.join(outDir, 'queues');
   let entries;
   try {
     entries = await fs.readdir(queuesDir, { withFileTypes: true });
   } catch {
-    fail(`${outDir} has no queues folder; run a workflow first.`, EXIT.invalid);
+    return [];
   }
 
   const queues = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     try {
+      // eslint-disable-next-line no-await-in-loop
       const queue = JSON.parse(await fs.readFile(path.join(queuesDir, entry.name, 'queue.json'), 'utf8'));
       if (queue?.id) queues.push(queue);
     } catch {
       // An unreadable queue is skipped; a later one may still be reportable.
     }
   }
-  if (queues.length === 0) fail(`no readable queue.json under ${queuesDir}.`, EXIT.invalid);
 
   // Newest first, then one per flow: the report describes the latest run of
   // each flow, not an arbitrary mix of attempts.
   queues.sort((a, b) => String(b.createdAt || b.id).localeCompare(String(a.createdAt || a.id)));
-  const wantedFlow = typeof flags.flow === 'string' ? String(flags.flow) : null;
+  const wanted = flow ? new Set([String(flow)])
+    : Array.isArray(flows) && flows.length > 0 ? new Set(flows.map(String)) : null;
   const selected = new Map();
   for (const queue of queues) {
     const flowId = queueFlowId(queue);
-    if (wantedFlow && flowId !== wantedFlow) continue;
+    if (wanted && !wanted.has(flowId)) continue;
     if (!selected.has(flowId)) selected.set(flowId, queue);
   }
-  if (selected.size === 0) fail(`no queue for flow "${wantedFlow}" under ${outDir}.`, EXIT.invalid);
 
   const generatedAt = new Date().toISOString();
   const models = [];
   for (const [flowId, queue] of selected) {
+    // eslint-disable-next-line no-await-in-loop
     models.push(buildWorkflowReport({ ...queue, flowId }, await queueRunRecords(queue), {
       generatedAt,
       appVersion: 'cli',
       recordInfo: queueRecordInfo(queue),
     }));
   }
+  return models;
+}
 
+/**
+ * Write every `reports[]` entry the project declares, after a run. The path is
+ * project-relative and must stay inside the output folder, like an output
+ * block's; a bad path is a run error, not a silent skip.
+ */
+async function emitDeclaredReports(project, outDir) {
+  const entries = (Array.isArray(project?.reports) ? project.reports : [])
+    .filter((entry) => entry && entry.kind === 'html');
+  const written = [];
+  for (const entry of entries) {
+    const relative = String(entry.path || '').trim();
+    const segments = relative.split('/');
+    if (!relative || relative.startsWith('/') || /^[A-Za-z]:/.test(relative)
+      || segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      throw new Error(`Report "${entry.id || relative}" path must be relative and stay inside the output folder.`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const models = await collectReportModels(outDir, { flows: entry.flows });
+    if (models.length === 0) continue;
+    const html = buildCombinedReportHtml(models, {
+      title: entry.title || `Project report — ${project.name || ''}`.trim(),
+      generatedAt: new Date().toISOString(),
+    });
+    const target = path.resolve(outDir, relative);
+    // eslint-disable-next-line no-await-in-loop
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    // eslint-disable-next-line no-await-in-loop
+    await fs.writeFile(target, html, 'utf8');
+    written.push({ id: entry.id || relative, path: relative, bytes: Buffer.byteLength(html) });
+  }
+  return written;
+}
+
+async function commandReport({ positional, flags }) {
+  const [outArg] = positional;
+  if (!outArg) fail('report needs an output directory.');
+  const outDir = path.resolve(outArg);
+  const wantedFlow = typeof flags.flow === 'string' ? String(flags.flow) : null;
+  const models = await collectReportModels(outDir, { flow: wantedFlow });
+  if (models.length === 0) {
+    fail(wantedFlow
+      ? `no queue for flow "${wantedFlow}" under ${outDir}.`
+      : `no readable queue.json under ${path.join(outDir, 'queues')}.`, EXIT.invalid);
+  }
+  const generatedAt = new Date().toISOString();
   const html = models.length === 1
     ? workflowReportHtml(models[0])
     : buildCombinedReportHtml(models, {
       title: `Project report — ${models[0].queue.projectName || path.basename(outDir)}`,
       generatedAt,
     });
+  // `--out` is the user's path: unlike an artifact declared inside a project,
+  // it is not confined to the output folder — the caller asked for it by name.
   const outFile = path.resolve(String(flags.out || path.join(outDir, 'reports', 'index.html')));
   await fs.mkdir(path.dirname(outFile), { recursive: true });
   await fs.writeFile(outFile, html, 'utf8');

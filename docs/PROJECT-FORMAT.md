@@ -250,6 +250,13 @@ that differs from the schema default (0 / 1); the default is not treated as an
 explicit override, because `defaultSettings()` writes it on every block. The
 record's `coords` replace the project geometry for that record's runs.
 
+`input.recordFilter` narrows the family without editing the dataset:
+`{ "field": "label", "equals": "enol-3" }` runs that record alone. The field is
+one of `id`, `label`, `charge`, `multiplicity`; `charge` and `multiplicity`
+compare as numbers, the others as trimmed strings. An empty `field` or `equals`
+means "every enabled record" — the default — and an unknown field is refused at
+plan time rather than silently matching nothing.
+
 Edge semantics under iteration:
 
 | Type | Expansion |
@@ -278,8 +285,10 @@ refusal names the product (`60 records × the blocks they feed`).
 
 A combined HTML report across flows: `{ id, title, kind: 'html', flows: [flowId], path }`.
 Per-flow reports are written by `output` blocks; `reports[]` only adds the
-document that stitches flows together. Failed and partial records are named in
-its index, never hidden.
+document that stitches flows together. `ncs run` writes every `reports[]` entry
+after the queue settles, from the queues that run left behind — no second
+command. The path is relative to the output folder and may not contain `..`.
+Failed and partial records are named in its index, never hidden.
 
 ## 5. Limits
 
