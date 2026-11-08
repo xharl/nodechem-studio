@@ -101,16 +101,17 @@ Type-specific payloads:
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
 `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
 `optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
-`raman`, `spinSweep`, `ladder`, `referenceNodeId`, `disabledChecks`, `gates`,
+`raman`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`.
 
 `settings.engine` is a per-block override (`gaussian` or `xtb`); an empty string means "use
 `defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
 edge between them is a geometry hand-off the queue either accepts or refuses with a recorded reason.
 `ladder` declares method-ladder groups, `referenceNodeId` names the block a barrier or ΔG‡ is
-measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, and `raman`,
-`spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding analysis and validity
-behaviour.
+measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, `orbitals` adds the
+orbital-eigenvalue print (`Pop=Full` on Gaussian) that the frontier-orbital and Koopmans panel is
+read from, and `raman`, `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
+analysis and validity behaviour.
 
 `settings.gates`: `termination`, `scf`, `imaginary`, `minMagnitude`, `thermo`,
 `finalEnergy`.
@@ -118,8 +119,8 @@ behaviour.
 `conformers.settings` is a separate key space — route keys cannot leak into a conformer search:
 `generator` (`crest` or `import`), `method` (`gfn2` or `gfnff`), `energyWindowKcal`,
 `rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`,
-`importPath`, `charge`, `multiplicity`. Defaults: energy window 10 kcal/mol, RMSD 0.5 Å, at most
-20 conformers, 298.15 K, spread warning at 2 kcal/mol.
+`importPath`, `charge`, `multiplicity`, `fanOut`. Defaults: energy window 10 kcal/mol, RMSD 0.5 Å,
+at most 20 conformers, 298.15 K, spread warning at 2 kcal/mol, fan-out off.
 
 `conformers.output` is the ensemble summary written back after a search:
 
@@ -136,6 +137,15 @@ behaviour.
 A calculation block fed by a `conformers` block runs the selected member's geometry. When no member
 is selected — including every protomer case — the queue refuses to build its input rather than
 falling back to the imported structure.
+
+With `fanOut` on, the block expands into one task per **retained** member (`<nodeId>~<memberId>`) and
+each calculation wired directly to it expands the same way, so the ensemble is optimised and reported
+per member instead of collapsing to one geometry. Downstream `run.json` records which member a run
+belongs to; dataset export carries `conformer_node`, `member`, `relative_kcal`, `population` and
+`protomer` columns. Two cases are refused at plan time rather than guessed: an executable block that
+would run once while several fanned-out branches feed it (the member it would use is ambiguous), and
+the same block fanned over two different ensembles. Fan-out does not yet propagate through a chain —
+`conformers → opt → freq` needs issue #87; until then it is refused, not run on the wrong geometry.
 
 `edges[]` — `id`, `from`, `to`, `type` (`dependency`, `checkpoint`, `branch`,
 `loop`), plus `branch` (`true`/`false`) on branch edges. Self-edges, duplicate
