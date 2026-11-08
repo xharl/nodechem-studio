@@ -484,6 +484,7 @@ export function createStructureViewer(canvas, options = {}) {
   let dragLast = null;
   let hovered = null;
   let lastProjection = [];
+  let lastCamera = null;
   let lastViewport = { width: 1, height: 1 };
 
   const handlePointerDown = (event) => {
@@ -645,6 +646,7 @@ export function createStructureViewer(canvas, options = {}) {
     const geometry = displacedGeometry();
     const projected = projectAtoms(geometry, camera);
     lastProjection = projected;
+    lastCamera = camera;
 
     const bondWidth = clamp(0.1 * camera.scale * zoom, 1.5, 9);
     const orderedBonds = prepared.bonds
@@ -772,6 +774,38 @@ export function createStructureViewer(canvas, options = {}) {
     draw();
   }
 
+  /**
+   * The current view as an SVG, with no captions or controls — just the atoms,
+   * the bonds and a scale bar whose length is taken from the camera, so the
+   * figure states its own scale.
+   */
+  function exportSvg({ scale = 2 } = {}) {
+    if (!prepared || !lastCamera || lastProjection.length === 0) return null;
+    const { width, height } = syncCanvasSize();
+    const w = Math.round(width * scale);
+    const h = Math.round(height * scale);
+    const bondWidth = clamp(0.1 * lastCamera.scale * zoom, 1.5, 9) * scale;
+    const bonds = prepared.bonds.map((bond) => {
+      const a = lastProjection[bond.a];
+      const b = lastProjection[bond.b];
+      return `<line x1="${(a.sx * scale).toFixed(1)}" y1="${(a.sy * scale).toFixed(1)}" x2="${(b.sx * scale).toFixed(1)}" y2="${(b.sy * scale).toFixed(1)}" stroke="#5f6b7a" stroke-width="${bondWidth.toFixed(1)}" stroke-linecap="round"/>`;
+    }).join('');
+    const atoms = [...lastProjection]
+      .sort((left, right) => left.depth - right.depth)
+      .map((atom) => `<circle cx="${(atom.sx * scale).toFixed(1)}" cy="${(atom.sy * scale).toFixed(1)}" r="${(Math.max(1.5, atom.screenRadius) * scale).toFixed(1)}" fill="${atom.color}" stroke="#04080e" stroke-width="${(atom.screenRadius > 4 ? 1 : 0.6) * scale}"><title>${atom.element || ''}</title></circle>`)
+      .join('');
+    // One ångström measured with the same camera the atoms were drawn with.
+    const bar = Math.max(8, lastCamera.scale * scale);
+    const barY = h - 14 * scale;
+    const scaleBar = `<g><line x1="${14 * scale}" y1="${barY}" x2="${14 * scale + bar}" y2="${barY}" stroke="#111827" stroke-width="${1.2 * scale}"/>`
+      + `<text x="${14 * scale}" y="${barY - 5 * scale}" font-family="ui-sans-serif, system-ui" font-size="${9 * scale}" fill="#111827">1 Å</text></g>`;
+    return '<?xml version="1.0" encoding="UTF-8"?>\n'
+      + `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`
+      + `<rect width="${w}" height="${h}" fill="#ffffff"/>`
+      + bonds + atoms + scaleBar
+      + '</svg>';
+  }
+
   function fit() {
     yaw = options.yaw ?? -0.42;
     pitch = options.pitch ?? 0.28;
@@ -810,6 +844,7 @@ export function createStructureViewer(canvas, options = {}) {
     getModes: () => modes,
     getCamera: () => ({ yaw, pitch, zoom }),
     getViewport: () => ({ ...lastViewport }),
+    exportSvg,
     destroy,
   };
 }
@@ -867,6 +902,7 @@ export function mountStructureViewer(inspectorEl, node) {
   const amplitudeInput = panel.querySelector('[data-structure-amplitude]');
   const playButton = panel.querySelector('[data-structure-play]');
   const fitButton = panel.querySelector('[data-structure-fit]');
+  const exportButton = panel.querySelector('[data-structure-export]');
   const legendSlot = panel.querySelector('[data-structure-legend]');
   if (!canvas || !source || !notice || !modesRow || !modeSelect || !playButton || !fitButton || !legendSlot) {
     return null;
@@ -924,5 +960,12 @@ export function mountStructureViewer(inspectorEl, node) {
   }
 
   fitButton.addEventListener('click', () => viewer.fit());
+  exportButton?.addEventListener('click', async () => {
+    const svg = viewer.exportSvg({ scale: 3 });
+    if (!svg) return;
+    const desktop = globalThis.window?.desktop ?? null;
+    if (!desktop?.saveText) return;
+    await desktop.saveText({ suggestedName: 'structure-figure.svg', text: svg });
+  });
   return viewer;
 }

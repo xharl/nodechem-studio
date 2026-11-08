@@ -19,6 +19,8 @@ import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 import { ircGate, pathBarrier, profileSvg, profilePoints, scanExtremum, scanSurfaceSvg } from '../shared/reactionPath.js';
+import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
+import { mountSuperposition } from './superpositionCard.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 
@@ -875,6 +877,44 @@ function provenanceBlock(record) {
 /* ── Public pure renderer ──────────────────────────────────── */
 
 /**
+ * Optimisation replay: every geometry the output printed, with the energy that
+ * preceded it. A step whose energy was not printed keeps an empty cell and does
+ * not appear on the curve.
+ */
+function trajectoryCard(parsed, flags) {
+  const trajectory = parsed?.trajectory;
+  if (!isObject(trajectory) || !Array.isArray(trajectory.steps) || trajectory.steps.length < 2) return '';
+  const series = trajectoryEnergies(trajectory);
+  if (!series) return '';
+  const rows = series.map((point) => {
+    const step = trajectory.steps[point.step - 1];
+    const coordinates = step.atoms.map((atom, index) => `<tr><td>${index + 1}</td><td>${esc(atom.element)}</td>`
+      + `<td class="num">${atom.x.toFixed(4)}</td><td class="num">${atom.y.toFixed(4)}</td><td class="num">${atom.z.toFixed(4)}</td></tr>`).join('');
+    return `<tr${point.reference ? ' class="is-reference"' : ''}>`
+      + `<td>${point.step}</td>`
+      + `<td class="num">${point.energyHartree === null ? 'not reported' : point.energyHartree.toFixed(6)}</td>`
+      + `<td class="num">${point.relativeKcal === null ? '—' : point.relativeKcal.toFixed(2)}</td>`
+      + `<td class="num">${point.atoms}</td>`
+      + `<td><details><summary>geometry</summary><table class="results-table"><thead><tr><th>#</th><th>El</th>`
+      + '<th class="num">x / Å</th><th class="num">y / Å</th><th class="num">z / Å</th></tr></thead>'
+      + `<tbody>${coordinates}</tbody></table></details></td></tr>`;
+  }).join('');
+  const missing = series.filter((point) => point.energyHartree === null).length;
+  return '<section class="results-card is-wide" data-field="optimisation-replay">'
+    + '<h3 class="results-card-title">Optimisation replay</h3>'
+    + trajectorySvg(trajectory)
+    + `<p class="results-note">${series.length} geometries were printed; ${missing === 0
+      ? 'each has the energy from the SCF that preceded it.'
+      : `${missing} of them ${missing === 1 ? 'has' : 'have'} no preceding SCF energy and ${missing === 1 ? 'is' : 'are'} shown as a gap rather than at zero.`}`
+    + ` The reference is the lowest energy recorded, not the first geometry.</p>`
+    + '<table class="results-table" data-field="trajectory-steps"><thead><tr><th>Step</th>'
+    + '<th class="num">E / Eh</th><th class="num">ΔE / kcal mol⁻¹</th><th class="num">Atoms</th><th>Geometry</th>'
+    + `</tr></thead><tbody>${rows}</tbody></table>`
+    + (flags.truncated ? '<p class="results-note">Truncated output: later steps may be missing.</p>' : '')
+    + '</section>';
+}
+
+/**
  * Render one run record. Missing sections are omitted or marked
  * "not reported"; nothing is derived from a field the record does not carry.
  */
@@ -916,6 +956,7 @@ export function resultsPanelHtml(record) {
     frequenciesCard(parsed, flags),
     excitedStatesCard(parsed, flags),
     reactionPathCard(record, parsed, flags),
+    trajectoryCard(parsed, flags),
     nmrCard(parsed, flags),
     chargesCard(parsed, flags),
     t1Card(parsed, flags),
@@ -991,6 +1032,7 @@ export function installResultsView({
     consoleEl?.classList.add('has-results');
     mountCompareBar(record);
     mountThermoEnsemble();
+    mountSuperposition({ container, currentRecord: record, desktop, doc });
   };
 
   /**

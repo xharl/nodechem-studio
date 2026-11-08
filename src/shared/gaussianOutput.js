@@ -18,6 +18,7 @@ import { ELEMENTS } from './elements.js';
 import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { parseShieldings } from './nmr.js';
 import { animatableModes, parseNormalModes } from './normalModes.js';
+import { parseTrajectory } from './trajectory.js';
 import { summarizeValidity } from './validityChecks.js';
 
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
@@ -1209,6 +1210,17 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   // Normal-mode vectors: only the modes whose displacement block is complete are
   // offered for animation, and the count of the rest is kept so the viewer can
   // say what it is not showing.
+  // Optimisation geometries: bounded so a long optimisation cannot bloat the
+  // run record; the number left out is stated rather than silently dropped.
+  const parsedTrajectory = parseTrajectory(text);
+  const TRAJECTORY_LIMIT = 80;
+  const trajectory = parsedTrajectory && parsedTrajectory.steps.length > TRAJECTORY_LIMIT
+    ? {
+      ...parsedTrajectory,
+      steps: parsedTrajectory.steps.slice(-TRAJECTORY_LIMIT),
+      dropped: parsedTrajectory.steps.length - TRAJECTORY_LIMIT,
+    }
+    : parsedTrajectory;
   const parsedModes = parseNormalModes(text);
   const normalModes = parsedModes ? animatableModes(parsedModes) : null;
 
@@ -1233,6 +1245,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     reactionPath,
     scan,
     nmr,
+    trajectory,
     normalModes,
     normalModesMeta: parsedModes
       ? {

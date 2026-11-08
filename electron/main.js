@@ -703,7 +703,12 @@ app.whenReady().then(async () => {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Save export',
       defaultPath: path.join(app.getPath('documents'), suggested),
-      filters: [{ name: 'Comma-separated values', extensions: ['csv'] }, { name: 'All files', extensions: ['*'] }],
+      filters: [
+        { name: 'SVG figure', extensions: ['svg'] },
+        { name: 'Comma-separated values', extensions: ['csv'] },
+        { name: 'Text', extensions: ['txt', 'md'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     await fsp.writeFile(result.filePath, textValue, 'utf8');
