@@ -123,6 +123,31 @@ export function conformerForNode(project, node, conformerMember = null) {
 }
 
 /**
+ * The conformer block a calculation is waiting on because it has not produced
+ * an ensemble yet, or null.
+ *
+ * Issue #101: `buildRunInput` refuses any conformer-fed block without a chosen
+ * member, which is right when the ensemble exists and the choice is the user's.
+ * On a fresh project the ensemble itself does not exist — the search task that
+ * would create it has not run — so refusing the whole plan deadlocks the
+ * natural `conformers -> calc` graph. Only a *missing* ensemble is deferred
+ * here; an ensemble that exists without a selection is still refused at plan
+ * time, because that is a decision, not a pending computation.
+ */
+export function pendingConformerFor(project, node) {
+  if (!node || node.type === 'conformers') return null;
+  const source = conformerSourceFor(project, node);
+  if (!source) return null;
+  if (source.output && typeof source.output === 'object') return null;
+  return { nodeId: source.id, title: source.title };
+}
+
+/** The one refusal message used at plan time and again by the queue. */
+export function noSelectedConformerMessage(conformer, node) {
+  return `"${conformer.title}" has no selected conformer. Run the ensemble and choose a member before running "${node.title}".`;
+}
+
+/**
  * The members a fanned-out conformer block runs, in rank order.
  *
  * Returns null when fan-out is off, when the block has not produced an
@@ -369,7 +394,7 @@ export function buildRunInput(project, node, { taskId = node?.id, settingsOverri
   // entire conformer stage, which is the error this feature exists to stop.
   const conformer = conformerForNode(project, node, conformerMember);
   if (conformer && !conformer.selected) {
-    throw new Error(`"${conformer.title}" has no selected conformer. Run the ensemble and choose a member before running "${node.title}".`);
+    throw new Error(noSelectedConformerMessage(conformer, node));
   }
   const base = safeBase(taskId);
   const built = engine.id === 'xtb'
@@ -400,6 +425,9 @@ export function buildRunInput(project, node, { taskId = node?.id, settingsOverri
 
 /**
  * The queue payload: one task per node, with every calculation already built.
+ * A calculation whose conformer ensemble has not been searched yet is included
+ * as a non-executable task carrying `pendingInput` (issue #101); the queue
+ * fails it with that reason instead of running it on the project geometry.
  * Throws when the workflow has nothing to run, which is what the UI shows as
  * "no calculation blocks".
  */
@@ -422,6 +450,12 @@ export function buildWorkflowTasks(project) {
  * two blocks fanned out over the same ensemble pair member to member, so a
  * member's branch never waits on a different member; an edge into a block that
  * is not fanned (a merge, say) keeps every member as an input.
+ *
+ * A calculation fed by a conformer block that has not produced an ensemble yet
+ * (#101) is planned as a non-executable task with `pendingInput`, so the search
+ * task that creates the ensemble is still queued. An ensemble that exists but
+ * has no chosen member is still refused here, exactly as before: that is a
+ * user decision, not a pending computation.
  */
 export function buildWorkflowPlan(project) {
   const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
@@ -444,7 +478,7 @@ export function buildWorkflowPlan(project) {
         idsFor.set(node.id, ids);
         continue;
       }
-      tasks.push(conformerTask(project, node));
+      tasks.push(conformerSearchTask(project, node));
       idsFor.set(node.id, [node.id]);
       continue;
     }
@@ -661,6 +695,15 @@ function calculationTask(project, node, {
   conformerMember = null,
   fanOut = null,
 }) {
+  // Issue #101: the ensemble has not been searched yet, so there is no member
+  // to build from. Emit a task that marks the block pending instead of throwing
+  // away the whole plan (which also discarded the search task that creates the
+  // ensemble). The queue fails it with the same reason if the ensemble is still
+  // missing when it gets there; it never falls back to the project geometry.
+  const pending = pendingConformerFor(project, node);
+  if (pending && !conformerMember) {
+    return pendingCalculationTask(project, node, { taskId, title, settingsOverride, ladder, spin, pending });
+  }
   const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember });
   const emissionFor = emissionContextFor(project, node, settingsOverride);
   return {
@@ -700,6 +743,47 @@ function calculationTask(project, node, {
     ...(fanOut ? { fanOut } : {}),
     ...(emissionFor ? { emission: emissionFor } : {}),
     ...(built.conformer ? { conformer: built.conformer } : {}),
+  };
+}
+
+/**
+ * A calculation whose input cannot be built yet because its conformer block has
+ * not produced an ensemble (issue #101).
+ *
+ * It is deliberately not executable and carries no input text: the queue must
+ * never fall back to the project geometry. `pendingInput.reason` is the same
+ * refusal `buildRunInput` raises, and the queue fails the task with it when it
+ * reaches the task and the ensemble is still absent. A later plan — after the
+ * search stored the ensemble — turns the block into a normal runnable task.
+ */
+function pendingCalculationTask(project, node, { taskId, title, settingsOverride, ladder, spin, pending }) {
+  const engine = engineForNode(project, node);
+  const base = safeBase(taskId);
+  const inputName = engine.id === 'xtb' ? `${base}.xyz` : engine.id === 'orca' ? `${base}.inp` : `${base}.gjf`;
+  return {
+    nodeId: taskId,
+    type: 'calc',
+    title: title || node.title,
+    kind: node.kind || 'Calc',
+    executable: false,
+    engine: engine.id,
+    argv: null,
+    route: null,
+    inputName,
+    outputName: inputName.replace(/\.[^.]+$/, '.out'),
+    inputText: '',
+    settings: settingsOverride || settingsForNode(project, node),
+    gates: gatesForNode(node),
+    validity: null,
+    checkpointName: checkpointNameFor(project, node, taskId),
+    checkpointFrom: checkpointSourceFor(project, node),
+    pendingInput: {
+      reason: noSelectedConformerMessage(pending, node),
+      conformerId: pending.nodeId,
+      conformerTitle: pending.title,
+    },
+    ...(ladder ? { ladder } : {}),
+    ...(spin ? { spin } : {}),
   };
 }
 
@@ -767,8 +851,11 @@ function conformerMemberTask(project, node, { taskId, member, ensemble }) {
  * app's vocabulary (no route, no gates, no parsed output), and pretending it
  * was one would force it through a runner built for Gaussian. The queue has a
  * dedicated path for it, just as it does for conditions and merges.
+ *
+ * Exported because "Run selected block" on a conformer block runs exactly this
+ * search, independent of whether the block is fanned out (#101).
  */
-function conformerTask(project, node) {
+export function conformerSearchTask(project, node) {
   const settings = conformerSettingsFor(node);
   const molecule = project?.molecule || {};
   const charge = Number.isInteger(node?.settings?.charge) ? node.settings.charge : Number(molecule.charge ?? 0);

@@ -66,6 +66,14 @@ task writes its geometry into its own folder (`member.xyz`, `conformers.json`) a
 run's `run.json` names the member it ran. Fan-out needs a stored ensemble, so run the block once
 with fan-out off (or on, with the ensemble absent) before expanding it.
 
+A fresh `Conformer ensemble → calculation` project can be queued as it stands: the plan runs the
+search first and marks the calculation **pending**, because its input can only be built from a
+member geometry. The queue fails that pending calculation with the “no selected conformer” reason
+instead of substituting the project geometry; the next **Run workflow** builds it from the stored
+ensemble and the chosen member (a single-protomer ensemble is chosen automatically). To run the
+search alone without deleting the downstream block, select the conformer block and use **Run
+selected block** — it queues just that block's search and stores the ensemble in the project.
+
 Fan-out is refused when the ensemble mixes protomers and no member is chosen: comparing protonation
 states in one ΔE table is not a conformer comparison. With a member chosen, only the kept members of
 that protomer are fanned out.
