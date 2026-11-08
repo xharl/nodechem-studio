@@ -10,7 +10,9 @@
  *
  * Exit codes:
  *   0  success
- *   2  the project does not validate, or a task cannot be built
+ *   1  the command was used incorrectly
+ *   2  the project does not validate, a task cannot be built, or a QCSchema
+ *      document/payload does not conform (see `ncs qcschema` for its codes)
  *   3  a run finished but its gates failed (queue reached needs-review)
  *   4  a run or the queue failed outright
  *   5  the queue is partial (some records failed) or a merge conflicted
@@ -25,10 +27,21 @@ import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { flowById } from '../src/shared/flows.js';
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
-import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
+import { parseGaussianOutput, geometryToXyz } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
 import { kineticsSummary } from '../src/shared/kinetics.js';
 import { convertFchk, convertParsed, convertStructure } from '../src/shared/converters/index.js';
+import {
+  QCSchemaError,
+  atomicResultFromRun,
+  atomsFromRun,
+  gaussianInputMolecule,
+  moleculeFromRun,
+  qcschemaSchemaPath,
+  readQcschema,
+  stringifyQcschema,
+  structureFromQcschema,
+} from '../src/shared/qcschema.js';
 import { parseFchk } from '../src/shared/fchk.js';
 import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
 import { parseCube } from '../src/shared/cubeFile.js';
@@ -57,6 +70,9 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
   ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
       [--out <file>] [--json]
+  ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>]
+      [--multiplicity <n>] [--out <file>] [--json]
+  ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
   ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
   ncs cache <file.ncsr> --inspect [--json]
 
@@ -722,6 +738,276 @@ async function commandConvert({ positional, flags }) {
 
 
 /**
+ * `ncs qcschema` — QCSchema (MolSSI) in and out.
+ *
+ * `export` writes one `qcschema_output` AtomicResult from a finished run: a run
+ * folder, or an `ncs run --out` folder with `--run` to choose. `import` reads a
+ * `qcschema_output` (or a bare `qcschema_input`) into the app vocabulary and can
+ * write the structure as XYZ.
+ *
+ * Refusals are machine-readable: stderr carries
+ * `{ "ok": false, "code": "...", "field": "...", "message": "..." }` and the
+ * exit code is 2. The codes are `qcschema-refused` (the run cannot supply a
+ * field the document needs), `qcschema-invalid` (the document does not conform),
+ * `qcschema-unsupported` (not a QCSchema document), `qcschema-no-run` and
+ * `qcschema-ambiguous`.
+ */
+const QCSCHEMA_USAGE = `ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>]
+    [--multiplicity <n>] [--out <file>] [--json]
+ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
+`;
+
+async function appVersion() {
+  try {
+    const text = await fs.readFile(new URL('../package.json', import.meta.url), 'utf8');
+    const parsed = JSON.parse(text);
+    return typeof parsed.version === 'string' ? parsed.version : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+function qcschemaRefuse(error) {
+  const payload = {
+    ok: false,
+    code: error.code || 'qcschema-invalid',
+    field: error.field || null,
+    message: error.message,
+    ...(error.details && typeof error.details === 'object' ? error.details : {}),
+  };
+  if (Array.isArray(error.errors) && error.errors.length > 0) payload.errors = error.errors;
+  process.stderr.write(`${JSON.stringify(payload, null, 2)}\n`);
+  process.stderr.write(`ncs: ${error.message}\n`);
+  process.exit(EXIT.invalid);
+}
+
+function qcschemaUsage(message) {
+  process.stderr.write(`ncs: ${message}\n\n${QCSCHEMA_USAGE}`);
+  process.exit(EXIT.usage);
+}
+
+const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
+
+async function isFile(candidate) {
+  try {
+    const stats = await fs.stat(candidate);
+    return stats.isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The run folder the export reads. A folder with `run.json` is one run; a folder
+ * with `runs/` is an `ncs run --out` tree, and then `--run` picks one. Several
+ * runs without `--run` are refused rather than guessing which one was meant.
+ */
+async function resolveQcschemaRun(target, runId = null) {
+  const absolute = path.resolve(target);
+  if (await isFile(path.join(absolute, 'run.json'))) return absolute;
+
+  const runsDir = path.join(absolute, 'runs');
+  let entries = [];
+  try {
+    entries = await fs.readdir(runsDir, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  const ids = entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+    .map((entry) => entry.name)
+    .sort();
+  const withRecord = [];
+  for (const id of ids) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await isFile(path.join(runsDir, id, 'run.json'))) withRecord.push(id);
+  }
+
+  if (runId) {
+    if (!withRecord.includes(runId)) {
+      throw new QCSchemaError(`no run "${runId}" with a run.json under ${runsDir}.`, {
+        code: 'qcschema-no-run', field: 'run', details: { runs: withRecord },
+      });
+    }
+    return path.join(runsDir, runId);
+  }
+  if (withRecord.length === 0) {
+    throw new QCSchemaError(`no run.json at ${absolute} or under ${runsDir}.`, {
+      code: 'qcschema-no-run', field: 'run',
+    });
+  }
+  if (withRecord.length > 1) {
+    throw new QCSchemaError(
+      `${withRecord.length} runs under ${runsDir}; pass --run <id> to choose one.`,
+      { code: 'qcschema-ambiguous', field: 'run', details: { runs: withRecord } },
+    );
+  }
+  return path.join(runsDir, withRecord[0]);
+}
+
+/** The molecule the run's own input file states, when the record carries none. */
+async function inputMoleculeFor(runDir, record) {
+  const name = String(record?.inputName || '');
+  if (!SAFE_NAME.test(name)) return null;
+  try {
+    const text = await fs.readFile(path.join(runDir, name), 'utf8');
+    return gaussianInputMolecule(text);
+  } catch {
+    return null;
+  }
+}
+
+function integerFlag(value, name) {
+  if (value === undefined) return null;
+  if (typeof value !== 'string' || !/^-?\d+$/.test(value.trim())) {
+    qcschemaUsage(`${name} needs an integer.`);
+  }
+  return Number(value.trim());
+}
+
+async function commandQcschemaExport({ positional, flags }) {
+  const [target] = positional;
+  if (!target) qcschemaUsage('qcschema export needs a run folder or a run output folder.');
+  const requestedRun = flags.run === undefined ? null : String(flags.run);
+  if (flags.run === true) qcschemaUsage('--run needs a run id.');
+  const chargeFlag = integerFlag(flags.charge, '--charge');
+  const multiplicityFlag = integerFlag(flags.multiplicity, '--multiplicity');
+
+  let runDir;
+  let record;
+  try {
+    runDir = await resolveQcschemaRun(target, requestedRun);
+    record = JSON.parse(await fs.readFile(path.join(runDir, 'run.json'), 'utf8'));
+  } catch (error) {
+    qcschemaRefuse(error instanceof QCSchemaError ? error
+      : new QCSchemaError(`cannot read the run record: ${error.message}`, { code: 'qcschema-invalid', field: 'run.json' }));
+  }
+  if (record.status === 'running') {
+    qcschemaRefuse(new QCSchemaError('the run has not finished; there is no result to export yet.', {
+      code: 'qcschema-refused', field: 'status',
+    }));
+  }
+
+  try {
+    const fromInput = await inputMoleculeFor(runDir, record);
+    const parsedAtoms = atomsFromRun(record);
+    const atoms = parsedAtoms?.atoms ?? fromInput?.atoms ?? null;
+    const molecule = moleculeFromRun(record, {
+      atoms,
+      charge: chargeFlag !== null ? chargeFlag : fromInput?.charge ?? null,
+      multiplicity: multiplicityFlag !== null ? multiplicityFlag : fromInput?.multiplicity ?? null,
+      name: fromInput?.name || record.title || null,
+    });
+    const doc = atomicResultFromRun(record, { molecule, version: await appVersion() });
+
+    const out = flags.out
+      ? path.resolve(String(flags.out))
+      : path.join(runDir, `${path.basename(runDir)}.qcschema.json`);
+    await fs.mkdir(path.dirname(out), { recursive: true });
+    await fs.writeFile(out, stringifyQcschema(doc), 'utf8');
+
+    const dryRun = record.dryRun === true;
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify({
+        ok: true,
+        runId: record.id || null,
+        out,
+        schema: qcschemaSchemaPath('output'),
+        schemaName: doc.schema_name,
+        schemaVersion: doc.schema_version,
+        driver: doc.driver,
+        energyHartree: doc.properties.return_energy,
+        method: doc.model.method,
+        basis: doc.model.basis,
+        atomCount: doc.molecule.symbols.length,
+        geometrySource: parsedAtoms?.source || (fromInput ? 'input-file' : null),
+        dryRun,
+      }, null, 2)}\n`);
+    } else {
+      if (dryRun) {
+        process.stderr.write(`note: ${record.id} is a dry run; the document says extras.nodechem.dry_run = true.\n`);
+      }
+      process.stdout.write(`${out}\n`);
+    }
+    process.exit(EXIT.ok);
+  } catch (error) {
+    qcschemaRefuse(error instanceof QCSchemaError ? error
+      : new QCSchemaError(error.message, { code: 'qcschema-invalid', field: null }));
+  }
+}
+
+async function commandQcschemaImport({ positional, flags }) {
+  const [input] = positional;
+  if (!input) qcschemaUsage('qcschema import needs a file.');
+  const file = path.resolve(input);
+
+  let doc;
+  try {
+    doc = JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch (error) {
+    qcschemaRefuse(new QCSchemaError(`cannot read ${file}: ${error.message}`, {
+      code: 'qcschema-invalid', field: 'document',
+    }));
+  }
+
+  const verdict = readQcschema(doc);
+  if (!verdict.ok) {
+    qcschemaRefuse(new QCSchemaError(verdict.message, {
+      code: verdict.code, field: verdict.field, errors: verdict.errors || [],
+    }));
+  }
+
+  try {
+    if (flags.out) {
+      const target = path.resolve(String(flags.out));
+      const extension = path.extname(target).toLowerCase();
+      let payload;
+      if (extension === '.xyz') {
+        const structure = structureFromQcschema(verdict);
+        payload = geometryToXyz(structure, { comment: structure.name });
+      } else {
+        payload = `${JSON.stringify(verdict, null, 2)}\n`;
+      }
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, payload, 'utf8');
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify({
+          ok: true, out: target, kind: verdict.kind, schemaName: verdict.schemaName, energyHartree: verdict.energyHartree,
+        }, null, 2)}\n`);
+      } else {
+        process.stdout.write(`${target}\n`);
+      }
+      process.exit(EXIT.ok);
+    }
+
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+      process.exit(EXIT.ok);
+    }
+    const molecule = verdict.molecule;
+    process.stdout.write(`${verdict.schemaName} ${verdict.schemaVersion}: ${molecule.name || 'molecule'} `
+      + `(${molecule.symbols.join(' ')}, charge ${molecule.charge}, multiplicity ${molecule.multiplicity})\n`);
+    if (verdict.energyHartree !== null) process.stdout.write(`  energy: ${verdict.energyHartree} Eh\n`);
+    process.stdout.write(`  model: ${verdict.model.method}${verdict.model.basis ? `/${verdict.model.basis}` : ''}`
+      + `${verdict.model.dispersion ? ` (${verdict.model.dispersion})` : ''}\n`);
+    for (const warning of verdict.warnings) process.stdout.write(`  note: ${warning}\n`);
+    process.exit(EXIT.ok);
+  } catch (error) {
+    qcschemaRefuse(error instanceof QCSchemaError ? error
+      : new QCSchemaError(error.message, { code: 'qcschema-invalid', field: null }));
+  }
+}
+
+async function commandQcschema({ positional, flags }) {
+  const [subcommand, ...rest] = positional;
+  if (!subcommand) qcschemaUsage('qcschema needs a subcommand: export or import.');
+  if (subcommand === 'export') return commandQcschemaExport({ positional: rest, flags });
+  if (subcommand === 'import') return commandQcschemaImport({ positional: rest, flags });
+  return qcschemaUsage(`unknown qcschema subcommand "${subcommand}"; expected export or import.`);
+}
+
+
+/**
  * `ncs cache` — write a parsed run or a volumetric field as typed arrays, or
  * inspect an existing cache. The cache is what a viewer should read: the cost
  * of opening a trajectory stops depending on how many characters the log has.
@@ -799,6 +1085,7 @@ const handlers = {
   diff: commandDiff,
   merge: commandMerge,
   convert: commandConvert,
+  qcschema: commandQcschema,
   cache: commandCache,
 };
 const handler = handlers[command];

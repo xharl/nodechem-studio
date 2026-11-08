@@ -8,7 +8,9 @@ Three things make the workbench usable from a script:
   CLI, standard library only.
 
 There is also an engine plugin seam for hosts that need a fifth engine; it has
-its own contract in [Engine plugins](ENGINE_PLUGIN.md).
+its own contract in [Engine plugins](ENGINE_PLUGIN.md), and `ncs qcschema` for
+handing a result to another program in a format it already speaks (see
+[QCSchema in and out](#qcschema-molssi-in-and-out) below).
 
 ## The record contract
 
@@ -165,13 +167,122 @@ an incomplete spec is refused with an error that names the missing key. The
 contract, an example and the limits (no sandbox, no user-directory loader yet)
 are in [Engine plugins](ENGINE_PLUGIN.md).
 
+## QCSchema (MolSSI) in and out
+
+`ncs qcschema` turns a finished run into a MolSSI **`qcschema_output`**
+(`AtomicResult`) and reads one back. The contract is the published schema, not a
+paraphrase of it: `schemas/qcschema/v2/qc_schema_output.schema` is a verbatim copy of
+MolSSI/QCSchema (`462d17b`, BSD-3-Clause, provenance in
+[`schemas/qcschema/README.md`](../schemas/qcschema/README.md)), and every document the
+writer produces is validated against it before it reaches disk. A field the upstream
+schema forbids fails in our tests, not in the next program.
+
+### Units
+
+QCSchema is atomic units. The conversion happens once, in
+`src/shared/qcschema.js`, and in this direction only:
+
+| Quantity | QCSchema | The app | Conversion |
+| --- | --- | --- | --- |
+| geometry | bohr, flat `[x1, y1, z1, …]` | angstrom, `{x, y, z}` per atom | × / ÷ `0.529177210903` (CODATA 2018 bohr radius) |
+| energy | hartree (`return_result`, `properties.return_energy`) | hartree | none — copied unchanged |
+| gradient | Eh/bohr, flat 3N | not parsed from a log | passed through when a caller has one |
+| hessian | Eh/bohr², flat (3N)² | not parsed from a log | passed through when a caller has one |
+
+Nothing is ever written into a hartree field in kcal/mol: thermochemistry travels in
+`extras` under keys that say `_hartree`, and a frequency count is a count.
+
+### What the export writes
+
+| Field | Emitted | Notes |
+| --- | --- | --- |
+| `schema_name` / `schema_version` | `qcschema_output`, `2` | |
+| `molecule` | `qcschema_molecule` v2 | `symbols`, `geometry` (bohr), `molecular_charge`, `molecular_multiplicity`, `name`; `fragments`, `fragment_charges`, `fragment_multiplicities` only when the caller supplies them. |
+| `driver` | `energy`, `gradient` or `hessian` | the highest derivative the run has. |
+| `return_result` | the energy, or the derivative | QCSchema's own slot for the requested answer. |
+| `properties.return_energy` | the run's final energy | **nothing else** — the published schema closes `properties` (`additionalProperties: false`), so a gradient never goes here even when QCSchema's pydantic model would allow `return_gradient`. |
+| `model` | `method`, `basis`, `dispersion` when reported | `basis` is `method-defined` for xTB and composite methods, which have no separate basis set — the sentinel the app's own provenance uses, never an invented basis name. |
+| `keywords` | `{}` | the app does not record program parameters in a QCSchema vocabulary. |
+| `provenance` | `creator`, `version`, `routine`, `engine`, `method`, `basis`, `run_id` (+ `dispersion`) | open in the schema; a dry run gets `routine: "ncs qcschema export (dry run)"`. |
+| `success` | from the parsed status | |
+| `error` | only when the failure maps onto `convergence_error` / `memory_error` / `file_error` | any other failure is left out rather than mislabelled. |
+| `extras.nodechem` | run id, engine, `dry_run`, job type, termination, program, app version/commit, frequency count, thermochemistry (hartree) | the open block; thermochemistry and frequencies do not fit `AtomicResult`. |
+| `wavefunction` | **omitted** | none of the four parsers produces MOs, so none is synthesised. A caller that really has one may pass it through; it is validated like the rest of the document. |
+
+A field the run cannot supply is a **refusal**, not a zero: an export without a final
+energy fails with `code: "qcschema-refused"` and `field: "return_result"`, and one
+without a charge fails on `molecule.molecular_charge`. Charge and multiplicity come from
+the run's own input file (the Gaussian job specification), from `--charge` /
+`--multiplicity`, or not at all.
+
+### Reading
+
+`readQcschema(document)` returns a verdict, never a throw:
+
+- `kind: "result"` for a `qcschema_output`: molecule in angstrom, `energyHartree`,
+  `gradient`/`hessian` labelled with `Eh/bohr` and `Eh/bohr^2`, `model`, `provenance`,
+  `dryRun`, `runId`, and `warnings` for anything a consumer should know (a gradient in
+  `return_result`, `success: false`, a dry run).
+- `kind: "input"` for a bare `qcschema_input`: its molecule and model, `energyHartree: null`.
+- `{ ok: false, code, field, message }` otherwise. `qcschema-unsupported` is a
+  `schema_name` that is neither; `qcschema-invalid` is a document that does not conform,
+  with the field named — `return_result` when it is absent, `molecule.molecular_charge`
+  when the molecule is silent. QCSchema defaults those two fields; the app refuses to
+  guess them.
+
+`structureFromQcschema(result)` produces the record the viewer and the converters
+already take (`{ format, name, atoms, charge, multiplicity }`), and
+`recordPatchFromQcschema(result)` produces only the run-record fields the document can
+fill (`engine`, `provenance.method`, `parsed.finalEnergy`). The patch is not a record:
+`run.json` needs runner evidence a document does not carry, and nothing is defaulted to
+make it look complete.
+
+### `ncs qcschema`
+
+```
+ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicity <n>]
+    [--out <file>] [--json]
+ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
+```
+
+```bash
+ncs run examples/single-point.ncs --out /tmp/runs --dry-run
+ncs qcschema export /tmp/runs --json
+ncs qcschema import /tmp/runs/runs/<id>/<id>.qcschema.json --out water.xyz
+```
+
+`export` takes a run folder (one `run.json`) or an `ncs run --out` folder, where
+`--run <id>` chooses among several runs; several runs without `--run` is a refusal
+(`qcschema-ambiguous`) that lists them. Without `--out` the document is written beside
+the run as `<run-id>.qcschema.json`. `import` prints the read-back payload, or writes it
+(`--out file.json`) or the structure (`--out file.xyz`).
+
+Refusals are machine-readable on stderr and exit **2**:
+
+```json
+{ "ok": false, "code": "qcschema-refused", "field": "return_result",
+  "message": "the run has no final energy, so QCSchema return_result cannot be filled in honestly." }
+```
+
+| Code | Meaning |
+| --- | --- |
+| `qcschema-refused` | the run cannot supply a field the document needs (the field is named). |
+| `qcschema-invalid` | the document does not conform to the published schema, or is not JSON. |
+| `qcschema-unsupported` | `schema_name` is neither `qcschema_output` nor `qcschema_input`. |
+| `qcschema-no-run` | there is no `run.json` at that path. |
+| `qcschema-ambiguous` | several runs under the folder; `runs` lists them. |
+
+Usage errors (a missing subcommand, a non-integer `--charge`) exit **1** like the rest
+of the CLI, with the command's usage on stderr.
+
 ## What is not here
 
 - No REST or socket server, and no way to drive the Electron window.
 - No notebook execution inside the app; a notebook imports the client above.
 - CLI refusals are machine-readable through their **exit codes** (see
   [Headless CLI](guide/cli.md)) and, for `ncs export`, through the
-  `code: "record-invalid"` envelope. Other commands print a sentence only.
+  `code: "record-invalid"` envelope; `ncs qcschema` adds the `qcschema-*` codes
+  above. The other commands print a sentence only.
 - A plugin is JavaScript the host imported: the seam validates its shape, not
   its behaviour, and provides no sandbox.
 

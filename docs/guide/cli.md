@@ -27,6 +27,8 @@ ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--timeout <seconds>]
 ncs report <out-dir> [--flow <id>] [--out <file>]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
+ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicity <n>] [--out <file>] [--json]
+ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv] [--out <file>] [--json]
@@ -59,6 +61,10 @@ ncs cache <file.ncsr> --inspect [--json]
 - `cache <input> --out <file.ncsr>` writes a parsed run or volumetric field as typed arrays, and
   `ncs cache <file.ncsr> --inspect` prints its header (`--precision f64|f32` picks the array width).
   Opening a trajectory then costs what the numbers cost, not what the log's text costs.
+- `qcschema export` writes one MolSSI `qcschema_output` (`AtomicResult`) from a finished run, in
+  atomic units, validated against the vendored published schema; `qcschema import` reads one back
+  and can write its structure as XYZ. Refusals exit 2 with a `qcschema-*` code on stderr. The
+  fields and units are in [Scripting against NodeChem Studio](../SCRIPTING.md#qcschema-molssi-in-and-out).
 
 ## Exit codes
 
@@ -137,8 +143,9 @@ wants a fifth engine should read [Engine plugins](../ENGINE_PLUGIN.md).
 - A REST or socket server; the machine interface is the CLI and the run folder.
 - A user-directory plugin loader. `registerEngine(spec)` is the seam, but the desktop queue still
   resolves the built-in engines through `src/shared/engines/index.js`.
-- Machine-readable refusal codes on every command. Exit codes are the branch point; only
-  `ncs export` also emits a `code` in its JSON refusal.
+- Machine-readable refusal codes on every command. Exit codes are the branch point; `ncs export`
+  (`code: "record-invalid"`) and `ncs qcschema` (`qcschema-*`) also emit a `code` in their JSON
+  refusal.
 
 ## Next
 
