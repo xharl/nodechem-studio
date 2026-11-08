@@ -3400,6 +3400,29 @@ async function copyTextToClipboard(text) {
   }
 }
 
+/**
+ * Export every finished run as one dataset file (CSV or JSON). The main process
+ * writes it; the renderer only chooses the format.
+ */
+async function exportRunDataset(format) {
+  if (!desktop?.exportDataset) {
+    toast('Open the desktop app to export a run dataset.');
+    return;
+  }
+  try {
+    const result = await desktop.exportDataset(format === 'json' ? 'json' : 'csv');
+    if (!result || result.canceled) return;
+    if (result.error) {
+      toast(`Could not export the dataset: ${result.error.message}`);
+      return;
+    }
+    const count = Number(result.rowCount) || 0;
+    toast(`Exported ${count} run${count === 1 ? '' : 's'} → ${result.path}`);
+  } catch (error) {
+    toast(`Could not export the dataset: ${error.message}`);
+  }
+}
+
 async function copyDiagnostics() {
   if (!desktop?.collectDiagnostics) { toast('Open the desktop app to create a diagnostics bundle.'); return; }
   try {
@@ -3504,6 +3527,7 @@ function handleAction(action, element) {
       exportRunBundleAction({ desktop, runId: state.run.id, notify: toast });
       break;
     case 'copy-diagnostics': copyDiagnostics(); break;
+    case 'export-dataset': exportRunDataset(element.dataset.datasetFormat); break;
     case 'save-diagnostics': saveDiagnostics(); break;
     case 'open-project': openProject(); break;
     case 'undo': undoEdit(); break;

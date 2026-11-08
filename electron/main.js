@@ -13,6 +13,7 @@ import { writeRunBundle } from './runner/runBundle.js';
 import { isSafeRunId } from '../src/shared/runBundle.js';
 import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
 import { buildDiagnostics } from '../src/shared/diagnostics.js';
+import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js';
 import {
   PROJECT_EXTENSIONS,
   classifySavePath,
@@ -395,6 +396,43 @@ async function exportRunBundle(runId) {
 }
 
 /**
+ * Export every finished run as one dataset file. The rows come from the same
+ * `run.json` records the results panel reads, so the export cannot disagree
+ * with what the app shows. A dry run keeps its flag; a missing value is empty.
+ */
+async function exportDataset(format = 'csv') {
+  const kind = format === 'json' ? 'json' : 'csv';
+  let runs;
+  try {
+    runs = await runManager.list();
+  } catch (error) {
+    return { canceled: false, error: { message: error.message } };
+  }
+  const rows = runRows(runs);
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: `Export run dataset (${kind.toUpperCase()})`,
+    defaultPath: path.join(app.getPath('documents'), `nodechem-dataset.${kind}`),
+    filters: kind === 'csv'
+      ? [{ name: 'CSV', extensions: ['csv'] }]
+      : [{ name: 'JSON', extensions: ['json'] }],
+    buttonLabel: 'Export',
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  try {
+    const body = kind === 'csv'
+      ? datasetCsv(rows)
+      : JSON.stringify(datasetJson(rows, {
+        generatedAt: new Date().toISOString(),
+        appVersion: currentAppInfo().version,
+      }), null, 2);
+    await fsp.writeFile(result.filePath, body, 'utf8');
+    return { canceled: false, path: result.filePath, rowCount: rows.length, format: kind };
+  } catch (error) {
+    return { canceled: false, error: { message: error.message } };
+  }
+}
+
+/**
  * Collect the one file a bug report needs. The renderer supplies only its
  * project summary; the build, platform and run history are read here so a
  * compromised renderer cannot mislabel the environment. Paths are passed to
@@ -520,6 +558,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('runs:list', () => runManager.list());
   ipcMain.handle('runs:verify', (_event, runId) => runManager.verify(runId));
   ipcMain.handle('runs:export-bundle', (_event, runId) => exportRunBundle(runId));
+  ipcMain.handle('runs:export-dataset', (_event, format) => exportDataset(format));
   ipcMain.handle('queue:start', (_event, payload) => queueManager.start(payload));
   ipcMain.handle('queue:pause', (_event, queueId) => queueManager.pause(queueId));
   ipcMain.handle('queue:resume', (_event, queueId) => queueManager.resume(queueId));

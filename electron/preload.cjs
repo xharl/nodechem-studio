@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('desktop', {
   listRuns: () => ipcRenderer.invoke('runs:list'),
   verifyRun: (runId) => ipcRenderer.invoke('runs:verify', runId),
   exportRunBundle: (runId) => ipcRenderer.invoke('runs:export-bundle', runId),
+  exportDataset: (format) => ipcRenderer.invoke('runs:export-dataset', format),
   startQueue: (payload) => ipcRenderer.invoke('queue:start', payload),
   pauseQueue: (queueId) => ipcRenderer.invoke('queue:pause', queueId),
   resumeQueue: (queueId) => ipcRenderer.invoke('queue:resume', queueId),

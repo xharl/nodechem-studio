@@ -16,6 +16,12 @@ Two questions get answered separately, and that separation is the most important
   comparison across different methods, bases or engines instead of presenting it as a re-run.
   A value one run did not report stays *not reported*.
 
+- **How do I get every run into a spreadsheet?** → **Export run dataset** in the overflow menu,
+  as CSV or JSON. One row per finished run: engine, job type, method, basis, dispersion,
+  solvation, status, gate and validity verdicts, energies, imaginary count, SCF cycles, elapsed
+  time, dry-run flag and both hashes. Missing values are empty cells, never zeros; a dry run stays
+  flagged. The JSON envelope carries a schema version and the app version.
+
 A run can execute correctly and still be scientifically unsupported. The record states both, and
 validity findings never change `gates.overall`.
 
