@@ -1,13 +1,15 @@
-# Wavefunctions: cubes, formatted checkpoints and Molden files
+# Wavefunctions: cubes, formatted checkpoints, Molden, WFN and WFX files
 
 The results panel reads the Gaussian log. A log is a report *about* a calculation; it does not
-carry the wavefunction itself. Three files do:
+carry the wavefunction itself. Five files do:
 
 | File | Written by | What it holds |
 | --- | --- | --- |
 | `.fchk` (formatted checkpoint) | `formchk run.chk run.fchk` | Scalars and arrays: geometry, orbital energies, charges, electron counts, total energy, and the basis/MO arrays the Molden writer needs |
 | `.cube` | `cubegen` | One scalar field sampled on a regular 3D grid, plus the nuclei |
 | `.molden` | ORCA (`orca_2mkl -molden`), Psi4 (`psi4.molden(wfn)`), PySCF, Q-Chem, GAMESS via Molden2AIM, or this app's own `ncs convert job.fchk --format molden` | Atoms, the Gaussian basis, spherical/Cartesian markers, and the molecular-orbital coefficients |
+| `.wfn` (traditional AIM wavefunction) | Gaussian (`output=wfn`), GAMESS, Q-Chem, ORCA, Molden2AIM and other AIM-era writers | Atoms, an uncontracted Cartesian Gaussian basis, orbital energies and occupations (occupied orbitals only) |
+| `.wfx` (AIM extended wavefunction) | AIMAll; Gaussian 09 B.01 and later (`output=wfx`); Multiwfn | The same data as WFN in tagged sections, plus explicit electron counts, spin types, total energy, virial ratio and optional ECP core-density (EDF) sections |
 
 This page describes what the app reads from each, what it deliberately refuses, and what it does
 **not** do yet. Everything on this page happens offline on files you already have; the app never
@@ -115,6 +117,100 @@ A marker that disagrees with the `[MO]` coefficient vector is refused rather tha
 file says `[5D]` and an orbital carries six coefficients for that shell, the error states how many
 coefficients arrived, how many functions the marker implies, and which marker was used.
 
+## What a WFN file contains
+
+A WFN file is the older AIM interchange format (Bader/AIMPAC lineage). It is line-oriented:
+
+```
+synthetic water
+GAUSSIAN              6 MOL ORBITALS     21 PRIMITIVES        3 NUCLEI
+  O    1    (CENTRE  1)   0.00000000  0.00000000  0.22142907  CHARGE =  8.0
+  H    2    (CENTRE  2)   1.43044242  0.00000000 -0.96097163  CHARGE =  1.0
+  H    3    (CENTRE  3)  -1.43044242  0.00000000 -0.96097163  CHARGE =  1.0
+CENTRE ASSIGNMENTS    1  1  1  … (one per primitive function)
+TYPE ASSIGNMENTS      1  1  1  … (AIM type codes: 1 S, 2-4 PX PY PZ, 5-10 D…)
+EXPONENTS   1.3070932D+02  … (one per primitive function)
+MO    1     MO 0.0        OCC NO =     2.0000000  ORB. ENERGY =   -20.240200
+   1.00000000D-2  …
+END DATA
+ THE  HF ENERGY =       -75.987654321000 THE VIRIAL(-V/T)=   2.00412345
+```
+
+**The header has two forms, and the reader decides which from the header itself.**
+
+- **3-line header**: the title block, the count line, then the first nucleus row. There is no
+  electrostatic-potential data.
+- **5-line header**: the same, but with a two-line `MEP` block inserted after the count line — a
+  `MEP <count>` row and its values. The block is the **molecular electrostatic potential at each
+  nucleus**, in hartree/e. The reader keeps the values in `mep.values`, reports `header.form:
+  '5-line'`, and derives nothing from them: no gradient, no Hessian. A file without the block is
+  read normally with `mep.present: false` and a warning saying the data is absent.
+
+The count line's label is not always `GAUSSIAN` — GAMESS, MOLPRO, ADF and TONTO files carry their
+own — and the title block can be many lines long (archived files often begin with a mail header).
+The reader finds the count line wherever it is and records `header.program` and
+`header.titleLines`.
+
+### The two basis orderings
+
+WFN stores a basis **primitive function by primitive function**, not shell by shell. Two tables
+are accepted, and they are distinguished by what the table looks like — never by trying one parse
+and falling back:
+
+- **Gaussian ordering** (`basisOrdering: 'gaussian'`): `CENTRE ASSIGNMENTS`, `TYPE ASSIGNMENTS` and
+  `EXPONENTS`, one entry per Cartesian component of every primitive. The integer type codes are the
+  AIM order, which is exactly the Cartesian order this app uses. The table is **decontracted**: one
+  shell per primitive, a contraction coefficient of 1, and the MO coefficients permuted from the
+  file's component-major order (`px₁ px₂ …, py₁ py₂ …, pz₁ pz₂ …`) into the shell-major order the
+  checkpoint path uses. No coefficient is averaged or dropped, and `numberOfBasisFunctions` equals
+  the number of primitive functions.
+- **Labelled ordering** (`basisOrdering: 'non-gaussian'`): the older shell table, a row such as
+  `  1  1  'S'` or `  2  1  'SP'` followed by one `exponent coefficient [coefficient]` row per
+  primitive. `s`, `p` and `sp` are mapped onto the checkpoint shell order because their component
+  order is unambiguous. A **`d`, `f` or higher shell is refused**: a one-letter label does not say
+  whether the six d functions are `xx yy zz xy xz yz` or another program's order, and a coefficient
+  attached to the wrong component is wrong science with no visible symptom.
+
+Both formats are **Cartesian-only**: there is no spherical marker, so a d shell is six functions and
+an f shell ten. The parsed object says `spherical: { d: false, f: false, g: false }` rather than
+guessing.
+
+### Orbitals
+
+Each MO is introduced by `MO <index>` with `OCC NO =` and `ORB. ENERGY =` fields; the older form is
+`'MO' <index> <occupation> <energy>`. The coefficient run has one value per primitive function (or
+per basis function in the labelled ordering) and is checked against the basis: a short or long run
+is refused with both numbers. The optional Multiwfn `$MOSPIN` block, when present, labels each
+orbital `1` (alpha), `2` (beta) or `3` (alpha and beta); its absence simply means no orbital carries
+a spin label.
+
+## What a WFX file contains
+
+WFX is AIMAll's extended format: sections of `<Tag>` … `</Tag>` lines, XML-like but deliberately not
+XML. Tags stand alone on their lines, may contain spaces, are case-insensitive, and the sections may
+appear in any order. The reader indexes the sections and looks each one up by name.
+
+| Section | Used for |
+| --- | --- |
+| `<Number of Nuclei>`, `<Number of Primitives>`, `<Number of Occupied Molecular Orbitals>` | The counts every other section is checked against |
+| `<Nuclear Names>`, `<Atomic Numbers>`, `<Nuclear Charges>`, `<Nuclear Cartesian Coordinates>` | The geometry, converted from bohr to Å once |
+| `<Net Charge>`, `<Number of Electrons>`, `<Number of Alpha Electrons>`, `<Number of Beta Electrons>`, `<Electronic Spin Multiplicity>` | The charge and spin state, stated rather than derived |
+| `<Primitive Centers>`, `<Primitive Types>`, `<Primitive Exponents>` | The basis, through the same decontraction as WFN |
+| `<Molecular Orbital Occupation Numbers>`, `<Molecular Orbital Energies>` | Energies and occupations; **fractional occupations are kept as written** (natural orbitals are not rounded) |
+| `<Molecular Orbital Spin Types>` | `Alpha and Beta`, `Alpha` or `Beta`, which decides the alpha and beta coefficient matrices |
+| `<Molecular Orbital Primitive Coefficients>` | One `<MO Number>` block per orbital, each with one coefficient per primitive |
+| `<Energy = T + Vne + Vee + Vnn>`, `<Virial Ratio (-V/T)>` | The total energy and virial ratio |
+
+The specification is version 1.0.x and files do not usually state a version. A `<Version>`,
+`<WFX Version>` or `<Format Version>` section is accepted when present; a major version other than 1
+is **refused by name**, because a different major version may lay out the coefficients differently
+and reading it as 1.x would be a guess.
+
+`<Additional Electron Density Function (EDF)>` sections (ECP core density) are not applied. The
+parsed object says `edf: { present: true, used: false }` so a caller can see that a density rebuilt
+from this record would omit the ECP-modeled core electrons. Nuclear gradients are not read, and none
+is invented.
+
 ## What the app extracts
 
 From a **cube**:
@@ -160,6 +256,31 @@ The result has the same field names as the checkpoint reader (`shellTypes`, `pri
 Molden cannot carry — total charge, multiplicity, partial charges, total energy — is absent and is
 named in `missing`; it is never filled with zero.
 
+From a **WFN file**:
+
+- the atoms and nuclear charges, in Å, from the nucleus table (bohr converted once);
+- the header form (`3-line` or `5-line`), the program label and the number of title lines;
+- the `MEP` values when the file carries them, or an explicit `mep.present: false` with the reason;
+- the basis in the checkpoint's shell layout. The Gaussian ordering is decontracted one shell per
+  primitive with the MO coefficients permuted to shell-major order; the labelled ordering maps `s`,
+  `p` and `sp` shells directly and refuses `d` and higher;
+- each MO's energy, occupation, optional `$MOSPIN` spin label and coefficient vector;
+- the `END DATA` total energy and virial ratio.
+
+From a **WFX file**:
+
+- the atoms, names, atomic numbers and nuclear charges, in Å;
+- the basis through the same decontraction as WFN;
+- each MO's energy, occupation and spin type, with `Alpha and Beta`/`Alpha` orbitals in the alpha
+  matrix and `Beta` orbitals in the beta matrix;
+- the net charge, electron counts, multiplicity, total energy and virial ratio that the file states;
+- `edf: { present, used: false }` when ECP core-density sections exist, so their absence from any
+  density rebuilt from this record is visible rather than silent.
+
+The WFN and WFX objects use the checkpoint's field names, so `orbitalGap`, `spinFromElectrons` and
+the shell decoder need no branch for them either. Fields the format cannot carry — partial charges,
+a virial ratio in WFN's older files, spherical markers — are absent and named in `missing`.
+
 ### The gap is an orbital-energy gap
 
 The gap is the difference between two Kohn–Sham (or Hartree–Fock) orbital energies. It is **not** the
@@ -184,8 +305,8 @@ and whether it is inside the tolerance; it does not "fix" the charges.
 A finished run can carry a `wavefunction` block in its `run.json`. It is produced by
 `src/shared/wavefunction.js` and holds:
 
-- `artifacts`: one entry per file with its kind (`cube`, `fchk` or `molden`), its name, its
-  **SHA-256** and its size in bytes — the same provenance idea as `inputSha256` and `outputSha256`;
+- `artifacts`: one entry per file with its kind (`cube`, `fchk`, `molden`, `wfn` or `wfx`), its name,
+  its **SHA-256** and its size in bytes — the same provenance idea as `inputSha256` and `outputSha256`;
 - `cube`: dimensions, origin, axes, spacing, cell volume, atom count and the statistics above;
 - `fchk`: which fields were found and which were missing, the optional scalars, and the derived
   gap, spin and charge blocks.
@@ -193,7 +314,10 @@ A finished run can carry a `wavefunction` block in its `run.json`. It is produce
 The Molden reader returns the same fchk-shaped object (`format: 'molden'`), so a caller can pass it
 straight to `orbitalGap`, `spinFromElectrons` or `shellsFromFchk`. `wavefunctionRecord` puts it in
 the same `fchk` summary block, with `format: 'molden'` naming the reader that produced it; no
-Molden-specific spreadsheet columns exist yet.
+Molden-specific spreadsheet columns exist yet. WFN and WFX do the same with `format: 'wfn'` and
+`format: 'wfx'`; their summary block also carries `header`, `basisOrdering` and `mep` (WFN) or
+`version` and `edf` (WFX), so the provenance that changes how the numbers should be read stays with
+the record.
 
 The grid itself is never copied into `run.json`. A 100³ cube is a million numbers; the record keeps
 the summary and the hash, and the file stays where it is.
@@ -261,6 +385,37 @@ For a Molden file, the refusals name the section and the offending value:
 - **A bad coefficient index.** An index outside `1..nbf`, or one repeated in the same orbital, is
   refused with the index.
 
+For a WFN file:
+
+- **No count line.** A file with no `… MOL ORBITALS … PRIMITIVES … NUCLEI` line is refused; the
+  message quotes the line form it needs, and the reader does not assume the count line is line 2
+  (a title block can be arbitrarily long).
+- **A nucleus table that does not match.** A table shorter than the declared nucleus count, an
+  out-of-order row, or a row that is not a nucleus row is refused with the declared and found counts.
+- **An MEP block that does not fit.** It must hold exactly one value per nucleus: a short block names
+  both numbers, and an overlong one is refused because the block and the nucleus table disagree.
+- **A count mismatch.** A basis table that ends before `PRIMITIVES` values, a coefficient block
+  shorter or longer than the basis, or an MO count that disagrees with the number of `MO` blocks is
+  refused with both numbers.
+- **A basis table it does not recognise.** Neither `CENTRE ASSIGNMENTS` nor a labelled shell row:
+  refused instead of guessed.
+- **A labelled d/f/g shell.** Refused by name, for the component-order reason above.
+- **A non-numeric token.** Refused with the line number, in the nucleus table, basis tables, the
+  `MEP` block and the coefficient runs alike.
+
+For a WFX file:
+
+- **A version outside 1.x.** Refused by name, with the version the file states.
+- **A non-GTO keyword set.** Refused; the reader handles Cartesian Gaussian primitives only.
+- **A count that disagrees.** Nucleus, primitive and orbital counts are checked against every array,
+  and the error names the section and both numbers. A coefficient block that ends early is refused
+  as `MO n has X coefficients but <Number of Primitives> says Y`.
+- **An unclosed or mismatched tag.** Refused with the tag name and line, so a truncated WFX is not
+  read as a shorter molecule.
+- **A file without the required sections.** `<Number of Nuclei>`, `<Number of Primitives>`,
+  `<Number of Occupied Molecular Orbitals>`, `<Nuclear Charges>`, the coordinates and the
+  coefficient block are required; the message names the missing one.
+
 A missing field is different from a broken one: it is simply **absent**. Nothing is zero-filled, and
 the record lists the missing field names so a reader can see what the file did not contain. A Molden
 file has no total charge, multiplicity, partial charges or total energy, so those keys are absent
@@ -288,6 +443,14 @@ so than show a picture that implies otherwise:
 - **Molden in the CLI and the window.** The shared reader is wired into `readWavefunction`, but
   `ncs convert job.molden --format xyz|sdf|qcschema` and the window's file picker are not. The
   shared reader is the piece both would call.
+- **WFN/WFX in the CLI and the window.** `ncs convert job.wfn|job.wfx --format molden|xyz` is not
+  implemented; only `detectWavefunctionFormat`/`readWavefunction` accept the two formats. WFN and
+  WFX carry occupied orbitals only, so a Molden file written from them would have no virtuals.
+- **WFX/WFN emission.** Reading is the half this page covers; nothing writes either format back.
+- **Applying WFX EDF data.** ECP core-density sections are detected and reported, but not added to
+  any density, so a density rebuilt from a WFX with an EDF would omit those core electrons.
+- **WFN gradients.** None is read, because the traditional format does not carry one; the WFX
+  gradient sections are likewise left unread.
 - **Attaching the files from the UI.** The parsers, the record block and the export columns are in
   place; choosing the files when a run finishes and writing the block into `run.json` belongs to the
   run-writer, not to this module.

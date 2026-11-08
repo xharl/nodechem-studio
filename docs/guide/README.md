@@ -42,8 +42,8 @@ Reference pages:
 
 - [Troubleshooting](troubleshooting.md) — symptom, cause, action.
 - [FAQ](faq.md) — short answers to the questions testers ask first.
-- [Wavefunctions](wavefunction.md) — what a `.cube`, an `.fchk` and a `.molden` contain, what the app
-  reads from them, and which analyses are still deferred.
+- [Wavefunctions](wavefunction.md) — what a `.cube`, an `.fchk`, a `.molden`, a `.wfn` and a `.wfx`
+  contain, what the app reads from them, and which analyses are still deferred.
 - [Converters](converters.md) — `ncs convert`: extxyz, xyz, SDF and JCAMP-DX, and the conventions
   each one carries.
 - [Spectra](spectra.md) — reading a JCAMP-DX file: `X++(Y..Y)`, `XYPOINTS`, DIF/DUP compression,

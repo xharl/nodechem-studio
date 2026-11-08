@@ -26,6 +26,8 @@ import { createHash } from 'node:crypto';
 import { parseCube, BOHR_TO_ANGSTROM } from './cubeFile.js';
 import { parseFchk } from './fchk.js';
 import { parseMolden } from './molden.js';
+import { parseWfn } from './wfn.js';
+import { parseWfx } from './wfx.js';
 
 export { BOHR_TO_ANGSTROM };
 
@@ -461,6 +463,10 @@ export function detectWavefunctionFormat(text) {
   const firstLine = source.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/).find((line) => line.trim());
   if (firstLine && /^\s*\[Molden Format\](?:\s|$)/i.test(firstLine)) return 'molden';
   if (/^\s*(?:Number of atoms|Atomic numbers|Current cartesian coordinates)\s+[IR]\b/m.test(source)) return 'fchk';
+  // WFN: the count line, wherever the title block puts it.
+  if (/^\s*[A-Za-z][\w.+-]*\s+\d+\s+MOL\s+ORBITALS\s+\d+\s+PRIMITIVES\s+\d+\s+NUCLEI\b/im.test(source)) return 'wfn';
+  // WFX: two required sections that no other format here uses.
+  if (/^\s*<Number of Nuclei>\s*$/im.test(source) && /^\s*<Number of Primitives>\s*$/im.test(source)) return 'wfx';
   if (looksLikeCube(source)) return 'cube';
   return '';
 }
@@ -471,10 +477,13 @@ export function readWavefunction(text, { filename = '', maxChars } = {}) {
   if (kind === 'cube') return { kind, parsed: parseCube(text, maxChars ? { maxChars } : undefined) };
   if (kind === 'fchk') return { kind, parsed: parseFchk(text, maxChars ? { maxChars } : undefined) };
   if (kind === 'molden') return { kind, parsed: parseMolden(text, maxChars ? { maxChars } : undefined) };
+  if (kind === 'wfn') return { kind, parsed: parseWfn(text, maxChars ? { maxChars } : undefined) };
+  if (kind === 'wfx') return { kind, parsed: parseWfx(text, maxChars ? { maxChars } : undefined) };
   throw new Error(
-    `${filename || 'The file'} is neither a Gaussian cube nor a formatted checkpoint (nor a Molden file). `
+    `${filename || 'The file'} is neither a Gaussian cube nor a formatted checkpoint (nor a Molden, WFN or WFX file). `
     + 'A cube starts with two comment lines and an "atoms ox oy oz" header; an fchk starts with "Number of atoms"; '
-    + 'a Molden file starts with "[Molden Format]".',
+    + 'a Molden file starts with "[Molden Format]"; a WFN has a "... MOL ORBITALS ... PRIMITIVES ... NUCLEI" count '
+    + 'line; a WFX starts with WFX sections such as "<Number of Nuclei>".',
   );
 }
 
@@ -528,6 +537,11 @@ function summariseFchk(fchk) {
   for (const key of copy) {
     if (fchk[key] !== undefined) summary[key] = fchk[key];
   }
+  // WFN/WFX provenance that changes how the numbers should be read: the header
+  // form, the ordering convention and whether MEP data was present.
+  for (const key of ['header', 'basisOrdering', 'mep', 'version', 'edf']) {
+    if (fchk[key] !== undefined) summary[key] = fchk[key];
+  }
   if (Array.isArray(fchk.atoms)) summary.atoms = fchk.atoms.length;
   return summary;
 }
@@ -570,7 +584,7 @@ export function wavefunctionRecord(files, { maxChars } = {}) {
       if (cube) throw new Error('Only one cube fits in a wavefunction record; attach the second cube to its own run.');
       cube = parsed;
     } else {
-      if (fchk) throw new Error('Only one checkpoint or Molden file fits in a wavefunction record; attach the second one to its own run.');
+      if (fchk) throw new Error('Only one checkpoint, Molden, WFN or WFX file fits in a wavefunction record; attach the second one to its own run.');
       fchk = parsed;
     }
     artifacts.push({
