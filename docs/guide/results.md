@@ -96,9 +96,10 @@ stored in the project (`settings.disabledChecks`) and survives save and reopen; 
 omitted from the result, never reported as a pass.
 
 **Scope.** These checks are offline and use only the project and the parsed output. Rules that need
-more than those two inputs — IRC path verification, standard-state declaration, conformer coverage,
-comparable-energy bookkeeping — are not implemented. xTB results are not judged at all: the checks
-are Gaussian-route checks, so an xTB record leaves them absent.
+more than those two inputs — standard-state declaration, conformer coverage, comparable-energy
+bookkeeping, IRC endpoint identity — are not implemented. xTB records are judged by the subset that
+applies to them: charge/multiplicity, geometry sanity, imaginary modes and optimisation convergence.
+The Gaussian-route checks are reported as *not applicable* for xTB, never as a pass.
 
 ## Thermochemistry
 

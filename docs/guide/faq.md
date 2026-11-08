@@ -75,8 +75,9 @@ Because the parser did not find them. The app never guesses a missing value and 
 zero.
 
 **Can I animate the normal modes?**
-Not today. The parser does not extract displacement vectors, so the viewer draws a static geometry
-and says so rather than inventing motion.
+Yes, when the output prints normal-mode displacement blocks — Gaussian does for a `Freq` job. The
+viewer animates each mode, drops any mode whose block does not cover every atom, and when the output
+carries no displacements at all it draws a static geometry and says so rather than inventing motion.
 
 **What happens to my project if I uninstall?**
 Nothing. Projects live wherever you saved them, and run records live in the per-user data directory.

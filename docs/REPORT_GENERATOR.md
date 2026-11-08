@@ -57,7 +57,7 @@ Gate verdicts are **copied**, never recomputed. The report is a view over record
 
 ```
 ┌ page 1 ──────────────────────────────────────────────────────────────┐
-│ NodeChem Studio            WORKFLOW REPORT              v0.2.1       │
+│ NodeChem Studio            WORKFLOW REPORT              v0.3.0       │
 │ Diels–Alder TS verification                                          │
 │ 7 blocks · Gaussian 16 · 2026-11-08 03:14 → 03:52 · 38 min          │
 │                                                                      │

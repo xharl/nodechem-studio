@@ -1,7 +1,9 @@
 # NodeChem Studio — implementation plan
 
-Status: **v0.2 early preview implemented**. This document is the source of truth for
-what comes next and how the remaining work is sequenced.
+Status: **0.3 feature set implemented; 0.3.0 not yet tagged.** Sections 1–3 and 5 describe the
+architecture and the original phase plan; §4 is the v0.1 baseline kept for history, §4b lists what
+landed since, and §6b is what remains after 0.3. The only unverified gate is still **GN-001**, a real
+licensed Gaussian run (see §6).
 
 ## 1. Product target
 
@@ -66,6 +68,10 @@ Success at v1:
 
 ### Why Electron
 
+Since v0.2 the main process also hosts `xtbRunner` (same contract, different engine), the durable
+queue with conditions, loops and checkpoint staging, and the report/export writers; `bin/ncs.js`
+reuses `buildWorkflowTasks` and `RunManager` so a headless run and a UI run cannot diverge.
+
 - The existing design is HTML/CSS/JS; Chromium gives one rendering target on Windows.
 - Node's `child_process` is the runner, native dialogs are straightforward, and packaging is
   well understood.
@@ -94,7 +100,7 @@ Success at v1:
 - The renderer is untrusted for path purposes: it can propose a basename, but the main process
   validates it and joins it under the run directory.
 
-## 4. What exists now (v0.1)
+## 4. What existed at v0.1 (historical baseline)
 
 | Area | Implemented | Evidence |
 | --- | --- | --- |
@@ -115,7 +121,7 @@ Success at v1:
 | Structure import | `.xyz`, `.mol`/`.sdf`, `.gjf`/`.com` with element/coordinate/parity validation; project-level geometry feeds every `.gjf` | `test/structureImport.test.js`, `test/projectSchema.test.js`, `test/gaussianInput.test.js` |
 | Dry run | labelled synthetic output, full parser/gate path | run console PASS evidence |
 | Persistence | native Open/Save, schema v1 validation, v0.1 migration, canonical save | `test/projectSchema.test.js` |
-| Packaging | electron-builder NSIS config; `npm run dist` produces `release/nodechem-studio-0.2.1-x64.exe`; CI workflow builds it on windows-latest. Linux AppImage target plus a `Linux package` CI workflow | `.github/workflows/windows-package.yml`, `.github/workflows/linux-package.yml`, `package.json` |
+| Packaging | electron-builder NSIS config; `npm run dist` produces `release/nodechem-studio-0.3.0-x64.exe`; CI workflow builds it on windows-latest. Linux AppImage target plus a `Linux package` CI workflow | `.github/workflows/windows-package.yml`, `.github/workflows/linux-package.yml`, `package.json` |
 
 ### Verified gaps
 
@@ -123,7 +129,7 @@ Success at v1:
   imported in the molecule drawer. Structure import is implemented (GN-006).
 - The queue runs calculation blocks in dependency order and survives a restart. Conditions
   release one branch, loops retry up to `maxAttempts`, review gates stop dependents; output
-  bundles are still unimplemented (GN-008).
+  bundles are still unimplemented (see §6b).
 - Merge waits for all inputs (the `any` policy is recorded but readiness is still all-inputs);
   output nodes stop with a recorded reason until bundling exists.
 - Output discovery and final-energy parsing are implemented (GN-007); heavy logs are read as a
@@ -138,10 +144,35 @@ Success at v1:
   executable bit, symlink-resolved `GAUSS_EXEDIR`, scratch warnings) is covered by unit tests
   against fake executables only.
 - Validity thresholds (covalent-radius ratios, spin-contamination limits, imaginary-mode
-  floor) are documented offline choices, not yet calibrated against a real Gaussian log;
-  `S**2` parsing and the geometry heuristics need GN-001-style real-log confirmation.
+  floors) are documented offline choices. The parser is now pinned by a corpus of twenty real
+  Gaussian 09/16 outputs (§4b), but the thresholds themselves have not been calibrated against a
+  licensed run; GN-001 remains the gate.
 - The NSIS installer exists and CI builds it; it is unsigned and has not been installed on a
   clean Windows VM. No auto-update or crash reporting.
+
+## 4b. What landed after v0.1 — the 0.2 and 0.3 lines
+
+Everything below is implemented and covered by Vitest; none of it has been exercised against a
+licensed Gaussian installation (GN-001).
+
+| Area | What landed | Evidence |
+| --- | --- | --- |
+| Visual identity (#52) | One token contract, three themes (`current`, `graphite`, `paper`), pre-paint boot script, self-hosted IBM Plex with its OFL notice, fixed type scale | `src/renderer/themes/`, `public/theme-boot.js`, `src/renderer/fonts.css`, `docs/THEME_ENGINE.md`, `test/theme.test.js` |
+| Editing safety (#56, #74) | Undo/redo for every graph mutation; structural diff, three-way merge keyed by block id, and a save guard for shared `.ncs` files; comparison of any two finished runs | `editHistory.js`, `projectMerge.js`, `runCompare.js`, `test/editHistory.test.js`, `test/projectMerge.test.js`, `test/runCompare.test.js` |
+| Drafts and templates | Debounced recovery draft offered at startup, save-before-close dialog, three workflow templates plus a blank project, `examples/` | `draft.js`, `templates.js`, `examples/`, `test/draft.test.js`, `test/templates.test.js` |
+| Per-block engines (#63) | A block may name its own engine; cross-engine geometry hand-off with explicit refusals; engine-owned provenance | `engineSettings.js`, `electron/runner/geometryHandoff.js`, `test/multiEngine.test.js`, `test/geometryHandoff.test.js` |
+| Excited states (#60, #75) | TD-DFT route and parser, simulated UV-Vis with stated broadening, NTOs, emission template and `Root`, ECD rotatory strengths | `test/tddft.test.js`, `test/ecd.test.js`, `test/wavefunctionStability.test.js` |
+| NMR and Raman (#61, #76) | Shielding parser, NMR job type and spectrum card; Raman activities, simulated spectrum and measured-CSV overlay | `nmr.js`, `raman.js`, `overlay.js`, `test/nmr.test.js`, `test/raman.test.js`, `test/overlay.test.js` |
+| Reaction energetics (#62) | IRC path gate and plot, scan extremum and surface, barrier with the level of theory stated, ΔG‡ from a declared reactant, pKa cycle | `reactionPath.js`, `test/reactionEnergetics.test.js`, `test/reactionPath.test.js` |
+| Thermochemistry (#70) | RRHO at any T and p pinned to Gaussian's own table, workbench card with sweeps, term switches, CSV export and conformer ensembles | `thermoSweep.js`, `test/thermochemistry.test.js`, `test/thermoWorkbench.test.js` |
+| Method ladders and ECP (#26, #68) | Ladder blocks with one spread gate per group and a spread table; GenECP routes with bundled SDD and def2-SVP ECP data, iodine, and a refusing check | `methodLadder.js`, `ecp.js`, `ecpData.js`, `test/methodLadder.test.js`, `test/ecp.test.js` |
+| Spin states and dispersion (#69) | Spin-state sweeps, `Stable=Opt` gate, D4 with a revision floor | `spinSweep.js`, `dispersion.js`, `test/spinSweep.test.js`, `test/dispersion.test.js` |
+| xTB parity (#72) | xTB records judged by the checks that apply to them, the rest reported as not applicable | `validityChecks.js`, `test/validityChecks.test.js` |
+| Reporting (#53) | One self-contained `report.html` plus `report.json` per finished queue; graph laid out from queue edges, gates copied not recomputed | `workflowReport.js`, `docs/REPORT_GENERATOR.md`, `test/workflowReport.test.js` |
+| Export and CLI (#65, #73) | Dataset CSV/JSON with a versioned envelope; `ncs validate`, `build-input`, `run`, `diff`, `merge` built on the app's own task builder | `datasetExport.js`, `bin/ncs.js`, `test/datasetExport.test.js`, `test/cli.test.js` |
+| Viewer (#71) | Normal-mode animation from real displacement blocks, optimisation trajectory replay, Kabsch/Horn superposition with RMSD, SVG figure export | `normalModes.js`, `trajectory.js`, `superpose.js`, `superpositionCard.js` + tests |
+| Import and corpus (#27, #28) | Batch indexing of a folder of Gaussian and xTB logs; a golden corpus of twenty real Gaussian 09/16 logs including truncated and SCF-failed cases | `logImport.js`, `test/fixtures/real/`, `test/realCorpus.test.js` |
+| Diagnostics and failure explanations (#55) | One-click redacted diagnostics bundle; offline signature table for known engine failures | `diagnostics.js`, `errorSignatures.js`, `test/diagnostics.test.js`, `test/errorSignatures.test.js` |
 
 ## 5. Delivery phases
 
@@ -245,6 +276,22 @@ through GN-009 are implemented and CI-tested on Linux; the Windows installer is 
 `Windows package` workflow but has not been installed on a clean VM. The Linux AppImage is built by
 the `Linux package` workflow but has not been installed on a clean Linux machine, and no real
 Linux/macOS Gaussian job has been run.
+
+## 6b. After 0.3
+
+| Item | Status | Where |
+| --- | --- | --- |
+| Tag and publish 0.3.0 | Release prep: version bump, README/plan refresh, release notes, tag → the two package workflows build the artifacts | `package.json`, `.github/workflows/*-package.yml` |
+| GN-001 (real licensed Gaussian run) | **Open** — needs Xavier's Windows machine and licence | §6 |
+| Output bundle block | **Open** — an output node stops the queue with a recorded reason; per-run export exists instead | `electron/runner/queue.js` |
+| Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |
+| Live queue status on the canvas | **Open** — node cards show project state; the queue panel shows task state | `src/renderer/app.js` |
+| macOS package | **Open** — runner supports macOS; there is no build to sign or test | §5 Phase 6 |
+| Code signing | **Open** — no certificate; both installers are unsigned | §5 Phase 6 |
+| Conformer/protomer stage (#30) | Milestone `0.3 — the moat` | GitHub issue |
+| Engine abstraction + ORCA (#31) | Milestone `1.0 — reach` | GitHub issue |
+| Molecular builder (#58), wavefunction analysis (#59), HPC submit/monitor (#64), multiscale QM/MM (#67), composite methods (#77) | Backlog, no milestone yet | GitHub issues |
+| VCD/ROA (#78) | **Blocked on data** — needs one real Gaussian `Freq=(VCD)` log to write the parser against | GitHub issue |
 
 ## 7. Risks and open questions
 

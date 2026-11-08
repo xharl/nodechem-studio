@@ -30,8 +30,8 @@ received.
 Download `nodechem-studio-<version>-x86_64.AppImage`, make it executable and run it:
 
 ```bash
-chmod +x nodechem-studio-0.2.1-x86_64.AppImage
-./nodechem-studio-0.2.1-x86_64.AppImage
+chmod +x nodechem-studio-0.3.0-x86_64.AppImage
+./nodechem-studio-0.3.0-x86_64.AppImage
 ```
 
 The AppImage bundles Electron and needs no Node installation on the target machine. It is unsigned
@@ -69,7 +69,7 @@ npm test
 npm run dist
 ```
 
-`release\nodechem-studio-0.2.1-x64.exe` is a per-user NSIS installer; the target machine does not
+`release\nodechem-studio-0.3.0-x64.exe` is a per-user NSIS installer; the target machine does not
 need Node. The build is unsigned, so SmartScreen warns on first launch.
 
 On a Linux machine with Node 22:
@@ -80,7 +80,7 @@ npm test
 npm run dist:linux
 ```
 
-`release/nodechem-studio-0.2.1-x86_64.AppImage` is a portable, unsigned AppImage; it bundles Electron
+`release/nodechem-studio-0.3.0-x86_64.AppImage` is a portable, unsigned AppImage; it bundles Electron
 and needs no Node on the target machine. It is not a Gaussian installer and contains no Gaussian
 binaries or licence files — it drives an installation the user already has on that Linux machine.
 

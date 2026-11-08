@@ -96,11 +96,20 @@ Type-specific payloads:
 
 `calc.settings` accepts exactly these keys — anything else is dropped:
 
-`jobType`, `method`, `basis`, `memory`, `memoryUnit`, `nproc`, `checkpoint`,
-`charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`,
-`verbosity`, `solvation`, `solvationModel`, `solvent`, `customKeywords`,
-`ircDirection`, `optConvergence`, `forceConstants`, `xtbMethod`,
-`xtbOptLevel`, `gates`.
+`jobType`, `engine`, `method`, `basis`, `memory`, `memoryUnit`, `nproc`, `checkpoint`,
+`charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
+`solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
+`optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
+`raman`, `spinSweep`, `ladder`, `referenceNodeId`, `disabledChecks`, `gates`,
+`xtbMethod`, `xtbOptLevel`, `xtbThreads`.
+
+`settings.engine` is a per-block override (`gaussian` or `xtb`); an empty string means "use
+`defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
+edge between them is a geometry hand-off the queue either accepts or refuses with a recorded reason.
+`ladder` declares method-ladder groups, `referenceNodeId` names the block a barrier or ΔG‡ is
+measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, and `raman`,
+`spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding analysis and validity
+behaviour.
 
 `settings.gates`: `termination`, `scf`, `imaginary`, `minMagnitude`, `thermo`,
 `finalEnergy`.

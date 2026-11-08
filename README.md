@@ -4,45 +4,62 @@ A desktop application for building and running computational-chemistry workflows
 calculation blocks on a canvas, connect them, and run one block or the whole workflow. Every run
 writes a folder with the exact input, the raw output and a provenance record you can hash and share.
 
-Two engines, one project at a time:
+Two engines, and each block picks the one it runs on:
 
 | Engine | Licence | Level of theory |
 | --- | --- | --- |
 | **Gaussian 16** | Commercial — licensed separately by Gaussian, Inc. | DFT and wavefunction methods with explicit basis sets |
 | **xTB** (GFN0/GFN1/GFN2/GFN-FF) | Open source (LGPL) | Fast semi-empirical and force-field methods |
 
-The app bundles neither engine. It drives an installation you already have, on the machine it is
-installed on. Without either, the dry run exercises the whole pipeline on a labelled fixture.
+A project can mix them: an xTB pre-optimisation feeding a Gaussian frequency job is a normal graph,
+with the hand-off refused when the receiving block cannot accept the geometry. The app bundles
+neither engine. It drives an installation you already have, on the machine it is installed on.
+Without either, the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
-**Status: v0.2.1 — early preview.** The graph, the durable workflow queue, the dry-run path, the
-project format, the results surface, validity checks, the methods paragraph, run-bundle export, the
-structure viewer and both engines' input builders and parsers are implemented and covered by tests.
+**Status: v0.3.0 — early preview.** The graph, the durable queue, the dry-run path, per-block engine
+selection, undo/redo, project templates, crash-safe drafts, three themes, the workflow report, the
+headless CLI, spectra and thermochemistry, reaction energetics, the structure viewer's animation and
+superposition, and both engines' input builders and parsers are implemented and covered by tests.
 What has *not* been proven is a real run: no licensed Gaussian job and no real xTB job has been
 executed by the project's automated tests. Read [Current limitations](#current-limitations) before
 you trust a result.
 
 ## What it does
 
-- **Graph workflows** — calculation blocks, conditions, loops and joins, with dependency,
-  checkpoint and branch connections.
-- **A durable queue** — runs blocks in dependency order, survives a restart, and reconciles an
-  interrupted task instead of calling it complete.
-- **Two engines behind one contract** — Gaussian 16 job types down to `Opt=TS`, IRC and scans; xTB
-  with GFN0/1/2 and GFN-FF, solvation, threads and restart hand-off.
-- **Honest results** — gates answer "did it run", validity checks answer "is it defensible", and
-  missing evidence is reported as `unknown` or `not reported`, never as a pass.
+- **Graph workflows** — calculation, condition, loop, merge, output and note blocks with dependency,
+  checkpoint and branch connections. Undo/redo, three starting templates, and a save guard that
+  refuses to overwrite a file changed on disk since it was opened.
+- **A durable queue** — runs blocks in dependency order, survives a restart, reconciles an
+  interrupted task instead of calling it complete, and records branch decisions and attempts.
+- **Two engines, chosen per block** — Gaussian 16 job types down to `Opt=TS`, IRC and scans; xTB
+  with GFN0/1/2 and GFN-FF, solvation, threads and restart hand-off, judged by the same validity
+  protocol where the checks apply.
+- **Results you can defend** — gates answer "did it run", validity checks answer "is it
+  defensible", an offline signature table explains known engine failures, and any two finished runs
+  can be compared without recomputing anything.
+- **Spectra and thermochemistry** — simulated UV-Vis from TD-DFT states, NMR shielding, Raman
+  activities with a measured overlay, ECD rotatory strengths; IRC paths, scans, barriers, ΔG‡ and a
+  pKa cycle; RRHO at any temperature and pressure with sweeps, conformer ensembles and CSV export.
+- **Structure viewer** — normal-mode animation from real displacement blocks, optimisation
+  trajectory replay, Kabsch/Horn superposition with RMSD, and SVG figure export.
+- **Reports and export** — a self-contained `report.html` plus `report.json` for a finished queue,
+  dataset CSV/JSON with a versioned envelope, and run bundles with a per-file SHA-256 manifest.
 - **Provenance** — `run.json` records the exact input hash, the parsed output, the engine's method
   block and the app version; a run bundle adds `methods.md` and a per-file SHA-256 manifest.
+- **Three themes** — *current*, *graphite*, *paper*, from one token contract; the type scale is
+  fixed and not themed.
+- **Headless CLI** — `ncs validate`, `ncs build-input` and `ncs run`, plus `ncs diff` / `ncs merge`
+  for projects shared through a drive.
 - **Local only** — no account, no telemetry, no network code at all.
 
 ## Install
 
 | Platform | How |
 | --- | --- |
-| Windows 10/11 x64 | Run `nodechem-studio-0.2.1-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
-| Linux x64 | `chmod +x nodechem-studio-0.2.1-x86_64.AppImage` and run it. Unsigned. |
+| Windows 10/11 x64 | Run `nodechem-studio-0.3.0-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
+| Linux x64 | `chmod +x nodechem-studio-0.3.0-x86_64.AppImage` and run it. Unsigned. |
 | From source | Node 22+, then `npm ci && npm run dev`. |
 
 Neither artifact installs Gaussian or xTB. See [Install](docs/guide/install.md) for the data
@@ -71,12 +88,17 @@ directory, requirements and the unsigned-build warning.
 | [Workflows](docs/guide/workflow.md) | Queue, conditions, loops, checkpoints, cluster export |
 | [Results](docs/guide/results.md) | Gates, validity checks, thermochemistry, viewer, bundles |
 | [Projects and runs on disk](docs/guide/project-files.md) | `.ncs` file, run folders, provenance |
+| [Appearance](docs/guide/appearance.md) | The three themes, what a theme may change, the font bundle |
+| [Headless CLI](docs/guide/cli.md) | `validate`, `build-input`, `run`, `diff`, `merge` |
+| [Output corpus](docs/guide/parser-corpus.md) | The real Gaussian logs the parser is tested against |
 | [Troubleshooting](docs/guide/troubleshooting.md) | Symptom → cause → action |
 | [FAQ](docs/guide/faq.md) | Short answers |
 | [Privacy and licensing](docs/guide/privacy-and-licensing.md) | What leaves the machine, and what the licence grants |
 
 Normative references: [`docs/PROJECT-FORMAT.md`](docs/PROJECT-FORMAT.md) (the `.ncs` document and the
 on-disk layout), [`docs/CLUSTER_EXPORT.md`](docs/CLUSTER_EXPORT.md) (SLURM/PBS export),
+[`docs/THEME_ENGINE.md`](docs/THEME_ENGINE.md) (the token contract and the three themes),
+[`docs/REPORT_GENERATOR.md`](docs/REPORT_GENERATOR.md) (the workflow report),
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) (phased plan).
 
 ## Requirements
@@ -100,7 +122,7 @@ release artifact. No xTB binary is bundled either.
 | `npm run dev` | Vite + Electron development loop |
 | `npm start` | Electron against `dist/` |
 | `npm test` | Vitest unit and runner tests |
-| `npm run check` | `node --check` on the Electron and shared modules |
+| `npm run check` | Syntax-check every shipped module (tree walk over `electron/`, `src/`, `bin/`, `scripts/`) |
 | `npm run build` | Vite production renderer build |
 | `npm run dist` | Vite build + NSIS installer (run on Windows) |
 | `npm run dist:linux` | Vite build + unsigned AppImage (run on Linux) |
@@ -132,16 +154,17 @@ docs/              documentation; the user guide lives in docs/guide/
 - **Output bundling is not implemented.** An Output bundle block stops the queue with a recorded
   reason; use **Export run bundle** on a finished run instead.
 - **Join policy `any` still waits for every input.**
-- **Validity thresholds are documented choices, not calibrated against real logs.** The `S**2`
-  parsing and geometry heuristics need a real-log check.
-- **The structure viewer is static.** The parser does not extract normal-mode displacements, so
-  animation is unavailable rather than faked.
+- **Validity thresholds are documented choices, not calibrated against real logs.** The parser is
+  now checked against a corpus of twenty real Gaussian 09/16 outputs, including truncated and
+  SCF-failed ones, so parsing defects surface in CI; the thresholds themselves (covalent-radius
+  ratios, spin contamination, imaginary-mode floors) remain engineering choices.
 - **Periodic systems are out of scope.** No unit cells, k-points, band structures or plane-wave
   engines. A `.cif`, `.poscar`/`.vasp` or `.cell` file is refused with a message saying so, rather
   than being parsed as if its asymmetric unit were a molecule. Revisit only alongside a periodic
   engine backend (see [#66](https://github.com/xharl/nodechem-studio/issues/66)).
-- **One engine process at a time.** No concurrent local scheduler; cluster execution happens by
-  exporting scripts, not by submitting them.
+- **One engine process at a time.** Blocks may name different engines, but the queue executes one
+  task at a time; there is no concurrent local scheduler. Cluster execution happens by exporting
+  scripts, not by submitting them.
 - **Unsigned builds.** No auto-update, no crash reporting, no code signing.
 - **No remote execution, submission, cloud API or telemetry.** This is intentional.
 
