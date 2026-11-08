@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "note": "Reference couples for E° cycles. Each entry is the offset that anchors a computed half-reaction to the SHE scale; the cycle itself uses computed free energies for both the sample and the reference couple, so the electron convention cancels. Potentials are quoted against the standard hydrogen electrode at the stated temperature.",
+  "references": [
+    {
+      "id": "she",
+      "name": "Standard hydrogen electrode (SHE)",
+      "couple": "H⁺/H2",
+      "e0V": 0,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "source": {
+        "citation": "IUPAC Compendium of Analytical Nomenclature (Orange Book), 3rd ed.; Blackwell Science: Oxford, 1997: the standard hydrogen electrode is the primary reference electrode and is assigned E° = 0 V at all temperatures.",
+        "year": 1997
+      }
+    },
+    {
+      "id": "ag-agcl",
+      "name": "Silver/silver chloride, saturated KCl",
+      "couple": "AgCl(s)/Ag(s), Cl⁻",
+      "e0V": 0.197,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Electrochemical Series' (saturated KCl, 25 °C).",
+        "table": "Electrochemical Series",
+        "year": 2016
+      }
+    },
+    {
+      "id": "sce",
+      "name": "Saturated calomel electrode (SCE)",
+      "couple": "Hg2Cl2(s)/Hg(l), Cl⁻",
+      "e0V": 0.241,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Electrochemical Series' (saturated KCl, 25 °C).",
+        "table": "Electrochemical Series",
+        "year": 2016
+      }
+    }
+  ]
+}

@@ -27,6 +27,7 @@ import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
+import { kineticsSummary } from '../src/shared/kinetics.js';
 import { convertFchk, convertParsed, convertStructure } from '../src/shared/converters/index.js';
 import { parseFchk } from '../src/shared/fchk.js';
 import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
@@ -281,6 +282,29 @@ async function commandRun({ positional, flags }) {
   const declared = await emitDeclaredReports(result.project, outDir)
     .catch((error) => fail(`declared report: ${error.message}`, EXIT.invalid));
 
+  const runRecords = {};
+  const runEntries = await Promise.all((queue.tasks || []).map(async (task) => {
+    const record = await readRunRecord(task.runDir);
+    if (record) {
+      runRecords[task.nodeId] = record;
+      if (task.runId) runRecords[task.runId] = record;
+    }
+    return {
+      nodeId: task.nodeId,
+      runId: task.runId || null,
+      status: task.status,
+      gates: record?.gates?.overall || null,
+      termination: record?.parsed?.termination || null,
+      error: record?.error || null,
+      runDir: task.runDir || null,
+    };
+  }));
+
+  // Eyring rates for the reaction paths this queue evaluated, with the unit
+  // derived from the reactant block's fragments. Existing summary keys keep
+  // their shape; a project with no reaction path has no `kinetics` key.
+  const kinetics = kineticsSummary({ project: result.project, queue, runRecords });
+
   const summary = {
     queueId,
     status: queue.status,
@@ -288,18 +312,8 @@ async function commandRun({ positional, flags }) {
     reports: declared,
     ladders: queue.ladders || {},
     spins: queue.spins || {},
-    runs: await Promise.all((queue.tasks || []).map(async (task) => {
-      const record = await readRunRecord(task.runDir);
-      return {
-        nodeId: task.nodeId,
-        runId: task.runId || null,
-        status: task.status,
-        gates: record?.gates?.overall || null,
-        termination: record?.parsed?.termination || null,
-        error: record?.error || null,
-        runDir: task.runDir || null,
-      };
-    })),
+    ...(kinetics.length > 0 ? { kinetics } : {}),
+    runs: runEntries,
   };
   process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 

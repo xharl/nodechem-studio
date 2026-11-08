@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "note": "Reference acids for isodesmic pKa cycles. Every entry carries the source it came from, the solvent and the temperature; a value without those is not a pKa, it is a number. Aqueous entries are at zero ionic strength (infinite dilution) unless stated otherwise.",
+  "references": [
+    {
+      "id": "acetic-acid",
+      "name": "Acetic acid",
+      "formula": "CH3COOH",
+      "conjugateBase": "CH3COO⁻",
+      "pKa": 4.76,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Organic Acids and Bases'.",
+        "table": "Dissociation Constants of Organic Acids and Bases",
+        "year": 2016
+      }
+    },
+    {
+      "id": "formic-acid",
+      "name": "Formic acid",
+      "formula": "HCOOH",
+      "conjugateBase": "HCOO⁻",
+      "pKa": 3.75,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Organic Acids and Bases'.",
+        "table": "Dissociation Constants of Organic Acids and Bases",
+        "year": 2016
+      }
+    },
+    {
+      "id": "benzoic-acid",
+      "name": "Benzoic acid",
+      "formula": "C6H5COOH",
+      "conjugateBase": "C6H5COO⁻",
+      "pKa": 4.2,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Organic Acids and Bases'.",
+        "table": "Dissociation Constants of Organic Acids and Bases",
+        "year": 2016
+      }
+    },
+    {
+      "id": "phenol",
+      "name": "Phenol",
+      "formula": "C6H5OH",
+      "conjugateBase": "C6H5O⁻",
+      "pKa": 9.95,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Organic Acids and Bases'.",
+        "table": "Dissociation Constants of Organic Acids and Bases",
+        "year": 2016
+      }
+    },
+    {
+      "id": "p-nitrophenol",
+      "name": "4-Nitrophenol",
+      "formula": "O2NC6H4OH",
+      "conjugateBase": "O2NC6H4O⁻",
+      "pKa": 7.15,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Organic Acids and Bases'.",
+        "table": "Dissociation Constants of Organic Acids and Bases",
+        "year": 2016
+      }
+    },
+    {
+      "id": "pyridinium",
+      "name": "Pyridinium ion",
+      "formula": "C5H5NH⁺",
+      "conjugateBase": "C5H5N",
+      "pKa": 5.23,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Organic Acids and Bases'.",
+        "table": "Dissociation Constants of Organic Acids and Bases",
+        "year": 2016
+      }
+    },
+    {
+      "id": "ammonium",
+      "name": "Ammonium ion",
+      "formula": "NH4⁺",
+      "conjugateBase": "NH3",
+      "pKa": 9.25,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Bates, R. G.; Pinching, G. D. Acidic Dissociation Constant of the Ammonium Ion and Activity Coefficients of Ammonia in Aqueous Solutions of Ammonium Chloride. J. Am. Chem. Soc. 1950, 72, 1393-1396.",
+        "table": "Acidic dissociation constant of the ammonium ion",
+        "year": 1950
+      }
+    },
+    {
+      "id": "water",
+      "name": "Water (pKa of H2O)",
+      "formula": "H2O",
+      "conjugateBase": "OH⁻",
+      "pKa": 15.74,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Harned, H. S.; Owen, B. B. The Physical Chemistry of Electrolytic Solutions, 3rd ed.; Reinhold: New York, 1958; chapter on the ionization of water. pKw = 14.00 at 298.15 K; pKa(H2O) = pKw − log10(55.5 mol L⁻¹) = 15.74.",
+        "table": "Ionization constant of water",
+        "year": 1958
+      }
+    },
+    {
+      "id": "dihydrogen-phosphate",
+      "name": "Dihydrogen phosphate ion",
+      "formula": "H2PO4⁻",
+      "conjugateBase": "HPO4²⁻",
+      "pKa": 7.2,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Inorganic Acids and Bases'.",
+        "table": "Dissociation Constants of Inorganic Acids and Bases",
+        "year": 2016
+      }
+    },
+    {
+      "id": "bicarbonate",
+      "name": "Bicarbonate ion",
+      "formula": "HCO3⁻",
+      "conjugateBase": "CO3²⁻",
+      "pKa": 10.33,
+      "solvent": "water",
+      "temperatureK": 298.15,
+      "ionicStrength": 0,
+      "source": {
+        "citation": "Haynes, W. M., Ed. CRC Handbook of Chemistry and Physics, 97th ed.; CRC Press: Boca Raton, FL, 2016; Section 5, table 'Dissociation Constants of Inorganic Acids and Bases'.",
+        "table": "Dissociation Constants of Inorganic Acids and Bases",
+        "year": 2016
+      }
+    }
+  ]
+}
