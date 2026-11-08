@@ -16,6 +16,7 @@
 
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
+import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -668,6 +669,53 @@ export function installResultsView({
     container.innerHTML = resultsPanelHtml(record);
     container.hidden = false;
     consoleEl?.classList.add('has-results');
+    mountCompareBar(record);
+  };
+
+  /**
+   * Difference-first comparison against any other finished run. The select is
+   * populated lazily from the run folders the main process already lists; a
+   * failed load leaves the panel alone instead of blanking it.
+   */
+  const mountCompareBar = async (record) => {
+    if (!desktop?.listRuns) return;
+    const runId = text(record.id);
+    if (!runId) return;
+    let runs = [];
+    try {
+      runs = await desktop.listRuns();
+    } catch {
+      return;
+    }
+    const others = (Array.isArray(runs) ? runs : [])
+      .filter((candidate) => candidate && text(candidate.id) && text(candidate.id) !== runId)
+      .slice(0, 40);
+    if (!others.length) return;
+    if (text(currentRecord?.id) !== runId) return;
+    const bar = doc.createElement('div');
+    bar.className = 'results-compare-bar';
+    bar.innerHTML = '<label class="results-compare-label">Compare with'
+      + '<select class="results-compare-select" data-role="compare-select">'
+      + '<option value="">Select a finished run…</option>'
+      + others.map((candidate) => `<option value="${esc(candidate.id)}">`
+        + `${esc(candidate.title || candidate.id)} · ${esc(candidate.status || 'unknown')}</option>`).join('')
+      + '</select></label><div class="results-compare-output" data-role="compare-output"></div>';
+    container.appendChild(bar);
+    const select = bar.querySelector('[data-role="compare-select"]');
+    const output = bar.querySelector('[data-role="compare-output"]');
+    select?.addEventListener('change', async () => {
+      const otherId = select.value;
+      if (!otherId) {
+        output.innerHTML = '';
+        return;
+      }
+      const other = await findRun(desktop, otherId);
+      if (!other) {
+        output.innerHTML = '<p class="results-missing">That run could not be loaded.</p>';
+        return;
+      }
+      output.innerHTML = comparisonHtml(compareRuns(other, record));
+    });
   };
 
   const showUnavailable = (runId) => {
@@ -876,6 +924,42 @@ const RESULTS_VIEW_CSS = `
 .results-diagnosis-cause { margin: 0 0 5px; color: var(--muted); font-size: 9.5px; line-height: 1.5; }
 .results-diagnosis-action { margin: 0; font-size: 9.5px; line-height: 1.5; }
 .results-diagnosis-action strong { color: var(--text); font-weight: 650; }
+
+.results-compare-bar {
+  margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+}
+.results-compare-label {
+  display: flex; gap: 6px; align-items: center;
+  color: var(--muted); font-size: 9px; letter-spacing: .06em; text-transform: uppercase;
+}
+.results-compare-select {
+  background: #0b0f16; color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 6px; font: 10px var(--sans);
+}
+.results-compare-output { flex-basis: 100%; }
+.results-compare {
+  margin-top: 6px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden;
+}
+.results-compare-head {
+  display: flex; flex-direction: column; gap: 2px; padding: 7px 9px;
+  background: rgba(255, 255, 255, .03);
+}
+.results-compare-title { font-size: 10px; font-weight: 650; }
+.results-compare-summary { color: var(--muted); font-size: 9px; }
+.results-compare-note {
+  margin: 0; padding: 5px 9px; font-size: 9px; color: #f0b86e;
+  background: rgba(240, 184, 110, .08);
+}
+.results-compare-table { width: 100%; border-collapse: collapse; font-size: 9px; }
+.results-compare-table th, .results-compare-table td {
+  padding: 4px 9px; text-align: right; border-top: 1px solid var(--line);
+}
+.results-compare-table thead th { color: var(--faint); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
+.results-compare-table tbody th { text-align: left; font-weight: 500; color: var(--muted); }
+.results-compare-table tr.is-changed td { color: #f0b86e; }
+.results-compare-row-note { display: block; color: var(--faint); font-size: 8px; }
+.results-compare-foot { margin: 0; padding: 5px 9px 7px; color: var(--faint); font-size: 8.5px; }
 .results-provenance { border-top: 1px solid var(--line); padding-top: 7px; }
 .results-provenance summary {
   cursor: pointer; color: var(--muted); font-size: 9px; letter-spacing: .08em;

@@ -11,6 +11,11 @@ Two questions get answered separately, and that separation is the most important
   compatibility under xTB) is reported as **not applicable**, which is different from **unknown**
   ("the question applies but there is no evidence") and is never a pass.
 
+- **How does it differ from the run before?** → **Compare**. Under a finished run, pick another
+  run; the panel shows both values, the signed difference (comparison minus baseline) and flags a
+  comparison across different methods, bases or engines instead of presenting it as a re-run.
+  A value one run did not report stays *not reported*.
+
 A run can execute correctly and still be scientifically unsupported. The record states both, and
 validity findings never change `gates.overall`.
 
