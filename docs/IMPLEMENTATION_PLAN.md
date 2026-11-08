@@ -1,6 +1,6 @@
 # NodeChem Studio — implementation plan
 
-Status: **0.4.0 prepared 2026-11-08; the tag is cut from this tree.** Sections 1–3 and 5 describe the architecture and the original
+Status: **0.4.0 released 2026-11-08 — tag `v0.4.0` → `36d36e1`.** Sections 1–3 and 5 describe the architecture and the original
 phase plan; §4 is the v0.1 baseline kept for history, §4b lists what landed since, and §6b is what
 remains. **GN-001 is partly satisfied**: on 2026-11-08 a peer run executed 25 cases written by this
 builder on a licensed Gaussian 16 Rev A.03 (Windows) and its logs are committed as
@@ -294,7 +294,7 @@ Linux/macOS Gaussian job has been run.
 | Item | Status | Where |
 | --- | --- | --- |
 | Tag and publish 0.3.0 | **Done** 2026-11-08 — tag `v0.3.0` → `699ae18`, prerelease with the Windows and Linux installers, milestone 3 closed | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
-| Tag and publish 0.4.0 | **Prepared** — notes, checks and the two package workflows are ready; the tag is cut after the final re-gate and then reported here with its SHA | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
+| Tag and publish 0.4.0 | **Done** 2026-11-08 — tag `v0.4.0` → `36d36e1`, prerelease with both installers, `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations, both verified with `gh attestation verify` | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
 | GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
 | Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |
 | Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |

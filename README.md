@@ -20,7 +20,7 @@ the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
-**Status: v0.4.0 — early preview.** This tree is the 0.4.0 release; the tag names it. The graph, the durable queue, the dry-run
+**Status: v0.4.0 — early preview.** Released 2026-11-08. The graph, the durable queue, the dry-run
 path, per-block engine selection, undo/redo, project templates, crash-safe drafts, three themes, the
 workflow report, the headless CLI, spectra and thermochemistry, reaction energetics, the structure
 viewer's animation and superposition, and every engine's input builder and parser are implemented
