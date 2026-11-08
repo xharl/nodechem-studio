@@ -98,7 +98,10 @@ async function makeStack({ behaviour, root, withExecutable = true } = {}) {
   return { base, runsRoot, queuesRoot, exe, events, runManager, queueManager };
 }
 
-async function waitFor(check, { timeout = 5000, label = 'condition' } = {}) {
+// Waiting on a child process chain on a loaded Windows runner is not the same
+// budget as waiting in memory: the label in the failure message is what tells
+// the next reader which state never landed, so the wait is generous on purpose.
+async function waitFor(check, { timeout = 20000, label = 'condition' } = {}) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
     const value = await check();
