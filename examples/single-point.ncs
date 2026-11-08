@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "name": "Single-point energy + NBO charges",
+  "molecule": {
+    "smiles": "",
+    "charge": 0,
+    "multiplicity": 1,
+    "fragments": [],
+    "coords": [],
+    "geometry": {
+      "source": "demo",
+      "file": "",
+      "format": ""
+    }
+  },
+  "defaults": {
+    "engine": "gaussian",
+    "method": "B3LYP",
+    "basis": "def2-SVP",
+    "memory": "4",
+    "memoryUnit": "GB",
+    "nproc": 4
+  },
+  "nodes": [
+    {
+      "id": "sp-energy",
+      "type": "calc",
+      "kind": "SP",
+      "title": "Single-point energy",
+      "state": "ready",
+      "x": 40,
+      "y": 60,
+      "settings": {
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "sp_energy.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "NBO",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": null
+    }
+  ],
+  "edges": []
+}

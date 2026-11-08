@@ -17,6 +17,7 @@ import {
   normalizeDraft,
 } from '../shared/draft.js';
 import { defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
 import {
@@ -1964,6 +1965,12 @@ function renderDrawer() {
   const modal = $('#modal');
   if (!modal || !state.drawer) return;
   const drawer = state.drawer;
+  // The New project chooser reuses the modal shell and its close/Escape/focus
+  // handling; only the body renderer is different.
+  if (drawer.type === 'template') {
+    renderTemplateChooser();
+    return;
+  }
   const draft = drawer.draft;
   const tabs = [
     ['structure', 'Structure'],
@@ -2970,6 +2977,133 @@ async function openProject() {
   }
 }
 
+/* ── New project from a template ──────────────────────────── */
+
+const BLANK_TEMPLATE = Object.freeze({
+  id: 'blank',
+  name: 'Blank project',
+  description: 'One empty calculation block with the default route and gates.',
+  blockCount: 1,
+});
+
+function hasUnsavedChanges() {
+  // "Unsaved" means different from what the session loaded, not "has no file":
+  // the seeded demo would otherwise warn about changes nobody made.
+  const baseline = state.savedSnapshot ?? state.draftBaseline ?? null;
+  return baseline === null || JSON.stringify(state.project) !== baseline;
+}
+
+/**
+ * Open the template chooser in the shared modal shell. The modal is also where
+ * an unsaved project is confirmed: there is no native confirm dialog in this
+ * renderer, and an inline step keeps the decision keyboard-accessible and
+ * testable.
+ */
+function openNewProject() {
+  state.drawer = {
+    type: 'template',
+    step: hasUnsavedChanges() ? 'confirm' : 'choose',
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  };
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  renderDrawer();
+  requestAnimationFrame(() => {
+    const modal = $('#modal');
+    modal?.querySelector('button, [tabindex]:not([tabindex="-1"])')?.focus();
+  });
+}
+
+function templateRow(template) {
+  const count = Number(template.blockCount) || 0;
+  return `<button type="button" class="palette-item" data-action="apply-template" data-template-id="${esc(template.id)}">
+    <span class="palette-copy" style="flex:1;min-width:0">
+      <strong>${esc(template.name)}</strong>
+      <small>${esc(template.description)}</small>
+    </span>
+    <span class="status-pill">${count} block${count === 1 ? '' : 's'}</span>
+  </button>`;
+}
+
+function renderTemplateChooser() {
+  const modal = $('#modal');
+  if (!modal || state.drawer?.type !== 'template') return;
+
+  if (state.drawer.step === 'confirm') {
+    const current = state.project.name || 'Untitled project';
+    modal.innerHTML = `
+      <div class="modal-head">
+        <div>
+          <span class="eyebrow">New project</span>
+          <h2 id="modal-title">Discard unsaved changes?</h2>
+          <p>Starting a new project replaces the graph that is open now.</p>
+        </div>
+        <button type="button" class="icon-btn" data-modal-close aria-label="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="callout red"><strong>“${esc(current)}” has unsaved changes.</strong> The template chooser replaces this project in memory, and the app keeps no undo copy of it.</div>
+        <p class="inspector-note" style="margin-top:10px">Save the project first if you want to keep it. A new project starts clean and its first Save opens Save As.</p>
+      </div>
+      <div class="modal-foot">
+        <div class="modal-note">Nothing is written to disk until you save the new project.</div>
+        <button type="button" class="btn" data-modal-close>Keep editing</button>
+        <button type="button" class="btn primary" data-action="template-discard">Discard and choose</button>
+      </div>`;
+    return;
+  }
+
+  modal.innerHTML = `
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">New project</span>
+        <h2 id="modal-title">Start from a template</h2>
+        <p>A ready-made starting graph you can edit; nothing is written until you save.</p>
+      </div>
+      <button type="button" class="icon-btn" data-modal-close aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="dep-list">${[...WORKFLOW_TEMPLATES, BLANK_TEMPLATE].map(templateRow).join('')}</div>
+      <div class="callout" style="margin-top:14px"><strong>Replaces the current project.</strong> The graph is swapped in memory, so Save asks for a new <code>.ncs</code> path instead of overwriting the file that was open.</div>
+    </div>
+    <div class="modal-foot">
+      <div class="modal-note">Templates use the schema defaults. Set the molecule and route before a real run.</div>
+      <button type="button" class="btn" data-modal-close>Cancel</button>
+    </div>`;
+}
+
+/** Swap in a template project and start it clean, with no file path yet. */
+function applyTemplateProject(templateId) {
+  if (state.drawer?.type !== 'template') return;
+  let project;
+  try {
+    project = templateId === BLANK_TEMPLATE.id ? blankProject() : templateProject(templateId);
+  } catch (error) {
+    toast(`Could not start from template: ${error.message}`);
+    return;
+  }
+  closeDrawer();
+  state.project = project;
+  state.selected = { type: 'project', id: null };
+  state.connecting = null;
+  state.keyboardConnect = null;
+  state.paletteOpen = false;
+  // markProjectSaved(null) clears the path (Save becomes Save As) and snapshots
+  // the freshly built project, so it opens clean and the dirty flag clears.
+  markProjectSaved(null);
+  // A draft from the project we just replaced must not be offered next launch.
+  clearDraft();
+  const name = $('#project-name-text');
+  if (name) name.textContent = state.project.name || 'Untitled project';
+  state.statusMessage = templateId === BLANK_TEMPLATE.id
+    ? 'Blank project · Save to choose a file name'
+    : `Started "${state.project.name}" from a template · Save to choose a file name`;
+  renderGraph();
+  renderInspector();
+  updateCounts();
+  updateRunConsoleCopy();
+  toast(templateId === BLANK_TEMPLATE.id ? 'Blank project created.' : 'Template applied.');
+}
+
 async function openStartupProject() {
   if (!desktop?.startupProject) return;
   try {
@@ -3144,6 +3278,14 @@ function handleAction(action, element) {
       exportRunBundleAction({ desktop, runId: state.run.id, notify: toast });
       break;
     case 'open-project': openProject(); break;
+    case 'new-project': openNewProject(); break;
+    case 'template-discard':
+      if (state.drawer?.type === 'template') {
+        state.drawer.step = 'choose';
+        renderDrawer();
+      }
+      break;
+    case 'apply-template': applyTemplateProject(element.dataset.templateId); break;
     case 'save-project': saveProject(); break;
     case 'export': exportSelectedInput(); break;
     case 'cluster':

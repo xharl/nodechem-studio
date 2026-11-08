@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "name": "Transition-state search",
+  "molecule": {
+    "smiles": "",
+    "charge": 0,
+    "multiplicity": 1,
+    "fragments": [],
+    "coords": [],
+    "geometry": {
+      "source": "demo",
+      "file": "",
+      "format": ""
+    }
+  },
+  "defaults": {
+    "engine": "gaussian",
+    "method": "B3LYP",
+    "basis": "def2-SVP",
+    "memory": "4",
+    "memoryUnit": "GB",
+    "nproc": 4
+  },
+  "nodes": [
+    {
+      "id": "ts-react-opt",
+      "type": "calc",
+      "kind": "Opt",
+      "title": "Reactant optimization",
+      "state": "ready",
+      "x": 40,
+      "y": 60,
+      "settings": {
+        "jobType": "Opt",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "reactant_opt.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": null
+    },
+    {
+      "id": "ts-opt",
+      "type": "calc",
+      "kind": "TS",
+      "title": "TS guess optimization",
+      "state": "ready",
+      "x": 40,
+      "y": 240,
+      "settings": {
+        "jobType": "Opt=TS",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "ts_opt.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "Tight",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": false
+        },
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": null
+    },
+    {
+      "id": "ts-freq",
+      "type": "calc",
+      "kind": "Freq",
+      "title": "TS frequency",
+      "state": "ready",
+      "x": 40,
+      "y": 420,
+      "settings": {
+        "jobType": "Freq",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "ts_freq.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": 1,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": false
+        },
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": "ts-opt"
+    },
+    {
+      "id": "ts-route-note",
+      "type": "note",
+      "kind": "Note",
+      "title": "Route note",
+      "state": "ready",
+      "x": 330,
+      "y": 60,
+      "note": {
+        "text": "Opt=TS with CalcFC computes the Hessian at the starting geometry (NoEigenTest is implied); the frequency block then verifies exactly one imaginary mode at or above 50 cm^-1. Opt=Tight before a frequency job keeps the geometry tightly converged."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "ts-react-opt",
+      "to": "ts-opt",
+      "type": "dependency",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "ts-opt",
+      "to": "ts-freq",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    }
+  ]
+}

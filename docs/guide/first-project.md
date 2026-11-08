@@ -23,6 +23,23 @@ The status bar at the bottom of the canvas summarises block states — **Passed*
 show the project's saved state; live status during a run is in the queue panel
 (see [Workflows](workflow.md)).
 
+### Start from a template
+
+**New** in the top bar opens a chooser. Pick a recipe and it replaces the graph in memory; **Save**
+then asks for a new `.ncs` path. If the current project has unsaved changes, the chooser asks before
+discarding them.
+
+| Template | Blocks | Starting point |
+| --- | --- | --- |
+| Reactant optimization + frequency | 2 | `Opt` → `Freq`, with the frequency block requiring zero imaginary modes |
+| Transition-state search | 4 | Reactant `Opt` → `Opt=TS` with `CalcFC` → `Freq`, plus a checkpoint hand-off and a note explaining the route |
+| Single-point energy + NBO charges | 1 | One `SP` job with `Pop=NBO`; no frequency gates |
+
+The TS template's frequency block requires exactly one imaginary mode at or above 50 cm⁻¹.
+**Blank project** is also in the list: one calculation block with the default route and gates. The
+same three recipes are checked in under [`examples/`](../../examples/README.md) as `.ncs` files, so
+you can open one directly with **Open**.
+
 ## 2. Run one block
 
 1. Click the **Reactant frequency** block on the canvas. The inspector on the right shows its job

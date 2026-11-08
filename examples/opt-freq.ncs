@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "name": "Reactant optimization + frequency",
+  "molecule": {
+    "smiles": "",
+    "charge": 0,
+    "multiplicity": 1,
+    "fragments": [],
+    "coords": [],
+    "geometry": {
+      "source": "demo",
+      "file": "",
+      "format": ""
+    }
+  },
+  "defaults": {
+    "engine": "gaussian",
+    "method": "B3LYP",
+    "basis": "def2-SVP",
+    "memory": "4",
+    "memoryUnit": "GB",
+    "nproc": 4
+  },
+  "nodes": [
+    {
+      "id": "of-opt",
+      "type": "calc",
+      "kind": "Opt",
+      "title": "Reactant optimization",
+      "state": "ready",
+      "x": 40,
+      "y": 60,
+      "settings": {
+        "jobType": "Opt",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "reactant_opt.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": null
+    },
+    {
+      "id": "of-freq",
+      "type": "calc",
+      "kind": "Freq",
+      "title": "Reactant frequency",
+      "state": "ready",
+      "x": 40,
+      "y": 240,
+      "settings": {
+        "jobType": "Freq",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": 0,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "disabledChecks": []
+      },
+      "output": null,
+      "checkpointFrom": null
+    }
+  ],
+  "edges": [
+    {
+      "from": "of-opt",
+      "to": "of-freq",
+      "type": "dependency",
+      "fromPort": "bottom",
+      "toPort": "top"
+    }
+  ]
+}
