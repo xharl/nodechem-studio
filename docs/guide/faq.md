@@ -35,9 +35,11 @@ refuses the job type. Use Gaussian for saddle searches.
 No. GFN methods are parameterised semi-empirical approximations: good for screening, conformers and
 pre-optimisation, not for energies or barriers comparable to DFT or wavefunction results.
 
-**Why does an xTB run show no validity checks?**
-The six checks are Gaussian-route checks — they inspect route settings and Gaussian log records. An
-xTB record leaves them absent, which is not the same as passing them.
+**Why does an xTB run list some validity checks as not applicable?**
+Two of the six checks inspect Gaussian route settings (method/basis compatibility and spin
+contamination). xTB has no route or basis, so those are reported as *not applicable* — a distinct
+state from *unknown*, and never a pass. The engine-neutral checks (charge/multiplicity, geometry
+sanity, imaginary modes, optimisation convergence) run for xTB and can fail a result.
 
 **Why are memory, cores and checkpoint fields missing in an xTB project?**
 xTB has no equivalent. It takes `Threads` (`OMP_NUM_THREADS`) instead, and a checkpoint edge copies

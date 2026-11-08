@@ -436,6 +436,13 @@ export function parseXtbOutput(text, { truncated = false, argv = null, route = n
 
   const optCycles = firstInteger(text, String.raw`GEOMETRY OPTIMIZATION CONVERGED AFTER\s+(\d+)\s+ITERATIONS`);
   const optimizationCompleted = optCycles !== null;
+  // Distinguish "this run was not an optimisation" from "it optimised and did
+  // not converge". The argv says what was requested; the banner proves an
+  // optimisation was actually attempted.
+  const requestedJob = jobTypeFromArgv(argv);
+  const optimizationAttempted = requestedJob === 'Opt'
+    || requestedJob === 'Opt Freq'
+    || /GEOMETRY OPTIMIZATION/i.test(text);
 
   const declaredCount = firstInteger(text, String.raw`#\s*frequencies\s+(\d+)`);
   const declaredImaginary = firstInteger(text, String.raw`#\s*imaginary freq\.?\s+(\d+)`);
@@ -496,6 +503,7 @@ export function parseXtbOutput(text, { truncated = false, argv = null, route = n
       completed: optimizationCompleted,
       stationary: optimizationCompleted,
       cycles: optCycles,
+      attempted: optimizationAttempted,
     },
     frequencies: {
       count: declaredCount ?? eigenvalues.length,

@@ -5,8 +5,11 @@
  * `FIXTURE OUTPUT` and reproduces only the record shapes the checks read. No
  * Gaussian executable ran and no value here is a real calculation.
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { evaluateGates, parseGaussianOutput } from '../src/shared/gaussianOutput.js';
+import { parseXtbOutput } from '../src/shared/engines/xtb.js';
 import {
   CHECK_STATUS,
   COVALENT_RADII_ANGSTROM,
@@ -593,11 +596,66 @@ describe('running checks', () => {
     expect(summarizeValidity([]).overall).toBe('unknown');
   });
 
-  it('does not guess for a non-Gaussian engine', () => {
+  it('judges an xTB run with the applicable checks and flags the rest', () => {
+    const context = {
+      settings: { jobType: 'Opt' },
+      molecule: { charge: 0, multiplicity: 1, coords: WATER },
+      parsed: null,
+    };
     const result = runValidityChecks(context, { phase: 'post', engine: 'xtb' });
-    expect(result.findings).toEqual([]);
-    expect(result.overall).toBe('unknown');
-    expect(result.note).toMatch(/Gaussian routes only/);
+    expect(result.engine).toBe('xtb');
+    const byId = Object.fromEntries(result.findings.map((finding) => [finding.id, finding]));
+    // Gaussian-route checks are not asked of xTB, and that is said explicitly.
+    expect(byId['spin-contamination'].status).toBe(CHECK_STATUS.SKIPPED);
+    expect(byId['spin-contamination'].applicability).toBe('not-applicable');
+    expect(byId['method-basis-compatibility'].status).toBe(CHECK_STATUS.SKIPPED);
+    expect(byId['method-basis-compatibility'].applicability).toBe('not-applicable');
+    // A check that applies but has no evidence is unknown, not skipped.
+    expect(byId['opt-convergence'].status).toBe(CHECK_STATUS.UNKNOWN);
+    expect(byId['opt-convergence'].applicability).toBe('not-evaluated');
+  });
+
+  it('passes an xTB optimisation that printed its convergence banner', () => {
+    const text = readFileSync(
+      fileURLToPath(new URL('./fixtures/xtb/water-opt-tight.out', import.meta.url)),
+      'utf8',
+    );
+    const parsed = parseXtbOutput(text, { argv: ['--opt', 'tight'] });
+    const result = checkOptimizationConvergence({ settings: { jobType: 'Opt' }, parsed, engine: 'xtb' });
+    expect(result.status).toBe(CHECK_STATUS.PASS);
+    expect(result.evidence.cycles).toBe(5);
+  });
+
+  it('fails an xTB optimisation that never converged', () => {
+    const text = [
+      ' GEOMETRY OPTIMIZATION',
+      ' * total energy  :    -5.0703708 Eh     change       -0.1154632E-13 Eh',
+      'normal termination of xtb',
+    ].join('\n');
+    const parsed = parseXtbOutput(text, { argv: ['--opt', 'normal'] });
+    expect(parsed.optimization.attempted).toBe(true);
+    expect(parsed.optimization.completed).toBe(false);
+    const result = checkOptimizationConvergence({ settings: { jobType: 'Opt' }, parsed, engine: 'xtb' });
+    expect(result.status).toBe(CHECK_STATUS.FAIL);
+  });
+
+  it('does not invent an optimisation when the xTB run was a single point', () => {
+    const text = 'normal termination of xtb';
+    const parsed = parseXtbOutput(text, { argv: ['--gfn', '2'] });
+    expect(parsed.optimization.attempted).toBe(false);
+    const result = checkOptimizationConvergence({ settings: { jobType: 'Opt' }, parsed, engine: 'xtb' });
+    expect(result.status).toBe(CHECK_STATUS.UNKNOWN);
+    expect(result.message).toMatch(/no optimisation record/i);
+  });
+
+  it('fails an xTB frequency job with an imaginary mode', () => {
+    const result = checkImaginaryFrequencies({
+      settings: { jobType: 'Opt Freq' },
+      parsed: {
+        frequencies: { count: 9, imaginaryCount: 1, imaginaryValues: [-420], minImaginary: -420 },
+      },
+    });
+    expect(result.status).toBe(CHECK_STATUS.FAIL);
   });
 });
 

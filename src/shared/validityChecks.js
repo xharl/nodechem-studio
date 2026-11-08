@@ -89,6 +89,7 @@ export const VALIDITY_CHECKS = Object.freeze([
     title: 'Charge / multiplicity',
     phases: Object.freeze(['pre', 'post']),
     blocking: true,
+    engines: Object.freeze(['gaussian', 'xtb']),
     description: 'The electron count must have the parity the multiplicity implies, and the reference must be compatible with it.',
   },
   {
@@ -96,6 +97,7 @@ export const VALIDITY_CHECKS = Object.freeze([
     title: 'Spin contamination',
     phases: Object.freeze(['post']),
     blocking: false,
+    engines: Object.freeze(['gaussian']),
     description: 'Unrestricted S**2 after annihilation must match S(S+1) for the requested multiplicity.',
   },
   {
@@ -103,6 +105,7 @@ export const VALIDITY_CHECKS = Object.freeze([
     title: 'Geometry sanity',
     phases: Object.freeze(['pre']),
     blocking: true,
+    engines: Object.freeze(['gaussian', 'xtb']),
     description: 'Atom clashes, implausibly short contacts, stretched bonds and angle anomalies against covalent radii.',
   },
   {
@@ -110,6 +113,7 @@ export const VALIDITY_CHECKS = Object.freeze([
     title: 'Stationary-point frequencies',
     phases: Object.freeze(['post']),
     blocking: false,
+    engines: Object.freeze(['gaussian', 'xtb']),
     description: 'A TS has exactly one imaginary mode; a minimum has none.',
   },
   {
@@ -117,6 +121,7 @@ export const VALIDITY_CHECKS = Object.freeze([
     title: 'Method / basis compatibility',
     phases: Object.freeze(['pre', 'post']),
     blocking: true,
+    engines: Object.freeze(['gaussian']),
     description: 'Heavy elements need a basis that carries an ECP, and built-in dispersion must not be double-counted.',
   },
   {
@@ -124,6 +129,7 @@ export const VALIDITY_CHECKS = Object.freeze([
     title: 'Optimisation convergence',
     phases: Object.freeze(['pre', 'post']),
     blocking: false,
+    engines: Object.freeze(['gaussian', 'xtb']),
     description: 'A frequency job may only claim a minimum when the optimisation it reads completed.',
   },
 ]);
@@ -713,9 +719,41 @@ export function checkMethodBasisCompatibility({ settings = {}, molecule = {} } =
  * that produced it reported "Optimization completed". `Opt Freq` carries that
  * record in its own output; a downstream `Freq` needs the upstream evidence.
  */
-export function checkOptimizationConvergence({ settings = {}, parsed = null, upstream = null } = {}) {
+export function checkOptimizationConvergence({ settings = {}, parsed = null, upstream = null, engine = 'gaussian' } = {}) {
   const id = 'opt-convergence';
   const jobType = oneLine(settings.jobType);
+
+  if (engine === 'xtb') {
+    // xTB prints a single banner when its optimisation converged. There is no
+    // Gaussian checkpoint chain, and `--ohess` optimises before the Hessian, so
+    // both Opt and Opt Freq make the same claim.
+    if (jobType !== 'Opt' && jobType !== 'Opt Freq' && jobType !== 'Freq') {
+      return skipped(id, `A ${jobType || 'unknown'} job makes no optimisation claim, so convergence was not judged.`);
+    }
+    if (!parsed) {
+      return unknown(id, 'No parsed output; xTB optimisation convergence can only be read from a finished job.');
+    }
+    const evidence = {
+      engine: 'xtb',
+      jobType,
+      complete: parsed.complete !== false,
+      attempted: parsed.optimization?.attempted ?? null,
+      completed: parsed.optimization?.completed ?? null,
+      cycles: parsed.optimization?.cycles ?? null,
+    };
+    if (parsed.complete === false) {
+      return unknown(id, 'The parse does not cover the whole output, so xTB convergence cannot be confirmed.', evidence);
+    }
+    if (parsed.optimization?.completed === true) {
+      return finding(id, CHECK_STATUS.PASS,
+        `xTB reported "GEOMETRY OPTIMIZATION CONVERGED" after ${parsed.optimization.cycles ?? '?'} iterations.`, evidence);
+    }
+    if (parsed.optimization?.attempted === true) {
+      return finding(id, CHECK_STATUS.FAIL,
+        'xTB ran an optimisation but printed no convergence banner; the geometry is not a converged stationary point.', evidence);
+    }
+    return unknown(id, 'The output contains no optimisation record, so convergence was not evaluated.', evidence);
+  }
 
   if (jobType !== 'Freq' && jobType !== 'Opt Freq') {
     return skipped(id, `A ${jobType || 'unknown'} job does not claim a minimum, so optimisation convergence was not judged.`);
@@ -825,38 +863,44 @@ function overallStatus(findings) {
  * Run the checks that belong to `phase`. Disabled checks are omitted from the
  * result entirely. `disabled` overrides `settings.disabledChecks` when given.
  *
- * Engines other than Gaussian 16 do not use Gaussian routes; their checks are
- * reported as a single unknown note rather than guessed at.
+ * A check that does not apply to the selected engine is reported as `skipped`
+ * with `applicability: 'not-applicable'`. That is deliberately different from
+ * `unknown` (`applicability: 'not-evaluated'`): the first means the protocol
+ * has no question to ask here, the second means a question exists but the
+ * evidence does not.
  */
 export function runValidityChecks(context = {}, { phase = 'post', disabled = null, engine = 'gaussian' } = {}) {
-  if (engine !== 'gaussian') {
-    return {
-      phase,
-      overall: 'unknown',
-      findings: [],
-      note: `Validity checks cover Gaussian routes only; engine "${engine}" was not judged.`,
-    };
-  }
-
   const disallowed = new Set(Array.isArray(disabled) ? disabled : disabledFrom(context.settings));
   const findings = [];
+  const engineId = String(engine || 'gaussian');
   for (const meta of VALIDITY_CHECKS) {
     if (!meta.phases.includes(phase)) continue;
     if (disallowed.has(meta.id)) continue;
+    const engines = Array.isArray(meta.engines) ? meta.engines : ['gaussian'];
+    if (!engines.includes(engineId)) {
+      findings.push({
+        ...skipped(meta.id, `${meta.title} is not applicable to the ${engineId} engine.`),
+        applicability: 'not-applicable',
+        title: meta.title,
+        phase,
+      });
+      continue;
+    }
     let result;
     try {
-      result = CHECK_FUNCTIONS[meta.id](context);
+      result = CHECK_FUNCTIONS[meta.id]({ ...context, engine: engineId });
     } catch (error) {
       result = unknown(meta.id, `could not be evaluated: ${error instanceof Error ? error.message : String(error)}`);
     }
     findings.push({
       ...result,
+      ...(result.status === CHECK_STATUS.UNKNOWN ? { applicability: 'not-evaluated' } : {}),
       severity: severityOf(result.status),
       title: meta.title,
       phase,
     });
   }
-  return { phase, overall: overallStatus(findings), findings };
+  return { phase, overall: overallStatus(findings), findings, engine: engineId };
 }
 
 /**

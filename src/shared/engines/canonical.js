@@ -114,6 +114,15 @@ export function canonicalResult({
       completed: Boolean(optimization.completed),
       stationary: Boolean(optimization.stationary),
       cycles: integerOrNull(optimization.cycles),
+      /**
+       * Whether the run actually attempted an optimisation. `null` means the
+       * engine did not say (Gaussian's parser reports only completion), `false`
+       * is evidence that no optimisation record exists, which is different from
+       * an optimisation that failed to converge.
+       */
+      attempted: optimization.attempted === true
+        ? true
+        : optimization.attempted === false ? false : null,
     },
     frequencies: {
       count: Number.isFinite(frequencies.count) ? frequencies.count : 0,

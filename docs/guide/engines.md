@@ -137,8 +137,10 @@ What xTB does **not** give you here:
   hidden in an xTB project and stripped from the run payload. GFN2-xTB already includes D4
   dispersion, and xTB's free energy already uses the mRRHO entropy treatment, so the app adds no
   quasi-harmonic or standard-state correction on top of it.
-- No validity checks. Those checks are Gaussian-route checks; the app does not judge them for xTB,
-  and a run record leaves them absent — never a pass.
+- No Gaussian-route checks. xTB has no route, basis or ECP, so method/basis compatibility and spin
+  contamination do not apply and are reported as **not applicable** — never as a pass. The checks
+  that do apply run for xTB too: charge/multiplicity parity, geometry sanity, imaginary modes and
+  optimisation convergence (read from xTB's own convergence banner).
 - No TD-DFT excited states, NMR shielding or NBO/ESP population analysis.
 
 **An xTB run is not a substitute for a Gaussian result.** GFN methods are parameterised
@@ -176,7 +178,7 @@ written to the run folder; it is not automatically loaded back as the project ge
 | Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` |
 | Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` |
 | Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder |
-| Validity checks | Six checks, pre and post run | Not judged — reported as absent, never a pass |
+| Validity checks | Six checks, pre and post run | Four applicable checks; Gaussian-only ones reported *not applicable* |
 | Dry run | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture |
 
 A dry run is a fixture for both engines: it writes a synthetic file headed `FIXTURE OUTPUT`, starts

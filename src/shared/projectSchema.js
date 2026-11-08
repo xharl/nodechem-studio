@@ -717,15 +717,6 @@ function normalizeEdges(c, raw, nodeIds, legacy) {
 function evaluateProjectValidity(c, { nodes, molecule, defaults }) {
   const findingsReport = [];
   const blocking = [];
-  if (defaults.engine !== 'gaussian') {
-    return {
-      overall: 'unknown',
-      findings: [],
-      blocking,
-      note: `Validity checks cover Gaussian routes only; engine "${defaults.engine}" was not judged.`,
-    };
-  }
-
   const byId = new Map(nodes.map((node) => [node.id, node]));
   nodes.forEach((node, index) => {
     if (node.type !== 'calc') return;
@@ -746,7 +737,7 @@ function evaluateProjectValidity(c, { nodes, molecule, defaults }) {
       molecule,
       parsed: null,
       upstream,
-    }, { phase: 'pre' });
+    }, { phase: 'pre', engine: defaults.engine });
 
     for (const finding of result.findings) {
       const entry = { ...finding, nodeId: node.id };

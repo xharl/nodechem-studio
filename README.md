@@ -126,8 +126,9 @@ docs/              documentation; the user guide lives in docs/guide/
   covered by tests; the end-to-end suite only runs when `XTB_BIN` points at a real binary.
 - **No packaged macOS build.** The runner and preflight support macOS; there is no build to sign or
   test.
-- **xTB has no validity checks.** They are Gaussian-route checks; an xTB record leaves them absent,
-  never a pass.
+- **xTB validity checks are narrower than Gaussian's.** xTB has no route, basis or ECP to inspect, so
+  the Gaussian-only checks are reported as *not applicable* (never as a pass). Charge/multiplicity,
+  geometry sanity, imaginary modes and optimisation convergence are judged for both engines.
 - **Output bundling is not implemented.** An Output bundle block stops the queue with a recorded
   reason; use **Export run bundle** on a finished run instead.
 - **Join policy `any` still waits for every input.**

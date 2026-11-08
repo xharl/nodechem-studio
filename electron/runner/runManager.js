@@ -250,6 +250,8 @@ export class RunManager {
         });
       outputText = result.outputText;
       exitCode = result.exitCode;
+      context.engineId = engine.id;
+      if (engine.id === 'xtb') context.parametersPath = result.parameterPath ?? null;
       context.outputPath = result.outputPath || null;
       context.outputMeta = {
         outputFile: result.outputName || null,
@@ -284,7 +286,7 @@ export class RunManager {
     // exit code. They are reported next to the gates (gates.validity) and do
     // not change gates.overall: the job can run correctly while the science is
     // unsupported, and the record must say both.
-    const validityContext = payload.validity && typeof payload.validity === 'object' && engine.id === 'gaussian'
+    const validityContext = payload.validity && typeof payload.validity === 'object'
       ? normalizeValidityContext(payload.validity)
       : null;
     const validity = validityContext
@@ -353,6 +355,12 @@ export class RunManager {
       provenance: {
         ...(record.provenance || {}),
         ...(output ? { output } : {}),
+        // xTB resolves its parameter directory from the executable or XTBPATH.
+        // Recording the path that was actually used makes a run reproducible
+        // after the installation moves, and records `null` when none was found.
+        ...(context.engineId === 'xtb'
+          ? { xtb: { parametersPath: context.parametersPath ?? null } }
+          : {}),
       },
       status,
       exitCode,

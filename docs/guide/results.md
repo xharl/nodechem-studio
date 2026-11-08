@@ -7,7 +7,9 @@ Two questions get answered separately, and that separation is the most important
   `pass`.
 - **Is the result defensible?** → **validity checks**. Charge/multiplicity parity, spin
   contamination, geometry sanity, imaginary-mode count, method/basis compatibility, optimisation
-  convergence.
+  convergence. A check that does not apply to the selected engine (for example method/basis
+  compatibility under xTB) is reported as **not applicable**, which is different from **unknown**
+  ("the question applies but there is no evidence") and is never a pass.
 
 A run can execute correctly and still be scientifically unsupported. The record states both, and
 validity findings never change `gates.overall`.

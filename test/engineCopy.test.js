@@ -91,7 +91,8 @@ describe('issue #43 — the documentation covers both engines', () => {
   it('explains what each engine cannot do and that xTB is not a Gaussian substitute', () => {
     expect(CORPUS).toContain('An xTB run is not a substitute for a Gaussian result');
     expect(CORPUS).toContain('No transition-state search (`Opt=TS`), no IRC and no PES scan');
-    expect(CORPUS).toContain('No validity checks');
+    expect(CORPUS).toContain('No Gaussian-route checks');
+    expect(CORPUS).toContain('not applicable');
     expect(CORPUS).toContain('licensed separately by Gaussian, Inc.');
     // Issue #40 made the restart hand-off real, so the docs must describe it
     // rather than repeating the old "not implemented" claim.
