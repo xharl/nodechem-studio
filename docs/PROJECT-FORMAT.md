@@ -195,19 +195,25 @@ naming the first differing index, and nothing is reordered automatically.
 `conformers.settings` is a separate key space — route keys cannot leak into a conformer search:
 `generator` (`crest` or `import`), `method` (`gfn2` or `gfnff`), `energyWindowKcal`,
 `rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`,
-`importPath`, `charge`, `multiplicity`, `fanOut`. Defaults: energy window 10 kcal/mol, RMSD 0.5 Å,
-at most 20 conformers, 298.15 K, spread warning at 2 kcal/mol, fan-out off.
+`importPath`, `charge`, `multiplicity`, `fanOut`, plus the imported-file fields `energyUnit`
+(`hartree` or `kcal/mol`, default `hartree`), `energyMethod` (free text, e.g. `MMFF94`) and `origin`
+(`{ program, version, method }`, what the user says produced the imported file). Defaults: energy
+window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K, spread warning at 2 kcal/mol,
+fan-out off, unit Hartree, no origin.
 
 `conformers.output` is the ensemble summary written back after a search:
 
 | Key | Notes |
 | --- | --- |
 | `generator`, `method` | `crest`, `import`, or `fixture` for a dry run |
+| `origin { program, version, method, sourceSha256 }` | what produced the ensemble; `crest`/`fixture` for a search run here, the declared program plus the digest of the imported file otherwise. Empty `program` means **not recorded**, never "computed here" |
+| `energyUnit`, `energyMethod` | the unit and producing method of the ensemble's absolute energies (`hartree` by default) |
+| `mixedEnergies` | true when the members disagree on unit or method; such an ensemble has no populations and no spread |
 | `count`, `total` | retained after pruning / frames read |
-| `spreadKcal` | highest minus lowest retained member, null when one member |
-| `selectedId`, `selected { id, energyEh, relativeKcal, population, protomer, atoms[] }` | the member downstream blocks run |
+| `spreadKcal` | highest minus lowest retained member, null when one member or when mixed |
+| `selectedId`, `selected { id, energyEh, energyKcal, energyUnit, energyMethod, relativeKcal, population, protomer, atoms[] }` | the member downstream blocks run |
 | `requiresSelection`, `autoSelected`, `protomers[]` | true when more than one protomer survives, which forbids an automatic choice |
-| `members[] { id, rank, energyEh, relativeKcal, population, rmsdToLowest, protomer, kept, dropped, atoms[] }` | ranked table; kept members carry their geometry so the choice is offline |
+| `members[] { id, rank, energyEh, energyKcal, energyUnit, energyMethod, relativeKcal, population, rmsdToLowest, protomer, kept, dropped, atoms[] }` | ranked table; kept members carry their geometry so the choice is offline. `energyEh` is null on a `kcal/mol` member, and `energyKcal` is null on a Hartree one — the absolute energy is never moved into a field that names the other unit |
 | `pruned { energy, rmsd, count }`, `warnings[]`, `generatedAt` | what was dropped and why |
 
 A calculation block fed by a `conformers` block runs the selected member's geometry. When no member

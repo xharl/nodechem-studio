@@ -36,6 +36,7 @@ import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, c
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import {
+  CONFORMER_ENERGY_UNITS,
   CONFORMER_GENERATORS,
   CONFORMER_METHODS,
   DEFAULT_CONFORMER_SETTINGS,
@@ -157,6 +158,8 @@ const BUNDLE_NAME = /^[^<>:"/\\|?*\u0000-\u001f]{1,120}\.zip$/i;
 const ARTIFACT_PATH = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 const PORT = /^[A-Za-z0-9_-]{1,24}$/;
 const NUMERIC = /^\d+(\.\d+)?$/;
+/** Issue #129: the digest of an imported file, as `sha256File()` writes it. */
+const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 const JOB_KINDS = {
   Opt: 'Opt',
@@ -496,6 +499,33 @@ function readXtbThreads(c, value, path, { legacy = false, fallback = '' } = {}) 
 /* ── Sections ─────────────────────────────────────────────── */
 
 /**
+ * Issue #129: the provenance of an imported ensemble. `program`, `version` and
+ * `method` are what the user says produced the file; `sourceSha256` is the
+ * digest of the bytes this app actually read, recorded by the queue. All four
+ * are bounded strings, and an empty program means "not recorded" — never
+ * "computed here".
+ */
+function normalizeConformerOrigin(c, raw, path, legacy) {
+  const empty = { program: '', version: '', method: '', sourceSha256: '' };
+  if (raw === undefined || raw === null) return empty;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be an object with program, version, method and sourceSha256.');
+    return empty;
+  }
+  warnUnknown(c, raw, new Set(['program', 'version', 'method', 'sourceSha256']), path);
+  const sourceSha256 = readString(c, raw.sourceSha256, `${path}.sourceSha256`, { legacy, fallback: '', max: 64 });
+  if (sourceSha256 && !SHA256_HEX.test(sourceSha256)) {
+    c.error(`${path}.sourceSha256`, 'must be a lowercase SHA-256 hex digest (64 characters).');
+  }
+  return {
+    program: readString(c, raw.program, `${path}.program`, { legacy, fallback: '', max: 40 }),
+    version: readString(c, raw.version, `${path}.version`, { legacy, fallback: '', max: 40 }),
+    method: readString(c, raw.method, `${path}.method`, { legacy, fallback: '', max: 60 }),
+    sourceSha256: SHA256_HEX.test(sourceSha256) ? sourceSha256 : '',
+  };
+}
+
+/**
  * Settings for a conformer block. Deliberately separate from the calculation
  * settings: CREST has no route, basis or SCF, and a shared key space would let
  * a route value leak into a conformer search.
@@ -504,12 +534,12 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   const provided = raw === undefined || raw === null ? {} : raw;
   if (!isPlainObject(provided)) {
     c.error(path, 'must be an object.');
-    return { ...DEFAULT_CONFORMER_SETTINGS, charge: 0, multiplicity: 1 };
+    return { ...DEFAULT_CONFORMER_SETTINGS, origin: { ...DEFAULT_CONFORMER_SETTINGS.origin }, charge: 0, multiplicity: 1 };
   }
   warnUnknown(c, provided, new Set([
     'generator', 'method', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
     'temperature', 'spreadThresholdKcal', 'selectedConformerId', 'importPath',
-    'fanOut', 'charge', 'multiplicity',
+    'fanOut', 'charge', 'multiplicity', 'energyUnit', 'energyMethod', 'origin',
   ]), path);
   // A conformer block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
@@ -524,6 +554,12 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   const selected = readString(c, source.selectedConformerId, `${path}.selectedConformerId`, { legacy, fallback: '', max: 24 });
   if (selected && !/^c\d+$/.test(selected)) {
     c.error(`${path}.selectedConformerId`, 'must be a conformer id such as "c1", or empty for automatic selection.');
+  }
+  const energyUnit = readEnum(c, source.energyUnit, CONFORMER_ENERGY_UNITS, `${path}.energyUnit`, {
+    legacy, fallback: DEFAULT_CONFORMER_SETTINGS.energyUnit,
+  });
+  if (generator === 'crest' && energyUnit === 'kcal/mol') {
+    c.warn(`${path}.energyUnit`, 'only applies to an imported ensemble; a CREST search writes Hartree energies.');
   }
   return {
     generator,
@@ -552,6 +588,13 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     }),
     charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, source.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
+    // Issue #130: the unit and method of the imported file's energies. A file
+    // that says nothing is Hartree, which is what every pre-#130 file meant.
+    energyUnit,
+    energyMethod: readString(c, source.energyMethod, `${path}.energyMethod`, { legacy, fallback: '', max: 40 }),
+    // Issue #129: what the user declares produced the file. The hash is not
+    // part of the declaration — the queue records the digest of the bytes read.
+    origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
   };
 }
 
@@ -595,16 +638,33 @@ function normalizeConformerOutput(c, raw, path, legacy) {
     c.error(path, 'must be null or a conformer ensemble summary.');
     return null;
   }
+  // Read once: a member that does not name its own unit inherits the
+  // ensemble's, and the ensemble's default is the historical Hartree.
+  const ensembleUnit = readEnum(c, raw.energyUnit, CONFORMER_ENERGY_UNITS, `${path}.energyUnit`, {
+    legacy: true, fallback: 'hartree',
+  });
   const members = Array.isArray(raw.members)
     ? raw.members.slice(0, 200).map((member, index) => {
       if (!isPlainObject(member)) return null;
       const memberPath = `${path}.members[${index}]`;
+      const energyUnit = readEnum(c, member.energyUnit, CONFORMER_ENERGY_UNITS, `${memberPath}.energyUnit`, {
+        legacy: true, fallback: ensembleUnit,
+      });
       return {
         id: readString(c, member.id, `${memberPath}.id`, { legacy: true, fallback: '', max: 24 }),
         rank: readInteger(c, member.rank, `${memberPath}.rank`, { legacy: true, fallback: index + 1, min: 1, max: 1000 }),
-        energyEh: readNumber(c, member.energyEh, `${memberPath}.energyEh`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+        // Issue #130: the absolute energy keeps the unit that produced it. A
+        // kcal/mol member has no Hartree energy, so `energyEh` stays null
+        // instead of holding a converted number that looks like an SCF total.
+        energyEh: member.energyEh === null ? null : readNumber(c, member.energyEh, `${memberPath}.energyEh`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+        energyKcal: member.energyKcal === undefined || member.energyKcal === null
+          ? null
+          : readNumber(c, member.energyKcal, `${memberPath}.energyKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+        energyUnit,
+        energyMethod: readString(c, member.energyMethod, `${memberPath}.energyMethod`, { legacy: true, fallback: '', max: 40 }),
         relativeKcal: readNumber(c, member.relativeKcal, `${memberPath}.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
-        population: readNumber(c, member.population, `${memberPath}.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
+        // A mixed ensemble has no population to report: null is stored, not 0.
+        population: member.population === null ? null : readNumber(c, member.population, `${memberPath}.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
         rmsdToLowest: readNumber(c, member.rmsdToLowest, `${memberPath}.rmsdToLowest`, { legacy: true, fallback: 0, min: 0, max: 100 }),
         protomer: readString(c, member.protomer, `${memberPath}.protomer`, { legacy: true, fallback: '', max: 40 }),
         kept: Boolean(member.kept),
@@ -616,15 +676,30 @@ function normalizeConformerOutput(c, raw, path, legacy) {
   const selectedRaw = isPlainObject(raw.selected) ? raw.selected : null;
   const selected = selectedRaw ? {
     id: readString(c, selectedRaw.id, `${path}.selected.id`, { legacy: true, fallback: '', max: 24 }),
-    energyEh: readNumber(c, selectedRaw.energyEh, `${path}.selected.energyEh`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    energyEh: selectedRaw.energyEh === null ? null : readNumber(c, selectedRaw.energyEh, `${path}.selected.energyEh`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    energyKcal: selectedRaw.energyKcal === undefined || selectedRaw.energyKcal === null
+      ? null
+      : readNumber(c, selectedRaw.energyKcal, `${path}.selected.energyKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    energyUnit: readEnum(c, selectedRaw.energyUnit, CONFORMER_ENERGY_UNITS, `${path}.selected.energyUnit`, {
+      legacy: true, fallback: ensembleUnit,
+    }),
+    energyMethod: readString(c, selectedRaw.energyMethod, `${path}.selected.energyMethod`, { legacy: true, fallback: '', max: 40 }),
     relativeKcal: readNumber(c, selectedRaw.relativeKcal, `${path}.selected.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
-    population: readNumber(c, selectedRaw.population, `${path}.selected.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
+    population: selectedRaw.population === null ? null : readNumber(c, selectedRaw.population, `${path}.selected.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
     protomer: readString(c, selectedRaw.protomer, `${path}.selected.protomer`, { legacy: true, fallback: '', max: 40 }),
     atoms: normalizeConformerAtoms(c, selectedRaw.atoms, `${path}.selected.atoms`, legacy),
   } : null;
   return {
     generator: readString(c, raw.generator, `${path}.generator`, { legacy: true, fallback: '', max: 24 }),
     method: readString(c, raw.method, `${path}.method`, { legacy: true, fallback: '', max: 24 }),
+    // Issue #130: what the ensemble's absolute energies are, and what produced
+    // them. `mixedEnergies` means the members disagree and nothing was averaged.
+    energyUnit: ensembleUnit,
+    energyMethod: readString(c, raw.energyMethod, `${path}.energyMethod`, { legacy: true, fallback: '', max: 40 }),
+    mixedEnergies: Boolean(raw.mixedEnergies),
+    // Issue #129: where the ensemble came from. Empty fields mean "not
+    // recorded", which is not the same claim as "computed here".
+    origin: normalizeConformerOrigin(c, raw.origin, `${path}.origin`, true),
     count: readInteger(c, raw.count, `${path}.count`, { legacy: true, fallback: members.filter((member) => member.kept).length, min: 0, max: 200 }),
     total: readInteger(c, raw.total, `${path}.total`, { legacy: true, fallback: members.length, min: 0, max: 5000 }),
     spreadKcal: raw.spreadKcal === null || raw.spreadKcal === undefined

@@ -20,6 +20,16 @@ export const KB_KCAL = 0.00198720425864083;
 export const CONFORMER_GENERATORS = Object.freeze(['crest', 'import']);
 export const CONFORMER_METHODS = Object.freeze(['gfn2', 'gfnff']);
 
+/**
+ * Issue #130: the unit an absolute member energy is recorded in. `hartree` is
+ * the historical default, so every ensemble written before the field existed
+ * still means what it always meant. `kcal/mol` is what an MM program prints —
+ * and an MM energy is not a molecular total energy, so it never gets stored in
+ * a field named `energyEh`.
+ */
+export const CONFORMER_ENERGY_UNITS = Object.freeze(['hartree', 'kcal/mol']);
+export const DEFAULT_ENERGY_UNIT = 'hartree';
+
 export const DEFAULT_CONFORMER_SETTINGS = Object.freeze({
   generator: 'crest',
   method: 'gfn2',
@@ -30,14 +40,43 @@ export const DEFAULT_CONFORMER_SETTINGS = Object.freeze({
   spreadThresholdKcal: 2,
   selectedConformerId: '',
   importPath: '',
+  // Issue #130: what the imported file's energies are, and what produced them.
+  // Ignored by a CREST search, which always writes Hartree energies.
+  energyUnit: 'hartree',
+  energyMethod: '',
+  // Issue #129: the provenance the user declares for an imported file. The
+  // hash of the bytes actually read is recorded at run time, not typed in.
+  origin: Object.freeze({ program: '', version: '', method: '' }),
   // Issue #80: fan the retained ensemble out into one task per member instead
   // of carrying a single chosen geometry downstream. Off by default, so a file
   // written before the switch existed runs exactly as it did.
   fanOut: false,
 });
 
+
 const PROTROMER_TOKEN = /(?:protomer|tautomer)\s*[=:]\s*([A-Za-z0-9_.-]+)/i;
 const ENERGY_TOKEN = /(?:energy|e)\s*[=:]\s*(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/i;
+/** Issue #130: a frame may say what unit its energy is in, and by what method. */
+const UNIT_TOKEN = /(?:energy[_\s-]?unit|unit)\s*[=:]\s*(hartree|ha|eh|kcal\/mol|kcal)/i;
+const METHOD_TOKEN = /(?:energy[_\s-]?method|energy[_\s-]?model|method)\s*[=:]\s*([A-Za-z0-9_.+\/-]{1,40})/i;
+
+/** Normalise a unit label; '' when the text is not a unit this app records. */
+export function normalizeEnergyUnit(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'kcal/mol' || text === 'kcal' || text === 'kcal mol-1') return 'kcal/mol';
+  if (text === 'hartree' || text === 'ha' || text === 'eh') return 'hartree';
+  return '';
+}
+
+/** `gfn2` → `GFN2-xTB`; anything else is returned as written. */
+export function conformerMethodLabel(method) {
+  const key = String(method ?? '').trim();
+  const lower = key.toLowerCase();
+  if (lower === 'gfn2') return 'GFN2-xTB';
+  if (lower === 'gfnff') return 'GFN-FF';
+  return key;
+}
+
 
 /**
  * Parse a multi-frame XYZ file — CREST's `crest_conformers.xyz` or any file a
@@ -79,7 +118,19 @@ export function parseMultiXyz(text) {
     }
     const energy = energyFromText(comment);
     const protomer = (comment.match(PROTROMER_TOKEN)?.[1] ?? '').trim();
-    frames.push({ index: frames.length + 1, comment: comment.trim(), atoms, energyEh: energy, protomer });
+    // A unit or method written in the frame comment belongs to that frame: an
+    // ensemble stitched together from two programs can carry both.
+    const unit = normalizeEnergyUnit(comment.match(UNIT_TOKEN)?.[1] ?? '');
+    const method = (comment.match(METHOD_TOKEN)?.[1] ?? '').trim();
+    frames.push({
+      index: frames.length + 1,
+      comment: comment.trim(),
+      atoms,
+      energyEh: energy,
+      protomer,
+      ...(unit ? { energyUnit: unit } : {}),
+      ...(method ? { energyMethod: method } : {}),
+    });
     index = cursor;
   }
   if (frames.length === 0 && errors.length === 0) {
@@ -170,34 +221,60 @@ export function rankEnsemble({
   temperature = DEFAULT_CONFORMER_SETTINGS.temperature,
   spreadThresholdKcal = DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal,
   selectedConformerId = '',
+  energyUnit = DEFAULT_ENERGY_UNIT,
+  energyMethod = '',
 } = {}) {
   if (!Array.isArray(frames) || frames.length === 0) {
-    return { members: [], spreadKcal: null, warnings: [], selectedId: '', requiresSelection: false, error: 'The ensemble is empty.' };
+    return { members: [], spreadKcal: null, warnings: [], selectedId: '', requiresSelection: false, mixedEnergies: false, energyUnit: normalizeEnergyUnit(energyUnit) || DEFAULT_ENERGY_UNIT, error: 'The ensemble is empty.' };
   }
   const missing = frames.findIndex((frame) => !Number.isFinite(frame.energyEh));
   if (missing !== -1) {
-    return { members: [], spreadKcal: null, warnings: [], selectedId: '', requiresSelection: false, error: `Conformer ${missing + 1} has no energy.` };
+    return { members: [], spreadKcal: null, warnings: [], selectedId: '', requiresSelection: false, mixedEnergies: false, energyUnit: normalizeEnergyUnit(energyUnit) || DEFAULT_ENERGY_UNIT, error: `Conformer ${missing + 1} has no energy.` };
   }
 
-  const sorted = frames
-    .map((frame, index) => ({ ...frame, originalIndex: index }))
-    .sort((a, b) => (a.energyEh - b.energyEh) || (a.originalIndex - b.originalIndex));
-  const lowest = sorted[0].energyEh;
+  // Issue #130: what unit a frame's number is in. A frame may say so itself
+  // (comment `unit=kcal/mol`); otherwise the ensemble's declaration applies,
+  // and a file that declares nothing is Hartree, exactly as before.
+  const declaredUnit = normalizeEnergyUnit(energyUnit) || DEFAULT_ENERGY_UNIT;
+  const declaredMethod = String(energyMethod ?? '').trim();
+  const unitOf = (frame) => normalizeEnergyUnit(frame.energyUnit) || declaredUnit;
+  const methodOf = (frame) => String(frame.energyMethod ?? '').trim() || declaredMethod;
+  // The only conversion in this module, and it is explicit: one Hartree is
+  // HARTREE_KCAL kcal/mol. Nothing is converted *into* Hartree, so an MM energy
+  // never acquires a Hartree-looking value.
+  const absoluteKcal = (frame) => (unitOf(frame) === 'kcal/mol' ? frame.energyEh : frame.energyEh * HARTREE_KCAL);
 
-  const members = sorted.map((frame, rank) => ({
-    id: `c${rank + 1}`,
-    originalIndex: frame.originalIndex,
-    rank: rank + 1,
-    energyEh: frame.energyEh,
-    relativeKcal: (frame.energyEh - lowest) * HARTREE_KCAL,
-    population: 0,
-    rmsdToLowest: 0,
-    rmsdToPreviousKept: null,
-    protomer: frame.protomer || '',
-    atoms: frame.atoms,
-    kept: false,
-    dropped: null,
-  }));
+  const sorted = frames
+    .map((frame, index) => ({ ...frame, originalIndex: index, absoluteKcal: absoluteKcal(frame) }))
+    .sort((a, b) => (a.absoluteKcal - b.absoluteKcal) || (a.originalIndex - b.originalIndex));
+  const lowest = sorted[0];
+  const singleFactor = unitOf(lowest) === 'kcal/mol' ? 1 : HARTREE_KCAL;
+
+  const members = sorted.map((frame, rank) => {
+    const unit = unitOf(frame);
+    return {
+      id: `c${rank + 1}`,
+      originalIndex: frame.originalIndex,
+      rank: rank + 1,
+      // The absolute energy keeps the unit that produced it: a kcal/mol member
+      // has no Hartree energy at all, so `energyEh` is null rather than a
+      // converted number that would invite comparison with an SCF total.
+      energyEh: unit === 'hartree' ? frame.energyEh : null,
+      energyKcal: unit === 'kcal/mol' ? frame.energyEh : null,
+      energyUnit: unit,
+      energyMethod: methodOf(frame),
+      relativeKcal: unit === unitOf(lowest)
+        ? (frame.energyEh - lowest.energyEh) * singleFactor
+        : frame.absoluteKcal - lowest.absoluteKcal,
+      population: 0,
+      rmsdToLowest: 0,
+      rmsdToPreviousKept: null,
+      protomer: frame.protomer || '',
+      atoms: frame.atoms,
+      kept: false,
+      dropped: null,
+    };
+  });
 
   // 1. Energy window.
   for (const member of members) {
@@ -234,19 +311,43 @@ export function rankEnsemble({
   const retained = kept.slice(0, maxConformers);
   for (const member of retained) member.kept = true;
 
+  // Issue #130: an ensemble whose members were not all produced the same way
+  // cannot be averaged. Averaging MM and SCF energies would report a population
+  // that no single method supports, so the ensemble is flagged and neither a
+  // population nor a spread is reported.
+  const signature = (member) => `${member.energyUnit}|${member.energyMethod.toLowerCase()}`;
+  const signatures = [...new Set(retained.map(signature))];
+  const mixedEnergies = signatures.length > 1;
+
   // Boltzmann populations over the retained set, at the requested temperature.
   const t = Math.max(Number(temperature) || 0, 1);
-  const partition = retained.reduce((sum, member) => sum + Math.exp(-member.relativeKcal / (KB_KCAL * t)), 0);
+  const partition = mixedEnergies
+    ? 0
+    : retained.reduce((sum, member) => sum + Math.exp(-member.relativeKcal / (KB_KCAL * t)), 0);
   for (const member of retained) {
+    if (mixedEnergies) {
+      member.population = null;
+      continue;
+    }
     member.population = partition > 0 ? Math.exp(-member.relativeKcal / (KB_KCAL * t)) / partition : 0;
   }
 
-  const spreadKcal = retained.length > 0
+  const spreadKcal = !mixedEnergies && retained.length > 0
     ? retained[retained.length - 1].relativeKcal - retained[0].relativeKcal
     : null;
 
   const warnings = [];
-  if (spreadKcal !== null && spreadKcal > spreadThresholdKcal) {
+  if (mixedEnergies) {
+    const units = [...new Set(retained.map((member) => member.energyUnit))].sort();
+    const methods = [...new Set(retained.map((member) => member.energyMethod).filter(Boolean))];
+    warnings.push({
+      id: 'conformer-mixed-energies',
+      status: 'warn',
+      message: `The ensemble mixes different energy units or methods (${units.join(', ')}${methods.length ? `; ${methods.join(', ')}` : ''}): the relative energies are not comparable across them, so no populations or spread are reported. The members are shown, not averaged.`,
+      units,
+      methods,
+    });
+  } else if (spreadKcal !== null && spreadKcal > spreadThresholdKcal) {
     warnings.push({
       id: 'conformer-spread',
       status: 'warn',
@@ -280,6 +381,9 @@ export function rankEnsemble({
     selectedId,
     autoSelected: !explicit && !requiresSelection,
     requiresSelection,
+    mixedEnergies,
+    energyUnit: declaredUnit,
+    energyMethod: declaredMethod,
     protomers,
     pruned: {
       energy: members.filter((member) => member.dropped === 'energy').length,
@@ -295,11 +399,44 @@ export function rankEnsemble({
  * Atoms are kept only for the selected member: one geometry, the one a
  * downstream block will actually use.
  */
-export function ensembleSummary(result, { generator = '', method = '' } = {}) {
+export function ensembleSummary(result, {
+  generator = '',
+  method = '',
+  origin = null,
+  energyUnit = '',
+  energyMethod = '',
+} = {}) {
   const selected = result.retained?.find((member) => member.id === result.selectedId) || null;
+  const unit = normalizeEnergyUnit(result.energyUnit) || normalizeEnergyUnit(energyUnit) || DEFAULT_ENERGY_UNIT;
+  const methodName = String(
+    result.energyMethod || energyMethod || (generator === 'crest' ? conformerMethodLabel(method) : ''),
+  ).trim();
+  const imported = String(generator || '').toLowerCase() === 'import';
+  // Issue #129: an origin is recorded for every ensemble. A generated one names
+  // the thing that ran here; an imported one carries only what was declared,
+  // and an empty program means "not recorded" rather than "computed here".
+  const originSource = origin && typeof origin === 'object' ? origin : {};
+  const recordedOrigin = {
+    program: String(originSource.program ?? '').trim() || (imported ? '' : String(generator || '').trim()),
+    version: String(originSource.version ?? '').trim(),
+    // `method` here is the *producing* method (MMFF94, GFN2-xTB), not the
+    // conformer-block enum: an imported MMFF94 ensemble has no gfn2 anywhere.
+    method: String(originSource.method ?? '').trim() || (imported ? '' : String(method || '').trim()),
+    sourceSha256: String(originSource.sourceSha256 ?? '').trim(),
+  };
+  const carryEnergy = (member) => ({
+    energyUnit: member.energyUnit || unit,
+    // The ensemble's method fills in when a member does not name its own; a
+    // mixed ensemble keeps each member's own answer.
+    energyMethod: String(member.energyMethod || methodName).trim(),
+  });
   return {
     generator: String(generator || ''),
     method: String(method || ''),
+    energyUnit: unit,
+    energyMethod: methodName,
+    mixedEnergies: Boolean(result.mixedEnergies),
+    origin: recordedOrigin,
     count: result.retained?.length ?? 0,
     total: result.members?.length ?? 0,
     spreadKcal: result.spreadKcal ?? null,
@@ -311,18 +448,22 @@ export function ensembleSummary(result, { generator = '', method = '' } = {}) {
     autoSelected: Boolean(result.autoSelected),
     selected: selected ? {
       id: selected.id,
-      energyEh: selected.energyEh,
+      energyEh: selected.energyEh ?? null,
+      energyKcal: selected.energyKcal ?? null,
+      ...carryEnergy(selected),
       relativeKcal: selected.relativeKcal,
-      population: selected.population,
+      population: selected.population ?? null,
       protomer: selected.protomer || '',
       atoms: selected.atoms,
     } : null,
     members: (result.members || []).map((member) => ({
       id: member.id,
       rank: member.rank,
-      energyEh: member.energyEh,
+      energyEh: member.energyEh ?? null,
+      energyKcal: member.energyKcal ?? null,
+      ...carryEnergy(member),
       relativeKcal: member.relativeKcal,
-      population: member.population,
+      population: member.population ?? null,
       rmsdToLowest: member.rmsdToLowest,
       protomer: member.protomer,
       kept: member.kept,
@@ -345,6 +486,119 @@ export function formatPopulation(value) {
   if (!Number.isFinite(value)) return '—';
   const percent = value * 100;
   return percent >= 10 ? `${percent.toFixed(0)}%` : `${percent.toFixed(1)}%`;
+}
+
+/* ── Provenance copy (issues #129, #130) ───────────────────────
+ *
+ * The card, the inspector and the ensemble table must agree on what an
+ * ensemble is. These three functions are the only place that copy is built, so
+ * "computed here" cannot appear on an imported ensemble and "Ha" cannot appear
+ * next to a kcal/mol number: the tests assert the exact strings.
+ */
+
+const ENERGY_UNIT_LABEL = Object.freeze({ hartree: 'Hartree', 'kcal/mol': 'kcal/mol' });
+
+function ensembleField(ensemble, key) {
+  return ensemble && typeof ensemble === 'object' ? ensemble[key] : undefined;
+}
+
+function originOf(ensemble) {
+  const origin = ensembleField(ensemble, 'origin');
+  return origin && typeof origin === 'object' ? origin : {};
+}
+
+/** `program version` from an origin, or '' when nothing was declared. */
+function originProgramText(origin) {
+  return [origin.program, origin.version]
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** Short digest for display: the first 12 hex characters and an ellipsis. */
+export function formatSourceHash(value) {
+  const text = String(value ?? '').trim();
+  return text ? `${text.slice(0, 12)}…` : '';
+}
+
+/**
+ * One line naming what produced the ensemble, for a card footer.
+ *  - imported with a declared origin: `imported · Spartan 26.1`
+ *  - imported with nothing declared:  `imported · origin not recorded`
+ *  - a CREST search:                  `CREST GFN2-xTB`
+ *  - a dry run:                       `dry-run fixture`
+ */
+export function conformerOriginShort(ensemble) {
+  const generator = String(ensembleField(ensemble, 'generator') ?? '').trim().toLowerCase();
+  const origin = originOf(ensemble);
+  if (generator === 'crest') {
+    const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim()
+      || conformerMethodLabel(ensembleField(ensemble, 'method'));
+    return ['CREST', method].filter(Boolean).join(' ');
+  }
+  if (generator === 'fixture') return 'dry-run fixture';
+  if (generator === 'import') {
+    const program = originProgramText(origin);
+    return program ? `imported · ${program}` : 'imported · origin not recorded';
+  }
+  return generator ? `imported · ${generator}` : '';
+}
+
+/**
+ * The full provenance line for the inspector. Deliberately says *imported*
+ * and names the producing method — never the conformer-block generator, and
+ * never `gfn2`, which an imported file was not produced with.
+ */
+export function conformerOriginLabel(ensemble) {
+  const generator = String(ensembleField(ensemble, 'generator') ?? '').trim().toLowerCase();
+  if (!generator) return '';
+  const origin = originOf(ensemble);
+  if (generator === 'fixture') return 'dry run · labelled fixture, not a search';
+  if (generator === 'crest') {
+    const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim()
+      || conformerMethodLabel(ensembleField(ensemble, 'method'));
+    return `computed here · ${['CREST', method].filter(Boolean).join(' ')}`;
+  }
+  const parts = ['imported'];
+  const program = originProgramText(origin);
+  parts.push(program || 'origin not recorded');
+  const method = String(origin.method ?? '').trim();
+  if (method) parts.push(method);
+  const hash = formatSourceHash(origin.sourceSha256);
+  if (hash) parts.push(`sha256 ${hash}`);
+  return parts.join(' · ');
+}
+
+/**
+ * What unit the absolute energies are in, and what produced them:
+ * `kcal/mol · MMFF94`, `Hartree · GFN2-xTB`, or the mixed-ensemble refusal.
+ */
+export function conformerEnergyLabel(ensemble) {
+  if (ensembleField(ensemble, 'mixedEnergies')) return 'mixed units/methods — not averaged';
+  const unit = normalizeEnergyUnit(ensembleField(ensemble, 'energyUnit')) || DEFAULT_ENERGY_UNIT;
+  const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim()
+    || (String(ensembleField(ensemble, 'generator') ?? '').toLowerCase() === 'crest'
+      ? conformerMethodLabel(ensembleField(ensemble, 'method'))
+      : '');
+  return `${ENERGY_UNIT_LABEL[unit]} · ${method || 'method not stated'}`;
+}
+
+/**
+ * The caption above the ensemble table. The table's ΔE column is always
+ * kcal/mol relative to the lowest member; this line says what the *absolute*
+ * numbers are, because that is the claim a reader would otherwise guess.
+ */
+export function conformerTableCaption(ensemble) {
+  if (!ensemble || typeof ensemble !== 'object') return 'No ensemble yet.';
+  if (ensembleField(ensemble, 'mixedEnergies')) {
+    return 'ΔE in kcal/mol · mixed energy units/methods — not averaged';
+  }
+  const unit = normalizeEnergyUnit(ensembleField(ensemble, 'energyUnit')) || DEFAULT_ENERGY_UNIT;
+  const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim()
+    || (String(ensembleField(ensemble, 'generator') ?? '').toLowerCase() === 'crest'
+      ? conformerMethodLabel(ensembleField(ensemble, 'method'))
+      : '');
+  return `ΔE in kcal/mol · absolute energies in ${ENERGY_UNIT_LABEL[unit]}${method ? ` (${method})` : ''}`;
 }
 
 /* ── Boltzmann-weighted observables (issue #96) ─────────────────
