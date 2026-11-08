@@ -10,6 +10,7 @@
 import { DEMO_WATER } from './gaussianInput.js';
 import { engineOrDefault } from './engines/index.js';
 import { ladderRungs } from './methodLadder.js';
+import { spinSweepFor } from './spinSweep.js';
 import { runSettingsFor } from './engineSettings.js';
 import { checkTsForceConstants, freqGeometryWarnings, optConvergenceWarnings } from './tsForceConstants.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from './validityChecks.js';
@@ -144,7 +145,12 @@ export function buildRunInput(project, node, { taskId = node?.id, settingsOverri
   const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node);
   if (issues.errors.length > 0) throw new Error(issues.errors[0]);
   const settings = settingsOverride || settingsForNode(project, node);
-  const molecule = moleculeForNode(project, node);
+  // A spin-state sweep varies the multiplicity per task, and the multiplicity
+  // is printed in the molecule block; an override has to reach it.
+  const baseMolecule = moleculeForNode(project, node);
+  const molecule = Number.isInteger(Number(settings.multiplicity)) && Number(settings.multiplicity) > 0
+    ? { ...baseMolecule, multiplicity: Number(settings.multiplicity) }
+    : baseMolecule;
   const blocking = blockingValidityFinding(project, node, settings, molecule);
   if (blocking) throw new Error(blocking.message);
   const base = safeBase(taskId);
@@ -204,6 +210,23 @@ export function buildWorkflowPlan(project) {
     }
 
     const ladder = ladderRungs(node.settings);
+    const spin = spinSweepFor(node.settings);
+    if (ladder && spin) {
+      throw new Error(`Block "${node.title}" has both a method ladder and a spin-state sweep; run one at a time.`);
+    }
+    if (spin) {
+      const spinIds = spin.multiplicities.map((multiplicity) => `${node.id}.m${multiplicity}`);
+      spin.multiplicities.forEach((multiplicity, index) => {
+        tasks.push(calculationTask(project, node, {
+          taskId: spinIds[index],
+          settingsOverride: { ...settingsForNode(project, node), multiplicity, spinSweep: null },
+          title: `${node.title} — multiplicity ${multiplicity}`,
+          spin: { id: node.id, index, multiplicity, count: spin.multiplicities.length },
+        }));
+      });
+      idsFor.set(node.id, spinIds);
+      continue;
+    }
     if (!ladder) {
       tasks.push(calculationTask(project, node, { taskId: node.id }));
       idsFor.set(node.id, [node.id]);
@@ -260,7 +283,7 @@ export function buildWorkflowPlan(project) {
   return { tasks, edges };
 }
 
-function calculationTask(project, node, { taskId, settingsOverride = null, title = null, ladder = null }) {
+function calculationTask(project, node, { taskId, settingsOverride = null, title = null, ladder = null, spin = null }) {
   const built = buildRunInput(project, node, { taskId, settingsOverride });
   return {
     nodeId: taskId,
@@ -280,5 +303,6 @@ function calculationTask(project, node, { taskId, settingsOverride = null, title
     checkpointName: checkpointNameFor(project, node, taskId),
     checkpointFrom: checkpointSourceFor(project, node),
     ...(ladder ? { ladder } : {}),
+    ...(spin ? { spin } : {}),
   };
 }

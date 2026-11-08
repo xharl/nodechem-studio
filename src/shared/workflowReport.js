@@ -135,6 +135,18 @@ export function buildWorkflowReport(queue, records = {}, { generatedAt = null, a
           relativeKcalPerMol: Number.isFinite(entry?.relativeKcalPerMol) ? entry.relativeKcalPerMol : null,
         })),
       })),
+    spins: Object.entries(source.spins && typeof source.spins === 'object' ? source.spins : {})
+      .map(([id, sweep]) => ({
+        id,
+        groundMultiplicity: Number.isInteger(sweep?.groundMultiplicity) ? sweep.groundMultiplicity : null,
+        reason: text(sweep?.reason),
+        rows: (Array.isArray(sweep?.rows) ? sweep.rows : []).map((row) => ({
+          multiplicity: Number.isInteger(row?.multiplicity) ? row.multiplicity : null,
+          energyHartree: Number.isFinite(row?.energyHartree) ? row.energyHartree : null,
+          relativeKcalPerMol: Number.isFinite(row?.relativeKcalPerMol) ? row.relativeKcalPerMol : null,
+          spinSquared: Number.isFinite(row?.spinSquared) ? row.spinSquared : null,
+        })),
+      })),
     fixtures: rows.filter((row) => row.dryRun).length,
   };
 }
@@ -228,6 +240,25 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
       + `<tbody>${rowsHtml}</tbody></table>`;
   }).join('');
 
+  // Spin-state sweeps: one table per swept block, ground state marked.
+  const spinBlocks = (Array.isArray(model.spins) ? model.spins : []).map((sweep) => {
+    const body = sweep.rows.map((row) => {
+      const ground = sweep.groundMultiplicity !== null && row.multiplicity === sweep.groundMultiplicity;
+      const label = row.multiplicity === null ? MISSING : String(row.multiplicity);
+      return '<tr' + (ground ? ' class="ground-state"' : '') + '>'
+        + `<td>${escapeHtml(label)}${ground ? ' <span class="tag">ground</span>' : ''}</td>`
+        + `<td class="num">${escapeHtml(value(row.energyHartree, 8))}</td>`
+        + `<td class="num">${escapeHtml(value(row.relativeKcalPerMol, 2))}</td>`
+        + `<td class="num">${row.spinSquared === null ? 'not reported' : escapeHtml(row.spinSquared.toFixed(4))}</td>`
+        + '</tr>';
+    }).join('');
+    return '<h2>Spin-state sweep — ' + escapeHtml(sweep.id) + '</h2>'
+      + `<p>${escapeHtml(sweep.reason || '')}</p>`
+      + '<table><thead><tr><th>Multiplicity</th><th class="num">E / Eh</th>'
+      + '<th class="num">ΔE / kcal mol⁻¹</th><th class="num">⟨S²⟩</th></tr></thead>'
+      + `<tbody>${body}</tbody></table>`;
+  }).join('');
+
   const fixtureNote = model.fixtures > 0
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
@@ -265,6 +296,7 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
     + '<th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th>'
     + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
     + ladderBlocks
+    + spinBlocks
     + (methodsBlocks ? '<h2>Methods</h2>' + methodsBlocks : '')
     + '<h2>Provenance</h2>'
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'

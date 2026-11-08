@@ -65,7 +65,7 @@ export const EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch', '
 export const BRANCHES = Object.freeze(['true', 'false']);
 export const JOB_TYPES = Object.freeze(['Opt', 'Opt Freq', 'Opt=TS', 'Freq', 'IRC', 'SP', 'Scan', 'NMR']);
 export const IRC_DIRECTIONS = Object.freeze(['forward', 'reverse', 'both']);
-export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3']);
+export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3', 'D4']);
 export const SCF_OPTIONS = Object.freeze(['', 'Tight', 'VeryTight']);
 export const GRID_OPTIONS = Object.freeze(['', 'Fine', 'UltraFine']);
 export const POPULATION_OPTIONS = Object.freeze(['', 'NBO', 'Hirshfeld', 'MK']);
@@ -128,7 +128,7 @@ const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'spinSweep',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -176,6 +176,9 @@ export function defaultSettings(overrides = {}) {
     gates: defaultGates(),
     // A method ladder is opt-in; `null` means "this block is a normal block".
     ladder: null,
+    stableOpt: false,
+    // A spin-state sweep enumerates multiplicities for the same system.
+    spinSweep: null,
     // Issue #25: validity checks are on by default; a node opts out by id.
     disabledChecks: [],
   };
@@ -315,9 +318,9 @@ function readNumber(c, value, path, { legacy = false, fallback = 0, min = -Infin
   return number;
 }
 
-function readBoolean(c, value, path, { legacy = false, fallback = false } = {}) {
+function readBoolean(c, value, path, { legacy = false, fallback = false, optional = false } = {}) {
   if (value === undefined || value === null) {
-    if (!legacy) c.error(path, 'is required.');
+    if (!legacy && !optional) c.error(path, 'is required.');
     return fallback;
   }
   if (typeof value !== 'boolean') {
@@ -482,6 +485,37 @@ function normalizeLadder(c, raw, path, legacy) {
   return { enabled, toleranceKcal, rungs };
 }
 
+/**
+ * A spin-state sweep: enumerate multiplicities of the same system at the same
+ * level of theory. Multiplicity is a property of the electronic state, so the
+ * block cannot keep one value and sweep it — the plan expands into one task per
+ * multiplicity.
+ */
+function normalizeSpinSweep(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be null or an object with enabled and multiplicities.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['enabled', 'multiplicities']), path);
+  const enabled = readBoolean(c, raw.enabled, `${path}.enabled`, { legacy, fallback: false });
+  const rawMultiplicities = Array.isArray(raw.multiplicities) ? raw.multiplicities : [];
+  const multiplicities = [];
+  rawMultiplicities.slice(0, 6).forEach((value, index) => {
+    const entryPath = `${path}.multiplicities[${index}]`;
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 12) {
+      c.error(entryPath, 'must be an integer multiplicity between 1 and 12.');
+      return;
+    }
+    if (!multiplicities.includes(parsed)) multiplicities.push(parsed);
+  });
+  if (enabled && multiplicities.length < 2) {
+    c.error(`${path}.multiplicities`, 'a spin-state sweep needs at least two distinct multiplicities.');
+  }
+  return { enabled, multiplicities };
+}
+
 function normalizeGates(c, raw, path, legacy) {
   const source = requiredObject(c, raw, path, legacy, {});
   warnUnknown(c, source, GATE_KEYS, path);
@@ -568,6 +602,9 @@ function normalizeSettings(c, raw, path, legacy) {
     xtbThreads: readXtbThreads(c, source.xtbThreads, `${path}.xtbThreads`, { legacy, fallback: '' }),
     optConvergence: readEnum(c, source.optConvergence, OPT_CONVERGENCE_IDS, `${path}.optConvergence`, { legacy, fallback: DEFAULT_OPT_CONVERGENCE }),
     forceConstants: readEnum(c, source.forceConstants, TS_FORCE_CONSTANT_IDS, `${path}.forceConstants`, { legacy, fallback: DEFAULT_TS_FORCE_CONSTANTS }),
+    // A wavefunction stability optimisation (`Stable=Opt`) is opt-in.
+    stableOpt: readBoolean(c, source.stableOpt, `${path}.stableOpt`, { legacy, fallback: false, optional: true }),
+    spinSweep: normalizeSpinSweep(c, source.spinSweep, `${path}.spinSweep`, legacy),
     gates: normalizeGates(c, source.gates, `${path}.gates`, legacy),
     ladder: normalizeLadder(c, source.ladder, `${path}.ladder`, legacy),
     disabledChecks: normalizeDisabledChecks(c, source.disabledChecks, `${path}.disabledChecks`, legacy),

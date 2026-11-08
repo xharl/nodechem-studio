@@ -211,6 +211,7 @@ async function commandRun({ positional, flags }) {
     status: queue.status,
     outDir,
     ladders: queue.ladders || {},
+    spins: queue.spins || {},
     runs: await Promise.all((queue.tasks || []).map(async (task) => {
       const record = await readRunRecord(task.runDir);
       return {

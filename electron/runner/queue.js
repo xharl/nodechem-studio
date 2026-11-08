@@ -9,6 +9,7 @@ import {
 import { conditionFields, evaluateCondition } from '../../src/shared/controlFlow.js';
 import { engineFor } from '../../src/shared/engines/index.js';
 import { ladderVerdict } from '../../src/shared/methodLadder.js';
+import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -158,6 +159,16 @@ function taskRecord(raw, index) {
   const merge = type === 'merge'
     ? { policy: ['all', 'any'].includes(raw?.merge?.policy) ? raw.merge.policy : 'all' }
     : null;
+  const rawSpin = raw?.spin && typeof raw.spin === 'object' ? raw.spin : null;
+  const spinId = rawSpin ? String(rawSpin.id || '') : '';
+  const spin = rawSpin && SAFE_ID.test(spinId)
+    ? {
+      id: spinId,
+      index: Number.isInteger(Number(rawSpin.index)) ? Number(rawSpin.index) : 0,
+      multiplicity: Number.isInteger(Number(rawSpin.multiplicity)) ? Number(rawSpin.multiplicity) : null,
+      count: Number.isInteger(Number(rawSpin.count)) ? Number(rawSpin.count) : null,
+    }
+    : null;
   const rawLadder = raw?.ladder && typeof raw.ladder === 'object' ? raw.ladder : null;
   const ladderId = rawLadder ? String(rawLadder.id || '') : '';
   const ladder = rawLadder && SAFE_ID.test(ladderId)
@@ -195,6 +206,7 @@ function taskRecord(raw, index) {
     loop,
     merge,
     ladder,
+    spin,
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -434,6 +446,8 @@ export class QueueManager {
       // Method ladders: one verdict per ladder group, evaluated when every rung
       // of that group has finished.
       ladders: {},
+      // Spin-state sweeps: the table and the ground state, per swept block.
+      spins: {},
     };
 
     await fsp.mkdir(path.join(this.queueDir(id), 'inputs'), { recursive: true });
@@ -492,6 +506,41 @@ export class QueueManager {
     return changed;
   }
 
+  /**
+   * One table per spin-state sweep, once every state has finished. The ground
+   * state is the lowest computed state; a state that did not run is named
+   * rather than assumed to be higher.
+   */
+  async evaluateSpins(queue) {
+    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted']);
+    const groups = new Map();
+    for (const task of queue.tasks) {
+      if (!task.spin?.id) continue;
+      if (!groups.has(task.spin.id)) groups.set(task.spin.id, []);
+      groups.get(task.spin.id).push(task);
+    }
+    let changed = false;
+    for (const [id, group] of groups) {
+      if (!group.every((task) => finished.has(String(task.status)))) continue;
+      const entries = [...group]
+        .sort((a, b) => (a.spin.multiplicity || 0) - (b.spin.multiplicity || 0))
+        .map((task) => ({
+          nodeId: task.nodeId,
+          multiplicity: task.spin.multiplicity,
+          energyHartree: Number.isFinite(task.parsedSummary?.energyHartree) ? task.parsedSummary.energyHartree : null,
+          spinSquared: Number.isFinite(task.parsedSummary?.spinSquared) ? task.parsedSummary.spinSquared : null,
+          spinSquaredSource: task.parsedSummary?.spinSquaredSource || null,
+        }));
+      queue.spins = queue.spins || {};
+      queue.spins[id] = {
+        ...spinSweepVerdict(entries, { expected: group[0].spin.count ?? group.length }),
+        evaluatedAt: new Date().toISOString(),
+      };
+      changed = true;
+    }
+    return changed;
+  }
+
   async drain(queue) {
     if (this.loops.has(queue.id)) return;
     this.loops.add(queue.id);
@@ -520,7 +569,8 @@ export class QueueManager {
         }
 
         await this.runTask(queue, task);
-        if (await this.evaluateLadders(queue)) {
+        const spinChanged = await this.evaluateSpins(queue);
+        if (await this.evaluateLadders(queue) || spinChanged) {
           await this.persist(queue);
           this.publish(queue);
         }
@@ -644,6 +694,10 @@ export class QueueManager {
         optimization: { completed: record.parsed.optimization?.completed === true },
         // The one number every rung of a method ladder has in common.
         energyHartree: Number.isFinite(record.parsed.finalEnergy?.hartree) ? record.parsed.finalEnergy.hartree : null,
+        // ⟨S²⟩ of the converged wavefunction, with the source recorded so a
+        // value read from the annihilation line is not mistaken for a raw one.
+        spinSquared: Number.isFinite(record.parsed.spinSquared?.value) ? record.parsed.spinSquared.value : null,
+        spinSquaredSource: record.parsed.spinSquared?.source || null,
       } : null;
       task.status = record.status === 'completed' ? 'completed'
         : record.status === 'needs-review' ? 'needs-review'

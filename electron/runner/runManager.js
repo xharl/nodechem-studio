@@ -307,6 +307,10 @@ export class RunManager {
       requireThermochemistry: Boolean(payload.gates?.requireThermochemistry),
       requireFinalEnergy: Boolean(payload.gates?.requireFinalEnergy),
       validity: validity ? validity.findings : null,
+      // D4 has a revision floor; the check runs against the version this
+      // output reports, not against what the settings hoped for.
+      dispersion: payload.settings?.dispersion || null,
+      requireStableWavefunction: payload.settings?.stableOpt === true,
     });
 
     const status = parsed.status === 'error' || gates.overall === 'fail' ? 'failed'

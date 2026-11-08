@@ -166,6 +166,42 @@ The spread is `(max − min) × 627.5095 kcal/mol` over the rung final energies.
 sensitivity; it is not an average, and no single "consensus" energy is invented from it. The workflow
 report prints one table per ladder with each rung's energy and ΔE, alongside the verdict.
 
+## Spin-state sweeps
+
+Multiplicity defines the electronic state, so a sweep is a set of separate runs over the same
+geometry rather than one job with a setting. Put it on the block:
+
+```json
+"spinSweep": { "enabled": true, "multiplicities": [1, 3, 5] }
+```
+
+The block becomes `<nodeId>.m1`, `.m3`, `.m5`, each with its own input, multiplicity in the molecule
+block, run folder and provenance. When every state has finished, `queue.spins.<nodeId>` carries the
+table — multiplicity, final energy, ΔE in kcal/mol, ⟨S²⟩ — with the ground state identified.
+
+- The ground state is the lowest **computed** state. A state that did not run stays in the table with
+  no energy and is named in the reason; it is never assumed to lie above the others.
+- A degeneracy is reported as a degeneracy; the lowest multiplicity is not picked silently.
+- ⟨S²⟩ comes from the annihilation output Gaussian prints (`after`), falling back to the SCF line, and
+  is `null` for a restricted reference — which has S² = 0 by construction but where nothing was read.
+- A block cannot be both a method ladder and a spin sweep; the plan refuses the combination instead of
+  running the cross product.
+
+## Wavefunction stability
+
+`"stableOpt": true` adds `Stable=Opt` to the route. The run then carries a **Wavefunction stability**
+gate: `pass` when Gaussian says the wavefunction is stable under the perturbations considered, `fail`
+when it reports an internal instability (with the re-run instruction in the gate detail), and
+`unknown` when the output contains no stability analysis — never a pass by default.
+
+## Dispersion
+
+`EmpiricalDispersion=` accepts `GD3BJ`, `GD3` and `D4`. D4 has a revision floor: Gaussian 16 rev.
+C.01. A D4 job that comes back from an older revision gets a **Dispersion supported** gate failure
+naming both the requirement and the revision the output reported (for example
+`Gaussian 16 rev. A.03`), rather than a silently ignored keyword. When the output does not state a
+version the gate is `unknown`.
+
 ## Workflow report
 
 **Report…** in the queue header writes two files for the finished queue:

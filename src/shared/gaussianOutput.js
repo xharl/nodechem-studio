@@ -13,6 +13,7 @@
  */
 
 import { terminationCodeOf } from './engines/canonical.js';
+import { dispersionSupport } from './dispersion.js';
 import { ELEMENTS } from './elements.js';
 import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { parseShieldings } from './nmr.js';
@@ -903,6 +904,41 @@ function parseFinalEnergy(joined, scf) {
  * Restricted (RHF/RDFT) references print no such line, so both values stay
  * null and the validity check reports `skipped` rather than inventing a zero.
  */
+/**
+ * The ⟨S²⟩ Gaussian prints after the SCF converges, e.g.
+ *   <Sx>= 0.0000 <Sy>= 0.0000 <Sz>= 0.5000 <S**2>= 0.7778 S= 0.5138
+ * A restricted reference prints no such line: S² is exact by construction and
+ * is reported as null rather than as a zero we did not read.
+ */
+/**
+ * Wavefunction stability analysis (requested with `Stable` or `Stable=Opt`).
+ *
+ * Gaussian prints one of two verdicts after the perturbation analysis. These
+ * strings are the documented output; the app's corpus has no Stable job yet, so
+ * an output without them is `null` — and the gate built on this says `unknown`
+ * rather than assuming stability.
+ */
+function parseWavefunctionStability(text) {
+  if (/The wavefunction is stable under the perturbations considered\./i.test(text)) {
+    return { stable: true, detail: 'stable under the perturbations considered' };
+  }
+  if (/The wavefunction has an internal instability\./i.test(text)) {
+    return { stable: false, detail: 'the wavefunction has an internal instability' };
+  }
+  if (/The wavefunction is not stable under the perturbations considered/i.test(text)) {
+    return { stable: false, detail: 'not stable under the perturbations considered' };
+  }
+  return { stable: null, detail: null };
+}
+
+function parseSpinSquared(joined) {
+  const matches = [...joined.matchAll(new RegExp(String.raw`<S\*\*2>=\s*(${NUMBER})`, 'g'))];
+  if (matches.length === 0) return { value: null, s: null };
+  const last = matches[matches.length - 1];
+  const sMatch = joined.slice(last.index).match(new RegExp(String.raw`^(?=[^\n]*S=\s*(${NUMBER}))`, 'm'));
+  return { value: toNumber(last[1]), s: sMatch ? toNumber(sMatch[1]) : null };
+}
+
 function parseSpinContamination(joined) {
   const match = joined.match(new RegExp(
     String.raw`S\*\*2\s+before\s+annihilation\s+(${NUMBER})\s*,?\s*after\s+(${NUMBER})`,
@@ -1019,6 +1055,8 @@ function parseLink(section, index) {
     thermochemistry: parseThermochemistry(joined, lines),
     finalEnergy: parseFinalEnergy(joined, scf),
     spinContamination: parseSpinContamination(joined),
+    spinSquared: parseSpinSquared(joined),
+    wavefunctionStability: parseWavefunctionStability(joined),
     excitedStates: parseExcitedStates(lines),
     charges: parseCharges(lines),
     t1Diagnostic: parseT1Diagnostic(lines),
@@ -1145,6 +1183,18 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   const spinContamination = spinLink
     ? spinLink.spinContamination
     : { before: null, after: null };
+  // ⟨S²⟩ of the converged wavefunction: the annihilated value when Gaussian
+  // printed one, otherwise the value on the SCF line, otherwise null.
+  const spinSquaredLink = reversed.find((link) => link.spinSquared?.value !== null
+    && link.spinSquared?.value !== undefined) || null;
+  const stabilityLink = reversed.find((link) => link.wavefunctionStability?.stable !== null
+    && link.wavefunctionStability?.stable !== undefined) || null;
+  const wavefunctionStability = stabilityLink ? stabilityLink.wavefunctionStability : { stable: null, detail: null };
+  const spinSquared = spinContamination.after !== null
+    ? { value: spinContamination.after, source: 'after-annihilation', s: null }
+    : spinSquaredLink
+      ? { ...spinSquaredLink.spinSquared, source: 'scf' }
+      : { value: null, source: null, s: null };
 
   // Excited states belong to the last link that printed a TD table.
   const excitedLink = reversed.find((link) => link.excitedStates.count > 0) || null;
@@ -1171,6 +1221,8 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     thermochemistry,
     finalEnergy,
     spinContamination,
+    spinSquared,
+    wavefunctionStability,
     excitedStates,
     reactionPath,
     scan,
@@ -1208,6 +1260,8 @@ export function evaluateGates(parsed, {
   requireThermochemistry = false,
   requireFinalEnergy = false,
   validity = null,
+  dispersion = null,
+  requireStableWavefunction = false,
 } = {}) {
   const gates = [];
   const add = (name, required, result, detail) => {
@@ -1221,6 +1275,23 @@ export function evaluateGates(parsed, {
     : 'the parse does not cover the whole output';
   add('Output complete', true, complete ? 'pass' : 'unknown',
     complete ? (bytes && Number.isFinite(bytes.bytesRead) ? byteDetail : 'full output parsed') : byteDetail);
+
+  if (requireStableWavefunction) {
+    const stability = parsed.wavefunctionStability || { stable: null, detail: null };
+    add('Wavefunction stability', true,
+      stability.stable === true ? 'pass' : stability.stable === false ? 'fail' : 'unknown',
+      stability.stable === null
+        ? 'no stability analysis in this output, so stability was not confirmed'
+        : stability.stable ? 'the wavefunction is stable under the perturbations considered'
+          : 'the wavefunction is unstable; re-run with Stable=Opt to re-optimise under the stable solution');
+  }
+
+  const dispersionCheck = dispersion ? dispersionSupport(parsed.program, dispersion) : null;
+  if (dispersionCheck && dispersionCheck.status !== 'ok') {
+    add('Dispersion supported', true,
+      dispersionCheck.status === 'unsupported' ? 'fail' : 'unknown',
+      dispersionCheck.detail);
+  }
 
   const termination = terminationCodeOf(parsed);
   add('Normal termination', true,

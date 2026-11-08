@@ -56,6 +56,8 @@ function routeValues(settings = {}) {
     solvationModel: solvated ? oneLine(settings.solvationModel, 'PCM') : null,
     solvent: solvated ? oneLine(settings.solvent, 'Water') : null,
     td: tdKeywordFor(settings),
+    // `Stable=Opt` re-optimises the geometry if the wavefunction is unstable.
+    stable: settings.stableOpt === true ? 'Stable=Opt' : null,
     customKeywords: oneLine(settings.customKeywords, ''),
   };
 }
@@ -83,6 +85,7 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
   if (values.grid) tokens.push(`Integral=${values.grid}`);
   if (values.population) tokens.push(`Pop=${values.population}`);
   if (values.td) tokens.push(values.td);
+  if (values.stable) tokens.push(values.stable);
   if (values.verbosity) tokens.push(`Output=${values.verbosity}`);
   if (values.solvationModel) {
     tokens.push(`SCRF=(${values.solvationModel},Solvent=${values.solvent})`);

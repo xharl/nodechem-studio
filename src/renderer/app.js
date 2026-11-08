@@ -116,7 +116,7 @@ const JOB_TYPES = [
   ['SP', 'Single point'], ['Scan', 'PES scan'], ['NMR', 'NMR shieldings'],
 ];
 const IRC_DIRECTIONS = [['forward', 'Forward'], ['reverse', 'Reverse'], ['both', 'Both directions']];
-const DISPERSIONS = [['', 'None'], ['GD3BJ', 'D3(BJ)'], ['GD3', 'D3']];
+const DISPERSIONS = [['', 'None'], ['GD3BJ', 'D3(BJ)'], ['GD3', 'D3'], ['D4', 'D4 (Gaussian 16 C.01+)']];
 const SCF_OPTIONS = [['', 'Default'], ['Tight', 'Tight'], ['VeryTight', 'Very tight']];
 const GRID_OPTIONS = [['', 'Default'], ['Fine', 'Fine'], ['UltraFine', 'UltraFine']];
 const POP_OPTIONS = [['', 'None'], ['NBO', 'NBO'], ['Hirshfeld', 'Hirshfeld'], ['MK', 'MK charges']];
