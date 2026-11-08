@@ -70,7 +70,7 @@ Top level, all six keys required after normalization:
 | `charge` | integer | default 0 |
 | `multiplicity` | integer | default 1 |
 | `fragments[]` | string[] | ≤ 64, ≤ 400 chars each |
-| `coords[]` | object[] | `{ element, x, y, z }`, ≤ 1000 atoms, Å |
+| `coords[]` | object[] | `{ element, x, y, z, fragment? }`, ≤ 1000 atoms, Å; `fragment` is a 1-based counterpoise label |
 
 `defaults`:
 
@@ -101,7 +101,8 @@ Type-specific payloads:
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
 `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
 `optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
-`raman`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `disabledChecks`, `gates`,
+`raman`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
+`counterpoiseChargeStates`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`.
 
 `settings.engine` is a per-block override (`gaussian` or `xtb`); an empty string means "use
@@ -112,6 +113,19 @@ measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, `or
 orbital-eigenvalue print (`Pop=Full` on Gaussian) that the frontier-orbital and Koopmans panel is
 read from, and `raman`, `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
 analysis and validity behaviour.
+
+`jobType` also accepts the composite methods `CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4`
+and `G4(MP2)`. A composite job **must** leave `method`, `basis`, `dispersion`, `solvation`,
+`tdStates`, `population`, `orbitals`, `customKeywords`, `raman`, `stableOpt`, `optConvergence` and
+`counterpoise` at their defaults; any value there is a conflict and refuses to build the input. The
+route is the bare keyword (`#p G4`, `#p G4MP2` for `G4(MP2)`).
+
+`counterpoise` is `0` (off) or the fragment count `2–10`. When it is set, every `coords[]` atom
+carries `fragment` in `1..N`, the set of labels must be exactly `1..N`, and `molecule.fragments`
+(when non-empty) must have `N` entries. `counterpoiseChargeStates` is optional: an array of
+`{ charge, multiplicity }` in fragment order, which is written after the whole-system pair on the
+charge/spin line; the fragment charges must sum to `molecule.charge`. Both keys are additive v1
+fields — an older build drops them with a warning on save.
 
 `settings.gates`: `termination`, `scf`, `imaginary`, `minMagnitude`, `thermo`,
 `finalEnergy`.

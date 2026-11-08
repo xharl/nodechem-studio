@@ -19,6 +19,7 @@ import {
   VALIDITY_CHECKS,
   VALIDITY_CHECK_IDS,
   checkChargeMultiplicity,
+  checkCounterpoise,
   checkGeometrySanity,
   checkImaginaryFrequencies,
   checkMethodBasisCompatibility,
@@ -91,6 +92,7 @@ describe('validity checks — contract', () => {
       'orbital-descriptors',
       'engine-settings',
       'method-basis-compatibility',
+      'counterpoise-bsse',
       'opt-convergence',
       'conformer-spread',
     ]);
@@ -564,6 +566,7 @@ describe('running checks', () => {
     expect(result.findings.map((finding) => finding.id).sort()).toEqual([
       'charge-multiplicity',
       'conformer-spread',
+      'counterpoise-bsse',
       'engine-settings',
       'imaginary-frequencies',
       'method-basis-compatibility',
@@ -588,6 +591,7 @@ describe('running checks', () => {
     expect(result.findings.map((finding) => finding.id).sort()).toEqual([
       'charge-multiplicity',
       'conformer-spread',
+      'counterpoise-bsse',
       'engine-settings',
       'geometry-sanity',
       'method-basis-compatibility',
@@ -599,8 +603,8 @@ describe('running checks', () => {
   it('removes a disabled check from the result entirely', () => {
     const before = runValidityChecks(context, { phase: 'post' });
     const after = runValidityChecks(context, { phase: 'post', disabled: ['spin-contamination'] });
-    expect(before.findings).toHaveLength(7);
-    expect(after.findings).toHaveLength(6);
+    expect(before.findings).toHaveLength(8);
+    expect(after.findings).toHaveLength(7);
     expect(after.findings.map((finding) => finding.id)).not.toContain('spin-contamination');
   });
 
@@ -825,5 +829,155 @@ describe('project validation integration', () => {
     expect(result.ok).toBe(true);
     expect(result.warnings.some((entry) => entry.path === 'nodes[0].settings.disabledChecks[0]')).toBe(true);
     expect(result.project.nodes[0].settings.disabledChecks).toEqual([]);
+  });
+});
+
+/* Issue #77: composite methods and counterpoise in the validity protocol. */
+describe('issue #77 — composite method compatibility', () => {
+  it('passes a composite job type with no separate method or basis', () => {
+    const result = checkMethodBasisCompatibility({
+      settings: { jobType: 'G4', method: '', basis: '', dispersion: '' },
+      molecule: water(),
+    });
+    expect(result.status).toBe('pass');
+    expect(result.message).toMatch(/composite method/);
+  });
+
+  it('fails a composite job that still carries a method/basis pair', () => {
+    const result = checkMethodBasisCompatibility({
+      settings: { jobType: 'G4', method: 'B3LYP', basis: 'def2-SVP', dispersion: '' },
+      molecule: water(),
+    });
+    expect(result.status).toBe('fail');
+    expect(result.message).toMatch(/method "B3LYP"/);
+    expect(result.message).toMatch(/basis "def2-SVP"/);
+    expect(result.severity).toBeUndefined(); // severity is attached by runValidityChecks
+  });
+
+  it('fails the old free-text composite method spelling', () => {
+    const result = checkMethodBasisCompatibility({
+      settings: { jobType: 'Opt', method: 'CBS-QB3', basis: '6-31G(d)' },
+      molecule: water(),
+    });
+    expect(result.status).toBe('fail');
+    expect(result.message).toMatch(/not method names|Choose a supported composite job type/);
+  });
+});
+
+const DIMER_COORDS = [
+  { element: 'O', x: 0.00, y: 0.00, z: 0.00, fragment: 1 },
+  { element: 'H', x: 0.49, y: 0.76, z: -0.29, fragment: 1 },
+  { element: 'H', x: 0.49, y: -0.76, z: -0.29, fragment: 1 },
+  { element: 'O', x: 0.00, y: 0.00, z: 2.98, fragment: 2 },
+  { element: 'H', x: -0.91, y: 0.00, z: 3.24, fragment: 2 },
+  { element: 'H', x: -0.01, y: 0.00, z: 2.03, fragment: 2 },
+];
+
+function dimer(overrides = {}) {
+  return { charge: 0, multiplicity: 1, fragments: ['O', 'O'], coords: DIMER_COORDS, ...overrides };
+}
+
+describe('issue #77 — counterpoise validity', () => {
+  const settings = { jobType: 'SP', method: 'B3LYP', basis: '6-31G(d)', counterpoise: 2 };
+
+  it('passes the pre-run check when every atom carries fragment 1..N', () => {
+    const result = checkCounterpoise({ settings, molecule: dimer() });
+    expect(result.status).toBe('pass');
+    expect(result.message).toMatch(/Counterpoise=2/);
+  });
+
+  it('fails when the fragment labels do not match the requested count', () => {
+    const result = checkCounterpoise({
+      settings,
+      molecule: dimer({ coords: DIMER_COORDS.map((atom, index) => (index === 5 ? { ...atom, fragment: 3 } : atom)) }),
+    });
+    expect(result.status).toBe('fail');
+    expect(result.message).toMatch(/exceed Counterpoise=2|consecutively/);
+  });
+
+  it('fails when molecule.fragments and Counterpoise=N disagree', () => {
+    const result = checkCounterpoise({ settings, molecule: dimer({ fragments: ['O'] }) });
+    expect(result.status).toBe('fail');
+    expect(result.message).toMatch(/declares 1 fragment/);
+  });
+
+  it('reports BSSE, the corrected complex and the interaction energies separately', () => {
+    const parsed = {
+      status: 'completed',
+      complete: true,
+      counterpoise: {
+        fragments: 2,
+        found: true,
+        complexEnergyHartree: -622.483714884838,
+        monomerSumHartree: -622.333463706103,
+        bsseHartree: 0.005664641553,
+        bsseKcalPerMol: 3.5546,
+        rawInteractionKcalPerMol: -97.84,
+        correctedInteractionKcalPerMol: -94.28,
+        interactionCorrectedHartree: -0.1502447,
+        bsseSource: 'printed',
+      },
+    };
+    const result = checkCounterpoise({ settings, molecule: dimer(), parsed });
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('BSSE 0.005664641553 Eh');
+    expect(result.message).toContain('Corrected interaction -94.28 kcal/mol vs raw -97.84 kcal/mol');
+    expect(result.evidence).toMatchObject({
+      counterpoise: 2,
+      basis: '6-31G(d)',
+      bsseHartree: 0.005664641553,
+      complexEnergyHartree: -622.483714884838,
+      monomerSumHartree: -622.333463706103,
+    });
+  });
+
+  it('stays unknown when the counterpoise summary is absent', () => {
+    const result = checkCounterpoise({
+      settings,
+      molecule: dimer(),
+      parsed: { status: 'completed', complete: true, counterpoise: { fragments: 2, found: false } },
+    });
+    expect(result.status).toBe('fail'); // completed job, requested block, no summary
+    const incomplete = checkCounterpoise({
+      settings,
+      molecule: dimer(),
+      parsed: { status: 'incomplete', complete: false, counterpoise: { fragments: 2, found: false } },
+    });
+    expect(incomplete.status).toBe('unknown');
+  });
+
+  it('skips a block that does not request counterpoise', () => {
+    const result = checkCounterpoise({
+      settings: { ...settings, counterpoise: 0 },
+      molecule: water(),
+      parsed: { status: 'completed', complete: true, counterpoise: null },
+    });
+    expect(result.status).toBe('skipped');
+  });
+
+  it('reports a parsed counterpoise block when the payload omitted the setting', () => {
+    const result = checkCounterpoise({
+      settings: { jobType: 'SP', method: 'B3LYP', basis: '6-31G(d)' },
+      molecule: water(),
+      parsed: {
+        status: 'completed',
+        complete: true,
+        counterpoise: {
+          fragments: 2,
+          found: true,
+          complexEnergyHartree: -622.483714884838,
+          monomerSumHartree: -622.333463706103,
+          bsseHartree: 0.005664641553,
+          bsseKcalPerMol: 3.5546,
+          rawInteractionKcalPerMol: null,
+          correctedInteractionKcalPerMol: null,
+          interactionCorrectedHartree: -0.1502447,
+          bsseSource: 'printed',
+        },
+      },
+    });
+    expect(result.status).toBe('pass');
+    expect(result.evidence.counterpoiseSource).toBe('output');
+    expect(result.evidence.counterpoise).toBe(2);
   });
 });

@@ -17,7 +17,7 @@
 export const SCHEMA_VERSION = 1;
 
 import { isElementSymbol } from './elements.js';
-import { MODERN_ROUTE_PRESET, defaultDispersionFor } from './routePresets.js';
+import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS } from './engines/xtb.js';
 import {
@@ -68,7 +68,12 @@ export const NODE_STATES = Object.freeze([
 
 export const EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'branch', 'loop']);
 export const BRANCHES = Object.freeze(['true', 'false']);
-export const JOB_TYPES = Object.freeze(['Opt', 'Opt Freq', 'Opt=TS', 'Freq', 'IRC', 'SP', 'Scan', 'NMR']);
+export const JOB_TYPES = Object.freeze([
+  'Opt', 'Opt Freq', 'Opt=TS', 'Freq', 'IRC', 'SP', 'Scan', 'NMR',
+  // Issue #77: composite methods are job types, not method strings. Each takes
+  // no separate method/basis pair and expands to its documented Gaussian links.
+  ...COMPOSITE_JOB_TYPES,
+]);
 export const IRC_DIRECTIONS = Object.freeze(['forward', 'reverse', 'both']);
 export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3', 'D4']);
 export const SCF_OPTIONS = Object.freeze(['', 'Tight', 'VeryTight']);
@@ -100,6 +105,7 @@ const JOB_KINDS = {
   IRC: 'IRC',
   SP: 'SP',
   Scan: 'Scan',
+  ...Object.fromEntries(COMPOSITE_JOB_TYPES.map((jobType) => [jobType, 'Composite'])),
 };
 
 const TYPE_KINDS = {
@@ -137,6 +143,7 @@ const SETTINGS_KEYS = new Set([
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
   'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
+  'counterpoise', 'counterpoiseChargeStates',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads', 'engine',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -154,17 +161,20 @@ export function defaultGates(overrides = {}) {
 }
 
 export function defaultSettings(overrides = {}) {
+  // A composite job type owns its own method and basis, so the factory must not
+  // plant the B3LYP/def2-SVP placeholder that would then conflict with it.
+  const composite = isCompositeJobType(overrides.jobType);
   const base = {
     jobType: 'Opt',
-    method: MODERN_ROUTE_PRESET.method,
-    basis: MODERN_ROUTE_PRESET.basis,
+    method: composite ? '' : MODERN_ROUTE_PRESET.method,
+    basis: composite ? '' : MODERN_ROUTE_PRESET.basis,
     memory: '4',
     memoryUnit: 'GB',
     nproc: '4',
     checkpoint: '',
     charge: 0,
     multiplicity: 1,
-    dispersion: defaultDispersionFor(MODERN_ROUTE_PRESET.method),
+    dispersion: composite ? '' : defaultDispersionFor(MODERN_ROUTE_PRESET.method),
     scf: '',
     grid: '',
     population: '',
@@ -194,6 +204,9 @@ export function defaultSettings(overrides = {}) {
     referenceNodeId: '',
     // Empty means the project default engine.
     engine: '',
+    // Issue #77: 0 means "not a counterpoise job"; N is the fragment count.
+    counterpoise: 0,
+    counterpoiseChargeStates: [],
     // Issue #25: validity checks are on by default; a node opts out by id.
     disabledChecks: [],
   };
@@ -205,7 +218,7 @@ export function defaultSettings(overrides = {}) {
   // An explicit dispersion override wins; otherwise follow the resolved method
   // so a functional with built-in dispersion is not double-corrected.
   if (!Object.prototype.hasOwnProperty.call(overrides, 'dispersion')) {
-    settings.dispersion = defaultDispersionFor(settings.method);
+    settings.dispersion = composite ? '' : defaultDispersionFor(settings.method);
   }
   return settings;
 }
@@ -552,11 +565,18 @@ function normalizeCoords(c, raw, legacy) {
       c.error(`${path}.element`, `unknown element symbol "${element}".`);
       return;
     }
+    const hasFragment = atom.fragment !== undefined && atom.fragment !== null && atom.fragment !== '';
+    const fragment = hasFragment
+      ? readOptionalInteger(c, atom.fragment, `${path}.fragment`, { fallback: 0, min: 1, max: LIMITS.fragments })
+      : 0;
     atoms.push({
       element,
       x: readNumber(c, atom.x, `${path}.x`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
       y: readNumber(c, atom.y, `${path}.y`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
       z: readNumber(c, atom.z, `${path}.z`, { legacy, fallback: 0, min: -1e6, max: 1e6 }),
+      // Counterpoise fragment label (#77). Absent means "not labelled", which
+      // keeps every pre-#77 atom object byte-identical.
+      ...(fragment > 0 ? { fragment } : {}),
     });
   });
   return atoms;
@@ -779,6 +799,31 @@ function normalizeDisabledChecks(c, raw, path, legacy) {
   return disabled;
 }
 
+function normalizeCounterpoiseChargeStates(c, raw, path) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    c.error(path, 'must be an array of { charge, multiplicity } entries.');
+    return [];
+  }
+  if (raw.length > COUNTERPOISE_MAX_FRAGMENTS) {
+    c.error(path, `must contain at most ${COUNTERPOISE_MAX_FRAGMENTS} fragment charge states.`);
+    return [];
+  }
+  const states = [];
+  raw.forEach((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    if (!isPlainObject(entry)) {
+      c.error(entryPath, 'must be an object with charge and multiplicity.');
+      return;
+    }
+    states.push({
+      charge: readInteger(c, entry.charge, `${entryPath}.charge`, { fallback: 0, min: -10, max: 10 }),
+      multiplicity: readInteger(c, entry.multiplicity, `${entryPath}.multiplicity`, { fallback: 1, min: 1, max: 10 }),
+    });
+  });
+  return states;
+}
+
 function normalizeSettings(c, raw, path, legacy) {
   const source = requiredObject(c, raw, path, legacy, {});
   warnUnknown(c, source, SETTINGS_KEYS, path);
@@ -791,15 +836,30 @@ function normalizeSettings(c, raw, path, legacy) {
     c.warn(`${path}.customKeywords`,
       'adds an Opt keyword, but the job type and force constants already emit one. Remove it, or the input builder will refuse to compose the route.');
   }
+  const jobType = readEnum(c, source.jobType, JOB_TYPES, `${path}.jobType`, { legacy, fallback: 'Opt', required: true }) || 'Opt';
+  // A composite method has no method/basis of its own; absent fields stay
+  // empty (not applicable), while an explicit value is preserved so the
+  // builder and the validity check can refuse the conflict.
+  const compositeJob = isCompositeJobType(jobType);
+  const counterpoise = readOptionalInteger(c, source.counterpoise, `${path}.counterpoise`, {
+    fallback: 0, min: 0, max: COUNTERPOISE_MAX_FRAGMENTS,
+  });
+  if (counterpoise === 1) {
+    c.error(`${path}.counterpoise`, 'must be 0 (off) or at least 2 fragments.');
+  }
   return {
     // Per-block engine override. Empty means "use the project default", which is
     // what every .ncs written before this setting existed says.
     engine: source.engine === undefined || source.engine === null || source.engine === ''
       ? ''
       : (readEnum(c, source.engine, ENGINE_IDS, `${path}.engine`, { legacy, fallback: 'gaussian' }) || 'gaussian'),
-    jobType: readEnum(c, source.jobType, JOB_TYPES, `${path}.jobType`, { legacy, fallback: 'Opt', required: true }) || 'Opt',
-    method: readString(c, source.method, `${path}.method`, { legacy, fallback: MODERN_ROUTE_PRESET.method, max: 64, required: true }) || MODERN_ROUTE_PRESET.method,
-    basis: readString(c, source.basis, `${path}.basis`, { legacy, fallback: MODERN_ROUTE_PRESET.basis, max: 64, required: true }) || MODERN_ROUTE_PRESET.basis,
+    jobType,
+    method: readString(c, source.method, `${path}.method`, {
+      legacy, fallback: compositeJob ? '' : MODERN_ROUTE_PRESET.method, max: 64, required: !compositeJob,
+    }) || (compositeJob ? '' : MODERN_ROUTE_PRESET.method),
+    basis: readString(c, source.basis, `${path}.basis`, {
+      legacy, fallback: compositeJob ? '' : MODERN_ROUTE_PRESET.basis, max: 64, required: !compositeJob,
+    }) || (compositeJob ? '' : MODERN_ROUTE_PRESET.basis),
     memory: readMemory(c, source.memory, `${path}.memory`, { legacy, fallback: '4' }),
     memoryUnit: readEnum(c, source.memoryUnit, MEMORY_UNITS, `${path}.memoryUnit`, { legacy, fallback: 'GB' }),
     nproc: readInteger(c, source.nproc, `${path}.nproc`, { legacy, fallback: 4, min: 1, max: 1024 }),
@@ -834,6 +894,10 @@ function normalizeSettings(c, raw, path, legacy) {
     // Which excited state an accompanying Opt follows (#75). 0 = not stated.
     tdRoot: readOptionalInteger(c, source.tdRoot, `${path}.tdRoot`, { fallback: 0, min: 0, max: 200 }),
     spinSweep: normalizeSpinSweep(c, source.spinSweep, `${path}.spinSweep`, legacy),
+    // Issue #77: Counterpoise=N with per-fragment charge/spin pairs when the
+    // fragments are not all at the complex's charge state.
+    counterpoise,
+    counterpoiseChargeStates: normalizeCounterpoiseChargeStates(c, source.counterpoiseChargeStates, `${path}.counterpoiseChargeStates`),
     // The block whose free energy is the reactant in a ΔG‡ for this path. It
     // is declared, never inferred from the graph.
     referenceNodeId: readString(c, source.referenceNodeId, `${path}.referenceNodeId`, { legacy, fallback: '', max: 64 }) || '',

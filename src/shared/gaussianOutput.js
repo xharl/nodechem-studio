@@ -23,6 +23,7 @@ import { parseOrbitals } from './orbitals.js';
 import { parseRotatoryStrengths } from './ecd.js';
 import { parseTrajectory } from './trajectory.js';
 import { summarizeValidity } from './validityChecks.js';
+import { COMPOSITE_METHODS, compositeMethodFor, HARTREE_TO_KCAL_PER_MOL } from './routePresets.js';
 
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
 
@@ -611,6 +612,192 @@ function emptyResources() {
   };
 }
 
+/* ── Composite methods and counterpoise (issue #77) ──────────── */
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Longest keyword first so G4MP2 is never read as G4. */
+const COMPOSITE_ROUTE_TOKENS = COMPOSITE_METHODS
+  .map((method) => ({
+    method,
+    pattern: new RegExp(`(^|[\\s(])${escapeRegExp(method.keyword)}(?=[\\s),=]|$)`, 'i'),
+  }))
+  .sort((a, b) => b.method.keyword.length - a.method.keyword.length);
+
+/** The composite method named by an echoed route line, or `null`. */
+export function compositeMethodFromRoute(route) {
+  const text = String(route ?? '');
+  if (!text) return null;
+  for (const entry of COMPOSITE_ROUTE_TOKENS) {
+    if (entry.pattern.test(text)) return entry.method;
+  }
+  return null;
+}
+
+function labelPattern(method) {
+  return method.labels.map(escapeRegExp).join('|');
+}
+
+/**
+ * The method-specific summary Gaussian prints after all composite links, e.g.
+ *
+ *   CBS-QB3 (0 K)=        -39.069832 CBS-QB3 Energy=           -39.066969
+ *   CBS-QB3 Enthalpy=     -39.066025 CBS-QB3 Free Energy=      -39.088192
+ *
+ * A G2 job prints G1 lines before its G2 lines, so the last recognised block
+ * wins. `(0 K)` is the headline composite energy; `Energy`, `Enthalpy` and
+ * `Free Energy` are the thermochemically corrected terms and stay separate.
+ */
+function parseCompositeSummary(lines, offset) {
+  const joined = lines.join('\n');
+  let record = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const zero = lines[index].match(new RegExp(
+      String.raw`^\s*([A-Za-z][A-Za-z0-9()\- ]*?)\s*\(0 K\)\s*=\s*(${NUMBER})`,
+      'i',
+    ));
+    if (!zero) continue;
+    const method = compositeMethodFor(zero[1]);
+    if (!method) continue;
+    const labels = labelPattern(method);
+    const energy = joined.match(new RegExp(String.raw`(?:${labels})\s*Energy\s*=\s*(${NUMBER})`, 'i'));
+    const enthalpy = joined.match(new RegExp(String.raw`(?:${labels})\s*Enthalpy\s*=\s*(${NUMBER})`, 'i'));
+    const freeEnergy = joined.match(new RegExp(String.raw`(?:${labels})\s*Free Energy\s*=\s*(${NUMBER})`, 'i'));
+    record = {
+      found: true,
+      method: method.id,
+      keyword: method.keyword,
+      label: zero[1].trim(),
+      line: offset + index + 1,
+      zeroPointEnergyHartree: toNumber(zero[2]),
+      thermalEnergyHartree: energy ? toNumber(energy[1]) : null,
+      enthalpyHartree: enthalpy ? toNumber(enthalpy[1]) : null,
+      freeEnergyHartree: freeEnergy ? toNumber(freeEnergy[1]) : null,
+    };
+  }
+  return record;
+}
+
+function emptyComposite(expected = null) {
+  return {
+    expected,
+    found: false,
+    method: null,
+    keyword: expected ? compositeMethodFor(expected)?.keyword ?? null : null,
+    zeroPointEnergyHartree: null,
+    thermalEnergyHartree: null,
+    enthalpyHartree: null,
+    freeEnergyHartree: null,
+  };
+}
+
+const COUNTERPOISE_CORRECTED = new RegExp(
+  String.raw`^\s*(?:Counterpoise\s*:?\s*)?corrected energy\s*=\s*(${NUMBER})`, 'i',
+);
+const COUNTERPOISE_BSSE = new RegExp(
+  String.raw`^\s*(?:Counterpoise\s*:?\s*)?BSSE energy\s*=\s*(${NUMBER})`, 'i',
+);
+const COUNTERPOISE_SUM = new RegExp(
+  String.raw`^\s*(?:Counterpoise\s*:?\s*)?sum of fragments\s*=\s*(${NUMBER})`, 'i',
+);
+const COUNTERPOISE_COMPLEXATION = new RegExp(
+  String.raw`^\s*complexation energy\s*=\s*(${NUMBER})\s*kcal/mole\s*\((raw|corrected)\)`, 'i',
+);
+
+/**
+ * The counterpoise summary block, scoped to one link. Gaussian prints the
+ * corrected complex energy, the BSSE and the monomer sum; older revisions use
+ * a `Counterpoise:` prefix, newer ones do not. The printed BSSE is the
+ * correction; `raw - corrected` complexation energies are a cross-check, not
+ * the definition. Individual monomer energies and deformation terms are not in
+ * this block and are left null rather than invented.
+ */
+function parseCounterpoise(lines, offset, route) {
+  const routeMatch = String(route ?? '').match(/Counterpoise\s*=\s*(\d+)/i);
+  const fragments = routeMatch ? Number(routeMatch[1]) : null;
+  let complexEnergyHartree = null;
+  let printedBsse = null;
+  let monomerSumHartree = null;
+  let rawInteractionKcalPerMol = null;
+  let correctedInteractionKcalPerMol = null;
+  let line = null;
+  let bsseSource = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const text = lines[index];
+    let match = text.match(COUNTERPOISE_CORRECTED);
+    if (match) {
+      complexEnergyHartree = toNumber(match[1]);
+      line = line ?? offset + index + 1;
+      continue;
+    }
+    match = text.match(COUNTERPOISE_BSSE);
+    if (match) {
+      printedBsse = toNumber(match[1]);
+      line = line ?? offset + index + 1;
+      continue;
+    }
+    match = text.match(COUNTERPOISE_SUM);
+    if (match) {
+      monomerSumHartree = toNumber(match[1]);
+      continue;
+    }
+    match = text.match(COUNTERPOISE_COMPLEXATION);
+    if (match) {
+      if (match[2].toLowerCase() === 'raw') rawInteractionKcalPerMol = toNumber(match[1]);
+      else correctedInteractionKcalPerMol = toNumber(match[1]);
+    }
+  }
+
+  const found = complexEnergyHartree !== null || printedBsse !== null || monomerSumHartree !== null;
+  if (!found && fragments === null) return null;
+  if (!found) {
+    return {
+      fragments,
+      found: false,
+      complexEnergyHartree: null,
+      monomerSumHartree: null,
+      bsseHartree: null,
+      bsseSource: null,
+      bsseKcalPerMol: null,
+      rawInteractionKcalPerMol: null,
+      correctedInteractionKcalPerMol: null,
+      interactionCorrectedHartree: null,
+      line: null,
+    };
+  }
+
+  // If a log prints only the complexation energies, BSSE is their difference;
+  // otherwise the printed BSSE line is authoritative.
+  let bsseHartree = printedBsse;
+  if (bsseHartree !== null) bsseSource = 'printed';
+  if (bsseHartree === null && rawInteractionKcalPerMol !== null && correctedInteractionKcalPerMol !== null) {
+    bsseHartree = (rawInteractionKcalPerMol - correctedInteractionKcalPerMol) / HARTREE_TO_KCAL_PER_MOL;
+    bsseSource = 'complexation-difference';
+  }
+  const interactionCorrectedHartree = correctedInteractionKcalPerMol !== null
+    ? correctedInteractionKcalPerMol / HARTREE_TO_KCAL_PER_MOL
+    : complexEnergyHartree !== null && monomerSumHartree !== null
+      ? complexEnergyHartree - monomerSumHartree
+      : null;
+
+  return {
+    fragments,
+    found: true,
+    complexEnergyHartree,
+    monomerSumHartree,
+    bsseHartree,
+    bsseSource,
+    bsseKcalPerMol: bsseHartree === null ? null : bsseHartree * HARTREE_TO_KCAL_PER_MOL,
+    rawInteractionKcalPerMol,
+    correctedInteractionKcalPerMol,
+    interactionCorrectedHartree,
+    line,
+  };
+}
+
 function parseScfRecords(lines, offset) {
   const records = [];
   for (let index = 0; index < lines.length; index += 1) {
@@ -1014,6 +1201,7 @@ function emptyExcitedStates() {
 function parseLink(section, index) {
   const { lines, startLine } = section;
   const joined = lines.join('\n');
+  const routeText = routeOf(lines);
   const steps = splitSteps(lines, startLine);
   const records = steps.flatMap((step) => step.scf.records);
   const failure = scfFailureLine(lines);
@@ -1056,7 +1244,7 @@ function parseLink(section, index) {
     index,
     line: startLine + 1,
     program: programOf(joined),
-    route: routeOf(lines),
+    route: routeText,
     termination: terminationOf(lines),
     geometry: parseGeometries(lines, startLine),
     scf,
@@ -1067,6 +1255,13 @@ function parseLink(section, index) {
     frequencyBlocks,
     thermochemistry: parseThermochemistry(joined, lines),
     finalEnergy: parseFinalEnergy(joined, scf),
+    composite: (() => {
+      const expected = compositeMethodFromRoute(routeText);
+      const summary = parseCompositeSummary(lines, startLine);
+      if (!summary) return emptyComposite(expected?.id ?? null);
+      return { ...summary, expected: expected?.id ?? null };
+    })(),
+    counterpoise: parseCounterpoise(lines, startLine, routeText),
     spinContamination: parseSpinContamination(joined),
     spinSquared: parseSpinSquared(joined),
     wavefunctionStability: parseWavefunctionStability(joined),
@@ -1160,9 +1355,33 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     : parseThermochemistry('', ['']);
 
   const finalEnergyLink = reversed.find((link) => link.finalEnergy.hartree !== null) || null;
-  const finalEnergy = finalEnergyLink
-    ? { hartree: finalEnergyLink.finalEnergy.hartree, source: finalEnergyLink.finalEnergy.source }
-    : { hartree: null, source: null };
+  // Issue #77: a composite route's answer is its method-specific summary, not
+  // the last SCF or post-HF record of an intermediate link. If the summary is
+  // absent, the composite energy is unknown — never the component energy.
+  const compositeLink = reversed.find((link) => link.composite.found || link.composite.expected !== null) || null;
+  const composite = compositeLink ? compositeLink.composite : null;
+  const counterpoiseLink = reversed.find((link) => link.counterpoise !== null) || null;
+  const counterpoise = counterpoiseLink ? counterpoiseLink.counterpoise : null;
+  let finalEnergy;
+  if (composite?.expected) {
+    const hartree = composite.found && Number.isFinite(composite.zeroPointEnergyHartree)
+      ? composite.zeroPointEnergyHartree
+      : null;
+    finalEnergy = {
+      hartree,
+      source: hartree === null ? null : `composite:${composite.method || composite.expected}`,
+    };
+  } else if (counterpoise?.found && Number.isFinite(counterpoise.complexEnergyHartree)) {
+    finalEnergy = { hartree: counterpoise.complexEnergyHartree, source: 'counterpoise-corrected' };
+  } else if (counterpoise && counterpoise.fragments !== null) {
+    // The route asked for a correction but the summary is missing; the SCF
+    // energy of the complex is uncorrected, so it is not this job's answer.
+    finalEnergy = { hartree: null, source: null };
+  } else {
+    finalEnergy = finalEnergyLink
+      ? { hartree: finalEnergyLink.finalEnergy.hartree, source: finalEnergyLink.finalEnergy.source }
+      : { hartree: null, source: null };
+  }
 
   const optimizationLink = reversed.find((link) => link.optimization.steps !== null) || null;
   const optimization = {
@@ -1266,6 +1485,8 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     orbitals,
     thermochemistry,
     finalEnergy,
+    composite,
+    counterpoise,
     spinContamination,
     spinSquared,
     wavefunctionStability,
@@ -1294,6 +1515,17 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
 }
 
 /**
+ * A composite gate expects a *method*, not just an energy: a log whose summary
+ * says G3 cannot satisfy a G4 block. `compositeMethodFor` canonicalises both
+ * spellings of G4(MP2).
+ */
+function compositeNameMatches(record, expected) {
+  if (!record?.method) return false;
+  const target = compositeMethodFor(expected)?.id || String(expected).trim();
+  return String(record.method).toLowerCase() === String(target).toLowerCase();
+}
+
+/**
  * Evaluate the first-slice gates. A missing or unjudgeable value is `unknown`,
  * never `pass`. `expectedImaginary` is null when the route has no frequency
  * interpretation.
@@ -1314,6 +1546,7 @@ export function evaluateGates(parsed, {
   requireFrequency = false,
   requireThermochemistry = false,
   requireFinalEnergy = false,
+  requireComposite = null,
   validity = null,
   dispersion = null,
   requireStableWavefunction = false,
@@ -1417,6 +1650,46 @@ export function evaluateGates(parsed, {
     add('Final energy record', true,
       finalEnergy.hartree !== null ? 'pass' : 'unknown',
       finalEnergy.hartree !== null ? `${finalEnergy.hartree} Eh (${finalEnergy.source})` : null);
+  }
+
+  // Issue #77: when the route names a composite method, its summary is the
+  // only acceptable final answer. A log that contains SCF or post-HF energies
+  // from the component links but no composite summary must not pass on one of
+  // those component energies — that is the exact failure this gate exists for.
+  const compositeRecord = parsed.composite || null;
+  const compositeExpected = requireComposite === true
+    ? compositeRecord?.expected ?? null
+    : typeof requireComposite === 'string' && requireComposite.trim() !== ''
+      ? requireComposite.trim()
+      : compositeRecord?.expected ?? null;
+  if (compositeExpected) {
+    const matches = compositeNameMatches(compositeRecord, compositeExpected);
+    const compositeEnergy = compositeRecord?.zeroPointEnergyHartree;
+    const judged = matches && Number.isFinite(compositeEnergy);
+    let result;
+    let detail;
+    if (judged) {
+      result = 'pass';
+      detail = `${compositeEnergy} Eh (${compositeRecord.method} 0 K composite energy)`;
+    } else if (!complete) {
+      result = 'unknown';
+      detail = `the output is incomplete, so the ${compositeExpected} composite summary cannot be confirmed`;
+    } else if (termination === 'error') {
+      result = 'fail';
+      detail = `the run terminated with an error before printing a ${compositeExpected} composite summary`;
+    } else if (termination === 'none') {
+      result = 'unknown';
+      detail = `the output has no termination marker and no ${compositeExpected} composite summary`;
+    } else if (compositeRecord?.found) {
+      result = 'fail';
+      detail = `the log printed a ${compositeRecord.method} summary, but this block is ${compositeExpected};`
+        + ' a different composite method is not this block\'s result';
+    } else {
+      result = 'fail';
+      detail = `the log terminated normally but printed no ${compositeExpected} composite summary;`
+        + ' the SCF or post-HF energy it contains is a component link, not the composite result';
+    }
+    add('Composite energy', true, result, detail);
   }
 
   const required = gates.filter((gate) => gate.required);
