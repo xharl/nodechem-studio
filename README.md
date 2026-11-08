@@ -57,7 +57,8 @@ you trust a result.
   fixed and not themed.
 - **Headless CLI** — `ncs validate`, `ncs build-input` and `ncs run`, plus `ncs diff` / `ncs merge`
   for projects shared through a drive.
-- **Local only** — no account, no telemetry, no network code at all.
+- **Local only** — no account, no telemetry, and no network code beyond the update check you
+  trigger yourself.
 
 ## Install
 

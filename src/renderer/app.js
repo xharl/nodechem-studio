@@ -3773,6 +3773,107 @@ async function saveDiagnostics() {
   }
 }
 
+/* ── Update notice (#82) ──────────────────────────────────── */
+
+/**
+ * The only outbound call the app can make, and only from this click. The
+ * banner is assembled from DOM nodes rather than an HTML string: the version
+ * and URL come from a remote response, and `esc()` exists to compose markup we
+ * wrote, not to sanitise a value that must never be parsed as markup.
+ */
+async function checkForUpdatesAction() {
+  if (!desktop?.checkForUpdates) {
+    toast('Open the Electron app to check for GitHub releases.');
+    return;
+  }
+  toast('Checking GitHub Releases…');
+  let result = null;
+  try {
+    result = await desktop.checkForUpdates();
+  } catch {
+    // A rejected invoke is the same user-facing event as an unreachable host.
+    result = null;
+  }
+  if (!result?.ok) {
+    showUpdateBanner({ state: 'unreachable' });
+    return;
+  }
+  if (!result.newer) {
+    // `up-to-date` and `prerelease-not-offered` both mean this stable build is
+    // as new as the channel allows. Any other reason means the list could not
+    // be read, which is not the same claim and must not be shown as one.
+    if (result.reason === 'up-to-date' || result.reason === 'prerelease-not-offered') {
+      toast(`You are on the newest release${appVersion ? ` (v${appVersion})` : ''}.`);
+    } else {
+      showUpdateBanner({
+        state: 'unreachable',
+        message: result.reason === 'no-releases'
+          ? 'No published release was found on GitHub.'
+          : 'GitHub returned a release list this build could not read.',
+      });
+    }
+    return;
+  }
+  showUpdateBanner({ state: 'newer', version: result.version, url: result.url });
+}
+
+function updateBannerElement() {
+  let banner = $('#update-banner');
+  if (banner) return banner;
+  banner = document.createElement('div');
+  banner.id = 'update-banner';
+  banner.className = 'update-banner';
+  banner.setAttribute('role', 'status');
+  banner.hidden = true;
+  document.body.appendChild(banner);
+  return banner;
+}
+
+function showUpdateBanner(notice) {
+  // The banner is the answer; a "Checking…" toast left underneath it would
+  // claim the request is still in flight.
+  const transient = $('#toast');
+  if (transient) transient.hidden = true;
+  clearTimeout(state.toastTimer);
+  const banner = updateBannerElement();
+  banner.textContent = '';
+  const message = document.createElement('span');
+  message.className = 'update-banner-text';
+  message.textContent = notice.message ?? (notice.state === 'newer'
+    ? `NodeChem Studio ${notice.version} is available.`
+    : 'Could not reach GitHub. Check your connection and try again.');
+  const actions = document.createElement('span');
+  actions.className = 'update-banner-actions';
+  if (notice.state === 'newer' && notice.url) {
+    // `target="_blank"` is the existing external-link path: the main process
+    // intercepts the window open and hands the URL to `shell.openExternal`.
+    const link = document.createElement('a');
+    link.className = 'btn small';
+    link.href = notice.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Release notes';
+    actions.appendChild(link);
+  }
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'icon-btn';
+  dismiss.dataset.action = 'dismiss-update';
+  dismiss.title = 'Dismiss';
+  dismiss.setAttribute('aria-label', 'Dismiss update notice');
+  dismiss.textContent = '×';
+  actions.appendChild(dismiss);
+  banner.append(message, actions);
+  banner.hidden = false;
+}
+
+function dismissUpdateBanner() {
+  const banner = $('#update-banner');
+  if (!banner) return;
+  banner.hidden = true;
+  banner.textContent = '';
+}
+
 function toggleOverflow() {
   const menu = $('#top-overflow');
   const button = $('.overflow-btn');
@@ -3854,6 +3955,8 @@ function handleAction(action, element) {
     case 'copy-diagnostics': copyDiagnostics(); break;
     case 'export-dataset': exportRunDataset(element.dataset.datasetFormat); break;
     case 'save-diagnostics': saveDiagnostics(); break;
+    case 'check-updates': checkForUpdatesAction(); break;
+    case 'dismiss-update': dismissUpdateBanner(); break;
     case 'open-project': openProject(); break;
     case 'undo': undoEdit(); break;
     case 'redo': redoEdit(); break;

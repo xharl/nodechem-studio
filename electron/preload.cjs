@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
   getInfo: () => ipcRenderer.invoke('app:info'),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
   collectDiagnostics: (payload) => ipcRenderer.invoke('diagnostics:collect', payload),
   saveDiagnostics: (text) => ipcRenderer.invoke('diagnostics:save', text),
   openProject: () => ipcRenderer.invoke('project:open'),

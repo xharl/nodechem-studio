@@ -5,8 +5,10 @@ The app is Apache 2.0. Gaussian 16 is not: it is licensed separately by Gaussian
 project grants no rights to it. xTB is open source (LGPL) and free to install.
 
 **Does it need an internet connection?**
-No. There is no telemetry, no update check, no cloud API and no network code in the app. Everything
-runs locally. See [Privacy and licensing](privacy-and-licensing.md).
+No. There is no telemetry, no cloud API and no background network activity. The single exception is
+**Check for updates**, which contacts GitHub only when you ask it to; skip it and the app never opens
+a connection. Everything else runs locally. See
+[Privacy and licensing](privacy-and-licensing.md).
 
 **Can I use it without any chemistry software installed?**
 Yes — the dry run is a labelled fixture. It exercises the graph, the input builder, the parser and
