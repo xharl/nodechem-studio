@@ -143,9 +143,13 @@ function buildOptFreq(name) {
     calcNode('of-freq', 'Reactant frequency', COLUMN_X, ROW_Y + ROW_GAP, {
       jobType: 'Freq',
       gates: defaultGates({ imaginary: 0, finalEnergy: true }),
-    }),
+    }, 'of-opt'),
   ];
-  return projectObject(name, nodes, [chainEdge('of-opt', 'of-freq')]);
+  // A checkpoint edge, not a dependency edge: without it the frequency block
+  // recomputes the *input* geometry, both gates still pass, and a user reading
+  // two green gates concludes they have a minimum when they have a frequency
+  // job on a non-stationary structure.
+  return projectObject(name, nodes, [chainEdge('of-opt', 'of-freq', 'checkpoint')]);
 }
 
 /**

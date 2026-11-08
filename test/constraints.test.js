@@ -141,7 +141,7 @@ describe('ModRedundant section in the input', () => {
   });
 
   it('refuses a constraint on a job type that has no ModRedundant section', () => {
-    for (const jobType of ['SP', 'Freq', 'Scan', 'IRC']) {
+    for (const jobType of ['SP', 'Freq', 'IRC']) {
       expect(() => build({ jobType, constraints: [{ kind: 'bond', atoms: [1, 2] }] }))
         .toThrow(/ModRedundant/);
     }
@@ -316,8 +316,8 @@ describe('constraints in the project schema', () => {
 
   it('keeps constraints through save and load', () => {
     const constraints = [
-      { kind: 'bond', atoms: [1, 2], value: 1.4 },
-      { kind: 'freeze', atoms: [6], value: null },
+      { kind: 'bond', atoms: [1, 2], value: 1.4, mode: 'freeze' },
+      { kind: 'freeze', atoms: [6], value: null, mode: 'freeze' },
     ];
     const result = validateProject(project({ constraints }));
     expect(result.ok).toBe(true);

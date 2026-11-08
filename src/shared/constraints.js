@@ -53,7 +53,7 @@ const QST_KINDS = Object.freeze({ 'Opt=QST2': 'QST2', 'Opt=QST3': 'QST3' });
 const QST_STRUCTURE_COUNTS = Object.freeze({ QST2: 1, QST3: 2 });
 
 /** Job types that read a ModRedundant section at all. */
-const MODREDUNDANT_JOB_TYPES = Object.freeze(['Opt', 'Opt Freq', 'Opt=TS', 'Opt=QST2', 'Opt=QST3']);
+const MODREDUNDANT_JOB_TYPES = Object.freeze(['Opt', 'Opt Freq', 'Opt=TS', 'Opt=QST2', 'Opt=QST3', 'Scan']);
 
 function oneLine(value, fallback = '') {
   return String(value ?? fallback).replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -219,6 +219,16 @@ export function modRedundantLine(constraint) {
     }
     return value;
   });
+  if (String(constraint?.mode ?? 'freeze') === 'scan') {
+    const steps = Number(constraint?.steps);
+    const size = Number(constraint?.size);
+    if (!Number.isInteger(steps) || steps < 1 || !Number.isFinite(size) || size === 0) {
+      throw new Error('A scanned constraint needs a positive step count and a non-zero step size.');
+    }
+    // `S` = scan: number of steps, then the step size in angstrom (bond) or
+    // degrees (angle, dihedral). Gaussian requires both.
+    return `${code} ${numbers.join(' ')} S ${steps} ${size}`;
+  }
   return `${code} ${numbers.join(' ')} F`;
 }
 
@@ -303,8 +313,17 @@ export function constraintFindings({
   const errors = [];
   const warnings = [];
   const list = Array.isArray(constraints) ? constraints : [];
-  if (list.length === 0) return { errors, warnings };
   const fail = (message, index = null) => errors.push({ index, message });
+  // A Scan job is `Opt=ModRedundant` with exactly one scanned coordinate, so it
+  // needs the section even when the list is empty: the bare Scan keyword has no
+  // variable to step and Gaussian stops in l108.
+  if (list.length === 0) {
+    if (oneLine(jobType) === 'Scan') {
+      fail('A Scan job needs one coordinate marked as scanned (a bond, angle or dihedral with mode "scan"); '
+        + 'Gaussian\'s bare Scan keyword has no variable to step and stops in l108.');
+    }
+    return { errors, warnings };
+  }
 
   const job = oneLine(jobType, 'Opt');
   if (engine !== 'gaussian') {
@@ -316,12 +335,22 @@ export function constraintFindings({
     return { errors, warnings };
   }
   if (!MODREDUNDANT_JOB_TYPES.includes(job)) {
-    fail(job === 'Scan'
-      ? 'A Scan job steps Gaussian\'s Scan keyword, which has no ModRedundant section: a frozen '
-        + 'coordinate inside a scanned step cannot be expressed. Use an Opt job with constraints '
-        + '(a relaxed scan) or remove them.'
-      : `${job} does not read a ModRedundant section. Constraints are written for ${MODREDUNDANT_JOB_TYPES.join(', ')} only.`);
+    fail(`${job} does not read a ModRedundant section. Constraints are written for ${MODREDUNDANT_JOB_TYPES.join(', ')} only.`);
     return { errors, warnings };
+  }
+  // A Scan job is `Opt=ModRedundant` with exactly one scanned coordinate.
+  // Emitting a bare `Scan` keyword produces a Z-matrix with nothing to scan and
+  // Gaussian stops in l108 with "No variables in Z-matrix."
+  const scanned = list.filter((constraint) => String(constraint?.mode ?? 'freeze') === 'scan');
+  if (job === 'Scan' && scanned.length === 0) {
+    fail('A Scan job needs one coordinate marked as scanned (a bond, angle or dihedral with mode "scan"); '
+      + 'Gaussian\'s bare Scan keyword has no variable to step and stops in l108.');
+  }
+  if (job === 'Scan' && scanned.length > 1) {
+    fail(`A Scan job scans one coordinate at a time; ${scanned.length} constraints are marked "scan".`);
+  }
+  if (job !== 'Scan' && scanned.length > 0) {
+    fail('A scanned coordinate is written only for a Scan job; this block is an ' + job + '.');
   }
 
   const atomCount = Array.isArray(atoms) ? atoms.length : 0;
@@ -392,12 +421,15 @@ export function constraintFindings({
 
   if (atomCount > 0) {
     const available = internalDegreesOfFreedom(atomCount);
-    const removed = removedDegreesOfFreedom(list);
+    // A scanned coordinate is stepped, not held, so it does not remove a degree
+    // of freedom from the optimisation.
+    const frozen = list.filter((constraint) => String(constraint?.mode ?? 'freeze') !== 'scan');
+    const removed = removedDegreesOfFreedom(frozen);
     if (available <= 0) {
       fail(`Constraints on a ${atomCount}-atom geometry leave no internal degree of freedom to optimise.`);
     } else if (removed >= available) {
       fail(
-        `The ${list.length} constraint${list.length === 1 ? '' : 's'} remove ${removed} of the `
+        `The ${frozen.length} constraint${frozen.length === 1 ? '' : 's'} remove ${removed} of the `
         + `${available} internal degrees of freedom of a ${atomCount}-atom geometry: no internal degree of `
         + 'freedom is left to optimise. Freeze fewer coordinates, or relax the geometry with a smaller set first.',
       );

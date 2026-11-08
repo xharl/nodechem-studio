@@ -98,9 +98,12 @@ describe('workflow templates — recipe contract', () => {
     expect(freq.settings.gates).toMatchObject({
       termination: true, scf: true, finalEnergy: true, imaginary: 0,
     });
+    // A checkpoint edge: without it the frequency block re-runs the input
+    // geometry and both gates still pass.
     expect(project.edges).toEqual([
-      { from: 'of-opt', to: 'of-freq', type: 'dependency', fromPort: 'bottom', toPort: 'top' },
+      { from: 'of-opt', to: 'of-freq', type: 'checkpoint', fromPort: 'bottom', toPort: 'top' },
     ]);
+    expect(freq.checkpointFrom).toBe('of-opt');
   });
 
   it('ts-search uses Opt=TS/CalcFC and verifies exactly one imaginary mode', () => {

@@ -13,8 +13,10 @@
   "scripts": {
     "dev": "concurrently -k -s first \"npm:dev:renderer\" \"npm:dev:electron\"",
     "dev:renderer": "vite --host 127.0.0.1",
+    "predev:electron": "node scripts/ensure-electron.mjs",
     "dev:electron": "wait-on http://127.0.0.1:5173 && electron . --dev",
     "build": "node scripts/stamp-build-info.mjs && vite build",
+    "prestart": "node scripts/ensure-electron.mjs",
     "start": "electron .",
     "test": "vitest run",
     "test:watch": "vitest",

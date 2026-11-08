@@ -34,16 +34,16 @@ describe('ECP requirement', () => {
     expect(needsEcp('def2-SVP', 46)).toBe(true);
   });
 
-  it('requires an ECP for palladium with def2-SVP', () => {
+  it('treats a def2 basis as native for a heavy element', () => {
+    // Gaussian 16 ships Def2SVP with its ECPs, so the route keyword carries the
+    // potential and no GenECP card block is written. A real A.03 run rejected
+    // the card block at link 301; the native keyword is the documented path.
     const requirement = ecpRequirement({ basis: 'def2-SVP', elements: ['Pd', 'C', 'O'] });
-    expect(requirement.needed).toBe(true);
-    expect(requirement.symbols).toEqual(['Pd']);
-    expect(requirement.missing).toEqual([]);
-    expect(requirement.blocks).toContain('Pd     0');
-    expect(requirement.blocks).toContain('PD-ECP');
-    expect(requirement.blocks).toContain('****');
-    expect(requirement.library).toMatchObject({ name: 'Basis Set Exchange', basis: 'def2-SVP' });
-    expect(requirement.library.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(requirement.needed).toBe(false);
+    expect(requirement.native).toBe(true);
+    expect(requirement.blocks).toBe('');
+    expect(basisNameFor('def2-SVP', requirement)).toBe('def2-SVP');
+    expect(ecpRequirement({ basis: 'def2-TZVP', elements: ['I'] }).needed).toBe(false);
   });
 
   it('leaves a light-element job alone', () => {
@@ -53,22 +53,18 @@ describe('ECP requirement', () => {
     expect(basisNameFor('def2-SVP', requirement)).toBe('def2-SVP');
   });
 
-  it('reports an element whose ECP this build does not ship', () => {
+  it('has nothing to refuse for a native basis, even for tungsten', () => {
     const requirement = ecpRequirement({ basis: 'def2-SVP', elements: ['W'] });
-    expect(requirement.needed).toBe(true);
-    expect(requirement.missing).toEqual(['W']);
-    expect(requirement.blocks).toBe('');
-    expect(ecpMissingMessage(requirement)).toMatch(/needs effective-core-potential data for W/);
-    expect(ecpMissingMessage(requirement)).toMatch(/Basis Set Exchange/);
+    expect(requirement.needed).toBe(false);
+    expect(requirement.missing).toEqual([]);
+    expect(ecpMissingMessage(requirement)).toBeNull();
   });
 
-  it('supports SDD for the same heavy elements, with its own library record', () => {
+  it('treats SDD as native too', () => {
     const requirement = ecpRequirement({ basis: 'SDD', elements: ['Pd'] });
-    expect(requirement.needed).toBe(true);
-    expect(requirement.blocks).toContain('PD-ECP     4     28');
-    expect(requirement.library).toMatchObject({ basis: 'SDD' });
-    expect(ecpRequirement({ basis: 'SDD', elements: ['Pt'] }).blocks).toContain('PT-ECP     5     60');
-    expect(ecpRequirement({ basis: 'SDD', elements: ['W'] }).missing).toEqual(['W']);
+    expect(requirement.needed).toBe(false);
+    expect(requirement.native).toBe(true);
+    expect(ecpRequirement({ basis: 'SDD', elements: ['W'] }).missing).toEqual([]);
   });
 
   it('does not claim ECP support for a basis it has no table for', () => {
@@ -78,14 +74,11 @@ describe('ECP requirement', () => {
 });
 
 describe('input file', () => {
-  it('emits a GenECP route and the basis/ECP blocks for a Pd complex', () => {
+  it('writes a native def2 route for a Pd complex, with no card block', () => {
     const text = buildGaussianInput({ settings, molecule: pdComplex, inputName: 'pd.gjf' });
-    expect(text).toMatch(/^#p B3LYP\/GenECP SP EmpiricalDispersion=GD3BJ$/m);
-    const [before, after] = text.split(/^Pd +0$/m);
-    expect(after, 'the basis block must follow the molecule').toBeTruthy();
-    expect(before.trimEnd().endsWith('O      2.900000     0.000000     0.400000')).toBe(true);
-    expect(text).toContain('PD-ECP     3     28');
-    expect(text).toContain('****');
+    expect(text).toMatch(/^#p B3LYP\/def2SVP SP EmpiricalDispersion=GD3BJ$/m);
+    expect(text).not.toMatch(/GenECP|ECP|\*\*\*\*/);
+    expect(text.trimEnd().endsWith('O      2.900000     0.000000     0.400000')).toBe(true);
   });
 
   it('writes the same bytes as before for a light-element job', () => {
@@ -99,22 +92,24 @@ describe('input file', () => {
     expect(text.endsWith('\n\n')).toBe(true);
   });
 
-  it('writes an SDD GenECP job for a Pd complex', () => {
+  it('writes a native SDD route for a Pd complex', () => {
     const text = buildGaussianInput({
       settings: { ...settings, basis: 'SDD' },
       molecule: pdComplex,
       inputName: 'pd-sdd.gjf',
     });
-    expect(text).toMatch(/^#p B3LYP\/GenECP SP/m);
-    expect(text).toContain('PD-ECP     4     28');
+    expect(text).toMatch(/^#p B3LYP\/SDD SP/m);
+    expect(text).not.toContain('PD-ECP');
   });
 
-  it('refuses an ECP basis with no data instead of writing a broken route', () => {
-    expect(() => buildGaussianInput({
+  it('writes tungsten with a native basis instead of demanding ECP data', () => {
+    const text = buildGaussianInput({
       settings,
       molecule: { charge: 0, multiplicity: 1, coords: [{ element: 'W', x: 0, y: 0, z: 0 }] },
       inputName: 'w.gjf',
-    })).toThrow(/effective-core-potential data for W/);
+    });
+    expect(text).toMatch(/^#p B3LYP\/def2SVP SP/m);
+    expect(text).not.toMatch(/GenECP/);
   });
 
   it('lets routeFor take the emitted basis name without changing the rest', () => {
@@ -124,16 +119,9 @@ describe('input file', () => {
 });
 
 describe('provenance', () => {
-  it('reads the ECP library back from the written input', () => {
+  it('records no ECP section for a native basis', () => {
     const text = buildGaussianInput({ settings, molecule: pdComplex, inputName: 'pd.gjf' });
-    const ecp = ecpFromInput(text);
-    expect(ecp).toMatchObject({
-      library: 'Basis Set Exchange',
-      basis: 'def2-SVP',
-      symbols: ['Pd'],
-      elements: [46],
-    });
-    expect(ecp.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(ecpFromInput(text)).toBeNull();
   });
 
   it('records nothing for an input without an ECP section', () => {
@@ -159,10 +147,9 @@ describe('validity check', () => {
     expect(check('def2-SVP', 'Pd').status).toBe('pass');
   });
 
-  it('fails an element whose ECP data is not in the build', () => {
+  it('passes a heavy element on a native basis, whose ECPs ship with the program', () => {
     const finding = check('def2-SVP', 'W');
-    expect(finding.status).toBe('fail');
-    expect(finding.message).toMatch(/ECP|effective-core-potential/i);
+    expect(finding.status).toBe('pass');
   });
 
   it('still fails a light-only basis on a heavy element', () => {

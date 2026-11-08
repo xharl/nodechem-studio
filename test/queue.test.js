@@ -106,7 +106,10 @@ async function waitFor(check, { timeout = 20000, label = 'condition' } = {}) {
   while (Date.now() - started < timeout) {
     const value = await check();
     if (value) return value;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // 10 ms polling misses state changes on a loaded Windows box: the poller
+    // and the queue share one event loop, and the deadline expires before the
+    // queue gets a turn.
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Timed out waiting for ${label}`);
 }
@@ -114,7 +117,12 @@ async function waitFor(check, { timeout = 20000, label = 'condition' } = {}) {
 const queueOptions = (exe, extra = {}) => ({ dryRun: false, executable: exe, scratchDir: '', ...extra });
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  // Windows keeps a handle on a directory for a moment after the queue stops
+  // (the runner's child process and its log stream), so a plain rmdir fails
+  // with EBUSY. maxRetries is Node's own Windows answer to that.
+  await Promise.all(roots.map((root) => fsp.rm(root, {
+    recursive: true, force: true, maxRetries: 10, retryDelay: 50,
+  })));
   roots.length = 0;
 });
 

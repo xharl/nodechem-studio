@@ -20,6 +20,29 @@ import { ELEMENTS } from './elements.js';
 /** def2 basis sets carry an ECP for every element above krypton (Z > 36). */
 export const ECP_FIRST_ELEMENT = 37;
 
+/**
+ * Bases Gaussian 16 already ships with their effective core potentials.
+ *
+ * Gaussian's own basis library includes `Def2SVP`, `Def2TZVP`, `Def2QZVP` and
+ * the rest of the Ahlrichs def2 family with the matching ECPs for the heavy
+ * elements, and `SDD`/`LANL2DZ` likewise (`SDD: D95 up to Ar and
+ * Stuttgart/Dresden ECPs on the remainder of the periodic table`). Writing a
+ * `GenECP` route for one of those replaces the program's own basis with a
+ * second-hand copy and requires an ECP card block that a real Gaussian 16
+ * A.03 run rejected at link 301. A route basis keyword is both simpler and
+ * the path the program documents.
+ */
+const NATIVE_ECP_BASES = Object.freeze([
+  'def2sv', 'def2svp', 'def2svpp', 'def2tzv', 'def2tzvp', 'def2tzvpp',
+  'def2qzv', 'def2qzvp', 'def2qzvpp', 'qzvp',
+  'sdd', 'sddall', 'lanl2dz', 'lanl2mb', 'shc', 'cep-4g', 'cep-31g', 'cep-121g',
+]);
+
+export function isNativeEcpBasis(basis) {
+  const key = String(basis ?? '').toLowerCase().replace(/[\s-]/g, '');
+  return NATIVE_ECP_BASES.includes(key);
+}
+
 export function ecpBases() {
   return Object.keys(ECP_DATA);
 }
@@ -50,6 +73,10 @@ function symbolOf(entry) {
  * @param {{basis?: string, elements?: Array<string|number>}} input
  */
 export function ecpRequirement({ basis, elements = [] } = {}) {
+  // A basis the program ships with its potentials needs no card block at all.
+  if (isNativeEcpBasis(basis)) {
+    return { needed: false, native: true, basis: String(basis), symbols: [], missing: [], blocks: '', library: null };
+  }
   const table = Object.hasOwn(ECP_DATA, String(basis)) ? ECP_DATA[String(basis)] : null;
   const symbols = [...new Set((Array.isArray(elements) ? elements : []).map(symbolOf).filter(Boolean))];
   if (!table) return { needed: false, basis: basis ?? null, symbols: [], missing: [], blocks: '', library: null };

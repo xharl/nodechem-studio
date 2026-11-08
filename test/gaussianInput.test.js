@@ -101,7 +101,7 @@ describe('Gaussian input builder', () => {
 
   it('builds an IRC route with both directions', () => {
     expect(routeFor({ ...baseSettings, jobType: 'IRC', ircDirection: 'both' }))
-      .toContain('IRC(forward,reverse)');
+      .toContain('IRC(forward,reverse,CalcFC)');
   });
 
   it('maps input names to Gaussian output names', () => {

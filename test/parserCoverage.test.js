@@ -307,7 +307,9 @@ describe('population analysis, dipole, T1 and resources', () => {
       ' SCF Done:  E(RB3LYP) =  -76.0     A.U. after    1 cycles',
       ' Normal termination of Gaussian 16',
     ].join('\n'));
-    expect(plain.charges).toEqual({ mulliken: [], lowdin: [], nbo: [], esp: [], dipole: null });
+    expect(plain.charges).toEqual({
+      mulliken: [], lowdin: [], nbo: [], esp: [], hirshfeld: [], dipole: null,
+    });
     expect(plain.t1Diagnostic).toBeNull();
     expect(plain.resources).toEqual({
       nBasis: null,

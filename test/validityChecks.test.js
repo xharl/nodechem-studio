@@ -434,7 +434,7 @@ describe('method / basis compatibility', () => {
     expect(result.status).toBe('pass');
   });
 
-  it('fails an ECP basis whose data does not ship, instead of passing it silently', () => {
+  it('passes a native ECP basis whose potentials ship with Gaussian', () => {
     const result = checkMethodBasisCompatibility({
       settings: { method: 'B3LYP', basis: 'SDD', dispersion: '' },
       molecule: {
@@ -443,8 +443,9 @@ describe('method / basis compatibility', () => {
         coords: [{ element: 'I', x: 0, y: 0, z: 0 }, { element: 'H', x: 2.0, y: 0, z: 0 }],
       },
     });
-    expect(result.status).toBe('fail');
-    expect(result.evidence.issues.some((issue) => issue.kind === 'ecp-data-missing')).toBe(true);
+    expect(result.status).toBe('pass');
+    expect(result.evidence.issues).toEqual([]);
+    expect(result.evidence.ecpBasis).toBe(true);
   });
 
   it('warns when a built-in-dispersion functional also gets GD3BJ', () => {

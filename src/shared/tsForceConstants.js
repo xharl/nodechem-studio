@@ -172,8 +172,19 @@ export function jobKeywordFor(settings = {}) {
     const direction = settings.ircDirection === 'both'
       ? 'forward,reverse'
       : (oneLine(settings.ircDirection, 'forward') || 'forward');
-    return `IRC(${direction})`;
+    // Gaussian refuses an IRC without a Hessian source: "You must use
+    // ReadCartesianFC, FCCards, or CalcFC with IRC." A real A.03 run of the
+    // bare form died in l1, so the keyword always names one. ReadFC is only
+    // written when the block was told to read a checkpoint Hessian.
+    const fc = oneLine(settings.forceConstants);
+    const source = fc === 'ReadFC' ? 'ReadFC' : 'CalcFC';
+    return `IRC(${direction},${source})`;
   }
+  // `Scan` on its own steps Z-matrix variables, and a Cartesian molecule
+  // specification has none: Gaussian stops in l108 with "No variables in
+  // Z-matrix." The working form is a relaxed scan — Opt=ModRedundant with the
+  // scanned coordinate in the ModRedundant section.
+  if (jobType === 'Scan') return 'Opt=ModRedundant';
   const convergence = optConvergenceFor(settings);
   if (jobType === TS_JOB_TYPE) {
     const flags = ['TS', ...forceConstantFlags(settings)];

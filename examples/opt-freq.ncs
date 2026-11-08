@@ -112,14 +112,14 @@
         "disabledChecks": []
       },
       "output": null,
-      "checkpointFrom": null
+      "checkpointFrom": "of-opt"
     }
   ],
   "edges": [
     {
       "from": "of-opt",
       "to": "of-freq",
-      "type": "dependency",
+      "type": "checkpoint",
       "fromPort": "bottom",
       "toPort": "top"
     }

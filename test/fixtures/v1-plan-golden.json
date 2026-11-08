@@ -96,11 +96,11 @@
         "id": "of-freq",
         "type": "calc",
         "executable": true,
-        "inputHash": "f2f0b1e048a3c791"
+        "inputHash": "2ca5d040a9af831b"
       }
     ],
     "edges": [
-      "of-opt->of-freq:dependency"
+      "of-opt->of-freq:checkpoint"
     ]
   },
   "single-point.ncs": {

@@ -965,7 +965,7 @@ function normalizeConstraints(c, raw, path, legacy) {
       c.error(entryPath, 'must be an object with kind, atoms and value.');
       return;
     }
-    warnUnknown(c, entry, new Set(['kind', 'atoms', 'value']), entryPath);
+    warnUnknown(c, entry, new Set(['kind', 'atoms', 'value', 'mode', 'steps', 'size']), entryPath);
     const kind = readEnum(c, entry.kind, CONSTRAINT_KINDS, `${entryPath}.kind`, { legacy, fallback: '', required: true });
     if (!kind) return;
     const expected = constraintAtomCount(kind);
@@ -986,7 +986,27 @@ function normalizeConstraints(c, raw, path, legacy) {
       c.error(`${entryPath}.value`, 'a frozen atom takes no value; freeze a bond, angle or dihedral to hold a number.');
       return;
     }
-    const constraint = { kind, atoms, value };
+    // A constraint is either frozen (the default) or scanned: `B 1 2 S 10 0.05`.
+    // A scan needs a step count and a step size, and both belong in the file so
+    // the CLI writes exactly what the window writes.
+    const mode = entry.mode === undefined || entry.mode === null || entry.mode === ''
+      ? 'freeze'
+      : readEnum(c, entry.mode, ['freeze', 'scan'], `${entryPath}.mode`, { legacy, fallback: 'freeze' });
+    if (mode === 'scan' && kind === 'freeze') {
+      c.error(`${entryPath}.mode`, 'freezing an atom cannot be scanned; scan a bond, angle or dihedral.');
+      return;
+    }
+    let steps = null;
+    let size = null;
+    if (mode === 'scan') {
+      steps = readInteger(c, entry.steps, `${entryPath}.steps`, { legacy, fallback: 10, min: 1, max: 1000 });
+      size = readNumber(c, entry.size, `${entryPath}.size`, { legacy, fallback: 0.05, min: -3600, max: 3600 });
+      if (!steps || size === null || size === 0) {
+        c.error(entryPath, 'a scan constraint needs a positive step count and a non-zero step size.');
+        return;
+      }
+    }
+    const constraint = { kind, atoms, value, mode, ...(mode === 'scan' ? { steps, size } : {}) };
     const duplicateOf = constraints.findIndex((existing) => constraintSignature(existing) === constraintSignature(constraint));
     if (duplicateOf !== -1) {
       c.error(entryPath, `repeats the constraint at ${path}[${duplicateOf}]; remove one of the two.`);

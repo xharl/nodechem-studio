@@ -100,7 +100,8 @@ export function jobKeywordWithConstraints(settings = {}) {
   }
   // Only a job that reads a ModRedundant section may ask for one; the builder
   // refuses the other job types before the route is written.
-  const readsModRedundant = jobType === 'Opt=TS' || qstKindFor(jobType) !== null || constrainedOpt;
+  const readsModRedundant = jobType === 'Opt=TS' || jobType === 'Scan'
+    || qstKindFor(jobType) !== null || constrainedOpt;
   if (hasConstraints(settings) && readsModRedundant) flags.push('ModRedundant');
   return flags.length > 0 ? withOptFlags(base, flags) : base;
 }
@@ -133,8 +134,19 @@ function routeValues(settings = {}) {
     solvationModel: solvated ? oneLine(settings.solvationModel, 'PCM') : null,
     solvent: solvated ? oneLine(settings.solvent, 'Water') : null,
     td: tdKeywordFor(settings),
-    // `Stable=Opt` re-optimises the geometry if the wavefunction is unstable.
-    stable: settings.stableOpt === true ? 'Stable=Opt' : null,
+    // `Stable=Opt` re-optimises the geometry if the wavefunction is unstable,
+    // so it needs a job that optimises. On a single point it asks Gaussian to
+    // optimise with no coordinate system and l108 stops with "No variables in
+    // Z-matrix." Refuse it here rather than write the route.
+    stable: (() => {
+      if (settings.stableOpt !== true) return null;
+      const job = oneLine(settings.jobType, 'Opt');
+      if (!/\bopt\b/i.test(job) || /qst/i.test(job)) {
+        throw new Error('Stable=Opt re-optimises the geometry, so it only applies to an Opt job; '
+          + `this block is ${job}. Use Stable (without =Opt) for a wavefunction stability check, or change the job type.`);
+      }
+      return 'Stable=Opt';
+    })(),
     customKeywords: oneLine(settings.customKeywords, ''),
   };
 }

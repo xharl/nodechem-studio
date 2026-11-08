@@ -479,7 +479,7 @@ function parseDipole(lines) {
 }
 
 function emptyCharges() {
-  return { mulliken: [], lowdin: [], nbo: [], esp: [], dipole: null };
+  return { mulliken: [], lowdin: [], nbo: [], esp: [], hirshfeld: [], dipole: null };
 }
 
 function parseCharges(lines) {
@@ -500,8 +500,37 @@ function parseCharges(lines) {
     if (nbo !== -1) charges.nbo = parseChargeRows(lines, nbo);
   }
 
+  // Hirshfeld is printed with one charge column (Q-H) plus spin density, three
+  // dipole components and CM5; only the first is the Hirshfeld charge.
+  const hirshfeld = lines.findIndex((line) => /^\s*Hirshfeld charges\b/i.test(line));
+  if (hirshfeld !== -1) charges.hirshfeld = parseHirshfeldRows(lines, hirshfeld);
+
   charges.dipole = parseDipole(lines);
   return charges;
+}
+
+/**
+ * `Hirshfeld charges, spin densities, dipoles, and CM5 charges using IRadAn= 5:`
+ *
+ *   Q-H  S-H  Dx  Dy  Dz  Q-CM5
+ *   1  O  -0.323144  0.000000  0.000000  0.000000  -0.186775  -0.659188
+ *
+ * The charge is the first numeric column; the `Tot` line is a sum, not an atom.
+ */
+function parseHirshfeldRows(lines, startIndex) {
+  const atoms = [];
+  for (let index = startIndex + 1; index < lines.length && index <= startIndex + 200; index += 1) {
+    const line = lines[index];
+    if (/^\s*Tot\b/i.test(line)) break;
+    const match = line.match(/^\s*(\d+)\s+([A-Z][a-z]?)\s+(-?\d+\.\d+)/);
+    if (match) {
+      atoms.push({ atom: Number(match[1]), element: match[2], charge: toNumber(match[3]), spinDensity: null });
+      continue;
+    }
+    if (atoms.length > 0) break;
+    if (index - startIndex > 6) break;
+  }
+  return atoms;
 }
 
 function parseT1Diagnostic(lines) {
@@ -1395,7 +1424,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   // Population records are scoped per link; the root summary takes the latest
   // link that actually printed each block.
   const charges = emptyCharges();
-  for (const key of ['mulliken', 'lowdin', 'nbo', 'esp']) {
+  for (const key of ['mulliken', 'lowdin', 'nbo', 'esp', 'hirshfeld']) {
     const link = reversed.find((entry) => entry.charges[key].length > 0);
     if (link) charges[key] = link.charges[key];
   }
