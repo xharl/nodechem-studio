@@ -94,6 +94,12 @@ Open **Molecule** in the top bar. The drawer has three tabs:
 - **Structure** — import a `.xyz`, `.mol`, `.sdf`, `.gjf` or `.com` file with the file picker or by
   drag-and-drop. Element symbols, finite coordinates and charge/multiplicity parity are validated;
   Z-matrix input is refused rather than guessed.
+
+  A file that holds more than one structure — a multi-record `.sdf`, a multi-frame `.xyz` — shows a
+  **Record** selector, so you choose which one becomes the project's molecule instead of the first
+  being taken silently. A `.mol`/`.sdf` that states its bonds keeps them, orders included: the 3D
+  viewer draws double and triple bonds as such, and the inspector says whether the topology came
+  from the file or from distance perception.
 - **Charge & fragments** — total charge, multiplicity and fragment bookkeeping.
 - **Defaults** — the **Engine** choice and the project-wide route defaults. New blocks snapshot
   these defaults when they are added.

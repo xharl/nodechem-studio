@@ -32,7 +32,7 @@ import {
   dispersionForMethodChange,
   routePresetIdFor,
 } from '../shared/routePresets.js';
-import { parseStructure } from '../shared/structureImport.js';
+import { parseStructureRecords } from '../shared/structureImport.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from '../shared/validityChecks.js';
 import {
   createHistory,
@@ -2075,6 +2075,13 @@ function openMoleculeDrawer(tab = 'structure') {
       coords: Array.isArray(state.project.molecule.coords)
         ? state.project.molecule.coords.map((atom) => ({ ...atom }))
         : [],
+      // Topology and any multi-record list survive reopening the drawer, so a
+      // chosen record is not lost when the panel is closed and re-rendered.
+      bonds: Array.isArray(state.project.molecule.bonds)
+        ? state.project.molecule.bonds.map((bond) => ({ ...bond }))
+        : [],
+      records: [],
+      recordIndex: 0,
       geometry: { source: 'demo', file: '', format: '', ...(state.project.molecule.geometry || {}) },
       engine: engineOrDefault(state.project.defaults.engine).id,
       xtbMethod: state.project.defaults.xtbMethod || 'gfn2',
@@ -2145,6 +2152,12 @@ function renderDrawer() {
             ${atomCount ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
           </div>
           <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.gjf,.com" hidden>
+          ${(draft.records?.length || 0) > 1 ? `
+            <label class="field-label" style="margin-top:8px">Record
+              <select data-record-select>
+                ${draft.records.map((record, index) => `<option value="${index}"${index === draft.recordIndex ? ' selected' : ''}>${esc(record.name)} · ${record.atoms.length} atoms</option>`).join('')}
+              </select>
+            </label>` : ''}
         </div>
       </div>
       <div class="callout green"><strong>Project-level structure.</strong> The queue builds every calculation input from this geometry; each block keeps its own charge, multiplicity, method, basis, and gates.</div>
@@ -2248,6 +2261,13 @@ function saveMolecule() {
     y: atom.y,
     z: atom.z,
   }));
+  // Topology stated by the imported file rides with the molecule; an empty
+  // list is omitted so nothing implies "no bonds".
+  if (Array.isArray(draft.bonds) && draft.bonds.length) {
+    state.project.molecule.bonds = draft.bonds.map((bond) => ({ ...bond }));
+  } else {
+    delete state.project.molecule.bonds;
+  }
   state.project.molecule.geometry = { ...draft.geometry };
   state.project.defaults.engine = engineOrDefault(draft.engine).id;
   state.project.defaults.xtbMethod = draft.xtbMethod || 'gfn2';
@@ -2277,16 +2297,46 @@ function saveMolecule() {
 async function importStructureFile(file) {
   if (!state.drawer || !file) return;
   try {
-    const structure = parseStructure(await file.text(), { filename: file.name });
-    state.drawer.draft.coords = structure.atoms;
-    state.drawer.draft.charge = structure.charge;
-    state.drawer.draft.multiplicity = structure.multiplicity;
-    state.drawer.draft.geometry = { source: 'imported', file: file.name, format: structure.format };
-    renderDrawer();
-    toast(`Imported ${structure.atoms.length} atoms from ${file.name}${structure.warnings.length ? ` · ${structure.warnings[0]}` : ''}.`);
+    const text = await file.text();
+    const { format, records } = parseStructureRecords(text, { filename: file.name });
+    const usable = records.filter((record) => !record.error);
+    if (usable.length === 0) {
+      throw new Error(records[0]?.error || 'No record in this file could be read.');
+    }
+    const skipped = records.length - usable.length;
+    state.drawer.draft.records = usable.map((record, index) => ({
+      index,
+      name: record.name || `Record ${index + 1}`,
+      atoms: record.atoms,
+      bonds: record.bonds || [],
+      charge: record.charge,
+      multiplicity: record.multiplicity,
+    }));
+    applyImportedRecord(0, file.name, format, usable.length + skipped);
+    toast(`Imported ${usable[0].atoms.length} atoms from ${file.name}`
+      + `${records.length > 1 ? ` · ${records.length} records, showing record 1` : ''}`
+      + `${skipped ? ` · ${skipped} unreadable record${skipped === 1 ? '' : 's'} skipped` : ''}.`);
   } catch (error) {
     toast(`Could not import structure: ${error.message}`);
   }
+}
+
+function applyImportedRecord(index, fileName, format, total) {
+  const draft = state.drawer?.draft;
+  const record = draft?.records?.[index];
+  if (!draft || !record) return;
+  draft.recordIndex = index;
+  draft.coords = record.atoms;
+  draft.bonds = record.bonds;
+  draft.charge = record.charge;
+  draft.multiplicity = record.multiplicity;
+  draft.geometry = {
+    source: 'imported',
+    file: fileName || draft.geometry?.file || '',
+    format: format || draft.geometry?.format || '',
+  };
+  renderDrawer();
+  if (total > 1) toast(`Loaded record ${index + 1} of ${total}: ${record.name}.`);
 }
 
 function clearImportedGeometry() {
@@ -3646,6 +3696,12 @@ function onDocumentClick(event) {
 
 function onDocumentChange(event) {
   const target = event.target;
+  if (target.matches('[data-record-select]')) {
+    const draft = state.drawer?.draft;
+    if (!draft) return;
+    applyImportedRecord(Number(target.value) || 0, draft.geometry?.file, draft.geometry?.format, draft.records.length);
+    return;
+  }
   if (target.id === 'structure-file') {
     const file = target.files?.[0];
     if (file) importStructureFile(file);

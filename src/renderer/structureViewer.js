@@ -197,10 +197,35 @@ export function prepareGeometry(input, { tolerance = 0.4 } = {}) {
     cy: atom.y - center.y,
     cz: atom.z - center.z,
   }));
-  const bonds = detectBonds(atoms, { tolerance });
+  // A source file that states its topology wins: distance perception cannot
+  // recover bond orders, and drawing a double bond as a single line loses
+  // chemistry the file actually carried.
+  // Bonds arrive 1-based, the way every file format and `molecule.bonds` state
+  // them; they are converted once here so no caller has to remember.
+  const stated = Array.isArray(input?.bonds) ? input.bonds : [];
+  const bonds = stated.length
+    ? stated
+      .filter((bond) => Number.isInteger(bond.a) && Number.isInteger(bond.b)
+        && bond.a >= 1 && bond.b >= 1 && bond.a <= atoms.length && bond.b <= atoms.length && bond.a !== bond.b)
+      .map((bond) => {
+        const a = bond.a - 1;
+        const b = bond.b - 1;
+        return {
+          a,
+          b,
+          order: Number(bond.order) || 1,
+          distance: Math.hypot(
+            atoms[a].cx - atoms[b].cx,
+            atoms[a].cy - atoms[b].cy,
+            atoms[a].cz - atoms[b].cz,
+          ),
+        };
+      })
+    : detectBonds(atoms, { tolerance });
   return {
     atoms,
     bonds,
+    bondsFrom: stated.length ? 'file' : 'perceived',
     atomCount: atoms.length,
     center,
     box: {
@@ -212,6 +237,13 @@ export function prepareGeometry(input, { tolerance = 0.4 } = {}) {
     source: typeof input?.source === 'string' ? input.source : null,
     tolerance,
   };
+}
+
+function bondOffsets(order) {
+  if (order >= 3) return [-1, 0, 1];
+  if (order >= 2) return [-1, 1];
+  if (order === 1.5) return [-1, 1];
+  return [0];
 }
 
 /* ── Projection and fitting ───────────────────────────────── */
@@ -435,7 +467,12 @@ export function resolveStructure(node) {
   if (!geometry || !Array.isArray(geometry.atoms) || geometry.atoms.length === 0) return null;
   let prepared;
   try {
-    prepared = prepareGeometry(geometry);
+    // Bonds stated by the source file travel with the project molecule. They
+    // are only attached when the atom counts match: a relaxed geometry with a
+    // different atom count cannot inherit the original topology safely.
+    const statedBonds = Array.isArray(node.molecule?.bonds) ? node.molecule.bonds : [];
+    const sameShape = statedBonds.length > 0 && geometry.atoms.length === node.molecule?.coords?.length;
+    prepared = prepareGeometry(sameShape ? { atoms: geometry.atoms, bonds: statedBonds } : geometry);
   } catch {
     return null;
   }
@@ -665,12 +702,23 @@ export function createStructureViewer(canvas, options = {}) {
       gradient.addColorStop(0.5, '#5f6b7a');
       gradient.addColorStop(1, mixWithWhite(b.color, 0.08));
       context.strokeStyle = gradient;
-      context.lineWidth = bondWidth;
+      const offsets = bondOffsets(Number(entry.bond?.order) || 1);
+      const dx = b.sx - a.sx;
+      const dy = b.sy - a.sy;
+      const length = Math.hypot(dx, dy) || 1;
+      const nx = -dy / length;
+      const ny = dx / length;
+      const gap = bondWidth * (offsets.length > 1 ? 0.85 : 0);
+      context.lineWidth = offsets.length > 1 ? Math.max(1, bondWidth * 0.42) : bondWidth;
       context.lineCap = 'round';
-      context.beginPath();
-      context.moveTo(a.sx, a.sy);
-      context.lineTo(b.sx, b.sy);
-      context.stroke();
+      for (const offset of offsets) {
+        const ox = nx * gap * offset;
+        const oy = ny * gap * offset;
+        context.beginPath();
+        context.moveTo(a.sx + ox, a.sy + oy);
+        context.lineTo(b.sx + ox, b.sy + oy);
+        context.stroke();
+      }
     }
 
     const orderedAtoms = [...projected].sort((left, right) => left.depth - right.depth);
@@ -788,7 +836,17 @@ export function createStructureViewer(canvas, options = {}) {
     const bonds = prepared.bonds.map((bond) => {
       const a = lastProjection[bond.a];
       const b = lastProjection[bond.b];
-      return `<line x1="${(a.sx * scale).toFixed(1)}" y1="${(a.sy * scale).toFixed(1)}" x2="${(b.sx * scale).toFixed(1)}" y2="${(b.sy * scale).toFixed(1)}" stroke="#5f6b7a" stroke-width="${bondWidth.toFixed(1)}" stroke-linecap="round"/>`;
+      const offsets = bondOffsets(Number(bond.order) || 1);
+      const dx = b.sx - a.sx;
+      const dy = b.sy - a.sy;
+      const length = Math.hypot(dx, dy) || 1;
+      const gap = bondWidth * (offsets.length > 1 ? 0.85 : 0);
+      const width = (offsets.length > 1 ? Math.max(1, bondWidth * 0.42) : bondWidth).toFixed(1);
+      return offsets.map((offset) => {
+        const ox = (-dy / length) * gap * offset;
+        const oy = (dx / length) * gap * offset;
+        return `<line x1="${((a.sx + ox) * scale).toFixed(1)}" y1="${((a.sy + oy) * scale).toFixed(1)}" x2="${((b.sx + ox) * scale).toFixed(1)}" y2="${((b.sy + oy) * scale).toFixed(1)}" stroke="#5f6b7a" stroke-width="${width}" stroke-linecap="round"/>`;
+      }).join('');
     }).join('');
     const atoms = [...lastProjection]
       .sort((left, right) => left.depth - right.depth)

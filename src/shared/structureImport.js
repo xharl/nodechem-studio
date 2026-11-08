@@ -36,7 +36,7 @@ function formatFor(filename, text) {
   return '';
 }
 
-function finalize({ atoms, charge, multiplicity, format, name, warnings }) {
+function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings }) {
   if (atoms.length === 0) throw new StructureError('The structure has no atoms.');
   if (atoms.length > MAX_ATOMS) throw new StructureError(`The structure has ${atoms.length} atoms; the limit is ${MAX_ATOMS}.`);
 
@@ -54,6 +54,26 @@ function finalize({ atoms, charge, multiplicity, format, name, warnings }) {
     });
     return { element, x: coords[0], y: coords[1], z: coords[2] };
   });
+
+  // Bonds are 1-based in every file format here; they are validated against the
+  // atom count rather than trusted, because a wrong index would draw a bond to
+  // an atom that does not exist.
+  const finalBonds = [];
+  const seenBonds = new Set();
+  for (const raw of Array.isArray(bonds) ? bonds : []) {
+    const a = integer(raw?.a);
+    const b = integer(raw?.b);
+    const order = toNumber(raw?.order ?? 1);
+    if (a === null || b === null) continue;
+    if (a < 1 || b < 1 || a > cleaned.length || b > cleaned.length || a === b) {
+      warnings.push(`Dropped a bond between atoms ${raw?.a} and ${raw?.b}: the indices are outside this structure.`);
+      continue;
+    }
+    const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+    if (seenBonds.has(key)) continue;
+    seenBonds.add(key);
+    finalBonds.push({ a: Math.min(a, b), b: Math.max(a, b), order: order === 1.5 || order === 2 || order === 3 ? order : 1 });
+  }
 
   const finalCharge = integer(charge ?? 0);
   if (finalCharge === null || finalCharge < -10 || finalCharge > 10) {
@@ -78,6 +98,9 @@ function finalize({ atoms, charge, multiplicity, format, name, warnings }) {
     format,
     name: String(name || '').trim().slice(0, 120) || 'Imported structure',
     atoms: cleaned,
+    // Only a file that states its topology carries bonds. Distance perception
+    // is the viewer's job, so an empty list means "not stated", never "none".
+    ...(finalBonds.length ? { bonds: finalBonds } : {}),
     charge: finalCharge,
     multiplicity: finalMultiplicity,
     warnings,
@@ -107,6 +130,34 @@ function parseXyz(lines) {
     warnings.push('Trailing lines after the declared atoms were ignored.');
   }
   return { atoms, charge: 0, multiplicity: 1, name, warnings };
+}
+
+/**
+ * Every frame of a multi-frame XYZ (an optimisation dump, a trajectory). Each
+ * frame is a count line, a comment line and `count` atom lines; a trailing
+ * incomplete frame is reported rather than silently ignored.
+ */
+function xyzFrames(lines) {
+  const frames = [];
+  let cursor = 0;
+  while (cursor < lines.length) {
+    while (cursor < lines.length && !lines[cursor].trim()) cursor += 1;
+    if (cursor >= lines.length) break;
+    const count = integer(lines[cursor]);
+    if (count === null || count <= 0) break;
+    const block = lines.slice(cursor, cursor + count + 2);
+    if (block.length < count + 2) {
+      frames.push({ error: `Frame ${frames.length + 1} declares ${count} atoms but the file ends early.` });
+      break;
+    }
+    try {
+      frames.push(parseXyz(block));
+    } catch (error) {
+      frames.push({ error: error.message });
+    }
+    cursor += count + 2;
+  }
+  return frames;
 }
 
 /* ── MOL / SDF (V2000) ────────────────────────────────────── */
@@ -142,6 +193,24 @@ function parseMol(lines, { format = 'mol', name = '' } = {}) {
     atoms.push(atom);
   }
 
+  // The bond block was previously read only to find where it ends; the orders
+  // it carries are real chemistry that distance perception cannot recover.
+  const bonds = [];
+  let aromatic = 0;
+  for (let index = 0; index < bondCount; index += 1) {
+    const line = lines[countsIndex + 1 + atomCount + index];
+    const match = line === undefined ? null : line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)/);
+    if (!match) continue;
+    const type = integer(match[3]);
+    // V2000 bond types: 1 single, 2 double, 3 triple, 4 aromatic.
+    if (type === 4) aromatic += 1;
+    bonds.push({
+      a: integer(match[1]),
+      b: integer(match[2]),
+      order: type === 4 ? 1.5 : Math.min(Math.max(type ?? 1, 1), 3),
+    });
+  }
+
   const chargeById = new Map();
   for (let index = countsIndex + 1 + atomCount + bondCount; index < lines.length; index += 1) {
     const line = lines[index];
@@ -158,10 +227,14 @@ function parseMol(lines, { format = 'mol', name = '' } = {}) {
 
   return {
     atoms,
+    bonds,
     charge,
     multiplicity: 1,
     name: name || (lines[0] || '').trim(),
-    warnings: chargeById.size > 0 ? [`Formal charges from ${chargeById.size} M  CHG entr${chargeById.size === 1 ? 'y' : 'ies'} applied.`] : [],
+    warnings: [
+      ...(chargeById.size > 0 ? [`Formal charges from ${chargeById.size} M  CHG entr${chargeById.size === 1 ? 'y' : 'ies'} applied.`] : []),
+      ...(aromatic > 0 ? [`${aromatic} aromatic bond${aromatic === 1 ? '' : 's'} kept as order 1.5.`] : []),
+    ],
   };
 }
 
@@ -222,15 +295,58 @@ function periodicFormatFor(filename, text) {
   return '';
 }
 
+/**
+ * Every structure in a file, so a caller can offer a picker instead of guessing.
+ *
+ * `.sdf` is split on its `$$$$` delimiter and `.xyz` on its frame headers; a
+ * single-structure format returns one record. This exists because the previous
+ * behaviour — parse record 1 and drop the rest — lost a 5-conformer file
+ * without saying so.
+ */
+export function parseStructureRecords(text, { filename = '' } = {}) {
+  if (typeof text !== 'string' || !text.trim()) throw new StructureError('The structure file is empty.');
+  const normalized = text.replace(/^\uFEFF/, '');
+  const periodic = periodicFormatFor(filename, normalized);
+  if (periodic) throw periodicError(filename, periodic);
+  const format = formatFor(filename, normalized);
+  const lines = normalized.split(/\r\n|\n|\r/);
+
+  if (format === 'sdf' && normalized.includes('$$$$')) {
+    const blocks = normalized.split('$$$$').map((block) => block.trim()).filter(Boolean);
+    const records = [];
+    blocks.forEach((block, index) => {
+      try {
+        records.push(finalize({ ...parseMol(block.split(/\r\n|\n|\r/), { format: 'sdf' }), format: 'sdf' }));
+      } catch (error) {
+        records.push({ error: `Record ${index + 1}: ${error.message}` });
+      }
+    });
+    if (records.length === 0) throw new StructureError('The SDF contains no records.');
+    return { format, records };
+  }
+
+  if (format === 'xyz') {
+    const frames = xyzFrames(lines);
+    if (frames.length > 1) {
+      return { format, records: frames.map((frame) => (frame.error ? frame : finalize({ ...frame, format }))) };
+    }
+  }
+
+  const single = parseStructure(text, { filename });
+  return { format: single.format, records: [single] };
+}
+
+function periodicError(filename, periodic) {
+  return new StructureError(`Periodic systems are not supported: ${filename || `this .${periodic} file`} describes a unit cell, not a molecule. `
+    + 'NodeChem Studio drives molecular Gaussian and xTB jobs — there is no unit cell, k-point sampling '
+    + 'or band structure. Convert the system to a molecular cluster (.xyz, .gjf, .mol) first.');
+}
+
 export function parseStructure(text, { filename = '' } = {}) {
   if (typeof text !== 'string' || !text.trim()) throw new StructureError('The structure file is empty.');
   const normalized = text.replace(/^\uFEFF/, '');
   const periodic = periodicFormatFor(filename, normalized);
-  if (periodic) {
-    throw new StructureError(`Periodic systems are not supported: ${filename || `this .${periodic} file`} describes a unit cell, not a molecule. `
-      + 'NodeChem Studio drives molecular Gaussian and xTB jobs — there is no unit cell, k-point sampling '
-      + 'or band structure. Convert the system to a molecular cluster (.xyz, .gjf, .mol) first.');
-  }
+  if (periodic) throw periodicError(filename, periodic);
   const format = formatFor(filename, normalized);
   const lines = normalized.split(/\r\n|\n|\r/);
 
@@ -241,6 +357,10 @@ export function parseStructure(text, { filename = '' } = {}) {
       ? normalized.split('$$$$')[0]
       : normalized;
     parsed = parseMol(block.split(/\r\n|\n|\r/), { format, name: lines[0] });
+    const recordCount = normalized.split('$$$$').filter((part) => part.trim()).length;
+    if (recordCount > 1) {
+      parsed.warnings = [...(parsed.warnings || []), `The file contains ${recordCount} records; record 1 is loaded. Use the record picker to choose another.`];
+    }
   } else if (format === 'gjf' || format === 'com') parsed = parseGjf(lines);
   else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com.');
 
@@ -249,5 +369,8 @@ export function parseStructure(text, { filename = '' } = {}) {
 
 /** Deterministic text form used by tests and the provenance record. */
 export function structureSummary(structure) {
-  return `${structure.atoms.length} atoms · charge ${structure.charge} · multiplicity ${structure.multiplicity}`;
+  const bonds = Array.isArray(structure.bonds) && structure.bonds.length
+    ? ` · ${structure.bonds.length} bonds`
+    : '';
+  return `${structure.atoms.length} atoms${bonds} · charge ${structure.charge} · multiplicity ${structure.multiplicity}`;
 }

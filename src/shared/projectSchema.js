@@ -410,7 +410,7 @@ function normalizeGeometry(c, raw, legacy, coords) {
 
 function normalizeMolecule(c, raw, legacy) {
   const source = requiredObject(c, raw, 'molecule', legacy, {});
-  warnUnknown(c, source, new Set(['smiles', 'charge', 'multiplicity', 'fragments', 'coords', 'geometry']), 'molecule');
+  warnUnknown(c, source, new Set(['smiles', 'charge', 'multiplicity', 'fragments', 'coords', 'bonds', 'geometry']), 'molecule');
   const fragmentsRaw = source.fragments;
   let fragments = [];
   if (fragmentsRaw === undefined) {
@@ -429,14 +429,60 @@ function normalizeMolecule(c, raw, legacy) {
     });
   }
   const coords = normalizeCoords(c, source.coords, legacy);
+  const bonds = normalizeBonds(c, source.bonds, legacy, coords.length);
   return {
     smiles: readString(c, source.smiles, 'molecule.smiles', { legacy, fallback: '', max: 1000 }),
     charge: readInteger(c, source.charge, 'molecule.charge', { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, source.multiplicity, 'molecule.multiplicity', { legacy, fallback: 1, min: 1, max: 10 }),
     fragments,
     coords,
+    // Optional: only a file that stated its topology carries bonds. An absent
+    // list means "not stated", so the viewer keeps perceiving them by distance.
+    ...(bonds.length ? { bonds } : {}),
     geometry: normalizeGeometry(c, source.geometry, legacy, coords),
   };
+}
+
+/**
+ * Topology stated by the source file. Kept optional and validated against the
+ * atom count, so a corrupt bond index is an error rather than a line to
+ * nowhere.
+ */
+function normalizeBonds(c, raw, legacy, atomCount) {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    c.error('molecule.bonds', 'must be an array of {a, b, order} entries.');
+    return [];
+  }
+  if (raw.length > LIMITS.atoms * 8) {
+    c.error('molecule.bonds', 'contains more bonds than this atom count can have.');
+    return [];
+  }
+  const bonds = [];
+  const seen = new Set();
+  raw.forEach((entry, index) => {
+    const path = `molecule.bonds[${index}]`;
+    if (!entry || typeof entry !== 'object') {
+      c.error(path, 'must be an object with a, b and order.');
+      return;
+    }
+    const a = Number(entry.a);
+    const b = Number(entry.b);
+    const order = Number(entry.order ?? 1);
+    if (!Number.isInteger(a) || !Number.isInteger(b) || a < 1 || b < 1 || a > atomCount || b > atomCount || a === b) {
+      c.error(path, `refers to atoms ${entry.a} and ${entry.b}; the structure has ${atomCount}.`);
+      return;
+    }
+    if (![1, 1.5, 2, 3].includes(order)) {
+      c.error(path, 'order must be 1, 2, 3 or 1.5 (aromatic).');
+      return;
+    }
+    const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    bonds.push({ a: Math.min(a, b), b: Math.max(a, b), order });
+  });
+  return bonds;
 }
 
 function normalizeDefaults(c, raw, legacy) {
