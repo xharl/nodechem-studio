@@ -241,6 +241,10 @@ async function commandRun({ positional, flags }) {
 
   const started = await queueManager.start({
     projectName: result.project.name || path.basename(file),
+    // The queue names the flow it ran, so `ncs report` can title each section
+    // after the tab it came from instead of repeating the project name.
+    flowId: plan.flowId || null,
+    flowTitle: flowById(result.project, plan.flowId)?.title || null,
     tasks,
     edges: plannedEdges,
     options: {

@@ -628,7 +628,12 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
       )).join('')
     : `<${sectionHeading}>What ran</${sectionHeading}>` + taskTableHtml(rows);
 
-  return `<${topHeading}>Workflow report — ${escapeHtml(q.projectName || q.id || 'queue')}</${topHeading}>`
+  // A combined report stacks several flow sections under one project heading,
+  // so each section has to name its flow; a single-flow report keeps the
+  // project name it always had.
+  const headingTitle = text(model.headingTitle)
+    || `Workflow report — ${q.projectName || q.id || 'queue'}`;
+  return `<${topHeading}>${escapeHtml(headingTitle)}</${topHeading}>`
     + `<p class="meta">Queue ${escapeHtml(q.id || MISSING)} · status ${escapeHtml(q.status || MISSING)}`
     + ` · created ${escapeHtml(q.createdAt || MISSING)} · finished ${escapeHtml(q.finishedAt || MISSING)}`
     + ` · generated ${escapeHtml(model.generatedAt || MISSING)}`
@@ -705,8 +710,12 @@ export function buildCombinedReportHtml(models, { title = 'Project report', gene
 
   const sections = list.map((model) => {
     const flowId = anchorId(model.flow?.id || 'flow');
+    const flowTitle = text(model.flow?.title);
+    const titled = flowTitle
+      ? { ...model, headingTitle: `${flowTitle} — workflow report` }
+      : model;
     return `<section class="flow-section" id="flow-${escapeHtml(flowId)}">`
-      + reportContentHtml(model, { level: 2 })
+      + reportContentHtml(titled, { level: 2 })
       + '</section>';
   }).join('');
 

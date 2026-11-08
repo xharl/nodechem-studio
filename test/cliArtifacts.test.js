@@ -107,6 +107,10 @@ describe('ncs run — flow, record and max-parallel', () => {
     const queue = await queueOf(out, summary.queueId);
     // The project's runner.maxParallel is the default; the CLI must pass it.
     expect(queue.maxParallel).toBe(2);
+    // An archived queue names the flow it ran: `ncs report` titles each section
+    // from it, and a queue whose project grew tabs cannot infer it later.
+    expect(queue.flowId).toBe('barrier');
+    expect(queue.flowTitle).toBe('Barrier');
     expect(queue.tasks.filter((task) => task.recordId).map((task) => task.recordId)).toEqual(['m1', 'm2']);
 
     // `--out` is the artifact root: reports and manifest live there, not in

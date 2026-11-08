@@ -746,6 +746,10 @@ export class QueueManager {
     const queue = {
       id,
       projectName: oneLine(payload.projectName, 200) || 'Untitled workflow',
+      // RFC 0001: the flow this queue ran. Without it an archived queue cannot
+      // say which tab it belonged to once the project has several.
+      flowId: oneLine(payload.flowId || options.flowId, 64) || null,
+      flowTitle: oneLine(payload.flowTitle || options.flowTitle, 200) || null,
       status: 'running',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
