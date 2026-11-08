@@ -1,10 +1,25 @@
 # Privacy and licensing
 
-## Privacy: nothing leaves the machine
+## Privacy: one outbound call, and only when you ask
 
-NodeChem Studio has no network capability. There is no telemetry, no crash reporting, no update
-check, no account and no cloud call. The source contains no HTTP client and the automated test suite
-fails if one is introduced.
+NodeChem Studio does not use the network while you work. There is no telemetry, no crash reporting,
+no account, no cloud execution and no background update check. Exactly one outbound request exists
+in the application, described below, and the automated test suite fails if a second one appears.
+
+### Checking for updates
+
+**Check for updates** (in the **⋯** menu) asks GitHub for this repository's published releases. The
+request goes to `api.github.com/repos/xharl/nodechem-studio/releases?per_page=20` at the moment you
+click; nothing is checked at startup, on a timer, or in the background. It carries no identifier — no
+account, no machine name, no installation id, no project data. The only header set beyond the
+defaults is a `User-Agent` naming the application version, which GitHub's API requires.
+
+The response is parsed in memory, compared with the version stamped into this build, and then
+discarded: it is not written to disk, not forwarded anywhere and not retained between clicks. If a
+newer release exists, the app shows a dismissible banner linking to its release page in your
+browser. **Nothing is downloaded or installed**; whether to upgrade, and doing it, is your decision.
+If GitHub cannot be reached — offline, or a rate-limit response — the banner says so and the app
+carries on unchanged.
 
 What exists on disk:
 

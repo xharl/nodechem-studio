@@ -124,9 +124,11 @@ describe('public documentation — copy consistency', () => {
     expect(readme).toContain('What has *not* been proven is a real run');
   });
 
-  it('ships no network client in the app sources', () => {
-    // The privacy page tells readers there is no network capability. Prove it
-    // rather than repeating it: no HTTP client, no fetch, no XHR, no URL in code.
+  it('ships exactly one outbound call, in the main process, on user request', () => {
+    // The privacy page states one outbound request and its trigger (#82).
+    // Prove it: no module may contain a network client, and the single
+    // exception must be the release check — bounded, user-triggered, and far
+    // away from the pure comparison module.
     const sources = [];
     for (const dir of ['src', 'electron']) {
       const walk = (rel) => {
@@ -145,8 +147,26 @@ describe('public documentation — copy consistency', () => {
     const pattern = /\bfetch\s*\(|XMLHttpRequest|['"]node:https?['"]|['"]https?['"]\s*\)|https?:\/\/[a-z0-9]/i;
     const offenders = sources
       .map(({ rel, text }) => ({ rel, text: text.replace(benign, 'BENIGN_URL') }))
-      .filter(({ text }) => pattern.test(text))
+      .filter(({ rel, text }) => rel !== 'electron/main.js' && pattern.test(text))
       .map(({ rel }) => rel);
     expect(offenders).toEqual([]);
+
+    const main = read('electron/main.js');
+    expect(main.match(/\bfetch\s*\(/g) ?? []).toHaveLength(1);
+    // Exactly three literals: the local dev URL (already excluded as benign),
+    // the API endpoint, and the release-page fallback for a URL-less release.
+    expect([...main.matchAll(/https?:\/\/[^\s'"`]+/g)].map((match) => match[0])).toEqual([
+      'http://127.0.0.1:5173',
+      'https://api.github.com/repos/xharl/nodechem-studio/releases?per_page=20',
+      'https://github.com/xharl/nodechem-studio/releases/tag/',
+    ]);
+    expect(main).toContain("'User-Agent'");
+    expect(main).toContain('AbortController');
+    expect(main).toContain('UPDATE_CHECK_TIMEOUT_MS = 10_000');
+    expect(main).toContain("ipcMain.handle('updates:check'");
+
+    // The comparison itself is pure: no network primitive, no URL, no clock.
+    const pure = read('src/shared/updateCheck.js');
+    expect(pure).not.toMatch(/\bfetch\s*\(|XMLHttpRequest|https?:\/\//);
   });
 });

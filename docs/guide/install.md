@@ -155,7 +155,8 @@ the application does not delete either location; delete them yourself if you wan
   release artifact.
 - No xTB binary. You install xTB yourself; the app only runs it.
 - No service, driver, background daemon or auto-updater.
-- No network calls at runtime. See [Privacy and licensing](privacy-and-licensing.md).
+- No background network activity. The only outbound call is the update check you trigger yourself,
+  and it never downloads anything. See [Privacy and licensing](privacy-and-licensing.md).
 
 ## Next
 

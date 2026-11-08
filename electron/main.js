@@ -14,6 +14,7 @@ import { isSafeRunId } from '../src/shared/runBundle.js';
 import { fingerprint, writeGuardDecision } from '../src/shared/projectMerge.js';
 import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
 import { buildDiagnostics } from '../src/shared/diagnostics.js';
+import { checkForUpdate } from '../src/shared/updateCheck.js';
 import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js';
 import { BATCH_MAX_LOG_BYTES, summarizeLog } from '../src/shared/logImport.js';
 import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
@@ -700,6 +701,64 @@ async function saveDiagnostics(text) {
   return { saved: true, path: result.filePath };
 }
 
+/**
+ * Issue #82: the single outbound request this application makes, and only when
+ * the user asks for it (the "Check for updates" action). There is no timer, no
+ * startup call, no retry and no cache — a click is one request.
+ *
+ * Privacy: the request carries no identifier beyond a User-Agent naming the app
+ * and its version, which GitHub's API requires. The response is parsed into the
+ * pure comparison module and then dropped; nothing is written to disk and no
+ * release is downloaded. The bounded timeout exists so a blocked network fails
+ * a click instead of leaving a promise pending forever.
+ */
+const RELEASES_API = 'https://api.github.com/repos/xharl/nodechem-studio/releases?per_page=20';
+const RELEASE_TAG_PAGE = 'https://github.com/xharl/nodechem-studio/releases/tag/';
+const UPDATE_CHECK_TIMEOUT_MS = 10_000;
+
+/** Keep only the fields the pure module reads; release bodies never cross IPC. */
+function releaseFields(release) {
+  if (!release || typeof release !== 'object') return null;
+  const tag = typeof release.tag_name === 'string' ? release.tag_name : '';
+  return {
+    tag_name: tag,
+    html_url: typeof release.html_url === 'string'
+      ? release.html_url
+      : `${RELEASE_TAG_PAGE}${encodeURIComponent(tag)}`,
+    published_at: release.published_at,
+    prerelease: release.prerelease === true,
+    draft: release.draft === true,
+  };
+}
+
+async function checkForUpdates() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS);
+  try {
+    const response = await fetch(RELEASES_API, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `NodeChem-Studio/${app.getVersion()}`,
+      },
+    });
+    if (!response.ok) return { ok: false, error: `GitHub answered ${response.status}` };
+    const payload = await response.json();
+    if (!Array.isArray(payload)) return { ok: false, error: 'Unexpected response from GitHub' };
+    const releases = payload.map(releaseFields).filter(Boolean);
+    return { ok: true, ...checkForUpdate({ currentVersion: app.getVersion(), releases }) };
+  } catch (error) {
+    // AbortError is the timeout; every other failure is a network or TLS one.
+    // Neither is worth a stack trace in front of the user.
+    return {
+      ok: false,
+      error: error?.name === 'AbortError' ? 'GitHub did not answer in time' : 'Could not reach GitHub',
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 app.whenReady().then(async () => {
   runManager = new RunManager({
     runsRoot: path.join(app.getPath('userData'), 'runs'),
@@ -714,6 +773,8 @@ app.whenReady().then(async () => {
   await queueManager.init();
 
   ipcMain.handle('app:info', () => currentAppInfo());
+  // Issue #82: one user-triggered request. Nothing else in the app calls out.
+  ipcMain.handle('updates:check', () => checkForUpdates());
   // Theme switching (#52): repaint the native chrome, record the launch cache.
   // The window itself is not reloaded — the renderer swaps the token file.
   ipcMain.handle('app:set-theme', (_event, payload) => {

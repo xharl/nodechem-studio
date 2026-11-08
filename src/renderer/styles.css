@@ -1078,6 +1078,30 @@ kbd {
 }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 5px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
+/* Update notice (#82): a dismissible, fixed banner below the topbar. It is
+   created by app.js, so a build that never checks for updates has no node. */
+.update-banner {
+  position: fixed;
+  top: 64px; left: 50%;
+  z-index: 200;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px;
+  max-width: min(680px, calc(100vw - 32px));
+  padding: 9px 13px;
+  border: 1px solid var(--tone-blue-105a);
+  border-radius: 8px;
+  background: var(--tone-blue-31a);
+  box-shadow: 0 12px 32px var(--tone-neutral-7a);
+  color: var(--tone-blue-126);
+  font-size: var(--text-size-xs);
+  line-height: 1.45;
+  animation: toast-in .16s ease-out;
+}
+.update-banner[hidden] { display: none; }
+.update-banner-text { flex: 1 1 auto; }
+.update-banner-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.update-banner-actions a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+
 /* ── Responsive ────────────────────────────────────────────── */
 @media (max-width: 1400px) {
   /* The overflow menu carries the theme picker and the long-tail actions.
