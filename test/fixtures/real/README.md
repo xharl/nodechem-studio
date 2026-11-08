@@ -16,6 +16,8 @@ to match the parser.
 | `g09-dvb-gopt-unconverged.log` | `cclib/cclib-data`, `Gaussian/Gaussian09/` | optimisation that ran out of steps and exited with an epigraph |
 | `g16-meoh-scf-error.log` | `jvalegre/aqme`, `Example_workflows/QCORR_processing_QM_outputs/QCORR_1/` | SCF non-convergence |
 | `g16-dvb-ir-truncated.out` | first 120 000 bytes of `g16-dvb-ir.out` | truncated file (derived, not a complete job) |
+| `g09-dvb-un-sp.log` | `cclib/cclib`, `data/Gaussian/basicGaussian09/dvb_un_sp.log` | unrestricted single point: ⟨S²⟩ line and annihilation block |
+| `g09-dvb-un-sp-b.log` | `cclib/cclib`, `data/Gaussian/basicGaussian09/dvb_un_sp_b.log` | second unrestricted single point, used to confirm the ⟨S²⟩ reader |
 
 Each excerpt starts at the header line Gaussian prints before the table and ends
 at the closing dashes (the relaxed scan ends at its last parameter row).
