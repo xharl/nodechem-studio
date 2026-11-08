@@ -349,6 +349,78 @@ A run without wavefunction files leaves the checkpoint columns **empty**. A valu
 computed — no orbital energies, no charges — is also an empty cell; the reason is in the record,
 not in the spreadsheet.
 
+## A picture of the field: slices and isosurfaces
+
+The results surface has a **Wavefunction view** card. It evaluates one orbital, or the density, on a
+uniform grid from the basis the record already carries, and draws either a plane slice or an
+isosurface. Nothing calls `cubegen` and nothing needs a network; the arithmetic is
+`src/shared/volume.js` and `src/shared/marchingCubes.js`.
+
+What the card offers:
+
+- **Field**: every alpha MO in the record, or the electron density summed over the occupied ones.
+  The HOMO is preselected when the occupations are known.
+- **View**: a plane slice (xy, xz or yz, an offset slider, iso lines drawn on top, a legend that
+  states the field, the plane and the value range) or an isosurface (orbit, zoom, a ± lobe toggle,
+  and PNG / binary STL export).
+- **Grid**: 0.2, 0.3 or 0.5 Å. The chosen spacing is printed under the picture, and so is the
+  coarsening when the 4-million-point cap forced one.
+- **Open .cube…**: a cube from any program goes through the same slice and surface code. The values
+  are used as written and the unit is labelled "file units", because a cube does not state its own.
+
+### The numbers under the picture
+
+| Line | Why it is there |
+| --- | --- |
+| grid, spacing | The resolution the picture was drawn at — a blocky surface is a coarse grid, not a bad orbital |
+| evaluated in … s (worker / main thread) | Which thread did the work; a 3-second pause should never be a mystery |
+| ∫\|ψ\|²dV (bohr³) | ≈1 for a normalised occupied orbital; below 1 means the box is too small or the grid too coarse |
+| ∫ρ dV (e) | The electron count the density actually integrates to |
+
+### Units and normalisation, stated because a wrong constant is a wrong picture
+
+- Exponents are in bohr⁻², so every point is converted to bohr before it touches an exponent, and
+  the values are **atomic units**: an orbital amplitude in bohr^{−3/2}, a density in e/bohr³. The
+  grid geometry stays in Å, and `cellVolumeBohr3` is provided so `Σ values × cellVolumeBohr3` is the
+  integral with no unit slip at the call site.
+- Primitives are normalised Cartesian Gaussians,
+  `N = (2α/π)^{3/4} √[(4α)^l / ((2i−1)!!(2j−1)!!(2k−1)!!)]`, and a contraction coefficient
+  multiplies a *normalised* primitive — the Gaussian/Molden convention. Nothing is renormalised
+  afterwards: doing so would move every coefficient relative to the others.
+- Pure d and f shells are the standard real solid harmonics: `3z²−r², xz, yz, x²−y², xy` for 5D, and
+  `z(5z²−3r²), x(5z²−r²), y(5z²−r²), z(x²−y²), xyz, x(x²−3y²), y(3x²−y²)` for 7F, in that order,
+  which is the order Molden and Gaussian store the coefficients in. Their scale is computed from the
+  exact monomial overlap metric, not from a table.
+- Cartesian f and g shells have two orderings in the wild. `gaussian` (Molden, Gaussian, this app's
+  Molden reader) is the default; `aim` is the WFN/WFX order documented in `aimBasis.js`. d is
+  identical in both, so this only matters once an f shell is present.
+- A shell type the evaluator does not implement is **refused by name**, never zero-filled:
+
+  ```
+  the h shell (shell type 5) is not implemented (shell 1); only s, p, sp, d, f and Cartesian g shells are evaluated.
+  the spherical g shell (shell type -4, 9 functions) is not implemented (shell 1); the nine-component order is not verified across writers, so it is refused rather than guessed. A Cartesian g shell (15 functions) is evaluated.
+  ```
+
+  The spherical g set is refused on purpose: writers disagree about the nine-component order, and a
+  coefficient attached to the wrong angular function has no visible symptom. Cartesian 15G is
+  evaluated.
+
+### The isosurface
+
+`extractSurface(field, iso)` meshes the level set `{f = iso}`. For `iso > 0` the enclosed region is
+`{f > iso}`; for `iso < 0` it is `{f < iso}`. Normals come from the **gradient of the field** by
+central differences, interpolated along each cut edge, and they point away from the enclosed region
+— so `+0.02` and `−0.02` are the two phases of an orbital, coloured differently and lit
+consistently. The mesh is closed by construction (every mesh edge is shared by exactly two
+triangles) and the test suite asserts it rather than trusting it.
+
+A skewed (non-orthogonal) grid is refused: the gradient transform assumes perpendicular axes, and a
+wrong normal is invisible in a picture.
+
+The viewport is lazy. It creates no WebGL2 context until a mesh exists, and when there is no context
+it prints `surface view unavailable: no WebGL2 context` and keeps the triangle counts, the isovalue
+and the grid on screen. A blank canvas would claim the orbital has no surface, which is false.
+
 ## What the readers refuse
 
 The readers are bounded, and they say what they refused instead of returning a partial answer.
@@ -427,17 +499,15 @@ invention, not a read.
 The ingest half of issue #59 is implemented. The visual half is not, and this page would rather say
 so than show a picture that implies otherwise:
 
-- **Orbital isosurfaces.** No marching-cubes mesh, no positive/negative phase colours, no isovalue
-  control in the viewer. The grid summary and the suggested isovalue exist so the renderer has
-  something to start from.
+- **Isosurfaces in the report.** The app draws them (`## A picture of the field` above); the report
+  renders figures from data, and a surface in the report is a later workstream.
 - **ESP colour-mapped surfaces and colour bars.** Requires a molecular surface and a colour scale,
   neither of which exists yet.
 - **QTAIM/AIM critical points, bond paths and basin charges.** A separate analysis with its own
   numerical requirements.
 - **NCI/RDG surfaces, ELF/LOL, deformation density.** Also separate analyses, not another cube read.
-- **Rendering the coefficients.** The fchk and Molden readers now carry the MO coefficient matrix,
-  but no marching-cubes renderer turns it into an orbital isosurface. An orbital cube from `cubegen`
-  is read fine; the app cannot generate one.
+- **Writing a cube.** The app renders the coefficients it reads, but `ncs cube` and a cube writer do
+  not exist: a cube can be read, not produced.
 - **Molden's vibrational sections.** `[FREQ]`, `[FR-COORD]`, `[INT]` and `[GEOMETRIES]` are ignored;
   frequencies come from the engine output parsers, not from a Molden file.
 - **Molden in the CLI and the window.** The shared reader is wired into `readWavefunction`, but
@@ -451,9 +521,9 @@ so than show a picture that implies otherwise:
   any density, so a density rebuilt from a WFX with an EDF would omit those core electrons.
 - **WFN gradients.** None is read, because the traditional format does not carry one; the WFX
   gradient sections are likewise left unread.
-- **Attaching the files from the UI.** The parsers, the record block and the export columns are in
-  place; choosing the files when a run finishes and writing the block into `run.json` belongs to the
-  run-writer, not to this module.
+- **Attaching checkpoints and Molden files from the UI.** The cube picker in the wavefunction view
+  is wired; choosing an fchk or a Molden file when a run finishes, and writing the block into
+  `run.json`, still belongs to the run-writer.
 - **Multiwfn hand-off.** Generating a Multiwfn input deck and reading its text report back is the
   cheaper route for the analyses above, and is not implemented.
 

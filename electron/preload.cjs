@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('desktop', {
   pickExecutable: () => ipcRenderer.invoke('gaussian:pick-executable'),
   pickCrestExecutable: () => ipcRenderer.invoke('crest:pick-executable'),
   pickEnsembleFile: () => ipcRenderer.invoke('conformers:pick-ensemble'),
+  // The wavefunction viewport: a user-supplied cube (text, capped in main) and
+  // the binary PNG/STL the surface viewport exports.
+  pickCubeFile: () => ipcRenderer.invoke('wavefunction:pick-cube'),
+  saveBinary: (payload) => ipcRenderer.invoke('file:save-binary', payload),
   preflight: (config) => ipcRenderer.invoke('gaussian:preflight', config),
   runTask: (payload) => ipcRenderer.invoke('gaussian:run', payload),
   cancelRun: (runId) => ipcRenderer.invoke('gaussian:cancel', runId),

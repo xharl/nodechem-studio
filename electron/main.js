@@ -206,6 +206,13 @@ let closeSaveTimer = null;
 /** How long to wait for the renderer's save before letting the user retry. */
 const CLOSE_SAVE_TIMEOUT_MS = 20000;
 
+/**
+ * A cube the viewport will accept. The parser's own limit is 64 MB of text;
+ * refusing here says so before the file crosses the bridge, and the number is
+ * deliberately the same one `cubeFile.js` uses.
+ */
+const CUBE_PICK_MAX_BYTES = 64 * 1024 * 1024;
+
 function emitRunEvent(event) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('gaussian:event', event);
@@ -959,6 +966,56 @@ app.whenReady().then(async () => {
   ipcMain.handle('gaussian:pick-executable', (_event, config) => chooseExecutable(config || {}));
   ipcMain.handle('crest:pick-executable', () => chooseCrestExecutable());
   ipcMain.handle('conformers:pick-ensemble', () => chooseEnsembleFile());
+  /**
+   * A user-supplied volume file for the wavefunction viewport. The renderer
+   * asks for text, not for a path, because it cannot read the filesystem; the
+   * size cap keeps a 500 MB cube from crossing the bridge.
+   */
+  ipcMain.handle('wavefunction:pick-cube', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Open a cube file',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Gaussian cube', extensions: ['cube', 'cub'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    if (result.canceled || !result.filePaths?.length) return { canceled: true };
+    const target = result.filePaths[0];
+    try {
+      const stats = await fsp.stat(target);
+      if (stats.size > CUBE_PICK_MAX_BYTES) {
+        return {
+          canceled: false,
+          error: `${path.basename(target)} is ${(stats.size / 1e6).toFixed(1)} MB; the limit is ${CUBE_PICK_MAX_BYTES / 1e6} MB.`,
+        };
+      }
+      return { canceled: false, name: path.basename(target), text: await fsp.readFile(target, 'utf8') };
+    } catch (error) {
+      return { canceled: false, error: `Could not read ${path.basename(target)}: ${error.message}` };
+    }
+  });
+  /**
+   * A binary artifact (the isosurface PNG or its binary STL). Same rule as
+   * `text:save`: the dialog and the write belong to the main process.
+   */
+  ipcMain.handle('file:save-binary', async (_event, payload) => {
+    const bytes = payload?.bytes;
+    if (!(bytes instanceof ArrayBuffer) && !ArrayBuffer.isView(bytes)) return { canceled: true };
+    const buffer = bytes instanceof ArrayBuffer ? Buffer.from(bytes) : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (buffer.length === 0) return { canceled: true };
+    const suggested = path.basename(String(payload?.suggestedName || 'export.bin')).replace(/[^A-Za-z0-9._-]/g, '_');
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save export',
+      defaultPath: path.join(app.getPath('documents'), suggested),
+      filters: suggested.endsWith('.png')
+        ? [{ name: 'PNG image', extensions: ['png'] }]
+        : [{ name: 'STL mesh', extensions: ['stl'] }, { name: 'All files', extensions: ['*'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    await fsp.writeFile(result.filePath, buffer);
+    return { canceled: false, path: result.filePath };
+  });
   ipcMain.handle('gaussian:preflight', (_event, config) => preflight(config || {}, {
     platform: process.platform,
     env: process.env,
