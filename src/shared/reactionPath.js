@@ -24,6 +24,7 @@
  */
 
 import { HARTREE_TO_KCAL_PER_MOL } from './runCompare.js';
+import { PK_UNIT_KCAL_PER_MOL } from './thermochemistry.js';
 
 const NUMBER = /-?\d+\.\d+/g;
 const DASHES = /^[\s-]+$/;
@@ -224,9 +225,11 @@ export function profilePoints(record) {
 /**
  * Where the path sits highest, and by how much over the lowest point.
  * This is a barrier on the computed path only: it is not ΔG‡ and the record
- * says so (`kind: 'potential-energy'`).
+ * says so (`kind: 'potential-energy'`). The level of theory and the
+ * thermochemical treatment are attached so a barrier is never printed on its
+ * own; both are `null` when the run did not record them.
  */
-export function pathBarrier(record) {
+export function pathBarrier(record, { levelOfTheory = null, thermochemicalTreatment = null } = {}) {
   const points = profilePoints(record);
   if (points.length === 0) return null;
   let highest = points[0];
@@ -241,6 +244,8 @@ export function pathBarrier(record) {
     label: highest.label,
     rxCoord: highest.rxCoord,
     points: points.length,
+    levelOfTheory: levelOfTheory || null,
+    thermochemicalTreatment: thermochemicalTreatment || null,
   };
 }
 
@@ -286,5 +291,269 @@ export function profileSvg(record, { width = 560, height = 190 } = {}) {
     + `<text x="${width - pad.right}" y="${height - 6}" text-anchor="end" class="spectrum-label">points 1–${points.length}</text>`
     + `<text x="${pad.left}" y="${height - 6}" class="spectrum-label">kcal mol⁻¹</text>`
     + '</svg>'
+    + '</figure>';
+}
+
+/**
+ * The located extremum of a scan.
+ *
+ * A one-dimensional scan gets a parabolic fit through the highest point and its
+ * two neighbours, which is what identifies a maximum between grid points; a
+ * boundary maximum cannot be fitted and is reported as such. A two-dimensional
+ * scan has no single coordinate, so the highest grid node is reported and
+ * nothing is interpolated.
+ */
+export function scanExtremum(record) {
+  const points = profilePoints(record);
+  if (points.length === 0) return null;
+  const declared = Array.isArray(record?.parameterNames) ? record.parameterNames : [];
+  // Only a parameter that actually takes different values was scanned; the
+  // others are printed alongside it (bond lengths next to angles, say).
+  const parameters = declared.filter((name) => new Set(
+    points.map((point) => point.parameters?.[name]).filter((value) => value !== undefined),
+  ).size > 1);
+  const highest = points.reduce((best, point) => (
+    point.relativeKcal !== null && (best === null || point.relativeKcal > best.relativeKcal) ? point : best
+  ), null);
+  if (!highest) return null;
+  const index = points.indexOf(highest);
+  const base = {
+    energyHartree: highest.energyHartree,
+    relativeKcal: highest.relativeKcal,
+    point: highest.point,
+    parameters: highest.parameters,
+  };
+  if (parameters.length > 1) {
+    return { ...base, dimension: 2, method: 'grid-node', interpolated: false, note: 'Highest grid node of a two-dimensional scan; no interpolation between nodes.' };
+  }
+  const previous = points[index - 1];
+  const next = points[index + 1];
+  const xAt = (point) => {
+    if (!point) return null;
+    const value = parameters.length === 1 ? point.parameters?.[parameters[0]] : point.rxCoord ?? point.label;
+    return Number.isFinite(value) ? value : null;
+  };
+  const x0 = xAt(previous);
+  const x1 = xAt(highest);
+  const x2 = xAt(next);
+  if (x0 === null || x1 === null || x2 === null) {
+    return { ...base, dimension: 1, method: 'grid-node', interpolated: false, note: 'The maximum sits on the boundary of the computed range, so it cannot be interpolated.' };
+  }
+  const y0 = previous.relativeKcal;
+  const y1 = highest.relativeKcal;
+  const y2 = next.relativeKcal;
+  const denominator = (x0 - x1) * (x0 - x2) * (x1 - x2);
+  if (!Number.isFinite(denominator) || denominator === 0 || y0 === null || y2 === null) {
+    return { ...base, dimension: 1, method: 'grid-node', interpolated: false, note: 'Three distinct points were not available for a parabolic fit.' };
+  }
+  const a = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / denominator;
+  const b = (x2 * x2 * (y0 - y1) + x1 * x1 * (y2 - y0) + x0 * x0 * (y1 - y2)) / denominator;
+  if (!Number.isFinite(a) || a >= 0) {
+    return { ...base, dimension: 1, method: 'grid-node', interpolated: false, note: 'The neighbours do not form a concave maximum, so no vertex was fitted.' };
+  }
+  const vertexX = -b / (2 * a);
+  // Same parabola, evaluated through a known point so the constant is exact.
+  const vertexY = y1 + a * (vertexX * vertexX - x1 * x1) + b * (vertexX - x1);
+  return {
+    ...base,
+    dimension: 1,
+    method: 'parabolic-fit',
+    interpolated: true,
+    coordinate: parameters.length === 1 ? parameters[0] : null,
+    vertexX,
+    vertexKcal: vertexY,
+    neighbours: [
+      { x: x0, kcal: y0 },
+      { x: x1, kcal: y1 },
+      { x: x2, kcal: y2 },
+    ],
+  };
+}
+
+const TERMINAL = new Set(['completed']);
+
+/**
+ * The IRC gate: did the path actually run, rise once, and come back down on
+ * both sides of the maximum?
+ *
+ * The endpoint *identity* (a minimum, and which one) cannot be established from
+ * an IRC summary alone — that needs a frequency job at each endpoint — so that
+ * check is reported as `unknown` rather than passed.
+ */
+export function ircGate(record) {
+  if (!record || !Array.isArray(record.points) || record.points.length === 0) {
+    return {
+      status: 'unknown',
+      checks: [{ id: 'path-present', status: 'unknown', detail: 'This output carries no IRC summary.' }],
+      reason: 'No IRC path in this output.',
+    };
+  }
+  const points = profilePoints(record);
+  const energies = points.map((point) => point.relativeKcal).filter((value) => value !== null);
+  const max = Math.max(...energies);
+  // IRC points sit on a plateau near the top (the summary prints five
+  // decimals), so a maximum is a *run* of highest points, not a single index.
+  const nearTop = new Set(points
+    .map((point, index) => (point.relativeKcal !== null && max - point.relativeKcal <= 0.01 ? index : -1))
+    .filter((index) => index >= 0));
+  let plateaus = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    if (!nearTop.has(index)) continue;
+    if (!nearTop.has(index - 1)) plateaus += 1;
+  }
+  const maxInInterior = !nearTop.has(0) && !nearTop.has(points.length - 1);
+  const interiorMaxima = plateaus;
+  const endpoints = [points[0], points[points.length - 1]].filter(Boolean);
+  const endpointsBelow = endpoints.every((point) => point.relativeKcal !== null && point.relativeKcal < max);
+  const coords = points.map((point) => point.rxCoord).filter((value) => Number.isFinite(value));
+  const directions = new Set(coords.map((value) => (value < 0 ? 'reverse' : 'forward')));
+  const checks = [
+    { id: 'path-present', status: 'pass', detail: `${points.length} points on the path.` },
+    {
+      id: 'single-maximum',
+      status: interiorMaxima === 1 ? 'pass' : 'fail',
+      detail: interiorMaxima === 1
+        ? 'One interior maximum, consistent with a single barrier.'
+        : `${interiorMaxima} interior maxima were found; a reaction path should cross one barrier.`,
+    },
+    {
+      id: 'endpoints-below-maximum',
+      status: endpointsBelow ? 'pass' : 'fail',
+      detail: endpointsBelow
+        ? 'Both ends of the path lie below the maximum, so the path descends on each side.'
+        : 'At least one end of the path does not lie below the maximum.',
+    },
+    {
+      id: 'maximum-in-interior',
+      status: maxInInterior ? 'pass' : 'unknown',
+      detail: maxInInterior
+        ? 'The maximum is not on either endpoint.'
+        : 'The maximum sits on an endpoint; the path may be truncated.',
+    },
+    {
+      id: 'endpoint-is-a-minimum',
+      status: 'unknown',
+      detail: 'An IRC summary cannot show that an endpoint is a minimum: that needs a frequency job at the endpoint.',
+    },
+  ];
+  const failed = checks.some((check) => check.status === 'fail');
+  return {
+    status: failed ? 'fail' : 'pass',
+    checks,
+    points: points.length,
+    directions: [...directions],
+    reason: failed
+      ? 'The path does not cross a single barrier with both ends below it.'
+      : 'The path crosses one barrier and descends on both sides. Endpoint identities are not verified.',
+  };
+}
+
+/**
+ * ΔG‡ from two thermochemistry records at the same level of theory.
+ *
+ * Nothing is derived if either free energy is missing, and the scheme is named
+ * in the result so a number quoted from it cannot lose its meaning.
+ */
+export function deltaGDoubleDagger({ transitionState = null, reactant = null } = {}) {
+  const ts = transitionState?.thermochemistry?.freeEnergyHartree;
+  const r = reactant?.thermochemistry?.freeEnergyHartree;
+  if (!Number.isFinite(ts) || !Number.isFinite(r)) {
+    return {
+      available: false,
+      reason: `A ΔG‡ needs a free energy for both the transition state and the reactant; ${Number.isFinite(ts) ? 'the reactant' : 'the transition state'} has none.`,
+    };
+  }
+  return {
+    available: true,
+    kcalPerMol: (ts - r) * HARTREE_TO_KCAL_PER_MOL,
+    scheme: 'ΔG‡ = G(TS) − G(reactant), both from frequency calculations at the same level of theory',
+    transitionStateFreeEnergyHartree: ts,
+    reactantFreeEnergyHartree: r,
+    temperatureK: transitionState?.thermochemistry?.temperatureK ?? null,
+  };
+}
+
+/**
+ * pKa from an isodesmic cycle against a reference acid, using the unit already
+ * defined for the thermochemistry module. The solvent, the standard state and
+ * the reference are required inputs: without them the number is not a pKa, it is
+ * a free-energy difference with a decimal point moved.
+ */
+export function pKaFromCycle({
+  deltaGDeprotonationKcal = null,
+  deltaGReferenceKcal = null,
+  referencePKa = null,
+  solvent = null,
+  standardStateK = 298.15,
+  standardStateAtm = 1,
+} = {}) {
+  const missing = [];
+  if (!Number.isFinite(deltaGDeprotonationKcal)) missing.push('the deprotonation free energy');
+  if (!Number.isFinite(deltaGReferenceKcal)) missing.push('the reference free energy');
+  if (!Number.isFinite(referencePKa)) missing.push('the reference pKa');
+  if (!solvent) missing.push('the solvent');
+  if (missing.length > 0) {
+    return { available: false, missing, reason: `A pKa needs ${missing.join(', ')}.` };
+  }
+  const delta = deltaGDeprotonationKcal - deltaGReferenceKcal;
+  return {
+    available: true,
+    pKa: referencePKa + delta / PK_UNIT_KCAL_PER_MOL,
+    deltaKcalPerMol: delta,
+    unitKcalPerMol: PK_UNIT_KCAL_PER_MOL,
+    solvent,
+    standardState: { temperatureK: standardStateK, pressureAtm: standardStateAtm },
+    reference: { pKa: referencePKa, deltaGReferenceKcal },
+    scheme: 'pKa = pKa(reference) + [ΔG(sample) − ΔG(reference)] / 1.364 kcal mol⁻¹, isodesmic cycle at the stated standard state',
+  };
+}
+
+/**
+ * A two-dimensional scan as a heatmap: one cell per computed node, coloured by
+ * relative energy, with the located extremum marked. Nodes that did not run are
+ * left as holes rather than filled in.
+ */
+export function scanSurfaceSvg(record, { cell = 22, pad = { left: 46, right: 12, top: 12, bottom: 30 } } = {}) {
+  const points = profilePoints(record);
+  const declared = Array.isArray(record?.parameterNames) ? record.parameterNames : [];
+  const varying = declared.filter((name) => new Set(
+    points.map((point) => point.parameters?.[name]).filter((value) => value !== undefined),
+  ).size > 1);
+  if (points.length < 4 || varying.length !== 2) return '';
+  const [xName, yName] = varying;
+  const xs = [...new Set(points.map((point) => point.parameters?.[xName]))].filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  const ys = [...new Set(points.map((point) => point.parameters?.[yName]))].filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (xs.length < 2 || ys.length < 2) return '';
+  const values = points.map((point) => point.relativeKcal).filter((value) => value !== null);
+  const max = Math.max(...values, 0.0001);
+  const cellAt = new Map(points.map((point) => [
+    `${point.parameters?.[xName]}|${point.parameters?.[yName]}`,
+    point.relativeKcal,
+  ]));
+  const extremum = scanExtremum(record);
+  const width = pad.left + xs.length * cell + pad.right;
+  const height = pad.top + ys.length * cell + pad.bottom;
+  const heat = (value) => {
+    const fraction = Math.max(0, Math.min(1, value / max));
+    const lightness = 82 - Math.round(fraction * 46);
+    return `hsl(212 24% ${lightness}%)`;
+  };
+  const cells = ys.map((yValue, row) => xs.map((xValue, column) => {
+    const key = `${xValue}|${yValue}`;
+    if (!cellAt.has(key) || cellAt.get(key) === null) return '';
+    const value = cellAt.get(key);
+    const x = pad.left + column * cell;
+    const y = pad.top + (ys.length - 1 - row) * cell;
+    const isPeak = extremum && extremum.parameters?.[xName] === xValue && extremum.parameters?.[yName] === yValue;
+    return `<rect x="${x}" y="${y}" width="${cell - 1}" height="${cell - 1}" fill="${heat(value)}"${isPeak ? ' stroke="#fbbf24" stroke-width="1.5"' : ''}><title>${xName}=${xValue}, ${yName}=${yValue}: ${value.toFixed(2)} kcal/mol</title></rect>`;
+  }).join('')).join('');
+  const axisLabels = `<text x="${pad.left - 8}" y="${pad.top + (ys.length * cell) / 2}" text-anchor="middle" transform="rotate(-90 ${pad.left - 8} ${pad.top + (ys.length * cell) / 2})" class="spectrum-label">${yName}</text>`
+    + `<text x="${pad.left + (xs.length * cell) / 2}" y="${height - 8}" text-anchor="middle" class="spectrum-label">${xName}</text>`;
+  return `<figure class="results-spectrum" data-field="scan-surface">`
+    + `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Potential-energy surface scan">`
+    + `${cells}${axisLabels}`
+    + '</svg>'
+    + `<figcaption>${xs.length} × ${ys.length} grid, ${points.length} computed nodes, relative energies in kcal mol⁻¹`
+    + `${extremum ? ` · highest node ${extremum.relativeKcal.toFixed(2)} kcal mol⁻¹` : ''}</figcaption>`
     + '</figure>';
 }

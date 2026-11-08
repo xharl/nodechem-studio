@@ -302,6 +302,16 @@ function calculationTask(project, node, { taskId, settingsOverride = null, title
     validity: validityForNode(project, node),
     checkpointName: checkpointNameFor(project, node, taskId),
     checkpointFrom: checkpointSourceFor(project, node),
+    // An IRC block can name the block that supplies the reactant free energy;
+    // without it no ΔG‡ is computed for this path.
+    ...(String((settingsOverride || settingsForNode(project, node)).jobType || '') === 'IRC'
+      ? {
+        reaction: {
+          transitionStateNodeId: checkpointSourceFor(project, node)?.nodeId || null,
+          reactantNodeId: (settingsOverride || settingsForNode(project, node)).referenceNodeId || null,
+        },
+      }
+      : {}),
     ...(ladder ? { ladder } : {}),
     ...(spin ? { spin } : {}),
   };

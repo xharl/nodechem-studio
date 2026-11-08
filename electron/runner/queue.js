@@ -10,6 +10,7 @@ import { conditionFields, evaluateCondition } from '../../src/shared/controlFlow
 import { engineFor } from '../../src/shared/engines/index.js';
 import { ladderVerdict } from '../../src/shared/methodLadder.js';
 import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
+import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -159,6 +160,13 @@ function taskRecord(raw, index) {
   const merge = type === 'merge'
     ? { policy: ['all', 'any'].includes(raw?.merge?.policy) ? raw.merge.policy : 'all' }
     : null;
+  const rawReaction = raw?.reaction && typeof raw.reaction === 'object' ? raw.reaction : null;
+  const reaction = rawReaction
+    ? {
+      transitionStateNodeId: String(rawReaction.transitionStateNodeId || '') || null,
+      reactantNodeId: String(rawReaction.reactantNodeId || '') || null,
+    }
+    : null;
   const rawSpin = raw?.spin && typeof raw.spin === 'object' ? raw.spin : null;
   const spinId = rawSpin ? String(rawSpin.id || '') : '';
   const spin = rawSpin && SAFE_ID.test(spinId)
@@ -207,6 +215,7 @@ function taskRecord(raw, index) {
     merge,
     ladder,
     spin,
+    reaction,
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -448,6 +457,8 @@ export class QueueManager {
       ladders: {},
       // Spin-state sweeps: the table and the ground state, per swept block.
       spins: {},
+      // ΔG‡ for a reaction path, when both blocks it names have free energies.
+      reactions: {},
     };
 
     await fsp.mkdir(path.join(this.queueDir(id), 'inputs'), { recursive: true });
@@ -541,6 +552,38 @@ export class QueueManager {
     return changed;
   }
 
+  /**
+   * ΔG‡ for each reaction path that declared its transition state and reactant.
+   * Both free energies come from the runs themselves; when either is missing the
+   * entry says which one, and no number is written.
+   */
+  async evaluateReactions(queue) {
+    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted']);
+    const byNodeId = new Map(queue.tasks.map((task) => [task.nodeId, task]));
+    let changed = false;
+    for (const task of queue.tasks) {
+      if (!task.reaction || !finished.has(String(task.status))) continue;
+      const tsTask = byNodeId.get(task.reaction.transitionStateNodeId);
+      const reactantTask = byNodeId.get(task.reaction.reactantNodeId);
+      if (!tsTask || (reactantTask && !finished.has(String(reactantTask.status)))) continue;
+      const verdict = deltaGDoubleDagger({
+        transitionState: { thermochemistry: { freeEnergyHartree: tsTask.parsedSummary?.freeEnergyHartree ?? null } },
+        reactant: reactantTask
+          ? { thermochemistry: { freeEnergyHartree: reactantTask.parsedSummary?.freeEnergyHartree ?? null } }
+          : null,
+      });
+      queue.reactions = queue.reactions || {};
+      queue.reactions[task.nodeId] = {
+        ...verdict,
+        transitionStateNodeId: task.reaction.transitionStateNodeId,
+        reactantNodeId: task.reaction.reactantNodeId,
+        evaluatedAt: new Date().toISOString(),
+      };
+      changed = true;
+    }
+    return changed;
+  }
+
   async drain(queue) {
     if (this.loops.has(queue.id)) return;
     this.loops.add(queue.id);
@@ -570,7 +613,8 @@ export class QueueManager {
 
         await this.runTask(queue, task);
         const spinChanged = await this.evaluateSpins(queue);
-        if (await this.evaluateLadders(queue) || spinChanged) {
+        const reactionChanged = await this.evaluateReactions(queue);
+        if (await this.evaluateLadders(queue) || spinChanged || reactionChanged) {
           await this.persist(queue);
           this.publish(queue);
         }
@@ -698,6 +742,8 @@ export class QueueManager {
         // value read from the annihilation line is not mistaken for a raw one.
         spinSquared: Number.isFinite(record.parsed.spinSquared?.value) ? record.parsed.spinSquared.value : null,
         spinSquaredSource: record.parsed.spinSquared?.source || null,
+        freeEnergyHartree: Number.isFinite(record.parsed.thermochemistry?.freeEnergyHartree)
+          ? record.parsed.thermochemistry.freeEnergyHartree : null,
       } : null;
       task.status = record.status === 'completed' ? 'completed'
         : record.status === 'needs-review' ? 'needs-review'

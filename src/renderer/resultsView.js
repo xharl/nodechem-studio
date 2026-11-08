@@ -18,7 +18,7 @@ import { methodsParagraphFor } from '../shared/methodsParagraph.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
-import { pathBarrier, profileSvg, profilePoints } from '../shared/reactionPath.js';
+import { ircGate, pathBarrier, profileSvg, profilePoints, scanExtremum, scanSurfaceSvg } from '../shared/reactionPath.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 
@@ -663,7 +663,11 @@ function reactionPathCard(runRecord, parsed, flags) {
   const irc = record.kind === 'irc' || Boolean(parsed?.reactionPath);
   const points = profilePoints(record);
   if (points.length === 0) return '';
-  const barrier = pathBarrier(record);
+  const treatment = parsed?.thermochemistry?.entropyTreatment
+    || (parsed?.frequencies?.count ? 'harmonic frequencies' : null);
+  // A barrier is never printed without its level of theory and treatment; both
+  // say "not recorded" when the run did not carry them.
+  const barrier = pathBarrier(record, { levelOfTheory: level || null, thermochemicalTreatment: treatment });
   const parameter = Array.isArray(record.parameterNames) && record.parameterNames.length
     ? record.parameterNames[0] : null;
   const rows = points.slice(0, 25).map((point) => '<tr>'
@@ -679,12 +683,28 @@ function reactionPathCard(runRecord, parsed, flags) {
       ? 'IRC path from the summary Gaussian printed at the end of the job. Energies are relative to the lowest computed point.'
       : `${record.kind === 'relaxed' ? 'Relaxed' : 'Unrelaxed'} potential-energy scan over ${esc(parameter || 'the scanned coordinate')}. Energies are relative to the lowest computed point.`)
     + '</p>'
+    + (irc
+      ? (() => {
+        const gate = ircGate(record);
+        const badge = gate.status === 'pass' ? 'gates-pass' : gate.status === 'fail' ? 'gates-fail' : '';
+        return `<p class="results-note ${badge}" data-field="irc-gate">Path gate: <strong>${esc(gate.status)}</strong> — ${esc(gate.reason)} `
+          + `${gate.checks.map((check) => `${esc(check.id)}: ${esc(check.status)}`).join(' · ')}</p>`;
+      })()
+      : (() => {
+        const extremum = scanExtremum(record);
+        if (!extremum) return '';
+        return `<p class="results-note" data-field="scan-extremum">Extremum: <strong>${esc(extremum.relativeKcal.toFixed(2))} kcal mol⁻¹</strong>`
+          + `${extremum.interpolated
+            ? ` at ${esc(extremum.coordinate || 'coordinate')} = ${esc(extremum.vertexX.toFixed(4))} (parabolic fit through ${extremum.neighbours.length} points)`
+            : ` at node ${esc(extremum.point)}`}`
+          + `${extremum.interpolated ? '' : ` — ${esc(extremum.note)}`}</p>`;
+      })())
     + (barrier
       ? `<p class="results-note" data-field="barrier">Highest point: <strong>${esc(barrier.maxKcal.toFixed(2))} kcal mol⁻¹</strong>`
         + ` at point ${esc(barrier.point)}${Number.isFinite(barrier.rxCoord) ? ` (RxCoord ${esc(barrier.rxCoord.toFixed(5))})` : ''}.`
         + ` ${levelText} This is a potential-energy difference on the computed points — not ΔG‡, no thermochemical correction is applied, and no rate constant is derived from it.</p>`
       : '')
-    + profileSvg(record)
+    + (record.kind === 'relaxed' || record.kind === 'unrelaxed' ? (scanSurfaceSvg(record) || profileSvg(record)) : profileSvg(record))
     + '<table class="results-table" data-field="reaction-path">'
     + `<thead><tr><th>#</th><th class="is-left">${irc ? 'RxCoord' : esc(parameter || 'coordinate')}</th><th>ΔE / kcal mol⁻¹</th><th>E / Eh</th></tr></thead>`
     + `<tbody>${rows}</tbody></table>`

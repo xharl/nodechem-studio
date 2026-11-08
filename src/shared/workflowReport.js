@@ -147,6 +147,19 @@ export function buildWorkflowReport(queue, records = {}, { generatedAt = null, a
           spinSquared: Number.isFinite(row?.spinSquared) ? row.spinSquared : null,
         })),
       })),
+    // ΔG‡ for a reaction path, only where the queue computed one and only with
+    // the correction scheme attached.
+    reactions: Object.entries(source.reactions && typeof source.reactions === 'object' ? source.reactions : {})
+      .map(([nodeId, reaction]) => ({
+        nodeId,
+        available: reaction?.available === true,
+        kcalPerMol: Number.isFinite(reaction?.kcalPerMol) ? reaction.kcalPerMol : null,
+        scheme: text(reaction?.scheme),
+        reason: text(reaction?.reason),
+        transitionStateNodeId: text(reaction?.transitionStateNodeId),
+        reactantNodeId: text(reaction?.reactantNodeId),
+        temperatureK: Number.isFinite(reaction?.temperatureK) ? reaction.temperatureK : null,
+      })),
     fixtures: rows.filter((row) => row.dryRun).length,
   };
 }
@@ -259,6 +272,18 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
       + `<tbody>${body}</tbody></table>`;
   }).join('');
 
+  // Reaction energetics: ΔG‡ only where both runs carried a free energy, with
+  // the correction scheme printed next to the number.
+  const reactionBlocks = (Array.isArray(model.reactions) ? model.reactions : []).map((reaction) => (
+    '<h2>Reaction energetics — ' + escapeHtml(reaction.nodeId) + '</h2>'
+    + (reaction.available
+      ? `<p><strong>ΔG‡ = ${escapeHtml(value(reaction.kcalPerMol, 2))} kcal mol⁻¹</strong>`
+        + `${reaction.temperatureK ? ` at ${escapeHtml(String(reaction.temperatureK))} K` : ''}. `
+        + `${escapeHtml(reaction.scheme || '')} `
+        + `(TS block ${escapeHtml(reaction.transitionStateNodeId || MISSING)}, reactant block ${escapeHtml(reaction.reactantNodeId || MISSING)}.)</p>`
+      : `<p class="warn">ΔG‡ not computed: ${escapeHtml(reaction.reason || 'the reaction path has no declared reactant block.')}</p>`)
+  )).join('');
+
   const fixtureNote = model.fixtures > 0
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
@@ -297,6 +322,7 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
     + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
     + ladderBlocks
     + spinBlocks
+    + reactionBlocks
     + (methodsBlocks ? '<h2>Methods</h2>' + methodsBlocks : '')
     + '<h2>Provenance</h2>'
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'

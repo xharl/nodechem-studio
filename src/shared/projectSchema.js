@@ -128,7 +128,7 @@ const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'spinSweep',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'spinSweep', 'referenceNodeId',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
@@ -179,6 +179,8 @@ export function defaultSettings(overrides = {}) {
     stableOpt: false,
     // A spin-state sweep enumerates multiplicities for the same system.
     spinSweep: null,
+    // The block whose free energy is the reactant of this path, if declared.
+    referenceNodeId: '',
     // Issue #25: validity checks are on by default; a node opts out by id.
     disabledChecks: [],
   };
@@ -605,6 +607,9 @@ function normalizeSettings(c, raw, path, legacy) {
     // A wavefunction stability optimisation (`Stable=Opt`) is opt-in.
     stableOpt: readBoolean(c, source.stableOpt, `${path}.stableOpt`, { legacy, fallback: false, optional: true }),
     spinSweep: normalizeSpinSweep(c, source.spinSweep, `${path}.spinSweep`, legacy),
+    // The block whose free energy is the reactant in a ΔG‡ for this path. It
+    // is declared, never inferred from the graph.
+    referenceNodeId: readString(c, source.referenceNodeId, `${path}.referenceNodeId`, { legacy, fallback: '', max: 64 }) || '',
     gates: normalizeGates(c, source.gates, `${path}.gates`, legacy),
     ladder: normalizeLadder(c, source.ladder, `${path}.ladder`, legacy),
     disabledChecks: normalizeDisabledChecks(c, source.disabledChecks, `${path}.disabledChecks`, legacy),

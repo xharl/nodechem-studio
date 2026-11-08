@@ -151,6 +151,30 @@ The ensemble is a calculation over runs you select; it assumes they are conforme
 one level of theory and says so. Nothing in the app generates conformers yet — see the conformer
 issue.
 
+## Reaction energetics
+
+An `IRC` job gets a **Reaction path** card with the profile, the table and a **path gate**:
+
+- `path-present` — the summary exists;
+- `single-maximum` — one plateau of highest points, which is how an IRC summary prints the barrier (near the top the printed energies repeat, so a maximum is a run of points, not one index);
+- `endpoints-below-maximum` — the path descends on both sides;
+- `maximum-in-interior` — `unknown` when the maximum sits on an endpoint, because the path may be truncated;
+- `endpoint-is-a-minimum` — always `unknown`: an IRC summary cannot show that an endpoint is a minimum. That needs a frequency job at the endpoint, and the check says so instead of assuming it.
+
+A `Scan` block gets the located extremum. A one-dimensional scan is fitted with a parabola through the highest point and its two neighbours, and the fitted coordinate is printed with the three points it came from; a maximum on the boundary, or neighbours that do not form a concave top, are reported as a grid node with the reason. A two-dimensional scan (two parameters that actually vary) draws a heatmap and reports the highest grid node — no interpolation between nodes.
+
+**Barriers are never printed alone.** `pathBarrier` attaches the level of theory and the thermochemical treatment, and the card prints "not recorded" when the run did not carry them. The number on the card is a potential-energy difference on the computed points, not ΔG‡.
+
+**ΔG‡** needs two runs: an `Opt=TS` (with `Freq`) block and the block that supplies the reactant free energy. An IRC block declares the latter:
+
+```json
+"referenceNodeId": "reactant-freq"
+```
+
+The queue then writes `reactions.<ircNodeId>` = `ΔG‡ = G(TS) − G(reactant)` in kcal/mol with the scheme named in the string, and the workflow report prints it next to the number. Undeclared or missing free energies produce a reason, never a number.
+
+**pKa** is computed from an isodesmic cycle with the constant already defined for the thermochemistry module (1.364 kcal mol⁻¹ per pKa unit at 298.15 K). The helper requires the deprotonation free energy, the reference free energy, the reference pKa and the solvent; missing any of them returns `available: false` with the list of what is missing, because a pKa without its solvent and reference is a free-energy difference with a decimal point moved.
+
 ## NMR shieldings
 
 
