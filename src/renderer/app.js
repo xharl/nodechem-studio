@@ -2089,6 +2089,10 @@ function renderDrawer() {
     renderTemplateChooser();
     return;
   }
+  if (drawer.type === 'batch') {
+    renderBatchImport();
+    return;
+  }
   const draft = drawer.draft;
   const tabs = [
     ['structure', 'Structure'],
@@ -3171,6 +3175,110 @@ function templateRow(template) {
   </button>`;
 }
 
+/**
+ * Open the batch-import drawer and scan a folder. The drawer is shown first
+ * with a loading line so a big folder does not look like a dead button.
+ */
+async function openBatchImport() {
+  if (!desktop?.importLogDirectory) {
+    toast('Open the desktop app to scan a folder of logs.');
+    return;
+  }
+  state.drawer = {
+    type: 'batch',
+    loading: true,
+    rows: [],
+    skipped: [],
+    directory: '',
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  };
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  renderDrawer();
+  try {
+    const result = await desktop.importLogDirectory();
+    if (!state.drawer || state.drawer.type !== 'batch') return;
+    if (!result || result.canceled) {
+      closeDrawer();
+      return;
+    }
+    if (result.error) {
+      state.drawer = { ...state.drawer, loading: false, error: result.error.message };
+    } else {
+      state.drawer = {
+        ...state.drawer,
+        loading: false,
+        rows: Array.isArray(result.rows) ? result.rows : [],
+        skipped: Array.isArray(result.skipped) ? result.skipped : [],
+        directory: result.directory || '',
+      };
+    }
+  } catch (error) {
+    if (!state.drawer || state.drawer.type !== 'batch') return;
+    state.drawer = { ...state.drawer, loading: false, error: error.message };
+  }
+  renderDrawer();
+}
+
+/**
+ * Batch import: a read-only index of every log in a folder. The rows come from
+ * the same parser a live run uses, so a status here means what it means there.
+ */
+function renderBatchImport() {
+  const modal = $('#modal');
+  const drawer = state.drawer;
+  if (!modal || drawer?.type !== 'batch') return;
+  const rows = Array.isArray(drawer.rows) ? drawer.rows : [];
+  const skipped = Array.isArray(drawer.skipped) ? drawer.skipped : [];
+  const counts = rows.reduce((acc, row) => {
+    acc[row.status] = (acc[row.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  const bodyHtml = drawer.loading
+    ? '<p class="inspector-note">Scanning the folder…</p>'
+    : drawer.error
+      ? `<div class="callout red">${esc(drawer.error)}</div>`
+      : rows.length === 0
+        ? '<div class="callout">No <code>.log</code> or <code>.out</code> files were found in that folder.</div>'
+        : `<div class="batch-table-wrap"><table class="batch-table">
+            <thead><tr><th>File</th><th>Status</th><th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th><th>Cause</th></tr></thead>
+            <tbody>${rows.map((row) => {
+              const level = [row.method, row.basis].filter(Boolean).join('/') || (row.engine === 'xtb' ? row.method || 'xTB' : '—');
+              return `<tr data-log-name="${esc(row.name)}" class="is-${esc(row.status)}">
+                <td class="batch-name">${esc(row.name)}</td>
+                <td><span class="batch-status is-${esc(row.status)}">${esc(row.status)}</span></td>
+                <td>${esc(level)}${row.jobType ? ` <span class="batch-job">${esc(row.jobType)}</span>` : ''}</td>
+                <td class="num">${row.finalEnergyHartree === null ? '—' : esc(row.finalEnergyHartree.toFixed(6))}</td>
+                <td class="num">${row.gibbsHartree === null ? '—' : esc(row.gibbsHartree.toFixed(6))}</td>
+                <td class="num">${row.imaginaryCount === null ? '—' : esc(row.imaginaryCount)}</td>
+                <td class="batch-cause">${esc(row.errorCause || '')}</td>
+              </tr>`;
+            }).join('')}</tbody></table></div>
+            ${skipped.length ? `<div class="callout" style="margin-top:10px"><strong>${skipped.length} file(s) skipped:</strong> ${esc(skipped.map((item) => `${item.name} (${item.reason})`).join('; '))}</div>` : ''}`;
+
+  const summary = rows.length
+    ? `${rows.length} log${rows.length === 1 ? '' : 's'} · ${counts.completed || 0} completed · ${counts.error || 0} error · ${counts.incomplete || 0} incomplete`
+    : '';
+
+  modal.innerHTML = `
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">Batch import</span>
+        <h2 id="modal-title">Logs in this folder</h2>
+        <p>${drawer.directory ? esc(drawer.directory) : 'Read-only index; nothing is imported into the project.'}</p>
+      </div>
+      <button type="button" class="icon-btn" data-modal-close aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      ${bodyHtml}
+    </div>
+    <div class="modal-foot">
+      <div class="modal-note">${esc(summary)}</div>
+      <button type="button" class="btn" data-modal-close>Close</button>
+    </div>`;
+}
+
 function renderTemplateChooser() {
   const modal = $('#modal');
   if (!modal || state.drawer?.type !== 'template') return;
@@ -3579,7 +3687,8 @@ function handleAction(action, element) {
         notify: toast,
       });
       break;
-    case 'import-log': toast('Runner output is parsed automatically. Native log import is the next milestone.'); break;
+    case 'import-log': openBatchImport(); break;
+    case 'import-log-directory': openBatchImport(); break;
     case 'view-output': openRunConsole(); break;
     case 'project-menu': toast('Use Open or Save in the top bar for native project files.'); break;
     case 'about': toast(`NodeChem Studio — the graph is the workspace. The inspector exposes the full job parameter set; the local runner executes one selected block or the whole workflow queue${appVersion ? ` (v${appVersion})` : ''}.`); break;

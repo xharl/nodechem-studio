@@ -22,6 +22,12 @@ Two questions get answered separately, and that separation is the most important
   time, dry-run flag and both hashes. Missing values are empty cells, never zeros; a dry run stays
   flagged. The JSON envelope carries a schema version and the app version.
 
+- **What is in this folder of old logs?** → **Batch import logs…** in the overflow menu. Pick a
+  folder and every `.log`/`.out` file is parsed with the same parser a live run uses, then listed
+  with its status, engine, level of theory, final energy, free energy, imaginary count and failure
+  cause. The scan is read-only — nothing is imported into the project — and a file over 32 MB or
+  one that cannot be read is listed as skipped with the reason.
+
 A run can execute correctly and still be scientifically unsupported. The record states both, and
 validity findings never change `gates.overall`.
 

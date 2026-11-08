@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('desktop', {
   listQueues: () => ipcRenderer.invoke('queue:list'),
   getQueue: (queueId) => ipcRenderer.invoke('queue:get', queueId),
   exportWorkflowReport: (queueId) => ipcRenderer.invoke('queue:report', queueId),
+  importLogDirectory: () => ipcRenderer.invoke('logs:import-directory'),
   onRunEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('gaussian:event', handler);

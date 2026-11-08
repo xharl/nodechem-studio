@@ -1340,3 +1340,17 @@ kbd {
   .structure-stage { height: 200px; }
 }
 
+
+/* ── Batch import ─────────────────────────────────────────── */
+.batch-table-wrap { max-height: 58vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.batch-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.batch-table th, .batch-table td { padding: 5px 8px; border-bottom: 1px solid rgba(148, 163, 184, .1); text-align: left; vertical-align: top; }
+.batch-table thead th { position: sticky; top: 0; background: var(--panel); color: var(--faint); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; font-weight: 500; }
+.batch-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.batch-table .batch-name { font-family: var(--mono); font-size: 10px; overflow-wrap: anywhere; }
+.batch-table .batch-cause { color: var(--muted); font-size: 10px; }
+.batch-table .batch-job { color: var(--faint); font-size: 9px; }
+.batch-status { border-radius: 3px; padding: 0 4px; font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+.batch-status.is-completed { background: rgba(52, 211, 153, .14); color: #6ee7b7; }
+.batch-status.is-error { background: rgba(248, 113, 113, .16); color: #fca5a5; }
+.batch-status.is-incomplete, .batch-status.is-unreadable { background: rgba(251, 191, 36, .14); color: #fcd34d; }

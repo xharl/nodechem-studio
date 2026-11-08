@@ -14,6 +14,7 @@ import { isSafeRunId } from '../src/shared/runBundle.js';
 import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
 import { buildDiagnostics } from '../src/shared/diagnostics.js';
 import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js';
+import { BATCH_MAX_LOG_BYTES, summarizeLog } from '../src/shared/logImport.js';
 import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { methodsParagraphFor } from '../src/shared/methodsParagraph.js';
 import {
@@ -398,6 +399,51 @@ async function exportRunBundle(runId) {
 }
 
 /**
+ * Read a folder of existing logs and return one summary row per file.
+ *
+ * Nothing is imported into a project: this is a read-only index so a user can
+ * see what a directory contains before deciding what to open. A file larger
+ * than the parse limit or unreadable is returned in `skipped` with a reason,
+ * never silently dropped.
+ */
+async function importLogDirectory() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a folder of Gaussian or xTB logs',
+    defaultPath: app.getPath('documents'),
+    properties: ['openDirectory'],
+    buttonLabel: 'Scan folder',
+  });
+  if (result.canceled || !result.filePaths[0]) return { canceled: true };
+  const directory = result.filePaths[0];
+  let entries;
+  try {
+    entries = await fsp.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    return { canceled: false, error: { message: error.message } };
+  }
+  const files = entries
+    .filter((entry) => entry.isFile() && /\.(log|out)$/i.test(entry.name))
+    .slice(0, 500);
+  const rows = [];
+  const skipped = [];
+  for (const file of files) {
+    const full = path.join(directory, file.name);
+    try {
+      const stat = await fsp.stat(full);
+      if (stat.size > BATCH_MAX_LOG_BYTES) {
+        skipped.push({ name: file.name, reason: 'larger than the 32 MB parse limit' });
+        continue;
+      }
+      rows.push(summarizeLog(await fsp.readFile(full, 'utf8'), { name: file.name, bytes: stat.size }));
+    } catch (error) {
+      skipped.push({ name: file.name, reason: error.message });
+    }
+  }
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  return { canceled: false, directory, rows, skipped, scanned: files.length };
+}
+
+/**
  * Write one workflow report for a finished queue: a self-contained
  * `report.html` plus the `report.json` model beside it. The per-task run
  * records are read from their run folders, so the report reflects what was
@@ -633,6 +679,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('queue:cancel', (_event, queueId) => queueManager.cancel(queueId));
   ipcMain.handle('queue:list', () => queueManager.list());
   ipcMain.handle('queue:get', (_event, queueId) => queueManager.get(queueId));
+  ipcMain.handle('logs:import-directory', () => importLogDirectory());
   ipcMain.handle('queue:report', (_event, queueId) => exportWorkflowReport(queueId));
 
   createWindow();
