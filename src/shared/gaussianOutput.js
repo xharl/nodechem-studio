@@ -14,6 +14,7 @@
 
 import { terminationCodeOf } from './engines/canonical.js';
 import { ELEMENTS } from './elements.js';
+import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { summarizeValidity } from './validityChecks.js';
 
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
@@ -89,8 +90,20 @@ const CPU_TIME = new RegExp(String.raw`Job cpu time:\s*${DURATION}`, 'i');
 const ELAPSED_TIME = new RegExp(String.raw`Elapsed time:\s*${DURATION}`, 'i');
 
 const ERROR_CAUSE_BOUNDARY = /^\s*(?:SCF Done:|Step number\s+\d+|Input orientation:|Standard orientation:|Harmonic frequencies|Frequencies\s+--\s+|Optimization completed|Stationary point found|#)/i;
-const ERROR_DIAGNOSTIC = /(?:Convergence failure|convergence criterion not met|distance matrix|Basis set .*not (?:available|found)|Erroneous (?:write|read)|disk quota|Atomic number out of range|End of file|Missing or bad data|>>>>>>>>>>)/i;
+const ERROR_DIAGNOSTIC = /(?:Convergence failure|convergence criterion not met|(?:problem with|error in) the distance matrix|FormBX|Basis set .*not (?:available|found)|Erroneous (?:write|read)|disk quota|Atomic number out of range|End of file|Missing or bad data|Optimization stopped|Number of steps exceeded|SCF has not converged|SCF Error|>>>>>>>>>>)/i;
 const NON_ACTIONABLE = /^(?:SCF Done:|Step number\s|Optimization completed|Stationary point found|Normal termination|--Link1--)/i;
+
+/**
+ * Most specific first. Gaussian repeats "SCF Error" across a whole block and
+ * prints the sentence that names the problem in the middle of it.
+ */
+const DIAGNOSTIC_PRIORITY = [
+  /SCF has not converged/i,
+  /Convergence failure|convergence criterion not met|Number of steps exceeded|Optimization stopped/i,
+  /(?:problem with|error in) the distance matrix|FormBX/i,
+  /Basis set .*not (?:available|found)|Atomic number out of range|Missing or bad data|End of file|Erroneous (?:write|read)|disk quota/i,
+  /SCF Error/i,
+];
 
 /**
  * Which records a piece of output can supply. The runner uses this to say what
@@ -478,9 +491,21 @@ function parseT1Diagnostic(lines) {
 }
 
 /**
+ * Gaussian closes a failed job with an epigraph: a shouted line and an
+ * attribution ("BREAD HAS TO MOLD IN ORDER TO GET PENICILLIN. / -- JERRY
+ * BOATZ"). It is not a diagnosis, so it is skipped.
+ */
+const EPITAPH = /^(?:--\s+)?[A-Z][A-Z0-9 ,.'"!?;:()-]{3,}$/;
+
+/**
  * The actionable line(s) immediately before `Error termination`: convergence
  * failure, distance-matrix problem, missing basis, disk quota. Scanning stops
  * at the previous section boundary so an SCF record is never called a cause.
+ *
+ * The decisive line can sit far above the termination — an optimiser that runs
+ * out of steps reports once, then the tail of the file carries only the link
+ * number and the epigraph — so a longer window is scanned for a real
+ * diagnostic when the nearby lines carry none.
  */
 function parseErrorCause(lines) {
   const index = lines.findIndex((line) => ERROR_TERMINATION.test(line));
@@ -491,10 +516,31 @@ function parseErrorCause(lines) {
     if (text === '') continue;
     if (/^[-=*]{3,}$/.test(text)) continue;
     if (ERROR_CAUSE_BOUNDARY.test(text)) break;
-    if (NON_ACTIONABLE.test(text)) continue;
+    if (NON_ACTIONABLE.test(text) || EPITAPH.test(text)) continue;
     collected.unshift(text);
   }
-  const diagnostic = [...collected].reverse().find((text) => ERROR_DIAGNOSTIC.test(text));
+  const candidates = collected.filter((text) => ERROR_DIAGNOSTIC.test(text));
+  if (candidates.length === 0) {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const text = lines[cursor].trim();
+      if (/\bNormal termination\b/i.test(text) || text === '--Link1--') break;
+      if (ERROR_DIAGNOSTIC.test(text)) {
+        const next = (lines[cursor + 1] || '').trim();
+        candidates.push(/^--\s/.test(next) ? `${text} ${next}` : text);
+        break;
+      }
+    }
+  }
+  // The most specific diagnosis wins over the loudest: a block of repeated
+  // "SCF Error" banners must not hide "SCF has not converged".
+  let diagnostic = null;
+  for (const pattern of DIAGNOSTIC_PRIORITY) {
+    const matches = candidates.filter((text) => pattern.test(text));
+    if (matches.length > 0) {
+      diagnostic = matches[matches.length - 1];
+      break;
+    }
+  }
   return {
     cause: diagnostic || (collected.length ? collected[collected.length - 1] : null),
     lines: collected,
@@ -1089,6 +1135,11 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   const excitedLink = reversed.find((link) => link.excitedStates.count > 0) || null;
   const excitedStates = excitedLink ? excitedLink.excitedStates : emptyExcitedStates();
 
+  // Reaction-path and scan tables are printed once per job by the link that ran
+  // them; absence means the job was neither, which is not an empty path.
+  const reactionPath = parseIrcSummary(text);
+  const scan = parseScanSummary(text);
+
   return {
     status,
     termination: terminationCode === 'normal'
@@ -1105,6 +1156,8 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     finalEnergy,
     spinContamination,
     excitedStates,
+    reactionPath,
+    scan,
     charges,
     t1Diagnostic: t1Link ? t1Link.t1Diagnostic : null,
     resources: resourcesLink ? resourcesLink.resources : emptyResources(),

@@ -12,7 +12,7 @@
  * presenting it as a re-run result.
  */
 
-const HARTREE_TO_KCAL_PER_MOL = 627.5094740631;
+export const HARTREE_TO_KCAL_PER_MOL = 627.5094740631;
 
 function num(value) {
   const number = Number(value);

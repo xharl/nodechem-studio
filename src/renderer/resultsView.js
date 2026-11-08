@@ -18,6 +18,7 @@ import { methodsParagraphFor } from '../shared/methodsParagraph.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
+import { pathBarrier, profileSvg, profilePoints } from '../shared/reactionPath.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -528,6 +529,47 @@ function spectrumFigure(states) {
     + '</figure>';
 }
 
+/**
+ * Reaction path (IRC) or potential-energy scan. The barrier printed here is a
+ * potential-energy difference on the computed points, not ΔG‡, and the caption
+ * says so; a rate is never derived from it.
+ */
+function reactionPathCard(parsed, flags) {
+  const record = parsed?.reactionPath || parsed?.scan;
+  if (!record || !Array.isArray(record.points) || record.points.length === 0) return '';
+  const irc = record.kind === 'irc' || Boolean(parsed?.reactionPath);
+  const points = profilePoints(record);
+  if (points.length === 0) return '';
+  const barrier = pathBarrier(record);
+  const parameter = Array.isArray(record.parameterNames) && record.parameterNames.length
+    ? record.parameterNames[0] : null;
+  const rows = points.slice(0, 25).map((point) => '<tr>'
+    + `<td>${esc(point.point)}</td>`
+    + `<td class="is-left">${esc(irc
+      ? (Number.isFinite(point.rxCoord) ? point.rxCoord.toFixed(5) : MISSING_TEXT)
+      : (Number.isFinite(point.label) ? Number(point.label).toFixed(4) : MISSING_TEXT))}</td>`
+    + `<td>${esc(Number(point.relativeKcal).toFixed(2))}</td>`
+    + `<td>${Number.isFinite(point.energyHartree) ? esc(point.energyHartree.toFixed(6)) : MISSING_TEXT}</td>`
+    + '</tr>').join('');
+  const body = '<p class="results-note">'
+    + (irc
+      ? 'IRC path from the summary Gaussian printed at the end of the job. Energies are relative to the lowest computed point.'
+      : `${record.kind === 'relaxed' ? 'Relaxed' : 'Unrelaxed'} potential-energy scan over ${esc(parameter || 'the scanned coordinate')}. Energies are relative to the lowest computed point.`)
+    + '</p>'
+    + (barrier
+      ? `<p class="results-note" data-field="barrier">Highest point: <strong>${esc(barrier.maxKcal.toFixed(2))} kcal mol⁻¹</strong>`
+        + ` at point ${esc(barrier.point)}${Number.isFinite(barrier.rxCoord) ? ` (RxCoord ${esc(barrier.rxCoord.toFixed(5))})` : ''}.`
+        + ' This is a potential-energy difference on the computed points — not ΔG‡, and no rate constant is derived from it.</p>'
+      : '')
+    + profileSvg(record)
+    + '<table class="results-table" data-field="reaction-path">'
+    + `<thead><tr><th>#</th><th class="is-left">${irc ? 'RxCoord' : esc(parameter || 'coordinate')}</th><th>ΔE / kcal mol⁻¹</th><th>E / Eh</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table>`
+    + (points.length > 25 ? `<p class="results-missing">Showing the first 25 of ${esc(points.length)} points.</p>` : '')
+    + caveatHtml(flags, 'These path energies');
+  return card(irc ? 'Reaction path' : 'Potential-energy scan', body, 'is-wide');
+}
+
 function methodsCard(record) {
   let result;
   try {
@@ -664,6 +706,7 @@ export function resultsPanelHtml(record) {
     methodsCard(record),
     frequenciesCard(parsed, flags),
     excitedStatesCard(parsed, flags),
+    reactionPathCard(parsed, flags),
     chargesCard(parsed, flags),
     t1Card(parsed, flags),
     resourcesCard(parsed, flags),
@@ -1033,6 +1076,7 @@ const RESULTS_VIEW_CSS = `
 .spectrum-axis { stroke: rgba(148, 163, 184, .35); stroke-width: 1; }
 .spectrum-curve { fill: none; stroke: #a8b8ff; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
 .spectrum-label { fill: var(--faint); font-size: 7px; font-family: var(--mono); }
+.profile-peak { fill: #a8b8ff; stroke: #0c1119; stroke-width: 1; }
 .results-spectrum figcaption { margin-top: 3px; color: var(--faint); font-size: 8.5px; line-height: 1.45; }
 .results-provenance { border-top: 1px solid var(--line); padding-top: 7px; }
 .results-provenance summary {

@@ -13,3 +13,7 @@ Thumbs.db
 # A worktree may symlink the shared install; the slash form above does not match
 # a symlink, so both spellings are ignored.
 node_modules
+
+# Real Gaussian outputs used as test fixtures (see test/fixtures/real/README.md)
+!test/fixtures/real/*.log
+!test/fixtures/real/*.out

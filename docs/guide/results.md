@@ -109,6 +109,25 @@ rather than implied. Where the parser finds no thermochemistry section, the pane
 xTB's free energy already uses mRRHO; the app adds no quasi-harmonic or standard-state correction on
 top of it.
 
+## Reaction paths and scans
+
+An `IRC` job and a `Scan` job produce a **Reaction path** / **Potential-energy scan** card, read from
+the summary table Gaussian prints at the end of the job — not re-integrated from the individual
+steps:
+
+- the profile curve, with energies relative to the lowest computed point;
+- the highest point and how far above the lowest it sits, in kcal mol⁻¹;
+- a table of points with the reaction coordinate (IRC) or the scanned parameter (scan) and both the
+  relative and absolute energies.
+
+An IRC table prints energies *relative to the transition state*; the card recovers the absolute
+energy from the header line Gaussian prints above the table and shows both. A job with neither
+block gets no card, and the app never fills the gap with a straight line.
+
+The barrier shown is a potential-energy difference on the computed points. It is **not** ΔG‡, it
+carries no thermochemical correction, and no rate constant is derived from it. For a ΔG‡ you need a
+frequency job at the saddle point and at each minimum; that work is tracked in the issue tracker.
+
 ## Structure viewer
 
 A parsed final geometry is drawn as a ball-and-stick model in the inspector, with bond perception
