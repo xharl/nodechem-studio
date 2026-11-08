@@ -1098,12 +1098,20 @@ export function evaluateGates(parsed, {
       : termination === 'error' ? 'fail' : 'unknown',
     parsed.termination);
 
+  const scfApplicable = parsed.scf?.applicable !== false;
+  const finalEnergyRecorded = Number.isFinite(parsed.finalEnergy?.hartree);
   add('SCF record', true,
-    parsed.scf.status === 'converged' ? 'pass'
-      : parsed.scf.status === 'failed' ? 'fail' : 'unknown',
-    parsed.scf.status === 'converged'
-      ? `${parsed.scf.energyHartree ?? '?'} Eh after ${parsed.scf.cycles ?? '?'} cycles`
-      : parsed.scf.status);
+    !scfApplicable
+      ? (parsed.extras?.runtimeException ? 'fail' : finalEnergyRecorded ? 'pass' : 'unknown')
+      : parsed.scf.status === 'converged' ? 'pass'
+        : parsed.scf.status === 'failed' ? 'fail' : 'unknown',
+    !scfApplicable
+      ? (parsed.extras?.runtimeException
+        ? (parsed.extras.runtimeExceptionDetail || 'xTB runtime exception')
+        : `${parsed.finalEnergy?.hartree ?? '?'} Eh; SCF not applicable to this method`)
+      : parsed.scf.status === 'converged'
+        ? `${parsed.scf.energyHartree ?? '?'} Eh after ${parsed.scf.cycles ?? '?'} cycles`
+        : parsed.scf.status);
 
   if (requireOptimization) {
     add('Optimization completed', true,

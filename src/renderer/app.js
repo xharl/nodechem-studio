@@ -2526,6 +2526,7 @@ function buildWorkflowTasks() {
       executable: true,
       engine: built.engine,
       argv: built.argv,
+      route: built.route,
       inputName: built.inputName,
       outputName: built.outputName,
       inputText: built.inputText,

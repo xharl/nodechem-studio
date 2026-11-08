@@ -1,0 +1,23 @@
+* xtb version 6.8.0 (4b8c987066c7e9bd0c2b727ce026fb9a581c273a) compiled by test
+
+:  # frequencies                           3      :
+:  # imaginary freq.                        0      :
+:  Hamiltonian                             GFN-FF      :
+:  entropy treatment                   mRRHO      :
+
+         ::                     SUMMARY                     ::
+         :: total energy              -0.327655963434 Eh    ::
+
+         ::::::::::::::::::::::::::::::::::::::::::::::::::::::
+         ::                  THERMODYNAMIC                  ::
+         ::::::::::::::::::::::::::::::::::::::::::::::::::::::
+         :: total free energy          -0.324409495375 Eh   ::
+         :: zero point energy           0.020909629944 Eh   ::
+
+           -------------------------------------------------
+          | TOTAL ENERGY               -0.327655963434 Eh   |
+          | TOTAL ENTHALPY             -0.302967304644 Eh   |
+          | TOTAL FREE ENERGY          -0.324409495375 Eh   |
+           -------------------------------------------------
+
+normal termination of xtb

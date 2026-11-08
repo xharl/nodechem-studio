@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { evaluateGates, parseGaussianOutput } from '../src/shared/gaussianOutput.js';
+import { parseXtbOutput } from '../src/shared/engines/xtb.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 import { resultsPanelHtml, installResultsView } from '../src/renderer/resultsView.js';
 
@@ -11,6 +12,10 @@ const coverageText = readFileSync(
 );
 const lowModeText = readFileSync(
   fileURLToPath(new URL('./fixtures/synthetic-lowmode-freq.out', import.meta.url)),
+  'utf8',
+);
+const gfnffText = readFileSync(
+  fileURLToPath(new URL('./fixtures/xtb/water-gfnff.out', import.meta.url)),
   'utf8',
 );
 
@@ -184,6 +189,45 @@ describe('results surface — complete record', () => {
     expect(html).toContain('data-fixture="false"');
     expect(html).not.toContain('data-role="fixture-badge"');
     expect(html).not.toContain('FIXTURE');
+  });
+});
+
+describe('results surface — xTB GFN-FF', () => {
+  const parsed = parseXtbOutput(gfnffText, {
+    argv: ['water.xyz', '--gfnff', '--ohess', 'tight'],
+    route: 'GFN-FF Opt Freq',
+  });
+  const html = resultsPanelHtml(recordFor(parsed, {
+    engine: 'xtb',
+    provenance: {
+      kind: 'calculation',
+      method: {
+        hamiltonian: 'gfnff',
+        optLevel: 'tight',
+        dispersion: 'force field (built in)',
+        solvation: null,
+        argv: ['water.xyz', '--gfnff', '--ohess', 'tight'],
+      },
+      input: { name: 'water.xyz', bytes: 151 },
+      output: { name: 'water.out', source: 'stdout', bytes: 1000, hashSource: 'file', sha256: HASH_B },
+    },
+    gates: evaluateGates(parsed, {
+      requireFrequency: true,
+      requireThermochemistry: true,
+      requireFinalEnergy: true,
+    }),
+  }));
+
+  it('labels the force-field energy and does not pretend it is an SCF result', () => {
+    expect(field(html, 'final-energy')).toBe('-0.3276559634 Eh');
+    expect(field(html, 'final-energy-source')).toBe('GFN-FF energy');
+    expect(field(html, 'scf-energy')).toContain('not reported');
+    expect(field(html, 'scf-status')).toContain('not applicable');
+    expect(html).not.toContain('xTB SCC');
+  });
+
+  it('shows the xTB route recorded with the task', () => {
+    expect(field(html, 'route')).toBe('GFN-FF Opt Freq');
   });
 });
 
