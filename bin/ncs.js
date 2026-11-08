@@ -425,7 +425,9 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
   try {
     entries = await fs.readdir(queuesDir, { withFileTypes: true });
   } catch {
-    return [];
+    // A folder that never ran anything can still hold imported records, so an
+    // absent queues/ directory is not the end of the report.
+    entries = [];
   }
 
   const queues = [];
@@ -463,7 +465,60 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
       includeImported,
     }));
   }
+
+  // `ncs record import --out <dir>` writes runs/<id>/run.json, which belongs to
+  // no queue: an imported number does not come from a run this app performed, so
+  // there is no task to hang it on. It is still reported — silently dropping it
+  // because nothing in the folder ran would hide exactly the thing the record
+  // exists to say — under its own section, one row per record.
+  const referenced = new Set();
+  for (const queue of selected.values()) {
+    for (const task of Array.isArray(queue.tasks) ? queue.tasks : []) {
+      if (task?.runDir) referenced.add(path.resolve(task.runDir));
+      if (task?.runId) referenced.add(`id:${task.runId}`);
+      if (task?.nodeId) referenced.add(`id:${task.nodeId}`);
+    }
+  }
+  for (const record of await orphanImportedRecords(outDir, referenced)) {
+    // eslint-disable-next-line no-await-in-loop
+    const model = buildWorkflowReport(
+      { id: record.id, flowId: 'imported', name: 'Imported results', createdAt: record.importedAt || null,
+        tasks: [{ nodeId: record.id, runId: record.id, runDir: record.runDir, type: 'imported', status: 'completed' }] },
+      { [record.id]: record.document },
+      { generatedAt, appVersion: 'cli', includeImported },
+    );
+    if (model) models.push(model);
+  }
   return models;
+}
+
+/** Imported records written under `runs/` by `ncs record import`, newest first. */
+async function orphanImportedRecords(outDir, referenced = new Set()) {
+  const runsDir = path.join(outDir, 'runs');
+  let entries;
+  try {
+    entries = await fs.readdir(runsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const runDir = path.join(runsDir, entry.name);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const document = JSON.parse(await fs.readFile(path.join(runDir, 'run.json'), 'utf8'));
+      if (document?.kind !== 'imported') continue;
+      // A record a queue already reads through its task is reported there: it
+      // must not appear twice because it also sits under runs/.
+      if (referenced.has(path.resolve(runDir)) || referenced.has(`id:${document.id || entry.name}`)) continue;
+      found.push({ id: document.id || entry.name, runDir, document, importedAt: document.importedAt || '' });
+    } catch {
+      // A run folder without a readable run.json is not an imported record.
+    }
+  }
+  found.sort((a, b) => String(b.importedAt).localeCompare(String(a.importedAt)) || a.id.localeCompare(b.id));
+  return found.slice(0, 64);
 }
 
 /**
