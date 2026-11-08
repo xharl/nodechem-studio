@@ -215,9 +215,41 @@ frequency job at the saddle point and at each minimum; that work is tracked in t
 A parsed final geometry is drawn as a ball-and-stick model in the inspector, with bond perception
 from covalent radii and a **Fit** control for the bounding box.
 
-The parser does not extract normal-mode displacement vectors today, so the animation controls appear
-only when a caller supplies explicit mode data. Without it the panel says
+### Normal-mode animation
+
+A frequency job's displacement blocks are parsed (`src/shared/normalModes.js`) and the panel animates
+the selected mode. Each frame normalises the mode so its **largest atomic displacement is exactly the
+amplitude**, and the canvas caption prints `amplitude X.XX Å` next to the frequency — the amplitude is
+stated, not implied. Amplitude runs 0.1–1.5 Å.
+
+The block format is easy to get wrong: each line is `component atom element` followed by **one number
+per mode**, three lines per atom in component order. A parser that assumes three numbers per mode
+reads a column of zeros and animates nothing visible.
+
+A mode is offered only when its block covers every atom. Missing atoms are counted as
+`incomplete` and those modes are dropped; an output with no displacement blocks says
 `Normal modes not present in this output.` and shows a static geometry — it never invents motion.
+
+### Optimisation replay
+
+Every geometry Gaussian printed is paired with the SCF energy that preceded it (`trajectory.js`). The
+results panel draws energy against step and lists one row per step with its energy and its
+coordinates. The reference is the **lowest energy recorded**, not the first geometry, and a geometry
+that had no preceding energy (the input structure, for example) is shown as a gap and `not reported`
+rather than at zero. At most 80 steps are kept in a run record; the number left out is stated.
+
+### Two-run superposition
+
+Results → **Superposition** compares the current structure with another run, but only one that has the
+same atoms in the same order. It reports the RMSD in Å over the atoms used, draws both structures
+projected on `xy` after alignment, and lists the five largest per-atom deviations. The RMSD is a plain
+per-atom RMSD after optimal rotation (Kabsch via Horn's quaternion method) — it is **not**
+mass-weighted, and the card says so.
+
+### Figures
+
+**Save figure…** writes an SVG of the current view at 3× with no captions or controls: atoms, bonds
+and a scale bar measured with the same camera as the drawing, labelled `1 Å`.
 
 ## Methods text
 
