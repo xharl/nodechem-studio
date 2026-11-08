@@ -66,6 +66,32 @@ describe('PDB — multi-model ensemble', () => {
   });
 });
 
+describe('PDB — CONECT', () => {
+  // A hand-built three-atom PDB whose CONECT block covers every atom: the case
+  // where a PDB *does* state a complete topology (a ligand file), as opposed to
+  // a protein where CONECT lists only the disulfides.
+  const pdb = [
+    'ATOM      1  O   HOH A   1       0.000   0.000   0.000  1.00  0.00           O',
+    'ATOM      2  H1  HOH A   1       0.957   0.000   0.000  1.00  0.00           H',
+    'ATOM      3  H2  HOH A   1      -0.239   0.927   0.000  1.00  0.00           H',
+    'CONECT    1    2    3',
+    'CONECT    2    1',
+    'CONECT    3    1',
+  ].join('\n');
+
+  it('uses CONECT as the topology when it covers the structure', () => {
+    const structure = parseStructure(pdb, { filename: 'water.pdb' });
+    expect(structure.bonds).toEqual([{ a: 1, b: 2, order: 1 }, { a: 1, b: 3, order: 1 }]);
+    expect(structure.warnings.join(' ')).toContain('Bonds taken from CONECT');
+  });
+
+  it('ignores a CONECT block that covers only a corner of a protein', () => {
+    const structure = parseStructure(read('1crn.pdb'), { filename: '1crn.pdb' });
+    expect(structure.bonds).toBeUndefined();
+    expect(structure.warnings.join(' ')).toMatch(/CONECT records cover \d+% of the atoms/);
+  });
+});
+
 describe('PDBQT — AutoDock ligand', () => {
   const structure = parseStructure(read('vina-1iep-ligand.pdbqt'), { filename: 'ligand.pdbqt' });
 

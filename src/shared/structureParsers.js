@@ -107,6 +107,7 @@ function pdbLine(line, index, { pdbqt = false } = {}) {
   }
   return {
     record,
+    serial: number(line.slice(6, 11)),
     element,
     x,
     y,
@@ -130,6 +131,7 @@ function pdbLine(line, index, { pdbqt = false } = {}) {
 function parsePdbBlock(lines, { name = '', pdbqt = false } = {}) {
   const warnings = [];
   const rows = [];
+  const conect = [];
   let conectLines = 0;
   let sawAtom = false;
   let inferred = 0;
@@ -138,6 +140,8 @@ function parsePdbBlock(lines, { name = '', pdbqt = false } = {}) {
     const record = line.slice(0, 6).trim();
     if (record === 'CONECT') {
       conectLines += 1;
+      const partners = line.slice(6).trim().split(/\s+/).map(Number).filter((value) => Number.isFinite(value));
+      if (partners.length > 1) conect.push({ from: partners[0], to: partners.slice(1) });
       return;
     }
     if (record !== 'ATOM' && record !== 'HETATM') return;
@@ -181,9 +185,42 @@ function parsePdbBlock(lines, { name = '', pdbqt = false } = {}) {
 
   if (altDropped > 0) warnings.push(`${altDropped} alternative-location atom${altDropped === 1 ? '' : 's'} resolved by occupancy.`);
   if (inferred > 0) warnings.push(`Element inferred from the atom name for ${inferred} atom${inferred === 1 ? '' : 's'} (no element column).`);
+  // CONECT is only a usable topology when it actually covers the structure: in
+  // a protein it lists the disulfides and little else, so using it would hide
+  // every backbone bond behind a "file topology" label. Coverage is measured on
+  // heavy atoms, and a file that names most of them states its bonds.
+  let bonds = [];
   if (conectLines > 0) {
-    warnings.push('CONECT records were not used: in a PDB they list only non-standard bonds, so the viewer perceives the topology from distances instead.');
+    const indexBySerial = new Map();
+    kept.forEach((row, index) => {
+      if (row.serial !== null) indexBySerial.set(row.serial, index);
+    });
+    const heavy = kept.filter((row) => row.element !== 'H').length || kept.length;
+    const mentioned = new Set();
+    const seen = new Set();
+    for (const entry of conect) {
+      const from = indexBySerial.get(entry.from);
+      if (from === undefined) continue;
+      for (const partner of entry.to) {
+        const to = indexBySerial.get(partner);
+        if (to === undefined || to === from) continue;
+        mentioned.add(from);
+        mentioned.add(to);
+        const key = `${Math.min(from, to)}-${Math.max(from, to)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        bonds.push({ a: Math.min(from, to) + 1, b: Math.max(from, to) + 1, order: 1 });
+      }
+    }
+    const coverage = heavy === 0 ? 0 : mentioned.size / heavy;
+    if (coverage < 0.9) {
+      bonds = [];
+      warnings.push(`CONECT records cover ${Math.round(coverage * 100)}% of the atoms, so they were not treated as a topology; the viewer perceives bonds from distances instead.`);
+    } else {
+      warnings.push('Bonds taken from CONECT (no bond orders are stored in a PDB, so all are single).');
+    }
   }
+  if (conectLines === 0) bonds = [];
   if (pdbqt) {
     const partial = kept.map((row) => row.charge).filter((value) => value !== null);
     if (partial.length) warnings.push(`Partial charges were read for ${partial.length} atoms; the total charge is not set from them.`);
@@ -191,6 +228,7 @@ function parsePdbBlock(lines, { name = '', pdbqt = false } = {}) {
 
   return {
     atoms: kept.map((row) => ({ element: row.element, x: row.x, y: row.y, z: row.z })),
+    bonds,
     charge: 0,
     multiplicity: 1,
     name,

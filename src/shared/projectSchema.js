@@ -83,7 +83,7 @@ export const CONDITION_UNKNOWN = Object.freeze(['block-both', 'treat-false', 'tr
 export const LOOP_MODES = Object.freeze(['retry', 'for-each']);
 export const MERGE_POLICIES = Object.freeze(['all', 'any']);
 export const GEOMETRY_SOURCES = Object.freeze(['demo', 'imported', 'manual']);
-export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'gjf', 'com']);
+export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'mol2', 'pdb', 'pdbqt', 'cjson', 'gjf', 'com', 'log']);
 
 const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;

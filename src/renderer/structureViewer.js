@@ -998,7 +998,11 @@ export function mountStructureViewer(inspectorEl, node) {
   if (label) label.textContent = node.type === 'conformers' ? 'Chosen conformer' : 'Final geometry';
   panel.setAttribute('aria-label', node.type === 'conformers' ? 'Chosen conformer viewer' : 'Parsed structure viewer');
   const sourceLabel = resolved.source ? `${resolved.source} orientation` : 'source unknown';
-  source.textContent = `${resolved.geometry.atomCount} atoms · ${resolved.geometry.bonds.length} bonds · ${sourceLabel}`;
+  // The provenance of the topology is part of the caption: "perceived" bonds are
+  // a guess from distances and a reader must be able to tell them from a file's
+  // own bond block (#79).
+  const topology = resolved.geometry.bondsFrom === 'file' ? 'bonds from file' : 'bonds perceived';
+  source.textContent = `${resolved.geometry.atomCount} atoms · ${resolved.geometry.bonds.length} bonds (${topology}) · ${sourceLabel}`;
   legendSlot.append(legendFor(resolved.geometry));
   canvas.setAttribute('aria-label', `${resolved.geometry.atomCount}-atom parsed final geometry; drag to rotate, wheel to zoom`);
 
