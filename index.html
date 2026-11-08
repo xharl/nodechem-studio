@@ -35,7 +35,8 @@
         <button class="overflow-item" data-action="undo" id="app-menu-undo">Undo</button>
         <button class="overflow-item" data-action="redo" id="app-menu-redo">Redo</button>
         <div class="overflow-split" aria-hidden="true"></div>
-        <button class="overflow-item" data-open-modal="molecule">Molecule &amp; defaults</button>
+        <button class="overflow-item" data-open-modal="molecule">Molecule…</button>
+        <button class="overflow-item" data-open-modal="settings">Project settings…</button>
         <button class="overflow-item" data-action="import-log-directory">Batch import logs…</button>
         <button class="overflow-item" data-action="cluster" data-cluster-op="import">Import cluster results</button>
         <button class="overflow-item" data-action="copy-diagnostics">Copy diagnostics</button>
@@ -67,15 +68,6 @@
     </div>
 
     <div class="top-actions">
-      <button class="btn ghost" data-action="undo" id="undo-btn" title="Undo (Ctrl/Cmd+Z)" disabled>
-        Undo
-      </button>
-      <button class="btn ghost" data-action="redo" id="redo-btn" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>
-        Redo
-      </button>
-      <button class="btn ghost" data-action="new-project" title="Start a new project from a workflow template">
-        New
-      </button>
       <button class="btn ghost" data-open-modal="molecule">
         <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="12" cy="12" r="2"/><path d="m5.8 7.2 4.4-2.4M5.8 8.8l4.4 2.4"/></svg>
         Molecule

@@ -10,6 +10,8 @@ import {
   tdKeywordFor,
 } from '../shared/gaussianInput.js';
 import { basisNameFor, ecpRequirement } from '../shared/ecp.js';
+import { atomicNumber } from '../shared/elements.js';
+import { elementStyle } from './structureViewer.js';
 import { routeFor } from '../shared/gaussianInput.js';
 import {
   DRAFT_KEY,
@@ -670,19 +672,10 @@ function syncEditHistory() {
   } else {
     state.history = recordSnapshot(state.history, snapshot);
   }
-  updateHistoryButtons();
 }
 
 function resetEditHistory() {
   state.history = createHistory(JSON.stringify(state.project));
-  updateHistoryButtons();
-}
-
-function updateHistoryButtons() {
-  const undo = $('#undo-btn');
-  const redo = $('#redo-btn');
-  if (undo) undo.disabled = !canUndo(state.history);
-  if (redo) redo.disabled = !canRedo(state.history);
 }
 
 function applyHistorySnapshot(snapshot) {
@@ -1091,7 +1084,7 @@ function renderProjectInspector() {
     : `<div class="kv"><span>Method</span><code>${esc(state.project.defaults.method)}</code></div>
         <div class="kv"><span>Basis</span><code>${esc(state.project.defaults.basis)}</code></div>`}
         <div class="kv"><span>Resources</span><code>${esc(state.project.defaults.memory)} ${esc(state.project.defaults.memoryUnit)} · ${esc(state.project.defaults.nproc)} cores</code></div>
-        <button type="button" class="btn" data-open-modal="molecule">Edit defaults</button>
+        <button type="button" class="btn" data-open-modal="settings">Edit defaults</button>
       </div>
     </section>
 
@@ -2232,13 +2225,134 @@ function endPan() {
 /* ── Molecule drawer ──────────────────────────────────────── */
 
 function drawerField(label, key, value, options = {}) {
-  return `<div class="field${options.full ? ' full' : ''}"><label>${esc(label)}</label><input class="input" data-drawer-field="${key}" aria-label="${esc(label)}" value="${esc(value)}"></div>`;
+  const type = options.type || 'text';
+  const attrs = options.attrs ? ` ${options.attrs}` : '';
+  return `<div class="field${options.full ? ' full' : ''}"><label>${esc(label)}</label><input class="input" type="${type}"${attrs} data-drawer-field="${key}" aria-label="${esc(label)}" value="${esc(value)}"></div>`;
+}
+
+/** Even electron counts need an odd multiplicity, and the other way round. */
+function electronSummary(atoms, charge, multiplicity) {
+  if (!Array.isArray(atoms) || atoms.length === 0) return null;
+  const electrons = atoms.reduce((total, atom) => total + (atomicNumber(atom.element) || 0), 0) - Number(charge || 0);
+  if (!Number.isFinite(electrons)) return null;
+  const value = Number(multiplicity);
+  const ok = Number.isInteger(value) && (electrons % 2 === 0 ? value % 2 === 1 : value % 2 === 0);
+  return { electrons, ok: Boolean(ok) };
+}
+
+/** Shared markup so the live parity line and the rendered one cannot drift. */
+function parityMarkup(info, multiplicity) {
+  if (!info) {
+    return '<p class="field-hint" data-parity>Import a structure to check charge and multiplicity against its electron count.</p>';
+  }
+  return info.ok
+    ? `<div class="parity ok" data-parity>${info.electrons} electrons · consistent with multiplicity ${esc(multiplicity)}</div>`
+    : `<div class="parity bad" data-parity>${info.electrons} electrons · inconsistent with multiplicity ${esc(multiplicity)} — an even electron count needs an odd multiplicity</div>`;
+}
+
+function updateParity() {
+  const draft = state.drawer?.draft;
+  if (!draft) return;
+  const atoms = draft.coords.length ? draft.coords : DEMO_WATER;
+  const info = electronSummary(atoms, draft.charge, draft.multiplicity);
+  for (const el of document.querySelectorAll('[data-parity]')) {
+    if (!info) {
+      el.className = 'field-hint';
+      el.textContent = 'Import a structure to check charge and multiplicity against its electron count.';
+      continue;
+    }
+    el.className = `parity ${info.ok ? 'ok' : 'bad'}`;
+    el.textContent = info.ok
+      ? `${info.electrons} electrons · consistent with multiplicity ${draft.multiplicity}`
+      : `${info.electrons} electrons · inconsistent with multiplicity ${draft.multiplicity} — an even electron count needs an odd multiplicity`;
+  }
+}
+
+function moleculeLegend(atoms) {
+  const counts = new Map();
+  for (const atom of atoms) counts.set(atom.element, (counts.get(atom.element) || 0) + 1);
+  return [...counts.entries()]
+    .map(([element, count]) => `<span><i style="background:${elementStyle(element).color}"></i>${esc(element)} <b>${count}</b></span>`)
+    .join('');
+}
+
+/**
+ * A flat projection of the coordinates the project would calculate. Picks the
+ * two axes with the largest spread so a planar molecule is not drawn edge-on,
+ * and only draws a line where the distance is inside a covalent-radius guess.
+ */
+function moleculePreviewSvg(atoms, width = 300, height = 190) {
+  if (!Array.isArray(atoms) || atoms.length === 0) return '<div class="molecule-preview-empty">No coordinates</div>';
+  const axes = ['x', 'y', 'z'].map((axis) => {
+    const values = atoms.map((atom) => Number(atom[axis]) || 0);
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    return { axis, variance: values.reduce((sum, value) => sum + (value - mean) ** 2, 0) };
+  }).sort((a, b) => b.variance - a.variance);
+  const [first, second] = [axes[0].axis, axes[1].axis];
+  const xs = atoms.map((atom) => Number(atom[first]) || 0);
+  const ys = atoms.map((atom) => Number(atom[second]) || 0);
+  const minX = Math.min(...xs); const maxX = Math.max(...xs);
+  const minY = Math.min(...ys); const maxY = Math.max(...ys);
+  const pad = 24;
+  const scale = Math.min((width - 2 * pad) / Math.max(maxX - minX, 0.4), (height - 2 * pad) / Math.max(maxY - minY, 0.4));
+  const offsetX = (width - (maxX - minX) * scale) / 2;
+  const offsetY = (height - (maxY - minY) * scale) / 2;
+  const points = atoms.map((atom) => ({
+    element: atom.element,
+    x: offsetX + ((Number(atom[first]) || 0) - minX) * scale,
+    y: height - offsetY - ((Number(atom[second]) || 0) - minY) * scale,
+  }));
+  const bonds = [];
+  for (let i = 0; i < atoms.length; i += 1) {
+    for (let j = i + 1; j < atoms.length; j += 1) {
+      const a = atoms[i]; const b = atoms[j];
+      const distance = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      const limit = 1.25 * (elementStyle(a.element).radius + elementStyle(b.element).radius);
+      if (distance > 0.4 && distance < limit) {
+        bonds.push(`<line x1="${points[i].x.toFixed(1)}" y1="${points[i].y.toFixed(1)}" x2="${points[j].x.toFixed(1)}" y2="${points[j].y.toFixed(1)}" />`);
+      }
+    }
+  }
+  const circles = points.map((point) => {
+    const radius = point.element === 'H' ? 6 : 9;
+    const fill = elementStyle(point.element).color;
+    const label = point.element === 'H'
+      ? ''
+      : `<text x="${point.x.toFixed(1)}" y="${(point.y + 2.4).toFixed(1)}">${esc(point.element)}</text>`;
+    return `<g><circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${radius}" fill="${fill}" />${label}<title>${esc(point.element)}</title></g>`;
+  });
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Current geometry: ${atoms.length} atoms projected on ${first.toUpperCase()} / ${second.toUpperCase()}"><g class="bonds">${bonds.join('')}</g>${circles.join('')}</svg>`;
 }
 
 function drawerSelect(label, key, options, value, full = false) {
   return `<div class="field${full ? ' full' : ''}"><label>${esc(label)}</label><select class="select" data-drawer-field="${key}" aria-label="${esc(label)}">
     ${options.map(([optionValue, optionLabel]) => `<option value="${esc(optionValue)}"${String(value) === String(optionValue) ? ' selected' : ''}>${esc(optionLabel)}</option>`).join('')}
   </select></div>`;
+}
+
+function openSettingsDrawer() {
+  state.drawer = {
+    type: 'settings',
+    tab: 'defaults',
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+    draft: {
+      engine: engineOrDefault(state.project.defaults.engine).id,
+      xtbMethod: state.project.defaults.xtbMethod || 'gfn2',
+      xtbOptLevel: state.project.defaults.xtbOptLevel || 'normal',
+      method: state.project.defaults.method,
+      basis: state.project.defaults.basis,
+      memory: state.project.defaults.memory,
+      memoryUnit: state.project.defaults.memoryUnit,
+      nproc: state.project.defaults.nproc,
+    },
+  };
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  renderDrawer();
+  requestAnimationFrame(() => {
+    const modal = $('#modal');
+    modal?.querySelector('button, input, select, [tabindex]:not([tabindex="-1"])')?.focus();
+  });
 }
 
 function openMoleculeDrawer(tab = 'structure') {
@@ -2295,6 +2409,7 @@ function closeDrawer() {
 function renderDrawer() {
   const modal = $('#modal');
   if (!modal || !state.drawer) return;
+  modal.classList.remove('is-molecule');
   const drawer = state.drawer;
   // The New project chooser reuses the modal shell and its close/Escape/focus
   // handling; only the body renderer is different.
@@ -2307,61 +2422,80 @@ function renderDrawer() {
     return;
   }
   const draft = drawer.draft;
-  const tabs = [
-    ['structure', 'Structure'],
-    ['fragments', 'Charge & fragments'],
-    ['defaults', 'Defaults'],
-  ];
+  const tabs = drawer.type === 'settings'
+    ? []
+    : [['structure', 'Structure'], ['fragments', 'Charge & fragments']];
+  const activeTab = drawer.type === 'settings' ? 'defaults' : drawer.tab;
+  const coords = Array.isArray(draft.coords) ? draft.coords : [];
+  const atoms = coords.length ? coords : DEMO_WATER;
+  const demo = coords.length === 0;
+  const electrons = electronSummary(atoms, draft.charge, draft.multiplicity);
   let body = '';
-  if (drawer.tab === 'structure') {
-    const atomCount = draft.coords.length;
-    const sourceLabel = draft.geometry.source === 'imported' && atomCount
+  if (activeTab === 'structure') {
+    const sourceLabel = draft.geometry.source === 'imported' && draft.coords.length
       ? `${esc(draft.geometry.file || 'imported file')} · ${esc(draft.geometry.format || 'structure')}`
-      : 'Project uses the built-in demo water until you import a structure.';
+      : 'No structure imported yet — the demo water below is what the project would calculate.';
     body = `
-      <div class="form-section">
-        <div class="section-label">Structure source</div>
-        <textarea class="textarea" data-drawer-field="smiles" rows="3" placeholder="SMILES, e.g. C=CC=C.C=C">${esc(draft.smiles)}</textarea>
-        <div class="drop-zone" style="margin-top:10px">
-          <strong>${atomCount ? `${atomCount} atoms` : 'Demo water geometry'}</strong>
-          <span>${sourceLabel}</span>
-          <span class="drop-hint">Drop a .xyz, .mol, .sdf, .mol2, .pdb, .pdbqt, .json, .gjf, .com or Gaussian .log file here.</span>
-          <div class="run-actions" style="margin:8px 0 0">
-            <button type="button" class="btn small" data-action="import-structure">Import structure file</button>
-            ${atomCount ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
+      <div class="molecule-grid">
+        <div class="molecule-pane">
+          <div class="form-section">
+            <div class="section-label">SMILES <span class="group-meta">metadata</span></div>
+            <textarea class="textarea" data-drawer-field="smiles" rows="3" aria-label="SMILES" placeholder="SMILES, e.g. C=CC=C.C=C">${esc(draft.smiles)}</textarea>
+            <p class="field-hint">Kept with the project as a label; calculations always use the coordinates, never this string.</p>
           </div>
-          <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out" hidden>
-          ${(draft.records?.length || 0) > 1 ? `
-            <label class="field-label" style="margin-top:8px">Record
-              <select data-record-select>
-                ${draft.records.map((record, index) => `<option value="${index}"${index === draft.recordIndex ? ' selected' : ''}>${esc(record.name)} · ${record.atoms.length} atoms</option>`).join('')}
-              </select>
-            </label>` : ''}
+          <div class="form-section">
+            <div class="section-label">Geometry</div>
+            <div class="drop-zone">
+              <strong>${draft.coords.length ? `${draft.coords.length} atoms` : 'Demo water geometry'}</strong>
+              <span>${sourceLabel}</span>
+              <span class="drop-hint">Drop a .xyz, .mol, .sdf, .mol2, .pdb, .pdbqt, .json, .gjf, .com or Gaussian .log file here.</span>
+              <div class="run-actions">
+                <button type="button" class="btn small" data-action="import-structure">Import structure file</button>
+                ${draft.coords.length ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
+              </div>
+              <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out" hidden>
+              ${(draft.records?.length || 0) > 1 ? `
+                <label class="field-label" style="margin-top:8px">Record
+                  <select data-record-select>
+                    ${draft.records.map((record, index) => `<option value="${index}"${index === draft.recordIndex ? ' selected' : ''}>${esc(record.name)} · ${record.atoms.length} atoms</option>`).join('')}
+                  </select>
+                </label>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="molecule-pane">
+          <div class="form-section">
+            <div class="section-label">Current geometry <span class="group-meta">${demo ? 'demo · 3 atoms' : `${coords.length} atoms`}</span></div>
+            <div class="molecule-preview">${moleculePreviewSvg(atoms)}</div>
+            <div class="molecule-legend">${moleculeLegend(atoms)}</div>
+          </div>
+          <div class="form-section">
+            <div class="section-label">Facts</div>
+            <div class="card">
+              <div class="kv"><span>Atoms</span><code>${draft.coords.length || 'demo (3)'}</code></div>
+              <div class="kv"><span>Fragments</span><code>${draft.fragments.length}</code></div>
+              <div class="kv"><span>Charge</span><code>${esc(draft.charge)}</code></div>
+              <div class="kv"><span>Multiplicity</span><code>${esc(draft.multiplicity)}</code></div>
+              <div class="kv"><span>Default method</span><code>${esc(draft.method)}/${esc(draft.basis)}</code></div>
+            </div>
+            ${parityMarkup(electrons, draft.multiplicity)}
+          </div>
         </div>
       </div>
-      <div class="callout green"><strong>Project-level structure.</strong> The queue builds every calculation input from this geometry; each block keeps its own charge, multiplicity, method, basis, and gates.</div>
-      <div class="form-section" style="margin-top:14px">
-        <div class="section-label">Project summary</div>
-        <div class="card">
-          <div class="kv"><span>Atoms</span><code>${atomCount || 'demo (3)'}</code></div>
-          <div class="kv"><span>Fragments</span><code>${draft.fragments.length}</code></div>
-          <div class="kv"><span>Charge</span><code>${esc(draft.charge)}</code></div>
-          <div class="kv"><span>Multiplicity</span><code>${esc(draft.multiplicity)}</code></div>
-          <div class="kv"><span>Default method</span><code>${esc(draft.method)}/${esc(draft.basis)}</code></div>
-        </div>
-      </div>`;
-  } else if (drawer.tab === 'fragments') {
+      <div class="callout green"><strong>Project-level structure.</strong> Every calculation block builds its input from these coordinates; each block keeps its own charge, multiplicity, method, basis and gates.</div>`;
+  } else if (activeTab === 'fragments') {
     body = `
       <div class="form-grid">
-        ${drawerField('Charge', 'charge', draft.charge)}
-        ${drawerField('Multiplicity', 'multiplicity', draft.multiplicity)}
+        ${drawerField('Charge', 'charge', draft.charge, { type: 'number', attrs: 'min="-10" max="10" step="1"' })}
+        ${drawerField('Multiplicity', 'multiplicity', draft.multiplicity, { type: 'number', attrs: 'min="1" max="10" step="1"' })}
       </div>
+      ${parityMarkup(electrons, draft.multiplicity)}
       <div class="form-section" style="margin-top:14px">
         <div class="section-label">Fragments <span class="group-meta">${draft.fragments.length}</span></div>
-        ${draft.fragments.map((fragment, index) => `<div class="fragment-row"><span class="frag-label">Fragment ${index + 1}</span><input class="input" data-drawer-fragment="${index}" value="${esc(fragment)}"></div>`).join('')}
+        ${draft.fragments.map((fragment, index) => `<div class="fragment-row"><span class="frag-label">Fragment ${index + 1}</span><input class="input" data-drawer-fragment="${index}" aria-label="Fragment ${index + 1}" value="${esc(fragment)}"></div>`).join('')}
         <button type="button" class="btn small" data-action="add-fragment">Add fragment</button>
       </div>
-      <div class="callout">Fragment order maps to <code>(Fragment=N)</code> in the exported route. Charge and multiplicity parity is checked by the real app.</div>`;
+      <div class="callout"><strong>Fragment order</strong> maps to <code>Fragment=N</code> in the exported route. Fragment labels are metadata; the atom partition comes from the geometry.</div>`;
   } else {
     const engineId = engineOrDefault(draft.engine).id;
     const isXtb = engineId === 'xtb';
@@ -2379,38 +2513,40 @@ function renderDrawer() {
         ${isXtb
     ? drawerSelect('Optimisation level', 'xtbOptLevel', XTB_OPT_LEVELS.map((level) => [level, level]), draft.xtbOptLevel || 'normal')
     : drawerSelect('Default basis', 'basis', BASIS_SETS, draft.basis)}
-        ${drawerField('Memory', 'memory', draft.memory)}
-        ${drawerSelect('Memory unit', 'memoryUnit', MEMORY_UNITS, draft.memoryUnit)}
-        ${drawerField('Cores (nproc)', 'nproc', draft.nproc)}
+        ${isXtb ? '' : drawerField('Memory', 'memory', draft.memory, { type: 'number', attrs: 'min="1" step="1"' })}
+        ${isXtb ? '' : drawerSelect('Memory unit', 'memoryUnit', MEMORY_UNITS, draft.memoryUnit)}
+        ${drawerField('Cores (nproc)', 'nproc', draft.nproc, { type: 'number', attrs: 'min="1" max="1024" step="1"' })}
       </div>
       <div class="form-section" style="margin-top:14px">
         <div class="section-label">Default route · ${esc(engineOrDefault(engineId).label)}</div>
         <div class="code-block">${esc(isXtb ? xtbRoute : gaussianRoute)}</div>
+        <p class="field-hint">Shown for the current defaults; each block keeps its own snapshot when it is created.</p>
       </div>
-      <div class="callout">Engine is a project-level choice: every calculation block is built for it. ${isXtb
-    ? 'xTB has no basis set, no transition-state search, no IRC and no scan — blocks needing those are refused at input build.'
-    : 'Gaussian blocks keep the route, dispersion and basis configured per block.'}</div>
-      <div class="callout">Defaults apply to <strong>new</strong> blocks. Existing blocks keep their own parameter snapshot, exactly like a workflow task.</div>`;
+      <div class="callout">${isXtb
+    ? 'xTB has no basis set, no transition-state search, no IRC and no scan — blocks needing those are refused when their input is built.'
+    : 'Gaussian blocks keep the route, dispersion and basis configured per block; these are only the defaults for new blocks.'}</div>`;
   }
 
+  modal.classList.add('is-molecule');
   modal.innerHTML = `
     <div class="modal-head">
       <div>
-        <span class="eyebrow">Project · molecule</span>
-        <h2 id="modal-title">Molecule & defaults</h2>
-        <p>Project-level structure and the parameters inherited by new blocks.</p>
+        <span class="eyebrow">${drawer.type === 'settings' ? 'Project · settings' : 'Project · molecule'}</span>
+        <h2 id="modal-title">${drawer.type === 'settings' ? 'Project settings' : 'Molecule'}</h2>
+        <p>${drawer.type === 'settings'
+    ? `Engine ${esc(engineOrDefault(draft.engine).label)} · defaults for new blocks`
+    : `${demo ? 'Demo water' : `${draft.coords.length} atoms`} · charge ${esc(draft.charge)} · multiplicity ${esc(draft.multiplicity)}${draft.fragments.length ? ` · ${draft.fragments.length} fragment${draft.fragments.length === 1 ? '' : 's'}` : ''}`}</p>
       </div>
       <button type="button" class="icon-btn" data-modal-close aria-label="Close drawer">×</button>
     </div>
-    <div class="modal-tabs">
-      ${tabs.map(([id, label]) => `<button type="button" class="modal-tab${drawer.tab === id ? ' is-active' : ''}" data-drawer-tab="${id}">${label}</button>`).join('')}
-    </div>
+    ${tabs.length ? `<div class="modal-tabs">
+      ${tabs.map(([id, label]) => `<button type="button" class="modal-tab${activeTab === id ? ' is-active' : ''}" data-drawer-tab="${id}">${label}</button>`).join('')}
+    </div>` : ''}
     <div class="modal-body">
       ${body}
-      <div class="callout" style="margin-top:14px"><strong>Imported geometry.</strong> Every calculation block in this project builds its input from these coordinates; save the project to keep them.</div>
     </div>
     <div class="modal-foot">
-      <div class="modal-note">Changes apply to this project only.</div>
+      <div class="modal-note">Applies to this project only · saved with the <code>.ncs</code> file.</div>
       <button type="button" class="btn" data-modal-close>Cancel</button>
       <button type="button" class="btn primary" data-action="save-molecule">Save changes</button>
     </div>`;
@@ -2419,6 +2555,7 @@ function renderDrawer() {
 function saveMolecule() {
   if (!state.drawer) return;
   const draft = state.drawer.draft;
+  if (state.drawer.type === 'molecule') {
   const previousCharge = state.project.molecule.charge;
   const previousMultiplicity = state.project.molecule.multiplicity;
   const nextCharge = Number(draft.charge) || 0;
@@ -2448,6 +2585,7 @@ function saveMolecule() {
     delete state.project.molecule.bonds;
   }
   state.project.molecule.geometry = { ...draft.geometry };
+  }
   state.project.defaults.engine = engineOrDefault(draft.engine).id;
   state.project.defaults.xtbMethod = draft.xtbMethod || 'gfn2';
   state.project.defaults.xtbOptLevel = draft.xtbOptLevel || 'normal';
@@ -3651,8 +3789,21 @@ function renderTemplateChooser() {
       <button type="button" class="icon-btn" data-modal-close aria-label="Close">×</button>
     </div>
     <div class="modal-body">
-      <div class="dep-list">${[...WORKFLOW_TEMPLATES, BLANK_TEMPLATE].map(templateRow).join('')}</div>
-      <div class="callout" style="margin-top:14px"><strong>Replaces the current project.</strong> The graph is swapped in memory, so Save asks for a new <code>.ncs</code> path instead of overwriting the file that was open.</div>
+      <div class="form-section">
+        <div class="section-label">Start from scratch</div>
+        <button type="button" class="palette-item" data-action="new-blank-settings">
+          <span class="palette-copy" style="flex:1;min-width:0">
+            <strong>Blank project</strong>
+            <small>One empty optimisation block. Set the engine, method and basis before it runs.</small>
+          </span>
+          <span class="status-pill">configure settings</span>
+        </button>
+      </div>
+      <div class="form-section">
+        <div class="section-label">Or start from a template</div>
+        <div class="dep-list">${WORKFLOW_TEMPLATES.map(templateRow).join('')}</div>
+      </div>
+      <div class="callout"><strong>Replaces the current project.</strong> The graph is swapped in memory, so Save asks for a new <code>.ncs</code> path instead of overwriting the file that was open.</div>
     </div>
     <div class="modal-foot">
       <div class="modal-note">Templates use the schema defaults. Set the molecule and route before a real run.</div>
@@ -4208,6 +4359,13 @@ function handleAction(action, element) {
       }
       break;
     case 'apply-template': applyTemplateProject(element.dataset.templateId); break;
+    case 'new-blank-settings': {
+      // Blank project first (it closes the chooser), then its settings drawer,
+      // so the route is configured before the first block exists.
+      applyTemplateProject(BLANK_TEMPLATE.id);
+      openSettingsDrawer();
+      break;
+    }
     case 'save-project': saveProject(); break;
     case 'export': exportSelectedInput(); break;
     case 'cluster':
@@ -4248,6 +4406,7 @@ function onDocumentClick(event) {
   const modalButton = event.target.closest('[data-open-modal]');
   if (modalButton) {
     if (modalButton.dataset.openModal === 'molecule') openMoleculeDrawer();
+    else if (modalButton.dataset.openModal === 'settings') openSettingsDrawer();
   }
 
   const blockButton = event.target.closest('[data-block]');
@@ -4458,6 +4617,7 @@ function onDocumentInput(event) {
   }
   if (target.dataset.drawerField && state.drawer) {
     state.drawer.draft[target.dataset.drawerField] = target.value;
+    if (target.dataset.drawerField === 'charge' || target.dataset.drawerField === 'multiplicity') updateParity();
   }
   if (target.dataset.drawerFragment !== undefined && state.drawer) {
     state.drawer.draft.fragments[Number(target.dataset.drawerFragment)] = target.value;
