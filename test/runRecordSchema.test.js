@@ -15,6 +15,10 @@ import {
  * These tests validate the two dry-run records in `test/fixtures/run-record/`
  * (one Gaussian, one xTB), then check that the schema declares exactly the
  * top-level fields those records carry -- no invented field, no omitted one.
+ *
+ * Version 2 adds a second record kind (issue #131). The run branch is v1
+ * verbatim, so the field-coverage checks below run against `$defs.runRecord`
+ * and every fixture must still validate under both versions.
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -30,6 +34,8 @@ const fixtures = fixtureFiles.map((name) => ({
 }));
 
 const schema = loadRecordSchema(RECORD_SCHEMA_VERSION);
+const runSchema = schema.$defs.runRecord;
+const v1Schema = loadRecordSchema(1);
 
 /**
  * Fields the writers can emit that neither dry-run fixture happened to
@@ -41,17 +47,27 @@ const OPTIONAL_TOP_LEVEL = new Set(['conformer']);
 describe('run-record schema — publication', () => {
   it('is a draft 2020-12 schema with a version and an id', () => {
     expect(schema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
-    expect(schema.$id).toMatch(/run-record\.v1\.schema\.json$/);
+    expect(schema.$id).toMatch(/run-record\.v2\.schema\.json$/);
     expect(schema['x-nodechem'].schemaVersion).toBe(RECORD_SCHEMA_VERSION);
     expect(schema['x-nodechem'].recordFile).toBe('run.json');
-    expect(recordSchemaVersions()).toEqual([1]);
+    expect(schema['x-nodechem'].supersedes).toBe(1);
+    expect(recordSchemaVersions()).toEqual([1, 2]);
     expect(recordSchemaPath(1)).toBe(path.join(ROOT, 'schemas', 'run-record.v1.schema.json'));
+    expect(recordSchemaPath(2)).toBe(path.join(ROOT, 'schemas', 'run-record.v2.schema.json'));
     expect(fs.existsSync(recordSchemaPath(1))).toBe(true);
+    expect(fs.existsSync(recordSchemaPath(2))).toBe(true);
+  });
+
+  it('leaves v1 as published: no record kind, closed envelope', () => {
+    expect(v1Schema.properties.kind).toBeUndefined();
+    expect(v1Schema.additionalProperties).toBe(false);
+    expect(v1Schema.required).toEqual(runSchema.required);
+    expect(v1Schema.properties).toEqual(runSchema.properties);
   });
 
   it('refuses an unknown version and names the versions it ships', () => {
-    expect(recordSchemaPath(2)).toBe(null);
-    expect(() => loadRecordSchema(2)).toThrow(/Unknown run-record schema version 2.*version 1/);
+    expect(recordSchemaPath(3)).toBe(null);
+    expect(() => loadRecordSchema(3)).toThrow(/Unknown run-record schema version 3.*version 1, 2/);
     expect(() => validateRecord({}, { version: 7 })).toThrow(/Unknown run-record schema version 7/);
   });
 });
@@ -62,11 +78,13 @@ describe('run-record schema — real records', () => {
   });
 
   for (const { name, record } of fixtures) {
-    it(`validates ${name}`, () => {
+    it(`validates ${name} under v1 and v2`, () => {
       const verdict = validateRecord(record);
       expect(verdict.errors, name).toEqual([]);
       expect(verdict.ok, name).toBe(true);
-      expect(record.schemaVersion, `${name} carries the contract version`).toBe(RECORD_SCHEMA_VERSION);
+      expect(validateRecord(record, { version: 1 }).errors, name).toEqual([]);
+      // A run is still written to the v1 contract; v2 only adds a branch.
+      expect(record.schemaVersion, `${name} declares the run contract`).toBe(1);
       expect(record.dryRun, `${name} is a dry run, not a calculation`).toBe(true);
     });
   }
@@ -78,7 +96,7 @@ describe('run-record schema — real records', () => {
 });
 
 describe('run-record schema — field coverage', () => {
-  const declared = new Set(Object.keys(schema.properties));
+  const declared = new Set(Object.keys(runSchema.properties));
   const observed = new Set();
   for (const { record } of fixtures) {
     for (const key of Object.keys(record)) observed.add(key);
@@ -114,7 +132,7 @@ describe('run-record schema — field coverage', () => {
   });
 
   it('requires every envelope field, and accepts a record without schemaVersion', () => {
-    for (const key of schema.required) {
+    for (const key of runSchema.required) {
       const record = JSON.parse(JSON.stringify(fixtures[1].record));
       delete record[key];
       const verdict = validateRecord(record);

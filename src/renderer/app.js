@@ -115,6 +115,7 @@ import { exportRunFormatAction } from './runConverter.js';
 import { provenanceSummary, syncVerifyButton, verifyRunInput } from './provenance.js';
 import { mountThermochemistryView } from './thermochemistryView.js';
 import { installResultsView } from './resultsView.js';
+import { IMPORTED_BADGE_TEXT, importedSummary, isImportedRecord } from '../shared/importedRecord.js';
 import { mountStructureViewer } from './structureViewer.js';
 import { formatPreflightReport } from './preflightReport.js';
 import {
@@ -575,6 +576,18 @@ function portHtml(node) {
  * parser did not report is simply absent.
  */
 function resultFacts(node) {
+  // Issue 131: a block carrying a result another program computed says so on
+  // the card, with its program and version. Its number is not dressed as the
+  // run's own result line.
+  const imported = importedSummary(node);
+  if (imported) {
+    const energy = Number.isFinite(imported.energyHartree) ? `${imported.energyHartree.toFixed(5)} Eh` : 'no energy recorded';
+    return {
+      main: IMPORTED_BADGE_TEXT,
+      sub: `${imported.program ?? 'unknown program'}${imported.version ? ` ${imported.version}` : ''} · E ${energy}`,
+      tone: 'warn',
+    };
+  }
   if (node.type === 'calc') {
     // A block downstream of a dataset runs once per record: there is no single
     // energy to show, so the card reports how many records finished and passed.
@@ -5048,8 +5061,13 @@ async function refreshHistory() {
     if (!el) return;
     el.innerHTML = runs.length
       ? runs.map((run) => {
-        const meta = [run.status, run.gates?.overall ? `gates ${run.gates.overall}` : '', run.dryRun ? 'dry' : engineOrDefault(run.engine).label]
-          .filter(Boolean).join(' · ');
+        // Issue 131: an imported record in the runs folder is listed, but its
+        // row says where the number came from instead of adopting the run's
+        // status/engine meta.
+        const meta = isImportedRecord(run)
+          ? importedSummary(run)?.badge
+          : [run.status, run.gates?.overall ? `gates ${run.gates.overall}` : '', run.dryRun ? 'dry' : engineOrDefault(run.engine).label]
+            .filter(Boolean).join(' · ');
         return `<li class="queue-item is-${esc(run.status)}" data-run-id="${esc(run.id || '')}" title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
       }).join('')
       : '<li class="queue-empty">No runs recorded yet.</li>';

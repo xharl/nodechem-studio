@@ -14,6 +14,7 @@
 
 import { cbsExtrapolate } from './cbs.js';
 import { boltzmannWeightedObservables, formatPopulation } from './conformers.js';
+import { IMPORTED_BADGE_TEXT, importedSummary } from './importedRecord.js';
 
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
@@ -47,10 +48,14 @@ function shortHash(value) {
   return raw === null ? null : raw.slice(0, 16) + (raw.length > 16 ? '…' : '');
 }
 
-function taskRow(task, record) {
+function taskRow(task, record, { includeImported = false } = {}) {
   const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
   const method = record?.provenance?.method && typeof record.provenance.method === 'object'
     ? record.provenance.method : {};
+  // Issue #131: a number another program computed is a different kind of
+  // record. It is carried as its own labelled row; its energy only enters the
+  // energy columns when the caller asked for it, and never unlabelled.
+  const imported = importedSummary(record);
   return {
     nodeId: text(task.nodeId),
     title: text(task.title) || text(task.nodeId) || 'Untitled block',
@@ -72,7 +77,10 @@ function taskRow(task, record) {
     finishedAt: text(task.finishedAt),
     error: text(task.error),
     dryRun: record?.dryRun === true,
-    engine: text(record?.engine || parsed.engine),
+    // An imported result keeps its own summary instead of being flattened into
+    // the run fields: program, version, method, basis, energy and source hash.
+    imported: imported ? { ...imported, included: includeImported } : null,
+    engine: imported ? imported.program : text(record?.engine || parsed.engine),
     // A geometry that crossed an engine boundary: where it came from, so the
     // report shows the hand-off rather than implying the block ran on its own.
     geometryHandoff: (task.geometryHandoff || record?.geometryHandoff)
@@ -85,8 +93,8 @@ function taskRow(task, record) {
       }
       : null,
     jobType: text(record?.provenance?.jobType || method.jobType),
-    method: text(method.functional || method.hamiltonian),
-    basis: text(method.basis),
+    method: imported ? imported.method : text(method.functional || method.hamiltonian),
+    basis: imported ? imported.basis : text(method.basis),
     // Issue #80: a fanned-out run names its member, and the report keeps that
     // label so N rows from one block can be grouped and compared at the level
     // they were actually run at.
@@ -106,7 +114,9 @@ function taskRow(task, record) {
     fanOut: task.fanOut && typeof task.fanOut === 'object'
       ? { conformerId: text(task.fanOut.conformerId), memberId: text(task.fanOut.memberId) }
       : null,
-    finalEnergyHartree: num(parsed.finalEnergy?.hartree),
+    finalEnergyHartree: imported
+      ? (includeImported && Number.isFinite(imported.energyHartree) ? imported.energyHartree : null)
+      : num(parsed.finalEnergy?.hartree),
     gibbsHartree: num(parsed.thermochemistry?.freeEnergyHartree),
     // Issue #96: a per-conformer scalar the parser already produced, so the
     // ensemble table can weight it instead of inventing a second observable.
@@ -147,10 +157,12 @@ function recordGroup(recordId, rows, info = null) {
 
   // The last block that reported an energy is the record's final level: the
   // plan order is the workflow order, so a later block supersedes an earlier one.
+  // An imported result never supersedes one: it did not run here.
   let finalEnergyHartree = null;
   for (const row of rows) {
-    if (Number.isFinite(row.finalEnergyHartree)) finalEnergyHartree = row.finalEnergyHartree;
+    if (!row.imported && Number.isFinite(row.finalEnergyHartree)) finalEnergyHartree = row.finalEnergyHartree;
   }
+  const importedRows = rows.filter((row) => row.imported);
 
   const methods = [];
   for (const row of rows) {
@@ -171,6 +183,17 @@ function recordGroup(recordId, rows, info = null) {
     finalEnergyHartree,
     // Filled once the first completed record establishes the baseline.
     relativeKcal: null,
+    // Why a ΔE is absent, when it is: an imported result in the record is the
+    // one reason a reader could otherwise read the two numbers as one series.
+    relativeKcalReason: importedRows.length > 0
+      ? `${IMPORTED_BADGE_TEXT}: this record includes a result computed by another program, so it is not compared with a ΔE`
+      : null,
+    imported: importedRows.length > 0
+      ? {
+        ...importedRows[0].imported,
+        nodes: importedRows.map((row) => row.nodeId),
+      }
+      : null,
     methods,
     tasks: rows.map((row) => row.nodeId),
     counts: {
@@ -198,12 +221,17 @@ function recordGroup(recordId, rows, info = null) {
  * @param {Array<object>|Object<string, object>|null} [options.recordInfo]
  *   dataset record metadata (`id`, `label`, `charge`, `multiplicity`) used to
  *   label a group whose tasks carry no `record` object
+ * @param {boolean} [options.includeImported]
+ *   include an imported result in the energy columns (labelled). Default
+ *   `false`: the result is still listed and named, but its number is not put in
+ *   a column that otherwise holds numbers this app computed.
  * @returns {object} a serialisable report model
  */
 export function buildWorkflowReport(queue, records = {}, {
   generatedAt = null,
   appVersion = null,
   recordInfo = null,
+  includeImported = false,
 } = {}) {
   const source = queue && typeof queue === 'object' ? queue : {};
   const tasks = Array.isArray(source.tasks) ? source.tasks : [];
@@ -211,7 +239,7 @@ export function buildWorkflowReport(queue, records = {}, {
   const rows = tasks.slice(0, 500).map((task) => {
     const byRun = task?.runId ? recordMap[task.runId] : null;
     const byNode = task?.nodeId ? recordMap[task.nodeId] : null;
-    return taskRow(task || {}, byRun || byNode || null);
+    return taskRow(task || {}, byRun || byNode || null, { includeImported });
   });
   // Issue #96: the ladder verdict carries only energies, so the report looks
   // up the row and the run record by node id to recover the level of theory
@@ -270,6 +298,7 @@ export function buildWorkflowReport(queue, records = {}, {
         memberId: row.conformer.memberId,
         protomer: row.conformer.protomer,
         status: row.status,
+        imported: row.imported ? row.imported.badge : null,
         energyHartree: row.finalEnergyHartree,
         relativeKcalSearch: row.conformer.relativeKcal,
         // The Boltzmann weight the conformer search assigned. It is shown in
@@ -288,6 +317,13 @@ export function buildWorkflowReport(queue, records = {}, {
         ensemble = {
           available: false,
           reason: 'this block fed more than one task per member (or several levels), so its rows are not one retained ensemble',
+        };
+      } else if (members.some((member) => member.imported)) {
+        // Issue #131: a Boltzmann average over a member this app did not
+        // compute would be a number built from two different provenances.
+        ensemble = {
+          available: false,
+          reason: `a member of this group is an imported result (${IMPORTED_BADGE_TEXT}), so the rows are not one retained ensemble and are not weighted`,
         };
       } else if (members.some((member) => !Number.isFinite(member.population))) {
         ensemble = {
@@ -354,7 +390,9 @@ export function buildWorkflowReport(queue, records = {}, {
     || recordModels.find((record) => Number.isFinite(record.finalEnergyHartree))
     || null;
   for (const record of recordModels) {
-    if (baseline && Number.isFinite(record.finalEnergyHartree)) {
+    // A record that holds an imported result is never given a ΔE: the reader
+    // would be invited to subtract a number this app did not compute.
+    if (baseline && !record.imported && Number.isFinite(record.finalEnergyHartree)) {
       record.relativeKcal = (record.finalEnergyHartree - baseline.finalEnergyHartree) * HARTREE_KCAL;
     }
   }
@@ -385,6 +423,15 @@ export function buildWorkflowReport(queue, records = {}, {
     // One entry per dataset record (empty for a v1 single-run queue), with the
     // comparison numbers a reader needs between records.
     records: recordModels,
+    // Issue #131: one entry per result another program computed, kept out of
+    // the computed series and labelled with the program and version that made
+    // it. `included` says whether its number was allowed into the energy
+    // columns; the entry is listed either way so it cannot go missing.
+    imported: rows.filter((row) => row.imported).map((row) => ({
+      nodeId: row.nodeId,
+      title: row.title,
+      ...row.imported,
+    })),
     // One entry per conformer block whose branches were fanned out, with the
     // target-level ΔE the run energies actually support.
     conformers,
@@ -477,15 +524,22 @@ function taskTableHtml(rows) {
     const member = row.conformer?.memberId
       ? ` <span class="mono">· member ${escapeHtml(row.conformer.memberId)}${row.conformer.protomer ? ` (${escapeHtml(row.conformer.protomer)})` : ''}</span>`
       : '';
-    return '<tr data-node="' + escapeHtml(row.nodeId || '') + '" data-status="' + escapeHtml(row.status) + '">'
-      + `<td><strong>${escapeHtml(row.title)}</strong>${member}${fixture}<div class="sub">`
+    return '<tr data-node="' + escapeHtml(row.nodeId || '') + '" data-status="' + escapeHtml(row.status) + '"'
+      + (row.imported ? ' data-kind="imported"' : '') + '>'
+      + `<td><strong>${escapeHtml(row.title)}</strong>${member}${fixture}`
+      + `${row.imported ? ` <span class="imported" data-field="imported-badge">${escapeHtml(row.imported.badge)}</span>` : ''}`
+      + `<div class="sub">`
       + `${escapeHtml(level)}${escapeHtml(kindSuffix)}</div></td>`
       + `<td>${escapeHtml(row.status)}</td>`
       + `<td class="gates-${gateClass}">${escapeHtml(gates)}</td>`
       + `<td>${escapeHtml(row.validity === null ? MISSING : row.validity)}</td>`
       + `<td>${escapeHtml(row.engine === null ? MISSING : row.engine)}</td>`
       + `<td>${escapeHtml(row.method === null ? MISSING : row.method)} / ${escapeHtml(row.basis === null ? MISSING : row.basis)}</td>`
-      + `<td class="num">${escapeHtml(value(row.finalEnergyHartree, 8))}</td>`
+      + `<td class="num">${row.imported
+        ? (row.finalEnergyHartree === null
+          ? escapeHtml(`${MISSING} (imported)`)
+          : `${escapeHtml(value(row.finalEnergyHartree, 8))} <span class="imported">${escapeHtml(row.imported.badge)}</span>`)
+        : escapeHtml(value(row.finalEnergyHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(row.gibbsHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(row.imaginaryCount))}</td>`
       + `<td class="num">${escapeHtml(value(row.elapsedSeconds, 1, ' s'))}</td>`
@@ -506,15 +560,19 @@ function recordComparisonHtml(records, flowAnchor, headingTag = 'h2') {
     const statusClass = record.status === 'failed' ? 'gates-fail'
       : record.status === 'completed' ? 'gates-pass' : 'warn-text';
     const gateClass = record.gates === 'pass' || record.gates === 'fail' ? record.gates : 'unknown';
-    return '<tr data-record="' + escapeHtml(record.id) + '">'
+    return '<tr data-record="' + escapeHtml(record.id) + '"'
+      + (record.imported ? ' data-kind="imported"' : '') + '>'
       + `<td><a href="#record-${escapeHtml(flowAnchor)}-${escapeHtml(anchorId(record.id))}"><strong>${escapeHtml(record.label || record.id)}</strong></a>`
+      + `${record.imported ? ` <span class="imported">${escapeHtml(record.imported.badge)}</span>` : ''}`
       + `<div class="sub mono">${escapeHtml(record.id)}`
       + `${record.charge === null ? '' : ` · charge ${escapeHtml(String(record.charge))}`}`
       + `${record.multiplicity === null ? '' : ` · multiplicity ${escapeHtml(String(record.multiplicity))}`}</div></td>`
       + `<td class="${statusClass}">${escapeHtml(record.status)}</td>`
       + `<td class="gates-${gateClass}">${escapeHtml(record.gates)}</td>`
       + `<td class="num">${escapeHtml(value(record.finalEnergyHartree, 8))}</td>`
-      + `<td class="num">${escapeHtml(value(record.relativeKcal, 2))}</td>`
+      + `<td class="num">${record.imported && record.relativeKcal === null
+        ? 'not compared'
+        : escapeHtml(value(record.relativeKcal, 2))}</td>`
       + `<td>${record.methods.length > 0 ? record.methods.map((entry) => escapeHtml(entry)).join('<br>') : MISSING}</td>`
       + '</tr>';
   }).join('');
@@ -538,6 +596,10 @@ function recordSectionHtml(record, rows, flowAnchor, headingTag) {
     + ` · gates ${escapeHtml(record.gates)}`
     + `${record.charge === null ? '' : ` · charge ${escapeHtml(String(record.charge))}`}`
     + `${record.multiplicity === null ? '' : ` · multiplicity ${escapeHtml(String(record.multiplicity))}`}</p>`
+    + (record.imported
+      ? `<p class="warn" data-field="record-imported"><span class="imported">${escapeHtml(record.imported.badge)}</span>`
+        + ` This record includes a result computed by another program. ${escapeHtml(record.relativeKcalReason || '')}</p>`
+      : '')
     + failed
     + taskTableHtml(rows);
 }
@@ -551,6 +613,7 @@ const REPORT_STYLE = 'body{font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-s
   + '.num{text-align:right;font-variant-numeric:tabular-nums}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}'
   + '.gates-pass{color:#137a3a;font-weight:600}.gates-fail{color:#b42318;font-weight:600}.warn-text{color:#7a5b00;font-weight:600}'
   + '.fixture{background:#fff3cd;color:#7a5b00;border-radius:3px;padding:0 4px;font-size:10px;font-weight:600}'
+  + '.imported{background:#e8eefc;color:#243b6b;border:1px solid #c3d2f0;border-radius:3px;padding:0 4px;font-size:10px;font-weight:600;white-space:nowrap}'
   + '.warn{background:#fff8e6;border-left:3px solid #e0a800;padding:8px 10px}'
   + '.ok{color:#137a3a}.failures{color:#b42318}'
   + 'pre{white-space:pre-wrap;font-size:11px;background:#f7f8fa;padding:10px;border-radius:4px}'
@@ -698,8 +761,10 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
   // population-weighted observables appear beside their spread. A group that
   // was not one retained ensemble is never weighted.
   const conformerBlocks = (Array.isArray(model.conformers) ? model.conformers : []).map((ensemble) => {
-    const body = ensemble.members.map((member) => '<tr>'
-      + `<td>${escapeHtml(member.memberId || MISSING)}${member.protomer ? ` · ${escapeHtml(member.protomer)}` : ''}</td>`
+    const body = ensemble.members.map((member) => '<tr'
+      + (member.imported ? ' data-kind="imported"' : '') + '>'
+      + `<td>${escapeHtml(member.memberId || MISSING)}${member.protomer ? ` · ${escapeHtml(member.protomer)}` : ''}`
+      + `${member.imported ? ` <span class="imported">${escapeHtml(member.imported)}</span>` : ''}</td>`
       + `<td>${escapeHtml(member.status || MISSING)}</td>`
       + `<td class="num">${escapeHtml(Number.isFinite(member.population) ? formatPopulation(member.population) : MISSING)}</td>`
       + `<td class="num">${escapeHtml(value(member.energyHartree, 8))}</td>`
@@ -741,6 +806,39 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
 
+  // Issue #131: results another program computed. They are named here whether
+  // or not their number was allowed into an energy column, with the program,
+  // version and source hash, so a reader can see what is imported and what is
+  // not. The hash identifies the file; it does not certify the calculation.
+  const importedResults = Array.isArray(model.imported) ? model.imported : [];
+  const importedBlocks = importedResults.length === 0 ? '' : (
+    `<${sectionHeading}>Imported results</${sectionHeading}>`
+    + '<p>These numbers were computed by another program, not by this app. '
+    + `${escapeHtml(IMPORTED_BADGE_TEXT)}. An imported number is never part of a computed series`
+    + `${importedResults.some((entry) => entry.included) ? '; where its value is shown below, it is labelled.' : ', and none of them is shown in an energy column here.'}</p>`
+    + '<table><thead><tr><th>Block</th><th>Program</th><th>Level</th><th class="num">E / Eh</th>'
+    + '<th>Source file</th><th>Source SHA-256</th><th class="num">Energy column</th></tr></thead><tbody>'
+    + importedResults.map((entry) => '<tr data-field="imported-result" data-node="' + escapeHtml(entry.nodeId || '') + '">'
+      + `<td><strong>${escapeHtml(entry.title || entry.nodeId || MISSING)}</strong>`
+      + ` <span class="imported" data-field="imported-badge">${escapeHtml(entry.badge)}</span></td>`
+      + `<td>${escapeHtml(entry.program || MISSING)}</td>`
+      + `<td>${escapeHtml(entry.method || MISSING)} / ${escapeHtml(entry.basis || MISSING)}</td>`
+      + `<td class="num">${escapeHtml(value(entry.energyHartree, 8))}</td>`
+      + `<td class="mono">${escapeHtml(entry.sourceName ?? MISSING)}</td>`
+      + `<td class="mono">${escapeHtml(shortHash(entry.sourceSha256) ?? MISSING)}</td>`
+      + `<td class="num">${entry.included ? 'shown, labelled' : 'not included'}</td>`
+      + '</tr>').join('')
+    + '</tbody></table>'
+    + '<p class="meta">The source hash proves which file the number was read from; it does not prove the calculation. '
+    + `To show an imported energy in the energy columns, rebuild the report with <code>includeImported: true</code>; it still carries the label.</p>`
+  );
+  const importedNote = importedResults.length === 0 ? '' : (
+    `<p class="warn" data-field="imported-note">${importedResults.length} result${importedResults.length === 1 ? '' : 's'} `
+    + `in this report ${importedResults.length === 1 ? 'was' : 'were'} imported from another program `
+    + `(${escapeHtml([...new Set(importedResults.map((entry) => `${entry.program ?? MISSING} ${entry.version ?? ''}`.trim()))].join(', '))}). `
+    + `${escapeHtml(IMPORTED_BADGE_TEXT)}: those numbers were not computed by NodeChem Studio.</p>`
+  );
+
   // A v1 queue keeps its single table; a record-scoped queue gets the
   // comparison table plus one section per record, in plan order.
   const whatRan = records.length > 0
@@ -764,6 +862,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + ` · generated ${escapeHtml(model.generatedAt || MISSING)}`
     + ` · NodeChem Studio ${escapeHtml(model.appVersion || MISSING)}</p>`
     + fixtureNote
+    + importedNote
     + `<${sectionHeading}>Outcome</${sectionHeading}>`
     + `<p>${counts.total || 0} task(s): ${counts.passed || 0} passed, ${counts.failed || 0} failed, `
     + `${counts.skipped || 0} skipped, ${counts.cancelled || 0} cancelled, ${counts.notRun || 0} not run. `
@@ -775,6 +874,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + conformerBlocks
     + spinBlocks
     + reactionBlocks
+    + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'

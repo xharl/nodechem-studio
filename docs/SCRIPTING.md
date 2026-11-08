@@ -2,7 +2,8 @@
 
 Three things make the workbench usable from a script:
 
-- a **versioned schema** for the `run.json` record the app already writes;
+- a **versioned schema** for the `run.json` record the app already writes, with
+  a second record kind for a number another program computed;
 - **`ncs export`**, which returns those records as one JSON envelope;
 - a **Python client** in `clients/python/` that reads run folders and calls the
   CLI, standard library only.
@@ -14,11 +15,19 @@ handing a result to another program in a format it already speaks (see
 
 ## The record contract
 
-Every run folder contains `run.json`. The published description is
-[`schemas/run-record.v1.schema.json`](../schemas/run-record.v1.schema.json)
-(JSON Schema draft 2020-12, `x-nodechem.schemaVersion: 1`). The same record is
-written by the local runner and by the cluster importer, so the schema covers
-both shapes.
+Every run folder contains `run.json`. There are two published descriptions:
+
+| Version | File | Knows |
+| --- | --- | --- |
+| 1 | [`schemas/run-record.v1.schema.json`](../schemas/run-record.v1.schema.json) | a run NodeChem performed |
+| 2 | [`schemas/run-record.v2.schema.json`](../schemas/run-record.v2.schema.json) | the v1 run, unchanged, **or** an imported result (`kind: "imported"`) |
+
+Both are JSON Schema draft 2020-12 with `x-nodechem.schemaVersion` set to their
+own version. The same run record is written by the local runner and by the
+cluster importer, so the run branch covers both shapes. v2 is a tagged union
+whose run branch is v1 verbatim: **every v1 document validates unchanged**, and
+a run still declares `schemaVersion: 1` because runs are still written to the
+v1 contract. `ncs record import` writes the only v2 record shape.
 
 The envelope is **closed**: an unknown top-level field fails validation. That is
 deliberate — a writer that gains a field must update the schema in the same
@@ -80,11 +89,16 @@ plus the `errors` / `warnings` / `unknowns` subsets. A gate result is `pass`,
   `ncs export --schema-version 2`: removing or renaming a field, changing a
   field's type or meaning, changing units, making an optional field required,
   or closing a section that was open. Old schema files stay in the tree so an
-  old export stays reproducible.
-- **Minor change** — editing the same file, no `schemaVersion` change: adding
-  an optional field in the same commit as the writer that emits it, adding an
-  enum value, or clarifying a description. Every record that validated before
-  still validates.
+  old export stays reproducible, and a document keeps validating against the
+  version it was written for. v2 (imported results, below) was published this
+  way rather than by loosening v1: v1's envelope is closed and its
+  `provenance.kind` enum is closed too, so it had no extension point a second
+  record shape could use, and editing it would have changed which documents v1
+  accepts.
+- **Minor change** — editing a version's file, no `schemaVersion` change:
+  adding an optional field in the same commit as the writer that emits it,
+  adding an enum value, or clarifying a description. Every record that
+  validated before still validates.
 - **Readers** must read the fields they know, treat absence as "not recorded"
   and never invent a default. `ncs export` is the producer-side check: it
   refuses a record that does not conform.
@@ -113,8 +127,12 @@ ncs export --json --schema-version 1 /tmp/ncs-runs
 
 - `schema` is the absolute path of the schema the records were validated
   against, so a caller can validate the payload without guessing.
-- `--schema-version` defaults to `1`. An unknown version exits 2 and prints the
-  path of the version it does ship; it does not print a partial envelope.
+- `--schema-version` defaults to the newest version the build ships (currently
+  `2`). An unknown version exits 2 and prints the path of the version it does
+  ship; it does not print a partial envelope. `--schema-version 1` still
+  produces the v1 envelope for records written under v1; it refuses an imported
+  record (exit 2, `record-invalid`) rather than dropping the field that says
+  what the record is.
 - One record that does not conform refuses the whole export: stderr carries
   `{ "ok": false, "code": "record-invalid", "failures": [...] }` with a JSON
   pointer per error, and stdout stays empty.
@@ -122,6 +140,71 @@ ncs export --json --schema-version 1 /tmp/ncs-runs
 
 This is additive: `ncs report`, the CSV/JSON dataset export inside the app and
 the run folders themselves are unchanged.
+
+## Imported results
+
+A number another program computed — a Spartan single point, a Gaussian job run
+on a cluster account, a colleague's ORCA optimisation — can be recorded in the
+same place as a run, as a **different kind of record**:
+
+```json
+{
+  "schemaVersion": 2,
+  "kind": "imported",
+  "id": "spartan-wb97xd3-def2tzvp",
+  "program": "Spartan '26",
+  "version": "26.0.1",
+  "method": "ωB97X-D3",
+  "basis": "def2-TZVP",
+  "energy": -2107.7761757,
+  "sourceSha256": "9f2c0d5e…",
+  "sourceName": "study-01.spartan.out",
+  "importedAt": "2026-11-08T19:38:00.000Z"
+}
+```
+
+It is built deliberately, not parsed out of a foreign log: `ncs record import`
+takes the provenance from the caller and writes one record, validated against
+`schemas/run-record.v2.schema.json` before it reaches disk.
+
+```bash
+ncs record import --program "Spartan '26" --version 26.0.1 \
+    --method ωB97X-D3 --basis def2-TZVP --energy -2107.7761757 \
+    --source study-01.spartan.out --out /tmp/ncs-runs --id spartan-sp
+# -> /tmp/ncs-runs/runs/spartan-sp/run.json
+#    imported, not run here — Spartan '26 26.0.1
+```
+
+`--source <file>` hashes the file here; `--source-sha256 <hex>` takes a digest
+computed on the machine that did the work (name exactly one). `--out` may be an
+`ncs run --out` folder — the record lands in `runs/<id>/run.json` beside the
+runs, so `ncs export` and the Python client find it — or a `.json` path for a
+standalone results file. `--json` prints the record and the label instead of the
+path. A second import never overwrites an existing record (`imported-exists`).
+
+**What the record claims.** This energy, at this level of theory, was computed
+by this program at this version, and the source file hashed to this digest.
+
+**What it does not claim.** That the calculation is right, that the geometry is
+the one you meant, or that NodeChem ran anything. The hash proves **the file**,
+not the calculation; two runs of the same program on the same input can differ.
+And the record is not run-shaped on purpose: there is no `status`, `outputFile`,
+`gates` or `exitCode`, because none of those happened here.
+
+Every surface that shows the number says so. The results panel, the block card,
+the workflow report row and the report's "Imported results" table print
+`imported, not run here — <program> <version>` next to it, and the app never
+gives an imported record a run status badge. Consumers that build a series from
+run records must label or exclude it:
+
+- `buildWorkflowReport(queue, records, { includeImported })` lists every
+  imported result either way; `includeImported: true` also puts its value in the
+  energy columns, still labelled. The default leaves that column holding only
+  numbers this app computed. A record containing an imported result gets no ΔE,
+  and a conformer ensemble with an imported member is not Boltzmann-averaged.
+- `ncs report <out-dir> --include-imported` is the same switch on the CLI.
+- `resultsPanelHtml(record, { includeImported: true, imported: [...] })` shows
+  an imported reference energy **beside** the pKa/redox cycles, never inside one.
 
 ## Python client
 
