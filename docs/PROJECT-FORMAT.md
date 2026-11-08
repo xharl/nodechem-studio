@@ -195,17 +195,23 @@ naming the first differing index, and nothing is reordered automatically.
 `conformers.settings` is a separate key space — route keys cannot leak into a conformer search:
 `generator` (`crest` or `import`), `method` (`gfn2` or `gfnff`), `energyWindowKcal`,
 `rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`,
-`importPath`, `charge`, `multiplicity`, `fanOut`, plus the imported-file fields `energyUnit`
-(`hartree` or `kcal/mol`, default `hartree`), `energyMethod` (free text, e.g. `MMFF94`) and `origin`
-(`{ program, version, method }`, what the user says produced the imported file). Defaults: energy
-window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K, spread warning at 2 kcal/mol,
-fan-out off, unit Hartree, no origin.
+`importPath`, `charge`, `multiplicity`, `fanOut`, `group` (an optional study id shared by blocks
+that belong together, 1–32 letters, digits, `.`, `_` or `-`; empty means no group), plus the
+imported-file fields `energyUnit` (`hartree` or `kcal/mol`, default `hartree`), `energyMethod` (free
+text, e.g. `MMFF94`) and `origin` (`{ program, version, method }`, what the user says produced the
+imported file). Defaults: energy window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K,
+spread warning at 2 kcal/mol, fan-out off, unit Hartree, no origin, no group.
+
+`group` is the only cross-block key a conformer block has: two blocks with the same `group` say they
+belong to the same study. It is not a protomer or tautomer judgement, and it never causes energies to
+be compared or averaged — a group is a heading, not a result.
 
 `conformers.output` is the ensemble summary written back after a search:
 
 | Key | Notes |
 | --- | --- |
 | `generator`, `method` | `crest`, `import`, or `fixture` for a dry run |
+| `group` | the block's study id, copied from `conformers.settings.group`; empty means no group. Per block, never per member |
 | `origin { program, version, method, sourceSha256 }` | what produced the ensemble; `crest`/`fixture` for a search run here, the declared program plus the digest of the imported file otherwise. Empty `program` means **not recorded**, never "computed here" |
 | `energyUnit`, `energyMethod` | the unit and producing method of the ensemble's absolute energies (`hartree` by default) |
 | `mixedEnergies` | true when the members disagree on unit or method; such an ensemble has no populations and no spread |

@@ -155,6 +155,29 @@ until you choose one. The validity check reports the same condition.
 Protomer labels are read from the frame comment (`protomer=A` or `tautomer=A`). A file without
 labels is treated as one protomer, which is what a plain conformer search produces.
 
+## Groups: ensembles that belong to one study
+
+A block ranks one ensemble, so a study with eleven distributions of one system — or one ensemble per
+tautomer — cannot be one block. Set **Group id** on each block that belongs to the same study and the
+blocks are visibly related without inventing a new document type or a cross-block ranking.
+
+- The id is a plain token: 1–32 letters, digits, `.`, `_` or `-`, starting with a letter or digit. You
+  type it on the block. A block with no id stands alone, and nothing is inferred from titles, protomer
+  labels or position on the canvas — two blocks are grouped only if you wrote the same id on both.
+- It is stored on the block's settings and copied into the ensemble summary (and `conformers.json`), so
+  one block's artifacts can say it belongs with others. A group id that is not a plain token is refused
+  by name when the project is validated; it is never trimmed into a different claim, and an empty id is
+  simply no group.
+- The card and the inspector print `group <id>` and how many blocks in the flow share it. The project
+  inspector lists each group with its member blocks and each block's protomer label. The workflow report
+  puts the grouped ensembles under one heading that names the group; every ensemble keeps its own
+  subsection, its own table, its own unit, method and protomer label.
+
+What the group claims: **these blocks belong to the same study**. What it does not claim: that they are
+the same molecule, that a protomer label is right, or that their energies are comparable. Energies across
+protonation states are not comparable without a proton reference, and the report never averages across a
+group — a group is a heading, not a result.
+
 ## Dry run
 
 A dry run produces a three-member labelled fixture headed `FIXTURE OUTPUT — dry run, not a conformer

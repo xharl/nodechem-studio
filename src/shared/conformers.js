@@ -51,7 +51,78 @@ export const DEFAULT_CONFORMER_SETTINGS = Object.freeze({
   // of carrying a single chosen geometry downstream. Off by default, so a file
   // written before the switch existed runs exactly as it did.
   fanOut: false,
+  // Issue #132: an optional study id shared by blocks that belong together.
+  // Empty means "this block stands alone", which is what every earlier file said.
+  group: '',
 });
+
+/**
+ * Issue #132: a group id is a plain bounded token, not free text. Letters,
+ * digits, dot, underscore and dash, 1–32 characters, starting with a letter or
+ * digit — the same shape as a block id, so a group can be typed, compared and
+ * printed without quoting rules. Anything else is refused by name instead of
+ * being trimmed into a different claim.
+ */
+export const CONFORMER_GROUP_MAX = 32;
+const CONFORMER_GROUP_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** True when `value` is a usable group id. Non-strings and '' are not. */
+export function isConformerGroupId(value) {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= CONFORMER_GROUP_MAX
+    && CONFORMER_GROUP_TOKEN.test(value);
+}
+
+/**
+ * The group id as stored, or '' for "none". Deliberately not a parser: an
+ * invalid string is returned as '' here so a reader that only displays cannot
+ * crash, and `projectSchema` is where the refusal is raised by name. It is not
+ * trimmed either — `two words` and ` two` are refusals, not quiet edits.
+ */
+export function normalizeConformerGroup(value) {
+  return isConformerGroupId(value) ? value : '';
+}
+
+/**
+ * How a block says it belongs with others: `group <id> · 2 blocks in this flow`.
+ * `blocks` is counted by the caller from the flow the block sits in; the id
+ * itself is the only stored fact. An empty id yields '' — an ungrouped block
+ * prints nothing rather than "group null".
+ */
+export function conformerGroupLabel(group, { blocks = 0, compact = false } = {}) {
+  const id = normalizeConformerGroup(group);
+  if (!id) return '';
+  const count = Number(blocks);
+  if (!Number.isInteger(count) || count <= 0) return `group ${id}`;
+  return `group ${id} · ${count} block${count === 1 ? '' : 's'}${compact ? '' : ' in this flow'}`;
+}
+
+/**
+ * Group the conformer blocks a caller can see, in first-seen order.
+ *
+ * Input rows are `{ id, title, group, protomers }` — a project/flow projection,
+ * not a project object, so the same function serves the inspector and a test.
+ * A block with no group is absent from the result rather than listed under a
+ * null group: an empty id claims nothing, so it must not look like a claim.
+ */
+export function conformerGroups(blocks) {
+  const rows = Array.isArray(blocks) ? blocks : [];
+  const byGroup = new Map();
+  for (const block of rows) {
+    const id = normalizeConformerGroup(block?.group);
+    if (!id) continue;
+    if (!byGroup.has(id)) byGroup.set(id, []);
+    byGroup.get(id).push({
+      id: String(block?.id ?? ''),
+      title: String(block?.title ?? '') || String(block?.id ?? ''),
+      protomers: Array.isArray(block?.protomers)
+        ? [...new Set(block.protomers.map((item) => String(item ?? '').trim()).filter(Boolean))].slice(0, 20)
+        : [],
+    });
+  }
+  return [...byGroup.entries()].map(([id, members]) => ({ id, blocks: members }));
+}
 
 
 const PROTROMER_TOKEN = /(?:protomer|tautomer)\s*[=:]\s*([A-Za-z0-9_.-]+)/i;
@@ -405,6 +476,7 @@ export function ensembleSummary(result, {
   origin = null,
   energyUnit = '',
   energyMethod = '',
+  group = '',
 } = {}) {
   const selected = result.retained?.find((member) => member.id === result.selectedId) || null;
   const unit = normalizeEnergyUnit(result.energyUnit) || normalizeEnergyUnit(energyUnit) || DEFAULT_ENERGY_UNIT;
@@ -437,6 +509,10 @@ export function ensembleSummary(result, {
     energyMethod: methodName,
     mixedEnergies: Boolean(result.mixedEnergies),
     origin: recordedOrigin,
+    // Issue #132: the study id the block carries. It is per block, never per
+    // member: two ensembles that belong together say so, and a member never
+    // belongs to a second group.
+    group: normalizeConformerGroup(group),
     count: result.retained?.length ?? 0,
     total: result.members?.length ?? 0,
     spreadKcal: result.spreadKcal ?? null,

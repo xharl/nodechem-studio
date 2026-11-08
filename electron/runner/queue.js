@@ -21,6 +21,7 @@ import { CrestRunner } from './crestRunner.js';
 import {
   ensembleSummary,
   fixtureConformerFrames,
+  isConformerGroupId,
   parseMultiXyz,
   rankEnsemble,
   withEnergies,
@@ -368,6 +369,10 @@ function conformerTaskRecord(raw, nodeId) {
       },
       charge: Math.round(number(conf.charge, 0, -10, 10)),
       multiplicity: Math.round(number(conf.multiplicity, 1, 1, 10)),
+      // Issue #132: the study the block belongs to, if any. Bounded here like
+      // every other string a hand-written queue payload could carry; an
+      // invalid value is dropped rather than guessed at.
+      group: isConformerGroupId(String(conf.group ?? '')) ? String(conf.group) : '',
       argv: Array.isArray(conf.argv) ? conf.argv.map(String).slice(0, 32) : [],
       member,
     },
@@ -1460,6 +1465,9 @@ export class QueueManager {
         origin: recordedOrigin,
         energyUnit,
         energyMethod,
+        // Issue #132: the study id travels with the ensemble, so a reader of
+        // conformers.json alone can see the block belongs with others.
+        group: conf.group,
       });
       summary.generatedAt = new Date().toISOString();
       const summaryPath = path.join(dir, 'conformers.json');
@@ -1519,6 +1527,10 @@ export class QueueManager {
       ...memberEnergy,
       origin: memberOrigin,
       mixedEnergies: false,
+      // Issue #132: the fanned-out branch repeats its parent's study id, so the
+      // one-member summary in a branch folder does not lose the relationship.
+      group: isConformerGroupId(String(task.conformers?.group ?? ''))
+        ? String(task.conformers.group) : '',
       count: 1,
       total: 1,
       spreadKcal: Number.isFinite(member.spreadKcal) ? member.spreadKcal : null,
