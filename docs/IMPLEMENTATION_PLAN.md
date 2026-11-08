@@ -289,7 +289,7 @@ Linux/macOS Gaussian job has been run.
 | Live queue status on the canvas | **Open** — node cards show project state; the queue panel shows task state | `src/renderer/app.js` |
 | macOS package | **Open** — runner supports macOS; there is no build to sign or test | §5 Phase 6 |
 | Code signing | **Open** — no certificate; both installers are unsigned | §5 Phase 6 |
-| Conformer/protomer stage (#30) | Milestone `0.3 — the moat` | GitHub issue |
+| Conformer fan-out into sibling calculations (#80) | **Open** — the block chooses one member; expanding an ensemble into one task per member is backlog. The block itself shipped in 0.3 (§4b) | GitHub issue |
 | Engine abstraction + ORCA (#31) | Milestone `1.0 — reach` | GitHub issue |
 | Molecular builder (#58), wavefunction analysis (#59), HPC submit/monitor (#64), multiscale QM/MM (#67), composite methods (#77) | Backlog, no milestone yet | GitHub issues |
 | VCD/ROA (#78) | **Blocked on data** — needs one real Gaussian `Freq=(VCD)` log to write the parser against | GitHub issue |
