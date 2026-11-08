@@ -34,7 +34,7 @@ modes are about untrusted data and file handling:
 - **Project files (`.ncs`)** — a crafted project that achieves code execution, reads outside the
   paths it should, or writes outside its own run/bundle folder. In particular: condition expressions
   must stay a data-only grammar, and input/output names must stay validated before any path join.
-- **Structure import** (`.xyz`, `.mol`, `.sdf`, `.gjf`, `.com`) — parser crashes, memory exhaustion,
+- **Structure import** (`.xyz`, `.mol`, `.sdf`, `.mol2`, `.pdb`/`.pdbqt`, `.cjson`, `.gjf`, `.com`, Gaussian `.log`) — parser crashes, memory exhaustion,
   or file reads outside the chosen file.
 - **Cluster-export import** — a returned folder that reads or writes outside the target directory, or
   that fabricates a passing gate.

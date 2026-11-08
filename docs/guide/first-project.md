@@ -91,7 +91,8 @@ order, byte-stable when nothing changed. The tab title stops showing *unsaved ch
 
 Open **Molecule** in the top bar. The drawer has three tabs:
 
-- **Structure** — import a `.xyz`, `.mol`, `.sdf`, `.gjf` or `.com` file with the file picker or by
+- **Structure** — import a `.xyz`, `.mol`, `.sdf`, `.mol2`, `.pdb`/`.pdbqt`, `.cjson`, `.gjf`, `.com` file,
+  or a Gaussian `.log`/`.out` (its optimisation frames become selectable records), with the file picker or by
   drag-and-drop. Element symbols, finite coordinates and charge/multiplicity parity are validated;
   Z-matrix input is refused rather than guessed.
 

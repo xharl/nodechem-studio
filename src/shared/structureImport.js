@@ -10,6 +10,8 @@
  */
 
 import { atomicNumber, isElementSymbol } from './elements.js';
+import { logFrames, parseCjson, parseMol2, parsePdb, parsePdbModels } from './structureParsers.js';
+import { parseTrajectory } from './trajectory.js';
 
 export class StructureError extends Error {}
 
@@ -28,23 +30,31 @@ function integer(value) {
 }
 
 const SUPPORTED_EXTENSIONS = Object.freeze(['xyz', 'mol', 'sdf', 'gjf', 'com']);
-const PENDING_EXTENSIONS = Object.freeze(['mol2', 'pdb', 'ent', 'pdbqt', 'cjson']);
+const EXTRA_EXTENSIONS = Object.freeze(['mol2', 'pdb', 'ent', 'pdbqt', 'cjson', 'log', 'out']);
+// Extensions we recognise only in order to refuse them with a reason (#59/#58).
+const REFUSED_EXTENSIONS = Object.freeze(['chk', 'fchk', 'smi', 'smiles', 'inchi', 'inchi1']);
 
 function formatFor(filename, text) {
   const extension = String(filename).toLowerCase().split('.').pop();
+  if (REFUSED_EXTENSIONS.includes(extension)) return extension;
   if (SUPPORTED_EXTENSIONS.includes(extension)) return extension;
-  // Sniff before the Gaussian heuristic: a MOL2 begins with `#` comment lines,
-  // which used to make it look like a .gjf route section.
+  // Content wins over the extension, because a `.log` can be a Gaussian output
+  // or a plain run log, and a MOL2 begins with `#` comment lines that used to
+  // look like a .gjf route section.
   if (/@<TRIPOS>MOLECULE/i.test(text)) return 'mol2';
-  if (/^(ATOM  |HETATM)/m.test(text)) return 'pdb';
-  if (PENDING_EXTENSIONS.includes(extension)) return extension;
+  if (/^\s*Standard orientation:/m.test(text) && /Gaussian|GINC|Entering Link 1/i.test(text)) return 'log';
+  if (/^\{"molecule"|"conformer"\s*:\s*\{/m.test(text)) return 'cjson';
+  if (/^(ATOM  |HETATM)/m.test(text)) {
+    return extension === 'pdbqt' ? 'pdbqt' : 'pdb';
+  }
+  if (EXTRA_EXTENSIONS.includes(extension)) return extension;
   if (/^\s*\d+\s*\r?\n/.test(text) && /\b\d+\s*\r?\n/.test(text)) return 'xyz';
   if (/V2000|V3000|\$\$\$\$/i.test(text)) return 'mol';
   if (/^\s*%|^\s*#/m.test(text)) return 'gjf';
   return '';
 }
 
-function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings }) {
+function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, parity = 'error' }) {
   if (atoms.length === 0) throw new StructureError('The structure has no atoms.');
   if (atoms.length > MAX_ATOMS) throw new StructureError(`The structure has ${atoms.length} atoms; the limit is ${MAX_ATOMS}.`);
 
@@ -96,9 +106,22 @@ function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings }
   if (electrons < 0) {
     throw new StructureError(`Charge ${finalCharge} removes more electrons than the ${cleaned.length} atoms provide.`);
   }
-  if ((electrons - (finalMultiplicity - 1)) % 2 !== 0) {
-    throw new StructureError(
-      `Charge ${finalCharge} and multiplicity ${finalMultiplicity} are inconsistent with ${electrons} electrons (parity mismatch).`,
+  // Formats that state charge and multiplicity must also agree with the
+  // electron count. Formats that state neither (PDB, MOL2, cJSON, a log frame)
+  // get the smallest consistent multiplicity instead, with a warning: refusing
+  // a crystallographic file because it lacks hydrogens would block the import
+  // to protect a number the file never contained.
+  let consistentMultiplicity = finalMultiplicity;
+  if ((electrons - (consistentMultiplicity - 1)) % 2 !== 0) {
+    if (parity === 'error') {
+      throw new StructureError(
+        `Charge ${finalCharge} and multiplicity ${consistentMultiplicity} are inconsistent with ${electrons} electrons (parity mismatch).`,
+      );
+    }
+    consistentMultiplicity = electrons % 2 === 0 ? 1 : 2;
+    warnings.push(
+      `The structure has ${electrons} electrons, so the multiplicity was set to ${consistentMultiplicity} `
+      + '(this format does not state a spin state; crystallographic files often omit hydrogens — check before running).',
     );
   }
 
@@ -110,7 +133,7 @@ function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings }
     // is the viewer's job, so an empty list means "not stated", never "none".
     ...(finalBonds.length ? { bonds: finalBonds } : {}),
     charge: finalCharge,
-    multiplicity: finalMultiplicity,
+    multiplicity: consistentMultiplicity,
     warnings,
   };
 }
@@ -340,8 +363,26 @@ export function parseStructureRecords(text, { filename = '' } = {}) {
     }
   }
 
-  const single = parseStructure(text, { filename });
+  if (format === 'pdb' || format === 'pdbqt') {
+    const records = parsePdbModels(normalized, { name: baseName(filename), pdbqt: format === 'pdbqt' });
+    return { format: format === 'pdbqt' ? 'pdb' : format, records: records.map((record) => finalize({ ...record, format, parity: 'adjust' })) };
+  }
+
+  if (format === 'log') {
+    const trajectory = parseTrajectory(normalized);
+    const frames = logFrames(trajectory?.steps ?? [], { name: baseName(filename) });
+    if (frames.length === 0) {
+      throw new StructureError('This Gaussian log contains no Standard orientation block, so there is no geometry to import.');
+    }
+    return { format: 'log', records: frames.map((frame) => finalize({ ...frame, format: 'xyz', parity: 'adjust' })) };
+  }
+
+  const single = parseSingle(text, { filename });
   return { format: single.format, records: [single] };
+}
+
+function baseName(filename) {
+  return String(filename || '').split(/[\\/]/).pop().replace(/\.[^.]+$/, '');
 }
 
 /**
@@ -349,10 +390,26 @@ export function parseStructureRecords(text, { filename = '' } = {}) {
  * issue is more useful than "Unrecognised structure format", which suggests the
  * file is broken rather than the reader being incomplete.
  */
-function pendingFormatError(format) {
-  const names = { mol2: 'MOL2', pdb: 'PDB', ent: 'PDB', pdbqt: 'PDBQT', cjson: 'cJSON' };
-  return new StructureError(`${names[format] || format.toUpperCase()} import is not implemented yet (#79). `
-    + 'Convert the file to .xyz, .mol or .sdf for now — the coordinates are Cartesian in all of them.');
+/**
+ * Formats that cannot be turned into a molecule here, each refused by reason.
+ * A binary checkpoint is #59's scope; a SMILES string has no coordinates at all
+ * and generating them needs an embedder this project does not ship.
+ */
+function unsupportedFormatError(format, filename) {
+  if (format === 'chk' || format === 'fchk') {
+    return new StructureError(`${String(format).toUpperCase()} is a binary checkpoint, not a structure file. `
+      + 'Wavefunction ingest is tracked in #59; export coordinates to .xyz or .mol instead.');
+  }
+  if (format === 'smiles' || format === 'smarts' || format === 'inchi') {
+    return new StructureError('A SMILES/InChI string carries no coordinates. Building a 3D structure from it '
+      + 'needs a chemistry engine, which is out of scope (decision recorded in #58/#79). '
+      + 'Supply a .xyz, .mol, .sdf, .mol2, .pdb or .cjson file.');
+  }
+  if (format === 'smi') {
+    return new StructureError(`${filename || 'The file'} is a SMILES list, which carries no coordinates. `
+      + 'Export the structures as .sdf or .mol2 and import that instead.');
+  }
+  return null;
 }
 
 function periodicError(filename, periodic) {
@@ -362,6 +419,10 @@ function periodicError(filename, periodic) {
 }
 
 export function parseStructure(text, { filename = '' } = {}) {
+  return parseSingle(text, { filename });
+}
+
+function parseSingle(text, { filename = '' } = {}) {
   if (typeof text !== 'string' || !text.trim()) throw new StructureError('The structure file is empty.');
   const normalized = text.replace(/^\uFEFF/, '');
   const periodic = periodicFormatFor(filename, normalized);
@@ -381,10 +442,20 @@ export function parseStructure(text, { filename = '' } = {}) {
       parsed.warnings = [...(parsed.warnings || []), `The file contains ${recordCount} records; record 1 is loaded. Use the record picker to choose another.`];
     }
   } else if (format === 'gjf' || format === 'com') parsed = parseGjf(lines);
-  else if (PENDING_EXTENSIONS.includes(format)) throw pendingFormatError(format);
-  else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com.');
+  else if (format === 'mol2') parsed = parseMol2(normalized, { name: baseName(filename) });
+  else if (format === 'pdb' || format === 'pdbqt') parsed = parsePdb(normalized, { name: baseName(filename), pdbqt: format === 'pdbqt' });
+  else if (format === 'cjson') parsed = parseCjson(normalized, { name: baseName(filename) });
+  else if (format === 'log') {
+    const frames = logFrames(parseTrajectory(normalized)?.steps ?? [], { name: baseName(filename) });
+    if (frames.length === 0) throw new StructureError('This Gaussian log contains no Standard orientation block.');
+    parsed = frames[frames.length - 1];
+  } else if (unsupportedFormatError(format, filename)) throw unsupportedFormatError(format, filename);
+  else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com, .mol2, .pdb, .pdbqt, .cjson, .log.');
 
-  return finalize({ ...parsed, format });
+  // Only .mol/.sdf/.gjf state charge or multiplicity, so only they are held to
+  // the parity rule as an error.
+  const statesSpin = format === 'mol' || format === 'sdf' || format === 'gjf' || format === 'com';
+  return finalize({ ...parsed, format, parity: statesSpin ? 'error' : 'adjust' });
 }
 
 /** Deterministic text form used by tests and the provenance record. */

@@ -2146,12 +2146,12 @@ function renderDrawer() {
         <div class="drop-zone" style="margin-top:10px">
           <strong>${atomCount ? `${atomCount} atoms` : 'Demo water geometry'}</strong>
           <span>${sourceLabel}</span>
-          <span class="drop-hint">Drop a .xyz / .mol / .sdf / .gjf / .com file here.</span>
+          <span class="drop-hint">Drop a .xyz, .mol, .sdf, .mol2, .pdb, .pdbqt, .json, .gjf, .com or Gaussian .log file here.</span>
           <div class="run-actions" style="margin:8px 0 0">
             <button type="button" class="btn small" data-action="import-structure">Import structure file</button>
             ${atomCount ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
           </div>
-          <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.gjf,.com" hidden>
+          <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out" hidden>
           ${(draft.records?.length || 0) > 1 ? `
             <label class="field-label" style="margin-top:8px">Record
               <select data-record-select>

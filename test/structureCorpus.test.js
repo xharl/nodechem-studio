@@ -82,31 +82,28 @@ describe('multi-frame XYZ — derived from a real Gaussian optimisation', () => 
 });
 
 /**
- * These four formats are not parsed yet. The assertion is that the refusal
- * *names the reason* — a silent "Unrecognised structure format" would tell the
- * user their file is broken when the reader is simply incomplete.
+ * These files were refused when the corpus was added; #79's readers now accept
+ * them. The assertions flipped from refusal text to atom counts over the same
+ * bytes — which is what the corpus was for.
  */
-describe('refusals that name the format', () => {
-  it('refuses a CIF by naming periodic systems', () => {
+describe('formats that became readable', () => {
+  it('still refuses a CIF by naming periodic systems', () => {
     expect(() => parseStructure(read('1crn.cif'), { filename: '1crn.cif' }))
       .toThrow(/Periodic systems are not supported/);
   });
 
-  it('refuses a single-model PDB as not implemented, not as unrecognised', () => {
-    expect(() => parseStructure(read('1crn.pdb'), { filename: '1crn.pdb' }))
-      .toThrow(/PDB import is not implemented yet \(#79\)/);
+  it('now reads the single-model PDB', () => {
+    expect(parseStructure(read('1crn.pdb'), { filename: '1crn.pdb' }).atoms).toHaveLength(327);
   });
 
-  it('refuses a multi-model PDB the same way, without mistaking it for a .mol', () => {
-    expect(() => parseStructure(read('1l2y-first-2-models.pdb'), { filename: '1l2y.pdb' }))
-      .toThrow(/PDB import is not implemented yet/);
+  it('now reads every model of the truncated ensemble', () => {
+    const { records } = parseStructureRecords(read('1l2y-first-2-models.pdb'), { filename: '1l2y.pdb' });
+    expect(records.map((record) => record.atoms.length)).toEqual([304, 304]);
   });
 
-  it('refuses MOL2 rather than sniffing its "#" comments as a Gaussian route', () => {
-    expect(() => parseStructure(read('rdkit-sulfonate.mol2'), { filename: 'sulfonate.mol2' }))
-      .toThrow(/MOL2 import is not implemented yet/);
-    expect(() => parseStructure(read('rdkit-noxide.mol2'), { filename: 'noxide.mol2' }))
-      .toThrow(/MOL2 import is not implemented yet/);
+  it('now reads both MOL2 files instead of sniffing their "#" comments as a Gaussian route', () => {
+    expect(parseStructure(read('rdkit-sulfonate.mol2'), { filename: 'sulfonate.mol2' }).atoms).toHaveLength(8);
+    expect(parseStructure(read('rdkit-noxide.mol2'), { filename: 'noxide.mol2' }).atoms).toHaveLength(27);
   });
 });
 
