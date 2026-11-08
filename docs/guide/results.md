@@ -356,6 +356,31 @@ dashed behind the simulation, scaled so its strongest point matches the simulate
 caption prints the factor that was applied — an overlay whose heights were silently rescaled would
 invite a comparison that is not available.
 
+## VCD rotational strengths
+
+Turn on **VCD** in a frequency block's inspector (it adds `=VCD` to the frequency keyword:
+`Freq=VCD`, `Opt Freq=VCD`; with Raman also on, one keyword carries both: `Freq=(Raman,VCD)`). The
+block is refused on a non-frequency job and on an xTB block.
+
+The **VCD** card lists, per mode, the frequency, the rotational strength <em>R</em> in
+**10⁻⁴⁴ esu² cm²**, the dipole strength in 10⁻⁴⁰ esu² cm², and the E–M angle in degrees, exactly as
+Gaussian prints them.
+
+Three things the card refuses to smooth over:
+
+- **_R_ is signed.** The figure is the signed Lorentzian sum around a **zero line**, normalised to
+  the strongest |_R_| — not to the strongest positive band, which would hide half the spectrum. The
+  caption counts the positive and negative bands.
+- **The representation may be unstated.** Gaussian 16 (Rev A.03, at least) prints the unit and no
+  velocity/length label. Velocity and length rotational strengths agree only in a complete basis, so
+  the record keeps `representation: null` and the card says "not stated in the output" instead of
+  picking one. If a revision does print a label, it is read and shown.
+- **Nothing is converted into an instrument intensity.** As with Raman, the plotted quantity is the
+  printed rotational strength, not an absorbance.
+
+ROA is not read: it needs Gaussian 16 B.01+ and no real ROA log exists in the corpus, so no parser is
+claimed for it.
+
 ## Emission and ECD
 
 **Emission.** Start from the **Emission from S1 (Opt then TD)** template: the first block emits

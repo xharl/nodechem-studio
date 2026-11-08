@@ -1063,6 +1063,7 @@ function checkEngineSettings({ settings, engine }) {
       ['The NMR job type', text(source.jobType) === 'NMR' ? 'NMR' : ''],
       ['A composite method job type', isCompositeJobType(source.jobType) ? text(source.jobType) : ''],
       ['Raman activities', source.raman === true ? 'true' : ''],
+      ['VCD rotational strengths', source.vcd === true ? 'true' : ''],
       ['Frontier-orbital descriptors', source.orbitals === true ? 'true' : ''],
     ].find(([, value]) => value !== '');
     if (offender) {

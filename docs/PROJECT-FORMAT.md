@@ -116,7 +116,7 @@ Type-specific payloads:
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
 `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
 `optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
-`raman`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
+`raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`.
 
@@ -141,8 +141,9 @@ before.
 `ladder` declares method-ladder groups, `referenceNodeId` names the block a barrier or ΔG‡ is
 measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, `orbitals` adds the
 orbital-eigenvalue print (`Pop=Full` on Gaussian) that the frontier-orbital and Koopmans panel is
-read from, and `raman`, `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
-analysis and validity behaviour.
+read from, `raman` and `vcd` put `=Raman` / `=VCD` on the frequency keyword (`Freq=(Raman,VCD)`
+when both are on), and `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
+analysis and validity behaviour. `vcd` is refused on a job type with no frequency to carry it.
 
 `jobType` also accepts the composite methods `CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4`
 and `G4(MP2)`. A composite job **must** leave `method`, `basis`, `dispersion`, `solvation`,

@@ -25,6 +25,7 @@ import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
 import { mountSuperposition } from './superpositionCard.js';
 import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
+import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
 import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
 import { overlayPolyline, parseMeasuredSpectrum, scaleToSpectrum } from '../shared/overlay.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
@@ -1067,7 +1068,73 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
 }
 
 /**
- * ECD (#75). Rotatory strength is signed, so the curve is too. The convention
+ * VCD (#78). Rotational strengths are signed, so the curve is drawn around a
+ * zero line and the table keeps the sign; normalising to the strongest
+ * positive band would hide half the spectrum.
+ *
+ * Gaussian 16 A.03 prints the row as `Rot. str. --` with the unit
+ * (10⁻⁴⁴ esu² cm²) and **no velocity/length label**. The two representations
+ * agree only in a complete basis, so the card says "not stated in the output"
+ * instead of choosing one; the unit and the E–M angle are printed so a reader
+ * can identify the convention from the numbers.
+ */
+function vcdCard(parsed, flags) {
+  const modes = parsed?.vcd;
+  if (!Array.isArray(modes) || modes.length === 0) return '';
+  const withStrength = modes.filter((mode) => Number.isFinite(mode.rotationalStrength));
+  if (withStrength.length === 0) return '';
+  const representation = parsed?.vcdTable?.representation ?? null;
+  const body = '<p class="results-note">Per-mode vibrational circular dichroism as printed by Gaussian: '
+    + 'rotational strength <em>R</em>, dipole strength and the E–M angle between the electric and magnetic '
+    + `dipole transition moments. R is <strong>signed</strong> (${esc(VCD_UNITS)}), and the curve below is `
+    + 'the signed Lorentzian sum normalised to the strongest |R|, not to the strongest positive band. '
+    + `Representation: ${representation === null
+      ? '<strong>not stated in the output</strong> — Gaussian 16 prints the unit only, and velocity and length '
+        + 'representations agree only in a complete basis, so none is assumed here.'
+      : `<code>${esc(representation)}</code>, as stated in the output.`}</p>`
+    + '<div class="nmr-controls">'
+    + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-vcd-fwhm value="12"></label>'
+    + '</div>'
+    + `<div data-field="vcd-figure">${vcdSectionHtml(modes, { fwhmCm: 12 })}</div>`
+    + caveatHtml(flags, 'These rotational strengths');
+  return card('VCD', body, 'is-wide');
+}
+
+/** The signed figure and the per-mode table, recomputed when the FWHM changes. */
+export function vcdSectionHtml(modes, { fwhmCm = 12 } = {}) {
+  const spectrum = vcdSpectrum(modes, { fwhmCm });
+  if (!spectrum) return '<p class="results-missing">No rotational strengths were printed, so there is nothing to plot.</p>';
+  const simulated = vcdPolyline(spectrum);
+  const figure = '<figure class="results-spectrum" data-field="vcd-spectrum">'
+    + '<svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Simulated VCD spectrum, signed">'
+    // The zero line is what makes a signed curve readable, so it carries its own
+    // stroke: a class alone leaves it invisible when the theme has no rule for
+    // it, and an invisible baseline turns negative bands into noise.
+    + '<line x1="0" y1="50" x2="100" y2="50" class="spectrum-zero" stroke="currentColor" '
+    + 'stroke-width="0.6" stroke-dasharray="2 2" opacity="0.5" vector-effect="non-scaling-stroke"/>'
+    + `<polyline points="${simulated}" class="spectrum-curve"/>`
+    + '</svg>'
+    + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(spectrum.counts.total)} modes `
+    + `(${esc(spectrum.counts.positive)} positive, ${esc(spectrum.counts.negative)} negative) · `
+    + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}</figcaption>`
+    + '</figure>';
+
+  const rows = spectrum.peaks.map((peak, index) => '<tr>'
+    + `<td>${esc(index + 1)}</td>`
+    + `<td>${esc(peak.wavenumber.toFixed(4))}</td>`
+    + `<td>${esc(peak.rotationalStrength.toFixed(4))}</td>`
+    + `<td>${peak.dipoleStrength === null ? MISSING_TEXT : esc(peak.dipoleStrength.toFixed(4))}</td>`
+    + `<td>${peak.emAngle === null ? MISSING_TEXT : esc(peak.emAngle.toFixed(4))}</td>`
+    + '</tr>').join('');
+  const table = '<table class="results-table" data-field="vcd-modes">'
+    + `<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th><th>R / ${esc(VCD_UNITS)}</th>`
+    + `<th>Dip. strength / ${esc(VCD_DIPOLE_UNITS)}</th><th>E–M angle / °</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table>`;
+  return figure + table;
+}
+
+/**
+ * ECD (#75). Rotatory strength is signed, so the curve is too.
  * (velocity vs length) is chosen by the reader and printed, because the two
  * numbers agree only in a complete basis and mixing them is meaningless.
  */
@@ -1412,6 +1479,7 @@ export function resultsPanelHtml(record, options = {}) {
     trajectoryCard(parsed, flags),
     nmrCard(parsed, flags),
     ramanCard(parsed, flags),
+    vcdCard(parsed, flags),
     ecdCard(parsed, flags),
     chargesCard(parsed, flags),
     sensitivityCard(record),
@@ -1577,6 +1645,19 @@ export function installResultsView({
     holder.innerHTML = ramanSectionHtml(modes, { fwhmCm, measured: ramanMeasured, overlayName: ramanOverlayName });
   };
 
+  /**
+   * VCD (#78): one control, one redraw. The signed curve is rebuilt from the
+   * parsed mode list so the FWHM never has to be sent back to the engine.
+   */
+  const rerenderVcd = () => {
+    const modes = currentRecord?.parsed?.vcd;
+    const holder = container.querySelector('[data-field="vcd-figure"]');
+    if (!modes || !holder) return;
+    const raw = container.querySelector('[data-vcd-fwhm]')?.value ?? '';
+    const fwhmCm = Number(raw) > 0 ? Number(raw) : 12;
+    holder.innerHTML = vcdSectionHtml(modes, { fwhmCm });
+  };
+
   const rerenderThermo = () => {
     const parsed = currentRecord?.parsed;
     const options = thermoControls();
@@ -1640,6 +1721,7 @@ export function installResultsView({
     if (!(target instanceof Element)) return;
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
+    if (target.matches('[data-vcd-fwhm]')) rerenderVcd();
     if (target.matches('[data-ecd-convention], [data-ecd-fwhm]')) rerenderEcd();
     if (target.matches('[data-thermo-temperature], [data-thermo-pressure], [data-thermo-term], [data-ensemble-run]')) rerenderThermo();
   });
@@ -1648,6 +1730,7 @@ export function installResultsView({
     if (!(target instanceof Element)) return;
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
+    if (target.matches('[data-vcd-fwhm]')) rerenderVcd();
     if (target.matches('[data-raman-overlay]') && target.files && target.files[0]) {
       const file = target.files[0];
       const reader = new FileReader();

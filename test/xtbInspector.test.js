@@ -145,7 +145,7 @@ describe('rendered calculation inspector', () => {
       'memory', 'memoryUnit', 'nproc', 'checkpoint',
       'routePreset', 'method', 'basis', 'dispersion', 'scf', 'grid', 'population', 'orbitals', 'verbosity',
       'tdStates', 'tdTriplets',
-      'raman',
+      'raman', 'vcd',
       'solvation', 'solvationModel', 'solvent',
       'charge', 'multiplicity', 'imaginary', 'minMagnitude',
       'checkpointFrom', 'customKeywords',

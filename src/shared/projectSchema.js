@@ -204,7 +204,7 @@ const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
   'counterpoise', 'counterpoiseChargeStates',
   // Issue #93: coordinate constraints and the extra QST2/QST3 structures.
   'constraints', 'qst',
@@ -260,6 +260,7 @@ export function defaultSettings(overrides = {}) {
     ladder: null,
     stableOpt: false,
     raman: false,
+    vcd: false,
     orbitals: false,
     tdRoot: 0,
     // A spin-state sweep enumerates multiplicities for the same system.
@@ -1125,6 +1126,7 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // Raman activities (#76): a flag on the frequency keyword, off by default so
     // an existing project keeps emitting exactly the route it did before.
     raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),
+    vcd: readBoolean(c, source.vcd, `${path}.vcd`, { legacy, fallback: false, optional: true }),
     orbitals: readBoolean(c, source.orbitals, `${path}.orbitals`, { legacy, fallback: false, optional: true }),
     // Which excited state an accompanying Opt follows (#75). 0 = not stated.
     tdRoot: readOptionalInteger(c, source.tdRoot, `${path}.tdRoot`, { fallback: 0, min: 0, max: 200 }),

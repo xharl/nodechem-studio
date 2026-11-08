@@ -22,12 +22,60 @@ to match the parser.
 | `g16-dvb-ir-truncated.out` | first 120 000 bytes of `g16-dvb-ir.out` | truncated file (derived, not a complete job) |
 | `g09-dvb-un-sp.log` | `cclib/cclib`, `data/Gaussian/basicGaussian09/dvb_un_sp.log` | unrestricted single point: ⟨S²⟩ line and annihilation block |
 | `g09-dvb-un-sp-b.log` | `cclib/cclib`, `data/Gaussian/basicGaussian09/dvb_un_sp_b.log` | second unrestricted single point, used to confirm the ⟨S²⟩ reader |
+| `g16-propyleneoxide-vcd.out` | generated for this repository on 2026-11-08 (see below) | `#p B3LYP/6-31G(d) Opt Freq=(VCD) EmpiricalDispersion=GD3BJ`, (S)-propylene oxide, 10 atoms, 24 modes |
 
 Each excerpt starts at the header line Gaussian prints before the table and ends
 at the closing dashes (the relaxed scan ends at its last parameter row).
 
 Attribution: the source repositories are public; the excerpts are reproduced for
 parser testing only. Gaussian itself is licensed separately by Gaussian, Inc.
+
+## `g16-propyleneoxide-vcd.out` — the first VCD log
+
+Issue #78 could not find a Gaussian `Freq=(VCD)` output anywhere public, so this
+one was produced for the repository rather than downloaded:
+
+| | |
+|---|---|
+| Program | Gaussian 16, Rev A.03, `EM64W-G16RevA.03 17-Dec-2016` (Windows x64) |
+| Route | `#p B3LYP/6-31G(d) Opt Freq=(VCD) EmpiricalDispersion=GD3BJ` |
+| Molecule | (S)-propylene oxide, C₃H₆O, 10 atoms — a small chiral molecule |
+| Starting geometry | RDKit ETKDG embedding + MMFF94 optimisation, written as Cartesian input |
+| Result | `Optimization completed`, `Normal termination`, 24 modes (3N−6), no imaginary modes |
+| Machine | 8 cores, 8 GB, 1 min 9 s wall time |
+| Run by | Will (licensed Gaussian 16 user), 2026-11-08, at his instruction |
+| Full log | kept whole (302 kB) because the VCD rows sit inside the frequency section, not in a standalone table |
+
+What the block looks like (this is the layout the parser is written against):
+
+```
+ Harmonic frequencies (cm**-1), IR intensities (KM/Mole), Raman scattering
+ activities (A**4/AMU), depolarization ratios for plane and unpolarized
+ incident light, reduced masses (AMU), force constants (mDyne/A),
+ Dipole strengths (10**-40 esu**2-cm**2),
+ Rotational strengths (10**-44 esu**2-cm**2),
+ E-M angle = Angle between electric and magnetic dipole transition moments (deg),
+ and normal coordinates:
+                      1                      2                      3
+ Frequencies --    212.7138               365.0224               411.8010
+ IR Inten    --      0.5246                 3.7138                 4.3208
+ Dip. str.   --      9.8394                40.5893                41.8584
+ Rot. str.   --      3.9145               -12.6414                -2.0675
+ E-M angle   --     70.6644               123.5470                97.0148
+  Atom  AN      X      Y      Z        X      Y      Z        X      Y      Z
+```
+
+Two observations this fixture settled, both now asserted in `test/vcd.test.js`:
+
+1. Rev A.03 prints **no velocity/length representation label** for the rotational
+   strength row — only the unit. #78 assumed the output states it; it does not,
+   so the record keeps `representation: null` and the card says so.
+2. The row is `Rot. str. --` / `Dip. str. --` (abbreviated), not
+   `Rotational strengths ---`. A parser written from the section prose header
+   would silently read nothing.
+
+ROA (`Freq=ROA`) is a Gaussian 16 **B.01+** feature and cannot be produced on an
+A.03 licence, so no ROA fixture is included and no ROA reader is claimed.
 | `g16-h2o-raman.out` | `exa-analytics/exatomic` (`exatomic/static/gaussian/g16-h2o-321g-freq.out`), G16, `Freq=Raman` on water | Raman activities 11.4937 / 95.6630 / 44.0813 Å⁴/amu and both depolarisation ratios; the file contains the short and the long layout of the same table |
 | `g16-dvb-td.out` | `cclib/cclib` (`data/Gaussian/basicGaussian16/dvb_td.out`), G16 TD-DFT on divinylbenzene | Rotatory-strength block in both conventions (velocity and length); **achiral**, so every value is printed as zero — it proves the column layout, not the signs |
 

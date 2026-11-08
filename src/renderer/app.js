@@ -1790,6 +1790,22 @@ function calcInspector(node) {
       + '</span></div>',
   ].join(''));
 
+  // VCD (#78) is the other modifier of the frequency keyword. It is offered only
+  // where a frequency job exists, and the note says what the panel will show and
+  // what Gaussian does *not* state (the velocity/length representation).
+  const vcdGroup = group('VCD', s.vcd ? 'rotational strengths on' : 'off', s.vcd, [
+    switchRow('VCD rotational strengths', 'adds =VCD to the frequency keyword', 'vcd', s.vcd, { disabled: !frequencyJob }),
+    '<div class="field full"><span class="inspector-note">'
+      + (frequencyJob
+        ? 'Gaussian prints the rotational strength <em>R</em> (10<sup>−44</sup> esu<sup>2</sup> cm<sup>2</sup>), '
+          + 'the dipole strength and the E–M angle per mode. <em>R</em> is signed and the results panel plots it '
+          + 'around a zero line. With Raman also on, one keyword carries both: <code>Freq=(Raman,VCD)</code>.'
+        : 'Requires a frequency job: choose Freq or Opt Freq. The input builder refuses the keyword otherwise.')
+      + ' Gaussian 16 prints no velocity/length label for the row, so the panel records the unit and says the '
+      + 'representation is not stated.'
+      + '</span></div>',
+  ].join(''));
+
   const gates = s.gates;
   const gatesGroup = group('Gates', `${[gates.thermo, gates.finalEnergy, gates.imaginary !== null, gates.scf].filter(Boolean).length} active`, true, [
     switchRow('Normal termination', 'always required', 'termination', true, { gate: true, disabled: true }),
@@ -1866,6 +1882,7 @@ function calcInspector(node) {
     ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : compositeJob ? compositeNote : methodGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : excitedGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : ramanGroup}
+    ${isXtb || isPsi4 || compositeJob ? '' : vcdGroup}
     ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : gaussianSolvationGroup}
     ${moleculeGroup}
     ${gatesGroup}
@@ -2738,6 +2755,7 @@ function updateNodeField(node, key, value) {
         node.settings.population = '';
         node.settings.orbitals = false;
         node.settings.raman = false;
+        node.settings.vcd = false;
         node.settings.grid = '';
         node.settings.scf = '';
         node.settings.tdStates = 0;

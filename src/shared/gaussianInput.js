@@ -380,6 +380,12 @@ export function buildGaussianInput({
       + `${settings.jobType || 'Opt'} would silently drop the keyword.`);
   }
 
+  // VCD rides the same frequency keyword, so it has the same requirement (#78).
+  if (settings.vcd === true && !/Freq/i.test(String(settings.jobType || 'Opt'))) {
+    throw new Error('VCD rotational strengths need a frequency job: choose Freq or Opt Freq, or turn VCD off. '
+      + `${settings.jobType || 'Opt'} would silently drop the keyword.`);
+  }
+
   // Counterpoise (#77): the fragment count is explicit, and every atom must
   // carry a matching fragment label. A mismatch is refused here rather than
   // written into an input Gaussian cannot interpret.

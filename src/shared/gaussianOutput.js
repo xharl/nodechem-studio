@@ -19,6 +19,7 @@ import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
 import { parseShieldings } from './nmr.js';
 import { animatableModes, parseNormalModes } from './normalModes.js';
 import { attachRaman, parseRamanActivities } from './raman.js';
+import { attachVcd, parseVcdStrengths } from './vcd.js';
 import { parseOrbitals } from './orbitals.js';
 import { parseRotatoryStrengths } from './ecd.js';
 import { parseTrajectory } from './trajectory.js';
@@ -1251,6 +1252,11 @@ function parseLink(section, index) {
     (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
     parseRamanActivities(lines.join('\n')),
   );
+  // VCD (#78) rides the same frequency block, one signed row per mode.
+  const vcdModes = attachVcd(
+    (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
+    parseVcdStrengths(lines.join('\n')),
+  );
   const convergenceRecords = parseConvergenceRecords(lines, startLine);
   const error = parseErrorCause(lines);
   const stepNumbers = lines
@@ -1281,6 +1287,11 @@ function parseLink(section, index) {
     optimization,
     frequencies: summarizeFrequencies(frequencyBlocks),
     raman: raman.some((mode) => mode.ramanActivity !== null) ? raman : null,
+    vcd: vcdModes.some((mode) => mode.rotationalStrength !== null) ? vcdModes : null,
+    vcdMeta: (() => {
+      const table = parseVcdStrengths(lines.join('\n'));
+      return table ? { units: table.units, dipoleUnits: table.dipoleUnits, representation: table.representation } : null;
+    })(),
     frequencyBlocks,
     thermochemistry: parseThermochemistry(joined, lines),
     finalEnergy: parseFinalEnergy(joined, scf),
@@ -1490,6 +1501,21 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     parseRamanActivities(text),
   );
   const raman = ramanModes.some((mode) => mode.ramanActivity !== null) ? ramanModes : null;
+  // VCD (#78) sits in the same frequency section: rotational strengths per
+  // mode, signed, with the dipole strength and E-M angle Gaussian prints
+  // beside them. Null means the route did not ask for VCD, never "all zero".
+  const vcdTable = parseVcdStrengths(text);
+  const vcdModes = attachVcd(
+    (frequencyLink?.frequencyBlocks?.at(-1)?.values || []).map((wavenumber) => ({ wavenumber })),
+    vcdTable,
+  );
+  const vcd = vcdModes.some((mode) => mode.rotationalStrength !== null) ? vcdModes : null;
+  // Units and representation belong to the table, not to a mode: a reader has to
+  // be able to say which convention produced these numbers, and Gaussian 16
+  // prints the unit without naming a representation.
+  const vcdMeta = vcdTable
+    ? { units: vcdTable.units, dipoleUnits: vcdTable.dipoleUnits, representation: vcdTable.representation }
+    : null;
   // ECD (#75): only a chiral TD job prints non-zero rotatory strengths, but the
   // table is present whenever the route asks for it. Null means "not printed".
   const rotatoryStrengths = parseRotatoryStrengths(text);
@@ -1510,6 +1536,17 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     finalGeometry: geometry.final,
     frequencies,
     raman,
+    vcd,
+    // The table carries the unit string and (when a revision prints one) the
+    // velocity/length representation; the card must not re-invent either.
+    vcdTable: vcdTable
+      ? {
+        units: vcdTable.units,
+        dipoleUnits: vcdTable.dipoleUnits,
+        representation: vcdTable.representation,
+        modeCount: vcdTable.rotationalStrengths.length,
+      }
+      : null,
     rotatoryStrengths,
     orbitals,
     thermochemistry,

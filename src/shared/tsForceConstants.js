@@ -196,11 +196,19 @@ export function jobKeywordFor(settings = {}) {
   // Raman activities are a flag on the frequency keyword, not a job of their
   // own: `Freq=Raman`, and `Opt Freq=Raman` for a frequency after an
   // optimisation (#76).
+  // VCD (#78) is the other flag on the frequency keyword. Both are accepted in
+  // one parenthesised list — `Freq=(Raman,VCD)` — which is what Gaussian 16
+  // A.03 runs; separate keywords (`Freq=Raman=VCD`) it does not.
   const raman = settings.raman === true;
-  if (jobType === 'Freq') return raman ? 'Freq=Raman' : 'Freq';
+  const vcd = settings.vcd === true;
+  const freqKeyword = raman && vcd
+    ? 'Freq=(Raman,VCD)'
+    : raman ? 'Freq=Raman'
+      : vcd ? 'Freq=VCD' : 'Freq';
+  if (jobType === 'Freq') return freqKeyword;
   if (jobType === 'Opt' || jobType === 'Opt Freq') {
     const [head, ...rest] = jobType.split(/\s+/);
-    const tail = rest.map((token) => (raman && token === 'Freq' ? 'Freq=Raman' : token));
+    const tail = rest.map((token) => (token === 'Freq' ? freqKeyword : token));
     return [convergence ? `${head}=${convergence}` : head, ...tail].join(' ');
   }
   return jobType;

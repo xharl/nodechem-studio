@@ -43,6 +43,14 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
   convergence (`Tight`, `VeryTight`) and the derived UltraFine grid.
 - **Checkpoint hand-offs** between blocks (`%OldChk` plus `Geom=Check` and `Guess=Read`).
 - **Thermochemistry** from a frequency job, read out of the log.
+- **VCD rotational strengths** (#78) — `Freq=VCD` on a `Freq` or `Opt Freq` block, parsed per mode
+  with the dipole strength and the E–M angle Gaussian prints beside them. The rotational strength is
+  **signed**, and the panel draws it around a zero line instead of a magnitude. Gaussian 16 prints
+  the unit (`10⁻⁴⁴ esu² cm²`) but **no velocity/length representation label**, so the record keeps
+  `representation: null` and the panel says the representation is not stated rather than choosing
+  one: the two agree only in a complete basis. Raman and VCD combine into one keyword,
+  `Freq=(Raman,VCD)`. ROA is a Gaussian 16 B.01+ feature and is not read here — this repository has
+  no real ROA log to write a parser against, and it does not guess layouts.
 - **Validity checks** — the six pre/post-run checks in [Results](results.md#validity-checks).
 - **Effective core potentials.** A basis with an ECP (def2 or SDD for any element above krypton)
   written for a heavy atom becomes a `GenECP` route with the basis and pseudopotential blocks
