@@ -155,6 +155,18 @@ describe('ncs run — flow, record and max-parallel', () => {
 });
 
 describe('ncs report', () => {
+  it('accepts --figures=none and produces the table-only document', async () => {
+    const { dir, file } = await writeProject();
+    const out = path.join(dir, 'figures-off');
+    const ran = await ncs(['run', file, '--out', out, '--dry-run'], { timeout: 120000 });
+    expect(ran.code).toBe(0);
+    const report = await ncs(['report', out, '--figures=none', '--out', path.join(out, 'plain.html')], { timeout: 60000 });
+    expect(report.code).toBe(0);
+    const html = await readFile(path.join(out, 'plain.html'), 'utf8');
+    expect(html).not.toContain('<figure');
+    expect(html).not.toMatch(/<script/i);
+  }, 120000);
+
   it('rebuilds the HTML report from the newest queue, by default into reports/index.html', async () => {
     const { dir, file } = await writeProject();
     const out = path.join(dir, 'reported');

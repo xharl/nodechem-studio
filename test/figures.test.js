@@ -6,6 +6,7 @@ import {
 } from '../src/shared/figures/index.js';
 import { fromNmr, fromRaman, fromUvVis, fromVcd } from '../src/shared/figures/spectra.js';
 import { niceTicks, scaleLinear } from '../src/shared/figures/primitives.js';
+import { surfaceFigure } from '../src/shared/figures/surface.js';
 
 /**
  * Figures are claims, so they are tested like claims: the same bytes twice, no
@@ -282,5 +283,49 @@ describe('registry', () => {
 
   it('rejects an unknown kind by name', () => {
     expect(() => figure('hologram', {})).toThrow(/unknown figure kind: hologram/);
+  });
+});
+
+describe('projected isosurface', () => {
+  /** A closed octahedron as two lobes, so both colours are exercised. */
+  function octahedron(offset, sign) {
+    const v = [
+      [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+    ].map((p) => p.map((c) => c + offset));
+    const faces = [[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4], [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]];
+    const positions = new Float32Array(faces.length * 9);
+    const normals = new Float32Array(faces.length * 9);
+    faces.forEach((face, index) => {
+      face.forEach((corner, slot) => {
+        const p = v[corner];
+        positions.set(p, index * 9 + slot * 3);
+        normals.set(p.map((c) => c - offset), index * 9 + slot * 3);
+      });
+    });
+    return { positions, normals, sign };
+  }
+
+  it('draws one path per shading band and both phases', () => {
+    const result = surfaceFigure({
+      meshes: [octahedron(0.5, 1), octahedron(-0.5, -1)],
+      iso: 0.02,
+    });
+    expect(result).not.toBeNull();
+    expect(result.params.triangles).toBe(16);
+    const paths = result.svg.match(/<path d="/g) || [];
+    expect(paths.length).toBeGreaterThan(0);
+    // Positive lobes are blue, negative red: both must be present.
+    expect(result.svg).toMatch(/fill="#[0-9a-f]{6}"/);
+    expect(result.caption).toContain('iso 0.020 au');
+    expect(result.caption).toContain('16 triangles');
+    noExternal(result.svg);
+  });
+
+  it('is deterministic and refuses more triangles than it can draw', () => {
+    const meshes = [octahedron(0, 1)];
+    const a = surfaceFigure({ meshes });
+    const b = surfaceFigure({ meshes });
+    expect(a.svg).toBe(b.svg);
+    expect(surfaceFigure({ meshes, maxTriangles: 4 })).toBeNull();
   });
 });

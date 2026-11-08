@@ -46,6 +46,7 @@ import {
 import { parseFchk } from '../src/shared/fchk.js';
 import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
 import { parseCube } from '../src/shared/cubeFile.js';
+import { extractSurface } from '../src/shared/marchingCubes.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 import {
@@ -104,13 +105,21 @@ function parseArgs(argv) {
   for (let index = 0; index < rest.length; index += 1) {
     const item = rest[index];
     if (item.startsWith('--')) {
-      const key = item.slice(2);
-      const next = rest[index + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        flags[key] = next;
-        index += 1;
+      // `--key value` and `--key=value` are both accepted: the second is what
+      // people type, and a flag silently read as unset is the worst outcome.
+      const body = item.slice(2);
+      const equals = body.indexOf('=');
+      if (equals > 0) {
+        flags[body.slice(0, equals)] = body.slice(equals + 1);
       } else {
-        flags[key] = true;
+        const key = body;
+        const next = rest[index + 1];
+        if (next !== undefined && !next.startsWith('--')) {
+          flags[key] = next;
+          index += 1;
+        } else {
+          flags[key] = true;
+        }
       }
     } else {
       positional.push(item);
@@ -462,7 +471,8 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
     // A slice figure needs a volume. With --figures=surfaces the cube files the
     // block read are parsed from the run folder; without one the figure says so.
     // eslint-disable-next-line no-await-in-loop
-    const volumes = figures === 'surfaces' ? await cubeVolumesFor(queue) : null;
+    const volumes = figures === 'none' ? null : await cubeVolumesFor(queue);
+    const surfaces = figures === 'surfaces' ? await surfacesFor(volumes) : null;
     models.push(buildWorkflowReport({ ...queue, flowId }, records, {
       generatedAt,
       appVersion: 'cli',
@@ -470,6 +480,7 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
       includeImported,
       figureLevel: figures,
       volumes,
+      surfaces,
     }));
   }
 
@@ -497,6 +508,48 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
     if (model) models.push(model);
   }
   return models;
+}
+
+/**
+ * Isosurfaces for the volumes, when `--figures=surfaces` was asked for.
+ *
+ * The isovalue is a stated fraction (10 %) of the field's largest absolute value
+ * rather than a magic constant, and the two lobes are meshed separately at +iso
+ * and −iso so their phases stay apart. A volume too dense to mesh within the cap
+ * returns null and the figure says so.
+ */
+async function surfacesFor(volumes) {
+  if (!volumes) return null;
+  const out = {};
+  for (const [nodeId, volume] of Object.entries(volumes)) {
+    if (!volume || !Array.isArray(volume.counts) || volume.axisAligned === false) continue;
+    const iso = Math.max(Math.abs(volume.min ?? 0), Math.abs(volume.max ?? 0)) * 0.1;
+    if (!(iso > 0)) continue;
+    const step = Array.isArray(volume.step) ? volume.step : [volume.step, volume.step, volume.step];
+    const field = {
+      dims: volume.counts,
+      origin: volume.origin,
+      step: volume.step,
+      axes: [[step[0], 0, 0], [0, step[1], 0], [0, 0, step[2]]],
+      values: volume.values,
+    };
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const positive = extractSurface(field, iso, { maxTriangles: 20000 });
+      // eslint-disable-next-line no-await-in-loop
+      const negative = extractSurface(field, -iso, { maxTriangles: 20000 });
+      out[nodeId] = {
+        iso,
+        meshes: [
+          { positions: positive.positions, normals: positive.normals, sign: 1 },
+          { positions: negative.positions, normals: negative.normals, sign: -1 },
+        ].filter((mesh) => mesh.positions.length > 0),
+      };
+    } catch {
+      // A field that cannot be meshed is reported by the figure, not thrown here.
+    }
+  }
+  return out;
 }
 
 /**
@@ -533,6 +586,8 @@ async function cubeVolumesFor(queue) {
         origin: parsedCube.origin,
         step: parsedCube.spacing,
         counts: parsedCube.dims,
+        min: parsedCube.stats?.min ?? 0,
+        max: parsedCube.stats?.max ?? 0,
         axisAligned,
         source: cube.name,
       };

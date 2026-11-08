@@ -26,6 +26,7 @@ disagree.
 | Orbital levels (α/β) | `parsed.orbitals.manifolds`, converted to eV at 27.2114 eV/Ha |
 | Convergence | `parsed.trajectory` step energies |
 | Contour slice | a `.cube` file **inside the task's run folder** (axes must be axis-aligned) |
+| Projected isosurface | the same cube, meshed at 10 % of its largest \|ψ\| and drawn as flat-shaded vector polygons — a printable copy of the 3D viewport |
 
 Each caption prints what a reader needs to judge the picture — FWHM, isovalue, grid, plane, units,
 number of points — plus a short content fingerprint (`figure <hash>`). A figure whose input is
@@ -33,7 +34,7 @@ absent says so: `figure not available: no cube file in the run folder`. The whol
 5 MB; anything dropped for the cap is named in the document.
 
 `ncs report --figures none|basic|surfaces` selects how much is drawn. `none` reproduces the
-table-only document of 0.4.0; `surfaces` adds the cube slice.
+table-only document of 0.4.0; `surfaces` adds the projected isosurface (the slab slice is drawn at every level when a cube is present).
 
 ## The per-flow report
 
