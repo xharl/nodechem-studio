@@ -1186,10 +1186,20 @@ app.whenReady().then(async () => {
     const textValue = typeof payload?.text === 'string' ? payload.text : '';
     if (!textValue) return { canceled: true };
     const suggested = path.basename(String(payload?.suggestedName || 'export.txt')).replace(/[^A-Za-z0-9._-]/g, '_');
+    // The Export menu writes NWChem/GAMESS/Q-Chem decks through this handler.
+    // Naming the filter matters: a save dialog opened on "Text (txt, md)" can
+    // otherwise append .txt and leave a file the other program will not read.
+    const deckFilter = {
+      '.nw': { name: 'NWChem input', extensions: ['nw'] },
+      '.inp': { name: 'GAMESS input', extensions: ['inp'] },
+      '.qcin': { name: 'Q-Chem input', extensions: ['qcin'] },
+    }[path.extname(suggested).toLowerCase()];
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Save export',
       defaultPath: path.join(app.getPath('documents'), suggested),
-      filters: suggested.endsWith('.cube')
+      filters: deckFilter
+        ? [deckFilter, { name: 'All files', extensions: ['*'] }]
+        : suggested.endsWith('.cube')
         // A cube written from the wavefunction card: name the format, so the
         // dialog does not open on "SVG figure" for a text volume.
         ? [{ name: 'Gaussian cube', extensions: ['cube'] }, { name: 'All files', extensions: ['*'] }]
