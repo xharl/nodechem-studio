@@ -23,6 +23,8 @@ export const SCHEMA_VERSION = 2;
 import { isElementSymbol } from './elements.js';
 import {
   DEFAULT_FLOW_ID,
+  DERIVATIVE_MAX_EDITS,
+  DERIVATIVE_OPS,
   GRAPH_ID_RE,
   RECORD_ID_RE,
   attachGraphAliases,
@@ -859,20 +861,20 @@ function normalizeMolecule(c, raw, legacy) {
  * atom count, so a corrupt bond index is an error rather than a line to
  * nowhere.
  */
-function normalizeBonds(c, raw, legacy, atomCount) {
+function normalizeBonds(c, raw, legacy, atomCount, basePath = 'molecule.bonds') {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
-    c.error('molecule.bonds', 'must be an array of {a, b, order} entries.');
+    c.error(basePath, 'must be an array of {a, b, order} entries.');
     return [];
   }
   if (raw.length > LIMITS.atoms * 8) {
-    c.error('molecule.bonds', 'contains more bonds than this atom count can have.');
+    c.error(basePath, 'contains more bonds than this atom count can have.');
     return [];
   }
   const bonds = [];
   const seen = new Set();
   raw.forEach((entry, index) => {
-    const path = `molecule.bonds[${index}]`;
+    const path = `${basePath}[${index}]`;
     if (!entry || typeof entry !== 'object') {
       c.error(path, 'must be an object with a, b and order.');
       return;
@@ -1353,6 +1355,74 @@ function normalizeSeries(c, raw, path, legacy) {
   };
 }
 
+/**
+ * Issue 189: one graph edit of a derivative block.
+ *
+ * Shape only, deliberately. Which elements an op needs, whether an index is in
+ * range for this structure, whether a valence is free — all of that is checked
+ * against the parent record by `applyEdits()` in `derivative.js`, and its
+ * message is what the user sees. Restating the rules here would be a second
+ * copy that drifts; the bounds below are wide on purpose, so a refusal explains
+ * the chemistry instead of a generic range message.
+ */
+function normalizeDerivativeEdit(c, raw, path, legacy) {
+  const source = requiredObject(c, raw, path, legacy, {});
+  warnUnknown(c, source, new Set(['op', 'atom', 'element', 'mass', 'charge', 'multiplicity']), path);
+  const op = readEnum(c, source.op, DERIVATIVE_OPS, `${path}.op`, { legacy, fallback: '', required: true });
+  if (!op) return null;
+  const atom = readInteger(c, source.atom, `${path}.atom`, {
+    legacy, fallback: 0, min: 1, max: LIMITS.atoms,
+  });
+  const element = readString(c, source.element, `${path}.element`, { legacy, fallback: '', max: 3 });
+  const optional = (value, label, min, max) => {
+    if (value === undefined || value === null || value === '') return null;
+    return readInteger(c, value, `${path}.${label}`, { legacy, fallback: null, min, max });
+  };
+  const mass = optional(source.mass, 'mass', 1, 400);
+  const charge = optional(source.charge, 'charge', -10, 10);
+  const multiplicity = optional(source.multiplicity, 'multiplicity', 1, 10);
+  return {
+    op,
+    atom,
+    ...(element ? { element } : {}),
+    ...(mass === null ? {} : { mass }),
+    ...(charge === null ? {} : { charge }),
+    ...(multiplicity === null ? {} : { multiplicity }),
+  };
+}
+
+/**
+ * Issue 189: the edit list of a derivative block. `[]` means "this is a normal
+ * dataset block", which is what every project written before the field existed
+ * says — so the key stays absent from a project that never asked for it.
+ */
+function normalizeDerivativeEdits(c, raw, path, legacy, kind) {
+  if (raw === undefined || raw === null) {
+    if (kind === 'derivative') {
+      c.error(path, 'is required when the block kind is "derivative".');
+    }
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    c.error(path, 'must be an array of { op, atom, … } edits.');
+    return [];
+  }
+  if (raw.length === 0) {
+    c.error(path, 'must contain at least one edit; an empty list has no structure to build.');
+    return [];
+  }
+  if (raw.length > DERIVATIVE_MAX_EDITS) {
+    c.error(path, `must contain at most ${DERIVATIVE_MAX_EDITS} edits.`);
+    return [];
+  }
+  const edits = [];
+  raw.slice(0, DERIVATIVE_MAX_EDITS).forEach((entry, index) => {
+    const edit = normalizeDerivativeEdit(c, entry, `${path}[${index}]`, legacy);
+    if (edit) edits.push(edit);
+  });
+  return edits;
+}
+
 function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePath = 'nodes') {
   const path = `${basePath}[${index}]`;
   if (!isPlainObject(raw)) {
@@ -1468,7 +1538,7 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
 
   if (type === 'input') {
     const source = requiredObject(c, raw.input, `${path}.input`, legacy, {});
-    warnUnknown(c, source, new Set(['datasetId', 'recordFilter', 'recordId', 'series']), `${path}.input`);
+    warnUnknown(c, source, new Set(['datasetId', 'recordFilter', 'recordId', 'series', 'edits']), `${path}.input`);
     const datasetId = readString(c, source.datasetId, `${path}.input.datasetId`, { legacy, fallback: '', max: 64, required: true });
     if (datasetId && !GRAPH_ID_RE.test(datasetId)) {
       c.error(`${path}.input.datasetId`, 'must be a dataset id: letters, digits, dot, underscore or dash.');
@@ -1485,21 +1555,29 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     if (!series && common.kind === 'series') {
       c.error(`${path}.input.series`, 'is required when the block kind is "series".');
     }
+    // Issue 189: the same field names the parent record of a derivative block;
+    // without one the block fans out over every enabled record.
+    const edits = normalizeDerivativeEdits(c, source.edits, `${path}.input.edits`, legacy, common.kind);
+    if (series && edits.length) {
+      c.error(`${path}.input`, 'cannot carry both a series definition and an edit list; a block is one kind of structure block.');
+    }
     return {
       ...common,
-      // A block that carries a series definition *is* a series block; the kind is
-      // stored so a renderer can branch on one key instead of two.
-      ...(series ? { kind: 'series' } : {}),
+      // A block that carries a series definition *is* a series block, and one
+      // that carries an edit list *is* a derivative block; the kind is stored so
+      // a renderer can branch on one key instead of two.
+      ...(series ? { kind: 'series' } : edits.length ? { kind: 'derivative' } : {}),
       input: {
         datasetId,
         recordFilter: {
           field: readString(c, filterRaw.field, `${path}.input.recordFilter.field`, { legacy, fallback: '', max: 64 }),
           equals: readString(c, filterRaw.equals, `${path}.input.recordFilter.equals`, { legacy, fallback: '', max: 200 }),
         },
-        // Both are absent-by-default: a project that never asked for a series
-        // saves exactly the bytes it did before.
+        // All three are absent-by-default: a project that never asked for a
+        // series or a derivative saves exactly the bytes it did before.
         ...(recordId ? { recordId } : {}),
         ...(series ? { series } : {}),
+        ...(edits.length ? { edits } : {}),
       },
     };
   }
@@ -1636,7 +1714,7 @@ function normalizeDatasetRecord(c, raw, datasetPath, index, legacy) {
     c.error(path, 'must be an object.');
     return null;
   }
-  warnUnknown(c, raw, new Set(['id', 'label', 'charge', 'multiplicity', 'coords', 'enabled', 'source']), path);
+  warnUnknown(c, raw, new Set(['id', 'label', 'charge', 'multiplicity', 'coords', 'bonds', 'enabled', 'source']), path);
   const id = readString(c, raw.id, `${path}.id`, { legacy, fallback: '', max: 64, required: true });
   if (!id || !RECORD_ID_RE.test(id)) {
     c.error(`${path}.id`, 'must be a record id: letters, digits, dot, underscore or dash, starting with a letter or digit.');
@@ -1646,12 +1724,18 @@ function normalizeDatasetRecord(c, raw, datasetPath, index, legacy) {
   if (coords.length === 0) {
     c.error(`${path}.coords`, 'must contain at least one atom: a record without a geometry cannot run.');
   }
+  // Issue 189: a record may state its topology. Absent means "never stated",
+  // which is what every record written before this key says — and the derivative
+  // block refuses a parent without it rather than perceiving bonds from
+  // distances, because a valence check built on a guess is not a check.
+  const bonds = normalizeBonds(c, raw.bonds, legacy, coords.length, `${path}.bonds`);
   return {
     id,
     label: readString(c, raw.label, `${path}.label`, { legacy, fallback: id, max: 200 }) || id,
     charge: readInteger(c, raw.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, raw.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
     coords,
+    ...(bonds.length ? { bonds } : {}),
     enabled: readBoolean(c, raw.enabled, `${path}.enabled`, { legacy, fallback: true, optional: true }),
   };
 }
@@ -1848,14 +1932,17 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
         c.error(`${nodePath}.input.datasetId`, `references unknown dataset "${node.input.datasetId}".`);
       } else if (enabledRecords(dataset).length === 0) {
         c.error(`${nodePath}.input`, `dataset "${dataset.id}" has no enabled record; import or enable at least one.`);
-      } else if (node.input.series) {
+      } else if (node.input.series || node.input.edits) {
         // Issue 169: a series is expanded here, at validation time, exactly as
         // the plan will expand it — so an unusable linkage is refused by name
         // when the project is opened, not after the first input file is written.
+        // Issue 189: the same guard for a derivative — every refusal comes from
+        // the edit engine itself, so a missing bond, a valence overrun or an
+        // unknown isotope is named when the project opens.
         try {
           recordsForInput(node, dataset);
         } catch (error) {
-          c.error(`${nodePath}.input.series`, error.message);
+          c.error(`${nodePath}.input.${node.input.edits ? 'edits' : 'series'}`, error.message);
         }
       }
     }

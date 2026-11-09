@@ -181,8 +181,12 @@ What the record claims, and what it does not:
   states no bonds (the valence check would be a guess) are all refused by name, with the atom index
   and element.
 
-The structure block that would expand one edit per record on the canvas is not wired yet; the engine
-and its unit tests are.
+The structure block is now wired: an `input` block with `kind: "derivative"` and an `input.edits` list
+expands one record per edit at plan time, so a substituent scan, a protonated/deprotonated pair or an
+isotopologue series is one block whose records every downstream block runs over. The inspector edits
+the list and shows the resulting formula and `needs optimisation` as soon as the edits are valid; an
+invalid one shows the engine's refusal verbatim. See
+[Datasets — Derivatives](datasets.md#derivatives) for the block and its refusals.
 
 ## Groups: ensembles that belong to one study
 

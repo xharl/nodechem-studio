@@ -24,6 +24,8 @@ import {
 import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
 import { applyQueueToProject, nextAction } from '../shared/queueReconcile.js';
 import {
+  DERIVATIVE_MAX_EDITS,
+  DERIVATIVE_OPS,
   attachGraphAliases,
   activeFlow,
   activeFlowId,
@@ -36,6 +38,7 @@ import {
   recordsOf,
   setFlowGraph,
 } from '../shared/flows.js';
+import { GEOMETRY_NOTE, GEOMETRY_STATUS } from '../shared/derivative.js';
 import {
   SERIES_LINKAGE_ORDER,
   SERIES_MAX_MEMBERS,
@@ -446,6 +449,21 @@ function seriesPreview(node, dataset) {
   }
 }
 
+/**
+ * Issue 189: what a derivative block would expand into right now, or the
+ * refusal. The inspector shows the records the plan will queue, computed by the
+ * same function the plan uses — never a second, optimistic expansion.
+ */
+function derivativePreview(node, dataset) {
+  if (!Array.isArray(node?.input?.edits) || node.input.edits.length === 0) return { records: [], error: '' };
+  if (!dataset) return { records: [], error: 'No dataset is bound, so there is no parent record to edit.' };
+  try {
+    return { records: recordsForInput(node, dataset), error: '' };
+  } catch (error) {
+    return { records: [], error: error.message };
+  }
+}
+
 function inputRecordCounts(node) {
   const dataset = datasetForInputNode(node);
   if (!dataset) return { total: 0, enabled: 0 };
@@ -485,6 +503,11 @@ function nodeDetail(node) {
       const preview = seriesPreview(node, dataset);
       if (preview.error) return 'series refused · open the block';
       return `${node.input.recordId || 'unit'} · n = ${series.from}…${series.to} · ${preview.records.length} members`;
+    }
+    if (node.input?.edits?.length) {
+      const preview = derivativePreview(node, dataset);
+      if (preview.error) return 'derivative refused · open the block';
+      return `${node.input.recordId || 'every record'} · ${preview.records.length} derivative${preview.records.length === 1 ? '' : 's'} · needs optimisation`;
     }
     const counts = inputRecordCounts(node);
     return `${dataset.title} · ${counts.enabled} of ${counts.total} enabled`;
@@ -543,6 +566,14 @@ function nodeFoot(node) {
         right: `${linkage.donor ?? '?'}→${linkage.acceptor ?? '?'} · ${Number(linkage.bondLengthAngstrom ?? 0).toFixed(2)} Å`,
       };
     }
+    if (node.input?.edits?.length) {
+      const derivatives = derivativePreview(node, dataset).records.length;
+      const parent = node.input.recordId || 'every record';
+      return {
+        left: `${derivatives} derivative${derivatives === 1 ? '' : 's'} · ${parent}`,
+        right: 'needs optimisation',
+      };
+    }
     return {
       left: dataset ? `${counts.enabled}/${counts.total} enabled` : 'not bound',
       right: dataset?.source?.format ? String(dataset.source.format).toUpperCase() : 'no dataset',
@@ -564,7 +595,7 @@ function kindCode(node) {
   if (node.type === 'conformers') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
-  if (node.type === 'input') return node.input?.series ? 'n×' : 'IN';
+  if (node.type === 'input') return node.input?.edits?.length ? 'Δ' : node.input?.series ? 'n×' : 'IN';
   if (node.type === 'output') return 'OUT';
   if (node.type === 'note') return '✎';
   return node.kind;
@@ -575,7 +606,7 @@ function kindLabel(node) {
   if (node.type === 'conformers') return 'Structure';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
-  if (node.type === 'input') return node.input?.series ? 'Series' : 'Data';
+  if (node.type === 'input') return node.input?.edits?.length ? 'Derivative' : node.input?.series ? 'Series' : 'Data';
   if (node.type === 'output') return 'Data';
   if (node.type === 'note') return 'Note';
   return 'Calculation';
@@ -2494,6 +2525,9 @@ function enableSeries() {
     return;
   }
   const atomCount = Array.isArray(unit.coords) ? unit.coords.length : 0;
+  // A block is one kind of structure block: turning it into a series drops an
+  // edit list, which the schema refuses beside a series definition.
+  delete node.input.edits;
   node.input.recordId = unit.id;
   node.input.series = {
     from: 1,
@@ -2642,6 +2676,230 @@ function seriesCard(node, dataset) {
     </div>`;
 }
 
+/**
+ * Issue 189: switch a structure block between a plain dataset and a derivative
+ * scan.
+ *
+ * The first edit is a starting point the preview judges immediately: the first
+ * hydrogen (or atom 1) replaced by F. Whether that parent has a topology to
+ * check is not decided here — if the record states no bonds the card says so in
+ * the engine's own words instead of queueing a guessed structure.
+ */
+function defaultDerivativeEdit(unit) {
+  const atoms = Array.isArray(unit?.coords) ? unit.coords : [];
+  const hydrogen = atoms.findIndex((atom) => String(atom?.element) === 'H');
+  return { op: 'substitute', atom: hydrogen >= 0 ? hydrogen + 1 : 1, element: 'F' };
+}
+
+function enableDerivative() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input') return;
+  if (!node.input) node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
+  const dataset = datasetForInputNode(node);
+  const unit = dataset ? recordsOf(dataset).find((record) => record.enabled !== false) || null : null;
+  if (!unit) {
+    toast('Bind a dataset with at least one enabled record before deriving from it.');
+    return;
+  }
+  delete node.input.series;
+  const enabled = recordsOf(dataset).filter((record) => record.enabled !== false);
+  // One parent or all of them: a scan over a whole dataset is well defined, and
+  // the select says which it will be.
+  node.input.recordId = enabled.length === 1 ? unit.id : '';
+  node.input.edits = [defaultDerivativeEdit(unit)];
+  node.kind = 'derivative';
+  renderGraph();
+  renderInspector();
+  toast(`Derivative of "${unit.label || unit.id}" · name the op and the atom. The geometry is a starting point, not a minimum.`);
+}
+
+/** Back to a plain dataset block: the edit list is dropped, nothing else. */
+function disableDerivative() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input') return;
+  if (node.input) {
+    delete node.input.edits;
+    delete node.input.recordId;
+  }
+  node.kind = 'Input';
+  renderGraph();
+  renderInspector();
+}
+
+/** One more edit: a full valence here is refused by the preview, not guessed. */
+function addDerivativeEdit() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
+  if (node.input.edits.length >= DERIVATIVE_MAX_EDITS) {
+    toast(`An edit list holds at most ${DERIVATIVE_MAX_EDITS} edits.`);
+    return;
+  }
+  const dataset = datasetForInputNode(node);
+  const unit = dataset
+    ? recordsOf(dataset).find((record) => String(record.id) === String(node.input.recordId || ''))
+      || recordsOf(dataset).find((record) => record.enabled !== false) || null
+    : null;
+  node.input.edits.push(defaultDerivativeEdit(unit));
+  renderGraph();
+  renderInspector();
+}
+
+/** Drop one edit; the last one turns the block back into a plain dataset. */
+function removeDerivativeEdit(index) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
+  if (index < 0 || index >= node.input.edits.length) return;
+  node.input.edits.splice(index, 1);
+  if (node.input.edits.length === 0) {
+    disableDerivative();
+    return;
+  }
+  renderGraph();
+  renderInspector();
+}
+
+/**
+ * A derivative field, with the type the schema expects: the parent is a record
+ * id, the atom an integer, the element a symbol, and mass/charge/multiplicity
+ * are integers that are dropped when the field is cleared — never defaulted,
+ * because `protonate`/`deprotonate` refuse an unstated spin state.
+ */
+function updateDerivativeField(node, index, field, rawValue) {
+  if (!node.input) return;
+  const value = String(rawValue ?? '').trim();
+  if (field === 'parent') {
+    if (value) node.input.recordId = value;
+    else delete node.input.recordId;
+    return;
+  }
+  const edit = Array.isArray(node.input.edits) ? node.input.edits[index] : null;
+  if (!edit) return;
+  if (field === 'op') {
+    edit.op = value;
+    return;
+  }
+  if (field === 'element') {
+    if (value) edit.element = value;
+    else delete edit.element;
+    return;
+  }
+  const numericField = field === 'atom' || field === 'mass' || field === 'charge' || field === 'multiplicity';
+  if (!numericField) return;
+  if (value === '') {
+    if (field === 'atom') edit.atom = 0;
+    else delete edit[field];
+    return;
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number)) return;
+  edit[field] = number;
+}
+
+const DERIVATIVE_OP_LABELS = Object.freeze({
+  substitute: 'Substitute',
+  add: 'Add atom',
+  remove: 'Remove atom',
+  isotope: 'Isotope',
+  protonate: 'Protonate',
+  deprotonate: 'Deprotonate',
+});
+
+/** The argument columns an op actually reads; the rest are shown greyed out. */
+const DERIVATIVE_OP_FIELDS = Object.freeze({
+  substitute: ['element'],
+  add: ['element'],
+  remove: [],
+  isotope: ['mass'],
+  protonate: ['charge', 'multiplicity'],
+  deprotonate: ['charge', 'multiplicity'],
+});
+
+function derivativeRow(edit, index) {
+  const fields = DERIVATIVE_OP_FIELDS[edit.op] || [];
+  const numberInput = (field, { min, max, step = 1 }) => {
+    const value = edit[field] === undefined || edit[field] === null ? '' : edit[field];
+    const off = fields.includes(field) ? '' : ' disabled';
+    return `<input class="input" type="number" min="${min}" max="${max ?? ''}" step="${step}" value="${esc(value)}"${off}
+      data-derivative-edit="${index}" data-derivative-field="${field}" aria-label="${field} of edit ${index + 1}" placeholder="—">`;
+  };
+  return `
+    <tr>
+      <td><select class="select" data-derivative-edit="${index}" data-derivative-field="op" aria-label="op of edit ${index + 1}">
+        ${DERIVATIVE_OPS.map((op) => `<option value="${op}"${op === edit.op ? ' selected' : ''}>${DERIVATIVE_OP_LABELS[op]}</option>`).join('')}
+      </select></td>
+      <td><input class="input" type="number" min="1" step="1" value="${esc(edit.atom ?? '')}" data-derivative-edit="${index}" data-derivative-field="atom" aria-label="atom of edit ${index + 1}"></td>
+      <td><input class="input" type="text" maxlength="3" value="${esc(edit.element ?? '')}"${fields.includes('element') ? '' : ' disabled'} data-derivative-edit="${index}" data-derivative-field="element" aria-label="element of edit ${index + 1}" placeholder="F"></td>
+      <td>${numberInput('mass', { min: 1, max: 400 })}</td>
+      <td>${numberInput('charge', { min: -10, max: 10 })}</td>
+      <td>${numberInput('multiplicity', { min: 1, max: 10 })}</td>
+      <td><button type="button" class="btn small danger" data-action="derivative-remove-edit" data-derivative-index="${index}" aria-label="Remove edit ${index + 1}">×</button></td>
+    </tr>`;
+}
+
+/**
+ * Issue 189: the derivative half of the input inspector.
+ *
+ * The rows are the block's own edit list, the preview is the expansion itself,
+ * and a refusal is shown verbatim. The geometry note is not decoration: it is
+ * the honest status of what the block produces.
+ */
+function derivativeCard(node, dataset) {
+  const edits = Array.isArray(node.input?.edits) ? node.input.edits : [];
+  if (edits.length === 0) {
+    return `<div class="field full">
+      <button type="button" class="btn small" data-action="derivative-enable"${dataset ? '' : ' disabled'}>Derive a related structure…</button>
+      <p class="field-hint">A derivative block applies one atom-level edit to a parent record — substitute an atom, add or remove one, or change an isotope — and yields one record per edit. Every downstream block runs once per edit, unchanged.</p>
+    </div>`;
+  }
+  const preview = derivativePreview(node, dataset);
+  const parentOptions = recordsOf(dataset)
+    .filter((record) => record.enabled !== false)
+    .map((record) => `<option value="${esc(record.id)}"${String(record.id) === String(node.input.recordId || '') ? ' selected' : ''}>${esc(record.label || record.id)} · ${(record.coords || []).length} atoms${Array.isArray(record.bonds) ? ` · ${record.bonds.length} bonds` : ' · no bonds'}</option>`)
+    .join('');
+  const rows = preview.records.map((record) => `
+    <tr>
+      <td><span class="record-label">${esc(record.label)}</span><span class="record-id">${esc(record.id)}</span></td>
+      <td class="mono">${esc(record.derivative?.formula || formulaOf(record.coords))}</td>
+      <td class="num">${record.coords.length}</td>
+      <td class="num">${record.bonds?.length ?? 0}</td>
+    </tr>`).join('');
+  return `
+    <div class="field full"><label>Parent record</label>
+      <select class="select" data-derivative-field="parent" aria-label="Parent record">
+        <option value=""${node.input.recordId ? '' : ' selected'}>— every enabled record —</option>
+        ${parentOptions || '<option value="">— no enabled record —</option>'}
+      </select>
+    </div>
+    <div class="field full"><label>Edits</label>
+      <div class="dataset-table-wrap"><table class="dataset-table">
+        <thead><tr><th>Op</th><th>Atom</th><th>Element</th><th>Mass</th><th>Charge</th><th>Mult</th><th></th></tr></thead>
+        <tbody>${edits.map((edit, index) => derivativeRow(edit, index)).join('')}</tbody>
+      </table></div>
+      <p class="field-hint">Atoms are 1-based, as written in the parent's geometry. Each row is its own record: the edits do not chain. ${edits.length} of ${DERIVATIVE_MAX_EDITS} used.</p>
+      <button type="button" class="btn small" data-action="derivative-add-edit">Add an edit</button>
+    </div>
+    <div class="field full"><label>Records this block will queue</label>
+      ${preview.error
+    ? `<div class="callout red"><strong>Refused.</strong> ${esc(preview.error)}</div>`
+    : (rows
+      ? `<div class="dataset-table-wrap"><table class="dataset-table">
+           <thead><tr><th>Derivative</th><th>Formula</th><th>Atoms</th><th>Bonds</th></tr></thead>
+           <tbody>${rows}</tbody>
+         </table></div>`
+      : '<p class="field-hint">No derivative can be built from this parent yet.</p>')}
+    </div>
+    <div class="field full">
+      <div class="callout"><strong>${esc(GEOMETRY_STATUS)}.</strong> ${esc(GEOMETRY_NOTE)}
+        The edited atom keeps the direction of the bond it replaces, at the sum of the two tabulated covalent radii; every other atom keeps its coordinates to the last bit.</div>
+      <p class="field-hint">A parent record must state its bonds: a valence check or a bond direction built on a perceived topology would be a guess, so a record without bonds is refused by name.</p>
+      <button type="button" class="btn small" data-action="derivative-disable">Use the dataset without a derivative</button>
+    </div>`;
+}
+
 function inputInspector(node) {
   const datasets = Array.isArray(state.project.datasets) ? state.project.datasets : [];
   const dataset = datasetForInputNode(node);
@@ -2672,16 +2930,19 @@ function inputInspector(node) {
     : '<div class="callout"><strong>No dataset bound.</strong> Import an SDF, XYZ, CSV or JSON file of geometries, or paste its text below.</div>';
 
   const seriesRefused = Boolean(node.input?.series && seriesPreview(node, dataset).error);
+  const derivativeRefused = Boolean(node.input?.edits?.length && derivativePreview(node, dataset).error);
 
   return `${inspectorHead(
     'Data · input',
     node.title,
     node.input?.series
       ? `${node.input.recordId || 'unit'} · n = ${node.input.series.from}…${node.input.series.to}${seriesRefused ? ' · refused' : ''}`
-      : (dataset ? `${esc(dataset.title)} · ${counts.total} record${counts.total === 1 ? '' : 's'}` : 'no dataset bound'),
+      : node.input?.edits?.length
+        ? `${node.input.recordId || 'all records'} · ${node.input.edits.length} edit${node.input.edits.length === 1 ? '' : 's'}${derivativeRefused ? ' · refused' : ''}`
+        : (dataset ? `${esc(dataset.title)} · ${counts.total} record${counts.total === 1 ? '' : 's'}` : 'no dataset bound'),
   )}
   <div class="inspector-scroll">
-    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${node.input?.series ? 'Runs once per series member' : 'Runs once per enabled record'}</span></div>
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${node.input?.series ? 'Runs once per series member' : node.input?.edits?.length ? 'Runs once per edit' : 'Runs once per enabled record'}</span></div>
     ${group('Dataset', dataset ? `${counts.total}` : 'none', true, [
       `<div class="field full"><label>Dataset</label><select class="select" data-input-field="datasetId">${options}</select></div>`,
       datasetCard,
@@ -2697,6 +2958,7 @@ function inputInspector(node) {
       </details>`,
     ].join(''))}
     ${group('Homologous series', node.input?.series ? `n = ${node.input.series.from}…${node.input.series.to}` : 'off', Boolean(node.input?.series), seriesCard(node, dataset))}
+    ${node.input?.series ? '' : group('Derivative', node.input?.edits?.length ? `${node.input.edits.length} edit${node.input.edits.length === 1 ? '' : 's'}` : 'off', Boolean(node.input?.edits?.length), derivativeCard(node, dataset))}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
       <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
@@ -6569,9 +6831,14 @@ function handleAction(action, element) {
       });
       break;
     }
-    // Issue 169: the two switches of a structure block, series or plain dataset.
+    // Issue 169 and issue 189: the switches of a structure block — series,
+    // derivative scan, or plain dataset.
     case 'series-enable': enableSeries(); break;
     case 'series-disable': disableSeries(); break;
+    case 'derivative-enable': enableDerivative(); break;
+    case 'derivative-disable': disableDerivative(); break;
+    case 'derivative-add-edit': addDerivativeEdit(); break;
+    case 'derivative-remove-edit': removeDerivativeEdit(Number(element?.dataset?.derivativeIndex)); break;
     case 'validate': validateGraph(); break;
     case 'zoom-in': setZoom(state.zoom + 0.05); break;
     case 'zoom-out': setZoom(state.zoom - 0.05); break;
@@ -6819,6 +7086,24 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !node.input?.series) return;
     updateSeriesField(node, target.dataset.seriesField, target.value);
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.derivativeEdit !== undefined) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
+    updateDerivativeField(node, Number(target.dataset.derivativeEdit), target.dataset.derivativeField, target.value);
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.derivativeField === 'parent') {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
+    updateDerivativeField(node, null, 'parent', target.value);
     renderGraph();
     renderInspector();
     return;

@@ -789,10 +789,15 @@ export function buildWorkflowPlan(project, { flowId = null } = {}) {
           datasetId: node.input?.datasetId || '',
           datasetTitle: bound?.title || '',
           ...(node.input?.series ? { series: { ...node.input.series, linkage: { ...node.input.series.linkage } } } : {}),
+          // Issue 189: the edit list travels with the block so the queue and the
+          // report can say what was changed, not just which records came out.
+          ...(Array.isArray(node.input?.edits) && node.input.edits.length
+            ? { edits: node.input.edits.map((edit) => ({ ...edit })) } : {}),
           records: members.map((record) => ({
             id: record.id,
             label: record.label || record.id,
             ...(record.series ? { n: record.series.n, parentId: record.series.parentId } : {}),
+            ...(record.derivative ? { parentId: record.derivative.parentId, summary: record.derivative.summary } : {}),
           })),
         },
       });
@@ -1151,7 +1156,10 @@ function calculationTask(project, node, {
   return {
     nodeId: taskId,
     type: 'calc',
-    title: title || (Number.isInteger(record?.series?.n) ? `${node.title} — n=${record.series.n}` : node.title),
+    title: title || (Number.isInteger(record?.series?.n)
+      ? `${node.title} — n=${record.series.n}`
+      // Issue 189: one block, several analogues — the row says which one.
+      : (record?.derivative?.summary ? `${node.title} — ${record.derivative.summary}` : node.title)),
     kind: node.kind || 'Calc',
     executable: true,
     engine: built.engine,
@@ -1196,9 +1204,13 @@ function calculationTask(project, node, {
         // Issue 169: a generated member names the unit it repeats and its n, so
         // a result can be traced back to "the 4-mer of that monomer".
         ...(record.series ? { series: record.series } : {}),
+        // Issue 189: the parent record, the edit and the atom numbering, so a
+        // result reads as "benzene with H3 replaced by F".
+        ...(record.derivative ? { derivative: record.derivative } : {}),
       },
     } : {}),
     ...(record?.series ? { series: record.series } : {}),
+    ...(record?.derivative ? { derivative: record.derivative } : {}),
   };
 }
 

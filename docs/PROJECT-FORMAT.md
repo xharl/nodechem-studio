@@ -107,7 +107,7 @@ Type-specific payloads:
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
 | `merge` | `merge { policy, notes }` |
-| `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1) |
+| `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
 | `note` | `note { text }` |
 
@@ -258,7 +258,7 @@ iterates. It lives in the project file, so a project is still one document.
 | `title` | string | display name |
 | `source` | object | `{ kind: 'file' or 'inline', path, format }`; `format` is `sdf`, `xyz`, `csv` or `json`; `path` is relative and has no `..` |
 | `fields` | object | optional column mapping `{ label, charge, multiplicity }` read from the file's properties |
-| `records[]` | array | at most 2 000, each `{ id, label, charge, multiplicity, coords[], enabled }` |
+| `records[]` | array | at most 2 000, each `{ id, label, charge, multiplicity, coords[], bonds[]?, enabled }` |
 | `notes` | string | at most 2 000 chars |
 
 A record's `id` uses the node-id grammar because it becomes a task-id segment.
@@ -266,7 +266,11 @@ A record's `id` uses the node-id grammar because it becomes a task-id segment.
 atoms) and is required: a record with no geometry cannot run and is a
 validation error. `charge` (-10 to 10) and `multiplicity` (1 to 10) default to 0
 and 1. `enabled: false` keeps the record in the file but out of every run, which
-is how a family member is skipped without deleting it.
+is how a family member is skipped without deleting it. `bonds[]` is optional and
+absent by default; when present it uses the molecule bond shape (`{ a, b, order }`,
+1-based, `order` 1, 1.5, 2 or 3) and is the topology a derivative block edits —
+a record without it is refused by a derivative block rather than given a
+perceived one.
 
 ### 4.2 `flows[]`
 
@@ -373,6 +377,56 @@ below 1; a member above 1 000 atoms. Bonds are perceived from covalent radii and
 bonds, because dataset records store no bond orders — the valence guard therefore catches
 over-coordination, not an over-valent multiple bond.
 
+### 4.3.2 A derivative block (`kind: "derivative"`)
+
+A structure block may carry an **edit list** instead of a plain dataset reference. It is the same
+`input` node type with `kind: "derivative"`: each edit is applied to a parent record on its own, so
+the block yields one record per edit — a substituent scan, a protonated/deprotonated pair, an
+isotopologue series.
+
+```json
+{ "type": "input", "kind": "derivative",
+  "input": { "datasetId": "parents", "recordId": "benzene",
+             "recordFilter": { "field": "", "equals": "" },
+             "edits": [ { "op": "substitute", "atom": 7, "element": "F" },
+                        { "op": "isotope", "atom": 8, "mass": 2 } ] } }
+```
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `recordId` | string | the parent record; absent means **every enabled record**, one derived record per parent × edit |
+| `edits[]` | object[] | required for `kind: "derivative"`; 1–**32** entries, each its own record (they do not chain) |
+| `edits[].op` | string | required; `substitute`, `add`, `remove`, `isotope`, `protonate`, `deprotonate` |
+| `edits[].atom` | integer | required; 1-based atom index, as written in the parent geometry |
+| `edits[].element` | string | an element symbol; used by `substitute` and `add` |
+| `edits[].mass` | integer | a mass number; used by `isotope` |
+| `edits[].charge`, `edits[].multiplicity` | integer | **required** by `protonate`/`deprotonate`, optional elsewhere |
+
+`kind` and `edits` are absent by default: a project that never asked for a derivative saves the same
+bytes it did before, and a block whose `kind` is `"derivative"` without `input.edits` is a validation
+error. A block cannot carry both `series` and `edits`.
+
+**Expansion is at plan time**, exactly as for a series, and the shape of the sums is the same: one
+ordinary record per edit, each one a real geometry with explicit bonds. Record ids are
+`<parentId>-<op><atom>` with the distinguishing argument appended — `benzene-sub7-F`,
+`benzene-iso8-2`, `water-rm9`, `water-prot1` — so no id depends on a position in the list. Each
+generated record carries `derivative { parentId, operations, atomIndexBase: 1, formula, summary,
+geometryStatus }`, and the planned task carries the same object, which is what a run record copies.
+
+**Geometry.** `substitute` keeps the direction of the replaced bond, seen from the atom that stays,
+and sets the new bond length to the sum of the two Cordero covalent radii; `add` places the new atom
+opposite the parent atom's existing bonds (the bisector when there are several) at the same
+radii-sum distance; `remove` and `isotope` move nothing; every other coordinate is copied unchanged.
+The geometry is therefore **a topology with a plausible starting geometry, not a minimum**, and
+`geometryStatus` says exactly `needs optimisation`.
+
+**Refusals** (by name, before any file is written, with `code`, `atomIndex` and `element` on the
+error): a parent that states no bonds; an atom index out of range; a bond referring to a missing
+atom; a substitution past the element's valence; `add` to an atom with no free valence; an unknown
+isotope; `protonate`/`deprotonate` without a charge or a multiplicity; two edits that produce the
+same structure; a record without 3D coordinates. All of them come from the edit engine in
+`src/shared/derivative.js` — the schema does not restate them.
+
 ### 4.4 `output` blocks
 
 | Key | Type | Notes |
@@ -404,6 +458,7 @@ Failed and partial records are named in its index, never hidden.
 | Atoms | 1 000 |
 | Records per dataset | 2 000 |
 | Series members per block | 24 |
+| Edits per derivative block | 32 |
 | Atoms in one series member | 1 000 |
 | Datasets | 64 |
 | Flows | 32 |
