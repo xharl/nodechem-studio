@@ -15,6 +15,7 @@
  */
 
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
+import { dp4PanelHtml } from '../shared/workflowReport.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
@@ -1659,6 +1660,22 @@ export function nmrSectionHtml(nmr, {
 }
 
 /**
+ * DP4+ probabilities (issue 165).
+ *
+ * The numbers are not recomputed here: `record.dp4` is the object `dp4.js`
+ * returned, and the card prints it with the level, the variant, the error fit
+ * and the parameters' provenance beside it. A record without the block renders
+ * nothing, so every run recorded before DP4+ existed looks exactly as it did.
+ */
+function dp4Card(record, flags) {
+  const result = isObject(record?.dp4) ? record.dp4 : null;
+  if (!result) return '';
+  const body = dp4PanelHtml(result, { tableClass: 'results-table', compact: true })
+    + caveatHtml(flags, 'These probabilities');
+  return card('DP4+ probabilities', body, 'is-wide');
+}
+
+/**
  * Raman (#76). The y axis is the printed activity in Å⁴/amu, not a scattering
  * cross-section: converting to one needs the excitation wavelength and a
  * Boltzmann population factor that the log does not carry.
@@ -2288,6 +2305,7 @@ export function resultsPanelHtml(record, options = {}) {
       vcdCard(parsed, flags),
       ecdCard(parsed, flags),
       chargesCard(parsed, flags),
+      dp4Card(record, flags),
       eprCard(parsed, flags),
       sensitivityCard(record),
       t1Card(parsed, flags),
