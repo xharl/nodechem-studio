@@ -322,12 +322,16 @@ function jacobiEigen(matrix, n, { tolerance = 1e-10, sweeps = 30 } = {}) {
 }
 
 /**
- * S^{1/2} for a symmetric positive-definite S, from its eigen-decomposition.
+ * S^{±1/2} for a symmetric positive-definite S, from its eigen-decomposition.
  *
  * A basis whose overlap has a non-positive eigenvalue is not a basis: the
  * refusal names the smallest eigenvalue rather than taking its square root.
+ *
+ * Exported (issue 173, route B) because the Löwdin partition of a transition
+ * density is taken in exactly this transformed space; the CT analysis and the
+ * spin populations must not disagree about what `S^{1/2}` means.
  */
-function symmetricPower(matrix, n, power) {
+export function symmetricPower(matrix, n, power) {
   const { values, vectors } = jacobiEigen(matrix, n);
   const out = new Float64Array(n * n);
   for (let index = 0; index < n; index += 1) {

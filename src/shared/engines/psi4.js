@@ -28,6 +28,7 @@
 import { canonicalResult, TERMINATION } from './canonical.js';
 import { parseFchk } from '../fchk.js';
 import { eprBlock } from '../epr.js';
+import { chargeTransferReport } from '../chargeTransfer.js';
 
 export const PSI4_ENGINE_ID = 'psi4';
 
@@ -423,38 +424,106 @@ export function assertPsi4Settings(settings = {}) {
 /* ── Input builder ────────────────────────────────────────── */
 
 /**
- * Issue 173: the reversible transition-dipole record for a TD-DFT block.
+ * Issue 173: the reversible record of the TD wavefunction for a TD-DFT block.
  *
  * The TDSCF table Psi4 prints carries energies and oscillator strengths but no
- * transition-dipole *vector*: |μ| follows from f, its direction does not, and the
- * direction is what an exciton coupling is made of. The vector does exist on the
- * returned wavefunction, as one array variable per root named
- * `TD-<method> ROOT 0 (<irrep>) -> ROOT <n> (<irrep>) ELECTRIC TRANSITION DIPOLE
- * MOMENT (LEN)`. `set tdscf_print` does not print it (measured at level 3 on
- * Psi4 1.11), so this block reads the wavefunction and prints one line per root:
+ * transition-dipole *vector* and no transition density: |μ| follows from f, its
+ * direction does not, and neither the direction nor the charge-transfer
+ * decomposition of route B can be recovered from the oscillator strength. Both
+ * objects do exist on the returned wavefunction:
  *
- *     NCS-TDM ROOT <n> <irrep> <x> <y> <z> a.u.
+ * - one array per root named
+ *   `TD-<method> ROOT 0 (<irrep>) -> ROOT <n> (<irrep>) ELECTRIC TRANSITION DIPOLE
+ *   MOMENT (LEN)` (atomic units), which becomes `NCS-TDM ROOT <n> <irrep> x y z a.u.`;
+ * - and the Tamm–Dancoff amplitudes as
+ *   `... RIGHT EIGENVECTOR ALPHA`, one block per root, which become the
+ *   `NCS-TDMAT` block: the transition density in the MO basis, from which
+ *   `chargeTransfer.js` builds D^{0I} = C_occ t C_virᵀ.
  *
- * The unit is on every line as well as in the header, because a bare triple of
- * numbers is a number in the wrong unit waiting to happen. Ten decimals of an
- * atomic-unit value round-trip the double Psi4 holds. Written only when the
- * block opts in, so a TD block that does not produces exactly the input it did
- * before.
+ * Three measured facts about Psi4 1.11 are baked in, each of which a previous
+ * version of this block got wrong:
+ *
+ * - the accessor is `wfn.array_variable(name)`, not `get_array`;
+ * - `print()` goes to the process's standard output, which the runner does not
+ *   keep — the record has to go through `psi4.core.print_out` to reach the log;
+ * - the same eigenvector is stored under four names (two method aliases, with
+ *   and without a `- <irrep> TRANSITION` suffix), so the block is keyed by root
+ *   and printed once.
+ *
+ * `set tdscf_tda true` is written with this block because the amplitudes read
+ * here are the Tamm–Dancoff ones, where Σ X² = 1 makes the partition
+ * normalisable; the RPA transition density carries de-excitations too and is a
+ * different object. The molecule block runs in C1 for the same kind of reason:
+ * with symmetry on, both the amplitudes and the checkpoint's MO coefficients are
+ * stored as per-irrep blocks, and pairing them would mean re-deriving Psi4's
+ * irrep offsets from a text log.
+ *
+ * The fragment labels are the block's own (`atom.fragment`), written as one
+ * number per atom so a complex whose members interleave is read correctly.
  */
-function transitionDipoleLines(fn) {
-  return [
+function transitionDipoleLines(fn, { fragmentLabels = [], checkpointName = null } = {}) {
+  const labels = Array.isArray(fragmentLabels) && fragmentLabels.length > 0 ? fragmentLabels : [1];
+  const lines = [
+    '# NCS-CT: the fragment label of each atom, in the order the molecule block',
+    '# lists them. The transition density is partitioned by these labels.',
+    `psi4.core.print_out('NCS-CTFRAG ${labels.length} ${labels.join(' ')}' + "\\n")`,
+    `E, wfn = energy('td-${fn}', return_wfn=True)`,
     '# NCS-TDM: the TDSCF table has no transition-dipole vector, so the wavefunction',
-    '# is read instead. One line per root below, values in atomic units (a.u.).',
-    `_ncs_energy, _ncs_wfn = energy('td-${fn}', return_wfn=True)`,
-    'for _ncs_name in _ncs_wfn.array_variables():',
+    '# is read instead. One line per root, values in atomic units (a.u.).',
+    '_ncs_dipoles = {}',
+    'for _ncs_name in wfn.array_variables():',
+    "    if 'ROOT 0 (' not in _ncs_name or '-> ROOT ' not in _ncs_name or _ncs_name.endswith(' TRANSITION'):",
+    '        continue',
     "    if 'ELECTRIC TRANSITION DIPOLE MOMENT (LEN)' not in _ncs_name:",
     '        continue',
-    "    _ncs_tail = _ncs_name.split('-> ROOT ')[-1]",
-    '    _ncs_v = _ncs_wfn.get_array(_ncs_name).to_array().flatten()',
-    "    print('NCS-TDM ROOT %s %s %.10f %.10f %.10f a.u.' % (",
-    "        _ncs_tail.split(' ')[0], _ncs_tail.split('(')[1].split(')')[0],",
+    "    _ncs_root = int(_ncs_name.split('-> ROOT ')[-1].split(' ')[0])",
+    '    if _ncs_root not in _ncs_dipoles:',
+    '        _ncs_dipoles[_ncs_root] = _ncs_name',
+    'for _ncs_root in sorted(_ncs_dipoles):',
+    '    _ncs_v = wfn.array_variable(_ncs_dipoles[_ncs_root]).to_array().flatten()',
+    "    psi4.core.print_out('NCS-TDM ROOT %d %s %.10f %.10f %.10f a.u.\\n' % (",
+    "        _ncs_root, _ncs_dipoles[_ncs_root].split('(')[1].split(')')[0],",
     '        float(_ncs_v[0]), float(_ncs_v[1]), float(_ncs_v[2])))',
+    '# NCS-TDMAT: the state\'s transition density in the MO basis (TDA amplitudes,',
+    '# occupied rows, virtual columns), from which chargeTransfer.js builds the AO',
+    '# transition density. Eight decimals of an O(1) amplitude are well inside the',
+    '# distance a CT fraction can resolve.',
+    '_ncs_eigen = {}',
+    'for _ncs_name in wfn.array_variables():',
+    "    if 'RIGHT EIGENVECTOR ALPHA' not in _ncs_name:",
+    '        continue',
+    "    if 'ROOT 0 (' not in _ncs_name or '-> ROOT ' not in _ncs_name or _ncs_name.endswith(' TRANSITION'):",
+    '        continue',
+    "    _ncs_root = int(_ncs_name.split('-> ROOT ')[-1].split(' ')[0])",
+    '    if _ncs_root not in _ncs_eigen:',
+    '        _ncs_eigen[_ncs_root] = _ncs_name',
+    'for _ncs_root in sorted(_ncs_eigen):',
+    '    _ncs_blocks = wfn.array_variable(_ncs_eigen[_ncs_root]).to_array()',
+    '    if not isinstance(_ncs_blocks, tuple):',
+    '        _ncs_blocks = (_ncs_blocks,)',
+    '    _ncs_rows = 0',
+    '    _ncs_cols = 0',
+    '    _ncs_text = []',
+    '    for _ncs_block in _ncs_blocks:',
+    "        _ncs_a = __import__('numpy').asarray(_ncs_block)",
+    '        if _ncs_a.size == 0:',
+    '            continue',
+    '        _ncs_rows += _ncs_a.shape[0]',
+    '        _ncs_cols = max(_ncs_cols, _ncs_a.shape[1])',
+    '        for _ncs_row in _ncs_a:',
+    "            _ncs_text.append(' '.join('%.8f' % float(_v) for _v in _ncs_row))",
+    "    psi4.core.print_out('NCS-TDMAT ROOT %d %d %d tda\\n' % (_ncs_root, _ncs_rows, _ncs_cols))",
+    '    for _ncs_line in _ncs_text:',
+    '        psi4.core.print_out(_ncs_line + "\\n")',
+    '    psi4.core.print_out(\'NCS-TDMAT END %d\\n\' % _ncs_root)',
   ];
+  if (checkpointName) {
+    // The MO coefficients and the overlap's basis are what turn the printed
+    // amplitudes into a density over atoms; without the file the parser refuses
+    // the analysis by name instead of guessing an orbital ordering.
+    lines.push(`fchk(wfn, '${checkpointName}')`);
+  }
+  return lines;
 }
 
 function coordinateLine(atom) {
@@ -470,14 +539,20 @@ function coordinateLine(atom) {
  * The molecule block. Fragments are separated by `--`, which is how Psithon
  * says "these atoms belong to a different monomer" — required for SAPT and
  * ignored by every other method.
+ *
+ * `symmetry` is only written when a caller asks for one (issue 173's
+ * transition-density record runs in C1, so that the checkpoint's orbital order
+ * and the printed amplitudes are the same order); a block that does not ask
+ * produces exactly the molecule block it did before.
  */
-function moleculeBlock(molecule = {}, { fragments = false } = {}) {
+function moleculeBlock(molecule = {}, { fragments = false, symmetry = null } = {}) {
   const coords = Array.isArray(molecule.coords) ? molecule.coords : [];
   if (coords.length === 0) throw new Error('A molecule with Cartesian coordinates is required.');
   const charge = Number.isInteger(Number(molecule.charge)) ? Number(molecule.charge) : 0;
   const multiplicity = Number.isInteger(Number(molecule.multiplicity)) ? Number(molecule.multiplicity) : 1;
 
   const lines = [];
+  if (symmetry) lines.push(`symmetry ${oneLine(symmetry)}`);
   if (!fragments) {
     lines.push(`${charge} ${multiplicity}`);
     for (const atom of coords) lines.push(coordinateLine(atom));
@@ -557,8 +632,16 @@ export function buildPsi4Input({
     '# Every line below is written by the app; edit and re-run at your own risk.',
     '',
   ];
+  // Issue 173, route B: the CT analysis needs the transition density in the MO
+  // basis, and the amplitudes Psi4 stores are keyed to the checkpoint's orbital
+  // order. Running in C1 is what makes those two orders the same one, and the
+  // Tamm–Dancoff amplitudes are what make the partition normalisable.
+  const recordsTransitionDensity = jobType === 'TD-DFT' && settings.recordTransitionDipoles === true;
   if (memoryMb) lines.push(`memory ${Math.max(1, Math.round(memoryMb))} mb`);
-  lines.push('', 'molecule {', ...moleculeBlock(molecule, { fragments: method.kind === 'sapt' }), '}', '');
+  lines.push('', 'molecule {', ...moleculeBlock(molecule, {
+    fragments: method.kind === 'sapt',
+    symmetry: recordsTransitionDensity ? 'c1' : null,
+  }), '}', '');
   lines.push(`set basis ${basis.psi4}`);
   if (method.kind !== 'sapt') lines.push(`set reference ${reference}`);
   // Density fitting is Psi4's default for SCF and its fastest reliable path;
@@ -596,12 +679,20 @@ export function buildPsi4Input({
     // are the n lowest. Measured on ethylene (D2h) with 5 states: five dark
     // states and the bright B1u missing; with 2 per irrep it appears at 12.70 eV,
     // f = 0.4183. The card and the docs state this rather than implying a
-    // selection the engine did not make.
+    // selection the engine did not make. (A transition-density record runs in C1,
+    // where there is one irrep, so the whole request lands in it.)
     lines.push(`set tdscf_states ${Number(settings.tdStates)}`);
-    if (settings.recordTransitionDipoles === true) {
-      // Opt-in (issue 173): the dipole vector is not in the table Psi4 prints,
-      // so it is read from the wavefunction and written back as NCS-TDM lines.
-      lines.push(...transitionDipoleLines(fn));
+    if (recordsTransitionDensity) {
+      // Issue 173: the dipole vector is not in the table Psi4 prints, and neither
+      // is the transition density, so the wavefunction is read instead and both
+      // are written back as `NCS-TDM` and `NCS-TDMAT` records.
+      lines.push('set tdscf_tda true');
+      lines.push(...transitionDipoleLines(fn, {
+        fragmentLabels: (Array.isArray(molecule.coords) ? molecule.coords : []).map((atom) => (
+          Number.isInteger(Number(atom?.fragment)) && Number(atom.fragment) >= 1 ? Number(atom.fragment) : 1
+        )),
+        checkpointName: `${safeName.replace(/\.dat$/i, '')}.fchk`,
+      }));
     } else {
       lines.push(`energy('td-${fn}')`);
     }
@@ -964,6 +1055,75 @@ function parsePsi4Excitations(body, lines) {
     }
   }
 
+  // Issue 173, route B: the transition-density record.
+  //
+  //     NCS-TDMAT ROOT <n> <nocc> <nvir> <tda|rpa>
+  //     <nocc lines of nvir amplitudes, TDA/right-eigenvector order>
+  //     NCS-TDMAT END <n>
+  //
+  // A root without a block gets no `transitionDensity` field, so the CT analysis
+  // refuses that state by name instead of scoring it 0. A block whose body is
+  // short of nocc×nvir numbers is a truncated log, and is dropped (with the
+  // states it belonged to) rather than read as a density with rows missing.
+  const densityBlocks = new Map();
+  const tdmHeader = /^NCS-TDMAT ROOT (\d+) (\d+) (\d+) (\S+)$/;
+  const tdmEnd = /^NCS-TDMAT END (\d+)$/;
+  for (let index = 0; index < lines.length; index += 1) {
+    const header = tdmHeader.exec(lines[index]);
+    if (!header) continue;
+    const root = Number(header[1]);
+    const nocc = Number(header[2]);
+    const nvir = Number(header[3]);
+    const kind = header[4].toLowerCase();
+    const values = new Float64Array(nocc * nvir);
+    let filled = 0;
+    let closed = false;
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const end = tdmEnd.exec(lines[cursor]);
+      if (end) {
+        closed = Number(end[1]) === root;
+        index = cursor;
+        break;
+      }
+      if (tdmHeader.test(lines[cursor])) break; // the next block started: this one is truncated
+      for (const token of lines[cursor].trim().split(/\s+/)) {
+        if (!token) continue;
+        if (filled >= values.length) break;
+        const value = toNumber(token);
+        if (!Number.isFinite(value)) {
+          filled = -1;
+          break;
+        }
+        values[filled] = value;
+        filled += 1;
+      }
+      if (filled < 0) break;
+    }
+    if (!closed || filled !== values.length) continue;
+    // The tcscf kind is recorded, not assumed: `rpa` amplitudes carry
+    // de-excitations and are a different object, and the analysis refuses them.
+    densityBlocks.set(root, { nocc, nvir, tda: kind === 'tda', kind, values });
+  }
+  if (densityBlocks.size > 0) {
+    for (const state of states) {
+      const block = densityBlocks.get(state.index);
+      if (block) state.transitionDensity = { ...block };
+    }
+  }
+
+  // Issue 173: `NCS-CTFRAG <natoms> <label per atom>` — the fragment each atom
+  // belongs to, as the block that wrote the input declared it. Parsed here
+  // because it qualifies the transition density, not the geometry.
+  let fragmentLabels = null;
+  const fragmentRow = /^NCS-CTFRAG\s+(\d+)((?:\s+\d+)+)\s*$/;
+  for (const line of lines) {
+    const match = fragmentRow.exec(line);
+    if (!match) continue;
+    const labels = match[2].trim().split(/\s+/).map(Number);
+    if (labels.length === Number(match[1])) fragmentLabels = labels;
+    break;
+  }
+
   return {
     count: states.length,
     requested: split.reduce((sum, entry) => sum + entry.count, 0) || null,
@@ -973,6 +1133,10 @@ function parsePsi4Excitations(body, lines) {
     // Number of states that carry a recorded dipole vector. Zero is a fact
     // about the run (the block did not opt in), not a parse failure.
     transitionDipoleCount: states.filter((state) => state.transitionDipoleAu).length,
+    /** Number of states that carry a transition density block. */
+    transitionDensityCount: states.filter((state) => state.transitionDensity).length,
+    /** Fragment label of each atom, or null when the log carries none. */
+    fragmentLabels,
     // The table is a documented Psi4 layout and these fixtures are real runs, so
     // unlike the Gaussian Opt-TD parser this one is verified.
     verified: true,
@@ -1208,6 +1372,15 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   } else if (fchk && typeof fchk === 'object') {
     checkpoint = fchk;
   }
+  // Issue 173: the level the CT numbers belong to. Psi4's own task line carries
+  // the method string and the basis it actually ran with —
+  //     Compute energy(): method=td-b3lyp, basis=def2-svp
+  // — and that is a better answer than the reference plus a label that may be
+  // missing from the echo. Asked for by name, because "property of the transition
+  // density at this level of theory" is meaningless without the level. The EPR
+  // block keeps the level string it has always printed.
+  const ranAs = /Compute energy\(\): method=([A-Za-z0-9_-]+), basis=([^\s,\]]+)/.exec(body);
+  const ctLevel = ranAs ? `${ranAs[1]}/${ranAs[2]}` : null;
   const epr = eprBlock({
     fchk: checkpoint,
     level: [reference, echo.method?.label, basisEntry?.label ?? namedBasis].filter(Boolean).join(' ') || null,
@@ -1216,6 +1389,20 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
     unavailableReason: checkpointError
       ? `the checkpoint beside this run could not be read: ${checkpointError}`
       : null,
+  });
+
+  // Issue 173, route B: the charge-transfer block, computed from the transition
+  // density the log recorded and the checkpoint beside it. It is assembled here,
+  // where both are in hand, and travels in the canonical result — a card that
+  // had to recompute it would need the whole MO coefficient array.
+  const excitations = parsePsi4Excitations(body, lines);
+  const chargeTransfer = chargeTransferReport({
+    states: excitations?.states ?? [],
+    checkpoint,
+    fragments: excitations?.fragmentLabels ?? [],
+    level: ctLevel
+      ?? ([reference, echo.method?.label, basisEntry?.label ?? namedBasis].filter(Boolean).join(' ') || null),
+    atoms: Array.isArray(lastGeometry) ? lastGeometry : null,
   });
 
   const result = canonicalResult({
@@ -1237,8 +1424,9 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
       cycles: optimization.cycles,
       attempted: optimization.attempted,
     },
-    excitedStates: parsePsi4Excitations(body, lines),
+    excitedStates: excitations,
     epr,
+    chargeTransfer,
     frequencies: {
       count: frequencies.values.length,
       imaginaryCount: imaginary.length,

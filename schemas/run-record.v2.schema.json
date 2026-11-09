@@ -957,6 +957,19 @@
         "engine": {
           "type": "string"
         },
+        "chargeTransfer": {
+          "type": "object",
+          "description": "Issue 173, route B: charge-transfer character of the excited states, from the transition density. Absent when the run recorded none. A block with \"modelled\": false carries a reason and no per-state numbers; a consumer must never read a missing fraction as 0.",
+          "additionalProperties": true,
+          "properties": {
+            "modelled": { "type": "boolean" },
+            "reason": { "type": ["string", "null"] },
+            "partition": { "type": ["string", "null"], "enum": ["lowdin", "mulliken", null] },
+            "level": { "type": ["string", "null"] },
+            "statement": { "type": "string" },
+            "states": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+          }
+        },
         "program": {
           "type": "object",
           "additionalProperties": true,

@@ -1060,6 +1060,43 @@ function radiativeKineticsHtml(kinetics) {
 }
 
 /**
+ * Issue 173, route B: the charge-transfer rows of the exciton card.
+ *
+ * One row per paired state, printed beside the point-dipole J, with the four
+ * numbers that answer different questions: the fraction of the excitation whose
+ * hole and particle sit on different fragments, the local fraction Ω (the same
+ * number from the other side), the delocalisation Λ and the net charge Δq. The
+ * partition is named on every row because a Mulliken and a Löwdin number are not
+ * the same number.
+ *
+ * A refusal prints its reason; nothing here ever prints a 0 for a state the
+ * analysis could not partition.
+ */
+function chargeTransferRows(chargeTransfer) {
+  if (!isObject(chargeTransfer)) return [];
+  if (chargeTransfer.modelled !== true) {
+    return [fieldValue('Charge transfer',
+      `${missingHtml()} ${esc(chargeTransfer.reason || 'not modelled: no transition-density analysis')}`,
+      'exciton-ct')];
+  }
+  const rows = [];
+  for (const [position, entry] of [[1, chargeTransfer.state1], [2, chargeTransfer.state2]]) {
+    if (!isObject(entry)) {
+      rows.push(fieldValue(`Charge transfer (state ${position})`, missingHtml(), `exciton-ct-state-${position}`));
+      continue;
+    }
+    const partition = entry.partition === 'mulliken' ? 'Mulliken' : 'Löwdin';
+    rows.push(fieldValue(`Charge transfer (state ${entry.index})`,
+      esc(`${(100 * entry.ctFraction).toFixed(1)} % of the excitation is inter-fragment · `
+        + `Ω = ${entry.localFraction.toFixed(3)} · Λ = ${entry.lambda.toFixed(2)} · `
+        + `Δq = ${entry.deltaQe >= 0 ? '+' : '−'}${Math.abs(entry.deltaQe).toFixed(2)} e · `
+        + `${partition} partition`),
+      `exciton-ct-state-${position}`));
+  }
+  return rows;
+}
+
+/**
  * Exciton coupling of a dimer (issue 173, route A).
  *
  * The two chromophores come from the block's `complex` record and the geometry
@@ -1086,17 +1123,27 @@ function excitonCouplingCard(parsed, flags, record = null, options = {}) {
     coords,
     pair: isObject(options.excitonPair) ? options.excitonPair : null,
     levelOfTheory: methodSummary(record?.provenance?.method),
+    chargeTransfer: isObject(parsed?.chargeTransfer) ? parsed.chargeTransfer : null,
   });
+  const chargeTransfer = isObject(report?.chargeTransfer) ? report.chargeTransfer : null;
   const approximation = '<p class="results-note" data-field="exciton-approximation">'
     + `${esc('This is point-dipole (Kasha) coupling between two transition dipoles. It is valid only '
       + 'when the chromophore separation is much larger than the chromophore extent, and it does not '
       + 'describe charge-transfer character: a CT band has no monomer analogue and this model cannot '
-      + 'produce one. A supersystem transition-density treatment is the honest route for that.')}</p>`;
+      + 'produce one.')}`
+    + (chargeTransfer?.modelled
+      ? `${esc(' The transition-density analysis below does describe it, and says where this J stops being the '
+        + 'right model.')}`
+      : esc(' A supersystem transition-density treatment is the honest route for that.'))
+    + '</p>';
 
   if (!report.modelled) {
+    const ctBlock = isObject(parsed?.chargeTransfer) ? parsed.chargeTransfer : null;
+    const ctRows = ctBlock?.modelled === true ? [...chargeTransferRows(ctBlock)] : [];
     return card('Exciton coupling',
       `<p class="results-missing" data-field="exciton-coupling">${esc(report.reason)}</p>`
       + (report.detail ? `<p class="results-note" data-field="exciton-detail">${esc(report.detail)}</p>` : '')
+      + (ctRows.length > 0 ? kv(ctRows) : '')
       + approximation
       + caveatHtml(flags, 'This coupling'),
       'is-wide');
@@ -1124,17 +1171,30 @@ function excitonCouplingCard(parsed, flags, record = null, options = {}) {
         + `${esc(validity.note)}<br>Threshold: r/extent ≥ ${esc(validity.threshold)}; the larger extent is `
         + `${esc(Math.max(...report.fragments.map((fragment) => fragment.extentAngstrom)).toFixed(3))} Å.`
       : missingHtml(), 'exciton-validity'),
+    ...chargeTransferRows(chargeTransfer, flags),
   ];
   const pairs = 'The pair is the two lowest states that carry both a recorded transition dipole and a '
     + 'non-zero oscillator strength; a dark state (f = 0) is never paired, and no dipole is '
     + 'reconstructed from f. The dipoles are the states this run computed; when a state is '
     + 'delocalised over both fragments, the pair is not two chromophore transitions and the number '
     + 'is a consistency check rather than a prediction.';
+  const ctStatement = isObject(parsed?.chargeTransfer) && typeof parsed.chargeTransfer.statement === 'string'
+    ? `<p class="results-note" data-field="exciton-ct-statement">${esc(parsed.chargeTransfer.statement)}</p>`
+    : '';
+  const ctWarning = chargeTransfer?.modelled && chargeTransfer.note
+    ? '<p class="results-note" data-field="exciton-ct-warning">'
+      + `${esc(chargeTransfer.note)}`
+      + `${chargeTransfer.state1?.unreliable ? ` ${esc(chargeTransfer.state1.reason)}` : ''}`
+      + `${chargeTransfer.state2?.unreliable ? ` ${esc(chargeTransfer.state2.reason)}` : ''}`
+      + '</p>'
+    : '';
   return card('Exciton coupling',
     kv(rows)
     + `<p class="results-note">${esc(pairs)}${report.membersNotCoupled.length
       ? ` ${esc(`Members ${report.membersNotCoupled.join(', ')} are not part of this coupling: it is a two-chromophore model.`)}`
       : ''}</p>`
+    + ctWarning
+    + ctStatement
     + approximation
     + caveatHtml(flags, 'This coupling'),
     'is-wide');

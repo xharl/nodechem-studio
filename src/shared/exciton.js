@@ -168,6 +168,52 @@ export function pointDipoleValidity({ distanceAngstrom, extentAngstrom } = {}) {
 }
 
 /**
+ * Below this local fraction the transition density is more inter-fragment than
+ * intra-fragment, and the point-dipole model — which has no way to put the hole
+ * and the particle in different places — is not describing the state it is being
+ * asked about. Stated, not tuned: half the excitation.
+ */
+export const CT_LOCAL_FRACTION_LIMIT = 0.5;
+
+/**
+ * At half an electron the net transferred charge is the same size as the
+ * fraction would be for a one-directional transfer, so the "point dipoles on two
+ * neutral chromophores" picture has stopped holding. Stated, not tuned.
+ */
+export const CT_TRANSFER_LIMIT_E = 0.5;
+
+/**
+ * Issue 173, route B: what the CT analysis says about one of the paired states,
+ * as the card needs it. Returns `null` when the report carries no entry for that
+ * index; a state the analysis refused is reported as absent, never as CT = 0.
+ */
+export function pointDipoleCtCaveat({ chargeTransfer = null, index = null } = {}) {
+  if (!chargeTransfer || chargeTransfer.modelled !== true || !Array.isArray(chargeTransfer.states)) return null;
+  const wanted = Number(index);
+  const entry = chargeTransfer.states.find((state) => state.index === wanted) || null;
+  if (!entry) return null;
+  const unreliable = entry.localFraction < CT_LOCAL_FRACTION_LIMIT
+    || Math.abs(entry.deltaQe) >= CT_TRANSFER_LIMIT_E;
+  return {
+    index: entry.index,
+    ctFraction: entry.ctFraction,
+    localFraction: entry.localFraction,
+    deltaQe: entry.deltaQe,
+    lambda: entry.lambda,
+    partition: entry.partition,
+    level: chargeTransfer.level ?? null,
+    unreliable,
+    reason: unreliable
+      ? `State ${entry.index}: ${(100 * entry.ctFraction).toFixed(0)} % of this excitation moves charge between the `
+        + `fragments (Ω = ${entry.localFraction.toFixed(3)}, Λ = ${entry.lambda.toFixed(2)}, `
+        + `Δq = ${entry.deltaQe.toFixed(2)} e). The point-dipole J is not a reliable number for this state.`
+      : `State ${entry.index}: ${(100 * entry.ctFraction).toFixed(0)} % of this excitation moves charge between the `
+        + `fragments (Ω = ${entry.localFraction.toFixed(3)}, Λ = ${entry.lambda.toFixed(2)}, `
+        + `Δq = ${entry.deltaQe.toFixed(2)} e), so the point-dipole J is the right model for it.`,
+  };
+}
+
+/**
  * One coupling report for a pair of states, refused when the geometry is not
  * justified — the card prints `not modelled` rather than a number with a caveat
  * that a reader will skip.
@@ -277,7 +323,7 @@ export function complexFragments({ complex = null, coords = null } = {}) {
  * chromophore, from a dark state, or from a geometry that is not a dimer.
  */
 export function excitonReport({
-  states = [], complex = null, coords = null, pair = null, levelOfTheory = null,
+  states = [], complex = null, coords = null, pair = null, levelOfTheory = null, chargeTransfer = null,
 } = {}) {
   const list = Array.isArray(states) ? states.filter((state) => state && typeof state === 'object') : [];
   let fragments;
@@ -359,6 +405,14 @@ export function excitonReport({
     };
   };
 
+  // Issue 173, route B: the transition-density verdict on the same two states.
+  // The point-dipole number above and the CT fraction below describe the same
+  // pair, which is the point: a reader can see when the model that produced J is
+  // describing the state at all.
+  const state1Ct = pointDipoleCtCaveat({ chargeTransfer, index: state1.index });
+  const state2Ct = pointDipoleCtCaveat({ chargeTransfer, index: state2.index });
+  const unreliable = [state1Ct, state2Ct].filter((entry) => entry?.unreliable).map((entry) => entry.index);
+
   return {
     modelled: true,
     state1: describe(state1, fragments[0]),
@@ -372,6 +426,22 @@ export function excitonReport({
     membersNotCoupled: fragments.length > 2 ? fragments.slice(2).map((fragment) => fragment.label) : [],
     separationAngstrom: separation,
     ...coupling,
+    chargeTransfer: {
+      modelled: chargeTransfer?.modelled === true,
+      reason: chargeTransfer?.modelled === true
+        ? null
+        : (chargeTransfer?.reason ?? 'not modelled: the run recorded no transition density'),
+      partition: chargeTransfer?.partition ?? null,
+      level: chargeTransfer?.level ?? levelOfTheory ?? null,
+      state1: state1Ct,
+      state2: state2Ct,
+      unreliable,
+      note: unreliable.length > 0
+        ? `Charge transfer is large for state${unreliable.length > 1 ? 's' : ''} ${unreliable.join(' and ')}: `
+          + 'the transition density is not two point dipoles, so J above is printed with that caveat and is not '
+          + 'a prediction for this pair.'
+        : null,
+    },
     levelOfTheory,
   };
 }

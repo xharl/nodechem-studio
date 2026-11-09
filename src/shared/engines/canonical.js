@@ -98,6 +98,13 @@ export function canonicalResult({
   // qualify it, and a half-copied section is how a table ends up on a card with
   // no statement of where it came from.
   epr = null,
+  // Issue 173, route B: the charge-transfer analysis of a TD run. Passed through
+  // whole, like `epr`, because a fraction is meaningless without the partition
+  // that produced it, the level of theory it was computed at, and the per-state
+  // detail it came from — a consumer that copies `ctFraction` alone would present
+  // a number with none of those. Absent when the engine computed no transition
+  // density, so a run that never opted in carries no key.
+  chargeTransfer = null,
   extras = {},
   lineCount = 0,
 } = {}) {
@@ -181,10 +188,26 @@ export function canonicalResult({
            * oscillator strengths.
            */
           transitionDipoleCount: integerOrNull(excitedStates.transitionDipoleCount),
+          /**
+           * Issue 173, route B: how many states carry a transition-density block,
+           * and the fragment label of each atom as the deck declared it. Kept
+           * beside the states for the same reason as the dipole count: the CT
+           * analysis starts from those two facts and a consumer must not have to
+           * infer either from the log's text.
+           */
+          transitionDensityCount: integerOrNull(excitedStates.transitionDensityCount),
+          fragmentLabels: Array.isArray(excitedStates.fragmentLabels)
+            ? excitedStates.fragmentLabels.map((label) => (Number.isInteger(label) ? label : null))
+            : null,
         },
       }
       : {}),
     ...(epr && typeof epr === 'object' && typeof epr.status === 'string' ? { epr } : {}),
+    // Issue 173: a boolean `modelled` is the minimum a consumer can act on; a
+    // block without it is not a CT analysis and is dropped rather than passed on
+    // as an empty section.
+    ...(chargeTransfer && typeof chargeTransfer === 'object'
+      && typeof chargeTransfer.modelled === 'boolean' ? { chargeTransfer } : {}),
     extras: extras && typeof extras === 'object' ? extras : {},
     lineCount: Number.isFinite(lineCount) ? lineCount : 0,
   };
