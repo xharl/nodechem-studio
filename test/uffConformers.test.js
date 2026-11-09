@@ -410,7 +410,8 @@ describe('UFF route wiring (issue 144)', () => {
     const plain = project({ generator: 'crest' });
     const text = JSON.stringify(plain);
     expect(text).not.toMatch(/torsionStepDegrees|maxTrials/);
-    expect(text).not.toMatch(/"uff"|"search"/);
+    // ADR 0001 serialises the generic source key; no UFF route key appears.
+    expect(text).not.toMatch(/"uff"/);
     // A second validation of the same bytes produces the same bytes.
     const again = validateProject(JSON.parse(text));
     expect(again.ok).toBe(true);

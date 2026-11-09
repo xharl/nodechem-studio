@@ -128,7 +128,7 @@ describe('recent-projects formatting (issue 149)', () => {
         { type: 'calculate', settings: { engine: 'psi4' } },
         { type: 'calculate', settings: { engine: 'psi4' } },
         { type: 'generate', settings: { generator: 'crest' } },
-        { type: 'generate', settings: { generator: 'import' } },
+        { type: 'generate', settings: { source: 'imported' } },
         { type: 'note' },
       ],
     };

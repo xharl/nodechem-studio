@@ -78,6 +78,7 @@ import {
 } from './outputFields.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
+  DEFAULT_ENSEMBLE_INPUT,
   conformerEnergyLabel,
   conformerGroupLabel,
   conformerGroups,
@@ -2966,6 +2967,12 @@ function conformersInspector(node) {
       : '',
     `<div class="field full"><span class="inspector-note">Blocks that share an id belong to the same study. A group is not a protomer or tautomer judgement, and energies across protonation states are not comparable without a proton reference.</span></div>`,
   ].join(''));
+  // ADR 0001: a generate block either searches or ranks the one ensemble input
+  // wired into it. The inspector says which, and never offers a file picker of
+  // its own: the input block owns the path, the unit and the provenance.
+  const sourceKind = s.source === 'imported' ? 'imported' : 'search';
+  const upstream = incoming(node.id).find((entry) => entry.type === 'input' && entry.input?.kind === 'ensemble') || null;
+  const upstreamOutput = upstream?.output && typeof upstream.output === 'object' ? upstream.output : null;
   const rows = members.length
     ? `<table class="batch-table">
         <thead><tr><th>Member</th><th>ΔE (kcal/mol)</th><th>Pop.</th><th>RMSD</th><th></th></tr></thead>
@@ -2979,8 +2986,8 @@ function conformersInspector(node) {
             : `<span class="inspector-note">${esc(member.dropped || 'dropped')}</span>`}</td>
         </tr>`).join('')}</tbody>
       </table>`
-    : `<div class="inspector-note">No ensemble yet. ${s.generator === 'import'
-      ? 'Choose a multi-XYZ file and run the block.'
+    : `<div class="inspector-note">No ensemble yet. ${s.source === 'imported'
+      ? (upstream ? `Run the block to rank the ensemble from "${esc(upstream.title)}".` : 'Wire an ensemble input into this block first.')
       : (s.generator === 'uff'
         ? 'Run the block: the UFF search runs here and needs no external binary.'
         : (s.generator === 'obabel'
@@ -2998,58 +3005,54 @@ function conformersInspector(node) {
     ${warningBlock}
     ${group('Ensemble', output ? caption : summaryLine, true, [rows])}
     ${groupBlock}
-    ${group('Search', s.generator === 'crest'
-      ? 'CREST'
-      : (s.generator === 'uff' ? 'UFF, in-app' : (s.generator === 'obabel' ? 'Open Babel, external' : 'imported file')), true, [
-      `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
-        <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
-        <option value="import"${s.generator === 'import' ? ' selected' : ''}>Import a multi-XYZ</option>
-        <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
-        <option value="obabel"${s.generator === 'obabel' ? ' selected' : ''}>Open Babel (external, MMFF94)</option>
+    ${group('Source', sourceKind === 'imported'
+      ? 'wired ensemble input'
+      : (s.generator === 'crest'
+        ? 'CREST'
+        : (s.generator === 'uff' ? 'UFF, in-app' : 'Open Babel, external')), true, [
+      `<div class="field full"><label>Candidate source</label><select class="select" data-conformer-field="source">
+        <option value="search"${sourceKind === 'search' ? ' selected' : ''}>Search with a generator</option>
+        <option value="imported"${sourceKind === 'imported' ? ' selected' : ''}>Rank a wired ensemble input</option>
       </select></div>`,
-      ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
+      ...(sourceKind === 'imported' ? [
+        upstream
+          ? `<div class="field full"><div class="card">
+              <div class="kv"><span>Input block</span><code>${esc(upstream.title)}</code></div>
+              <div class="kv"><span>File</span><code>${esc(upstream.input?.path || '—')}</code></div>
+              <div class="kv"><span>Energies</span><code>${esc((upstreamOutput?.energyUnit || upstream.input?.energyUnit) === 'kcal/mol' ? 'kcal/mol' : 'hartree')}${(upstreamOutput?.energyMethod || upstream.input?.energyMethod) ? ` · ${esc(upstreamOutput?.energyMethod || upstream.input?.energyMethod)}` : ''}</code></div>
+              <div class="kv"><span>Produced by</span><code>${esc(upstreamOutput?.origin?.program || upstream.input?.origin?.program || 'not recorded')}${upstreamOutput?.sourceSha256 ? ` · sha256 ${esc(String(upstreamOutput.sourceSha256).slice(0, 12))}…` : ''}</code></div>
+            </div></div>`
+          : '<div class="field full"><div class="callout red"><strong>No ensemble input wired.</strong> Drag a dependency edge from an Ensemble input block into this one.</div></div>',
+        `<div class="field full"><span class="inspector-note">Ranking is a generate-block job: the energy window, RMSD and protomer policy below act on the input's frames. The input block owns the path, the energy unit and the provenance, so this block never opens the file.</span></div>`,
+      ] : [
+        `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
+          <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
+          <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
+          <option value="obabel"${s.generator === 'obabel' ? ' selected' : ''}>Open Babel (external, MMFF94)</option>
+        </select></div>`,
+        ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
             <option value="gfn2"${s.method === 'gfn2' ? ' selected' : ''}>GFN2-xTB</option>
             <option value="gfnff"${s.method === 'gfnff' ? ' selected' : ''}>GFN-FF</option>
           </select></div>`] : []),
-      ...(s.generator === 'obabel' ? [
-        `<div class="field"><label>Force field</label><select class="select" data-conformer-field="ff">
-          <option value="mmff94"${s.ff === undefined || s.ff === 'mmff94' ? ' selected' : ''}>MMFF94</option>
-          <option value="mmff94s"${s.ff === 'mmff94s' ? ' selected' : ''}>MMFF94s (static)</option>
-        </select></div>`,
-        `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
-        `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on MMFF94 energy, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name.</span></div>`,
-      ] : []),
-      ...(s.generator === 'import' ? [`<div class="field full"><label>Ensemble file</label>
-            <div style="display:flex;gap:6px">
-              <input class="input" data-conformer-field="importPath" value="${esc(s.importPath || '')}" placeholder="C:\\path\\to\\conformers.xyz">
-              <button type="button" class="btn small" data-action="pick-ensemble">Choose…</button>
-            </div>
-          </div>`] : []),
-      // Issue 144: the in-app route's own two knobs, and the statement of what
-      // the search is. Absent from a CREST or import block.
-      ...(s.generator === 'uff' ? [
-        `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
-          <option value="60"${Number(s.torsionStepDegrees) === 60 ? ' selected' : ''}>60°</option>
-          <option value="90"${Number(s.torsionStepDegrees) === 90 ? ' selected' : ''}>90°</option>
-          <option value="120"${s.torsionStepDegrees === undefined || Number(s.torsionStepDegrees) === 120 ? ' selected' : ''}>120°</option>
-          <option value="180"${Number(s.torsionStepDegrees) === 180 ? ' selected' : ''}>180°</option>
-        </select></div>`,
-        `<div class="field"><label>Max trials</label><input class="input" type="number" min="1" max="2000" step="1" data-conformer-field="maxTrials" value="${esc(s.maxTrials ?? 200)}"></div>`,
-        `<div class="field full"><span class="inspector-note" data-conformer-uff-note>Torsional grid plus UFF relaxation, run in this app: not a Monte-Carlo or CREST search. Every member is a UFF force-field structure, and its kcal/mol energy is not comparable with a Hartree value. UFF here has no electrostatics term and does not sample ring conformers; a molecule with no rotatable bonds yields one relaxed structure.</span></div>`,
-      ] : []),
-      // Issues 129/130: an imported file carries energies this app did not
-      // compute, in a unit it did not choose. Both are recorded, not guessed:
-      // an MM energy in kcal/mol is never stored or shown as a Hartree total.
-      ...(s.generator === 'import' ? [
-        `<div class="field"><label>Energies are in</label><select class="select" data-conformer-field="energyUnit">
-          <option value="hartree"${s.energyUnit !== 'kcal/mol' ? ' selected' : ''}>Hartree</option>
-          <option value="kcal/mol"${s.energyUnit === 'kcal/mol' ? ' selected' : ''}>kcal/mol</option>
-        </select></div>`,
-        `<div class="field"><label>Energy method</label><input class="input" data-conformer-field="energyMethod" value="${esc(s.energyMethod || '')}" placeholder="MMFF94" maxlength="40"></div>`,
-        `<div class="field"><label>Produced by</label><input class="input" data-conformer-field="originProgram" value="${esc(s.origin?.program || '')}" placeholder="program name" maxlength="40"></div>`,
-        `<div class="field"><label>Program version</label><input class="input" data-conformer-field="originVersion" value="${esc(s.origin?.version || '')}" placeholder="e.g. 26.1" maxlength="40"></div>`,
-        `<div class="field full"><label>Producing method / settings</label><input class="input" data-conformer-field="originMethod" value="${esc(s.origin?.method || '')}" placeholder="e.g. MMFF94, 15 kJ/mol window" maxlength="60"></div>`,
-      ] : []),
+        ...(s.generator === 'obabel' ? [
+          `<div class="field"><label>Force field</label><select class="select" data-conformer-field="ff">
+            <option value="mmff94"${s.ff === undefined || s.ff === 'mmff94' ? ' selected' : ''}>MMFF94</option>
+            <option value="mmff94s"${s.ff === 'mmff94s' ? ' selected' : ''}>MMFF94s (static)</option>
+          </select></div>`,
+          `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
+          `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on MMFF94 energy, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name.</span></div>`,
+        ] : []),
+        ...(s.generator === 'uff' ? [
+          `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
+            <option value="60"${Number(s.torsionStepDegrees) === 60 ? ' selected' : ''}>60°</option>
+            <option value="90"${Number(s.torsionStepDegrees) === 90 ? ' selected' : ''}>90°</option>
+            <option value="120"${s.torsionStepDegrees === undefined || Number(s.torsionStepDegrees) === 120 ? ' selected' : ''}>120°</option>
+            <option value="180"${Number(s.torsionStepDegrees) === 180 ? ' selected' : ''}>180°</option>
+          </select></div>`,
+          `<div class="field"><label>Max trials</label><input class="input" type="number" min="1" max="2000" step="1" data-conformer-field="maxTrials" value="${esc(s.maxTrials ?? 200)}"></div>`,
+          `<div class="field full"><span class="inspector-note" data-conformer-uff-note>Torsional grid plus UFF relaxation, run in this app: not a Monte-Carlo or CREST search. Every member is a UFF force-field structure, and its kcal/mol energy is not comparable with a Hartree value. UFF here has no electrostatics term and does not sample ring conformers; a molecule with no rotatable bonds yields one relaxed structure.</span></div>`,
+        ] : []),
+      ]),
       `<div class="field"><label>Energy window (kcal/mol)</label><input class="input" type="number" min="0" max="100" step="0.5" data-conformer-field="energyWindowKcal" value="${esc(s.energyWindowKcal)}"></div>`,
       `<div class="field"><label>RMSD threshold (Å)</label><input class="input" type="number" min="0.01" max="10" step="0.05" data-conformer-field="rmsdThreshold" value="${esc(s.rmsdThreshold)}"></div>`,
       `<div class="field"><label>Keep at most</label><input class="input" type="number" min="1" max="200" data-conformer-field="maxConformers" value="${esc(s.maxConformers)}"></div>`,
@@ -3795,7 +3798,60 @@ function derivativeCard(node, dataset) {
     </div>`;
 }
 
+function ensembleInputInspector(node) {
+  const input = node.input || {};
+  const output = node.output && typeof node.output === 'object' ? node.output : null;
+  const fileLabel = input.path ? String(input.path).split(/[\\/]/).pop() : 'no file chosen';
+  const digest = output?.sourceSha256 || input.sourceSha256 || '';
+  const origin = output?.origin || input.origin || {};
+  return `${inspectorHead('Data · input', node.title,
+    output ? `${output.frameCount} frame${output.frameCount === 1 ? '' : 's'} · ${output.energyUnit}` : fileLabel)}
+  <div class="inspector-scroll">
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">Runs once, before the generate block that ranks it</span></div>
+    ${group('Ensemble file', input.path ? fileLabel : 'required', true, [
+      `<div class="field full"><label>File</label>
+        <div style="display:flex;gap:6px">
+          <input class="input" data-ensemble-field="path" value="${esc(input.path || '')}" placeholder="path/to/conformers.xyz" spellcheck="false">
+          <button type="button" class="btn small" data-action="pick-ensemble">Choose…</button>
+        </div>
+        <p class="field-hint">One or more XYZ frames. Relative paths resolve against the project file.</p>
+      </div>`,
+      `<div class="field"><label>Format</label><select class="select" data-ensemble-field="format">
+        <option value="xyz"${input.format !== 'xyz' ? '' : ' selected'}>Multi-XYZ</option>
+      </select></div>`,
+      `<div class="field"><label>Energies are in</label><select class="select" data-ensemble-field="energyUnit">
+        <option value="hartree"${input.energyUnit !== 'kcal/mol' ? ' selected' : ''}>Hartree</option>
+        <option value="kcal/mol"${input.energyUnit === 'kcal/mol' ? ' selected' : ''}>kcal/mol</option>
+      </select></div>`,
+      `<div class="field"><label>Energy method</label><input class="input" data-ensemble-field="energyMethod" value="${esc(input.energyMethod || '')}" placeholder="MMFF94" maxlength="40"></div>`,
+      `<div class="field"><label>Produced by</label><input class="input" data-ensemble-field="originProgram" value="${esc(origin.program || '')}" placeholder="program name" maxlength="40"></div>`,
+      `<div class="field"><label>Program version</label><input class="input" data-ensemble-field="originVersion" value="${esc(origin.version || '')}" placeholder="e.g. 26.1" maxlength="40"></div>`,
+      `<div class="field full"><label>Producing method / settings</label><input class="input" data-ensemble-field="originMethod" value="${esc(origin.method || '')}" placeholder="e.g. MMFF94, 15 kJ/mol window" maxlength="60"></div>`,
+      `<div class="field full"><span class="inspector-note">The input block owns the file, the energy unit and the provenance. Ranking stays in the generate block that consumes it; the digest is recorded from the bytes read at run time, not typed in.</span></div>`,
+    ].join(''))}
+    ${group('Read record', output ? `${output.frameCount} frames` : 'not read yet', Boolean(output), [
+      output
+        ? `<div class="field full"><div class="card">
+            <div class="kv"><span>Frames</span><code>${esc(output.frameCount)}</code></div>
+            <div class="kv"><span>Energies</span><code>${esc(output.energyUnit)}${output.energyMethod ? ` · ${esc(output.energyMethod)}` : ''}</code></div>
+            <div class="kv"><span>SHA-256</span><code>${digest ? `${esc(digest.slice(0, 16))}…` : 'not recorded'}</code></div>
+            <div class="kv"><span>Read</span><code>${esc(output.origin?.program || 'origin not recorded')}</code></div>
+          </div></div>`
+        : '<div class="field full"><span class="inspector-note">Run the block to read, hash and store the ensemble. Every downstream block reads that record, not the original path.</span></div>',
+    ].join(''))}
+    <div class="inspector-actions-row">
+      <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
+      <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
+    </div>
+  </div>
+  <div class="inspector-footer">
+    <button type="button" class="btn primary" data-action="validate">Validate</button>
+    <button type="button" class="btn" data-action="delete-node">Delete</button>
+  </div>`;
+}
+
 function inputInspector(node) {
+  if (node.input?.kind === 'ensemble') return ensembleInputInspector(node);
   const datasets = Array.isArray(state.project.datasets) ? state.project.datasets : [];
   const dataset = datasetForInputNode(node);
   const records = dataset ? recordsOf(dataset) : [];
@@ -4030,6 +4086,7 @@ const BLOCKS = [
   ] },
   { group: 'Data', items: [
     { type: 'input', icon: 'IN', title: 'Dataset input', note: 'run the graph once per record' },
+    { type: 'ensemble', icon: 'XYZ', title: 'Ensemble input', note: 'rank an external multi-XYZ ensemble' },
     { type: 'output', icon: 'OUT', title: 'Output file', note: 'csv / json / html / zip' },
   ] },
   { group: 'Project', items: [
@@ -4111,9 +4168,6 @@ function addBlock(type) {
       id, type: 'generate', kind: 'Generate', title: 'Generate structures', state: 'ready', ...position,
       settings: {
         ...DEFAULT_CONFORMER_SETTINGS,
-        // A fresh origin per block: the default is one frozen object, and two
-        // blocks must not share the provenance they declare.
-        origin: { ...DEFAULT_CONFORMER_SETTINGS.origin },
         charge: state.project.molecule.charge,
         multiplicity: state.project.molecule.multiplicity,
       },
@@ -4130,6 +4184,18 @@ function addBlock(type) {
     node = {
       id, type: 'analyse', kind: 'Analyse', title: 'Analyse', state: 'ready', ...position,
       analyse: { expression: 'E', inputs: [{ name: 'E', field: 'finalEnergyHartree', source: '' }] },
+    };
+  } else if (type === 'ensemble') {
+    node = {
+      id, type: 'input', kind: 'Ensemble input', title: 'Ensemble input', state: 'ready', ...position,
+      input: {
+        kind: 'ensemble',
+        ...DEFAULT_ENSEMBLE_INPUT,
+        // A fresh origin per block: the default is one frozen object, and two
+        // blocks must not share the provenance they declare.
+        origin: { ...DEFAULT_ENSEMBLE_INPUT.origin },
+      },
+      output: null,
     };
   } else if (type === 'input') {
     const dataset = Array.isArray(state.project.datasets) ? state.project.datasets[0] : null;
@@ -6198,7 +6264,11 @@ async function pickEnsembleFile() {
   if (!desktop?.pickEnsembleFile) { toast('Open the Electron app to choose an ensemble file.'); return; }
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'generate') return;
+  const isInput = node?.type === 'input' && node.input?.kind === 'ensemble';
+  if (!isInput) {
+    toast('Choose the ensemble file on the Ensemble input block, not on the generate block.');
+    return;
+  }
   try {
     const file = await desktop.pickEnsembleFile();
     if (!file) return;
@@ -6206,14 +6276,13 @@ async function pickEnsembleFile() {
     // it: a project that ships with its data must not be pinned to the machine
     // that wrote the absolute path. Outside the project folder the absolute
     // path stays, because there is nothing to anchor it to.
-    node.settings.importPath = portableImportPath(file, state.projectPath);
-    node.settings.generator = 'import';
+    node.input.path = portableImportPath(file, state.projectPath);
     node.output = null;
     node.state = 'ready';
     refreshDirty();
     renderGraph();
     renderInspector();
-    toast('Ensemble file selected. Run the block to rank it.');
+    toast('Ensemble file selected. Run the workflow to read and hash it.');
   } catch (error) {
     toast(`Could not choose the ensemble file: ${error.message}`);
   }
@@ -6941,6 +7010,18 @@ async function attachQueueParsed(queue) {
 function attachQueueEnsembles(queue) {
   let changed = false;
   for (const task of queue?.tasks || []) {
+    // ADR 0001: an ensemble input's run records how many frames were read and
+    // the digest of the exact file. The frames stay in the run folder.
+    if (task?.type === 'input' && task.input?.kind === 'ensemble'
+      && task.status === 'completed' && task.ensemble) {
+      const inputNode = nodeById(task.nodeId);
+      if (inputNode && inputNode.type === 'input' && inputNode.input?.kind === 'ensemble') {
+        inputNode.output = task.ensemble;
+        inputNode.state = 'passed';
+        changed = true;
+      }
+      continue;
+    }
     if (task?.type !== 'generate' || task.status !== 'completed' || !task.ensemble) continue;
     const node = nodeById(task.nodeId);
     if (!node || node.type !== 'generate') continue;
@@ -8567,6 +8648,10 @@ function onDocumentChange(event) {
     applyTimeout(target.value);
     return;
   }
+  if (target.dataset.ensembleField) {
+    applyEnsembleInputField(target);
+    return;
+  }
   if (target.dataset.inputField) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
@@ -8919,6 +9004,32 @@ function onDocumentChange(event) {
  * listeners come here, so typing a number and picking from a select behave the
  * same way.
  */
+/**
+ * ADR 0001: one writer for an ensemble input's fields. The path and the energy
+ * declaration live on `input`; the provenance is nested, so it needs its own
+ * branch like the conformer block's origin.
+ */
+function applyEnsembleInputField(target) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return;
+  const key = target.dataset.ensembleField;
+  const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
+  if (originField) {
+    node.input.origin = { ...(node.input.origin || {}), [originField]: String(target.value || '') };
+  } else if (key === 'path' || key === 'format' || key === 'energyUnit' || key === 'energyMethod') {
+    node.input[key] = String(target.value || '');
+  } else {
+    return;
+  }
+  // Any change to what the file is voids the record read from the old one.
+  node.output = null;
+  node.state = 'ready';
+  refreshDirty();
+  renderGraph();
+  renderInspector();
+}
+
 function applyConformerField(target) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
@@ -8945,9 +9056,16 @@ function applyConformerField(target) {
   } else {
     // A switch writes its checked state, not the string "on".
     node.settings[key] = target.type === 'checkbox' ? target.checked : target.value;
+    if (key === 'source') {
+      // ADR 0001: search and imported are exclusive. A stored generator on an
+      // imported block would be a claim that no search will honour.
+      node.settings.generator = node.settings.source === 'imported' ? '' : 'crest';
+      node.output = null;
+      node.state = 'ready';
+    }
     if (key === 'generator' && node.output && node.output.generator !== target.value) {
-      // An imported table is not what CREST would produce, and a CREST run is
-      // not the file that was imported: switching the source voids the choice.
+      // A CREST table is not what UFF would produce, and a UFF run is not the
+      // CREST search that was chosen: switching the generator voids the choice.
       node.output = null;
       node.state = 'ready';
     }
@@ -8959,6 +9077,10 @@ function applyConformerField(target) {
 
 function onDocumentInput(event) {
   const target = event.target;
+  if (target.dataset.ensembleField) {
+    applyEnsembleInputField(target);
+    return;
+  }
   if (target.dataset.conformerField) {
     applyConformerField(target);
     return;

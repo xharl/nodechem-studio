@@ -482,6 +482,11 @@ export function scopeFor(project, nodes, edges, node) {
       + ' A block cannot run over two record sets; split the flow, or join the branches first.');
   }
   const [input] = inputs.values();
+  // ADR 0001: an ensemble input is a scope of one implicit record. It owns a
+  // file rather than a dataset row, so the records expansion does not apply.
+  if (input.input?.kind === 'ensemble') {
+    return { input, dataset: null, records: [null] };
+  }
   const dataset = datasetById(project, input.input?.datasetId);
   if (!dataset) {
     throw new Error(`"${input.title || input.id}" references dataset "${input.input?.datasetId || ''}", which is not in this project.`);

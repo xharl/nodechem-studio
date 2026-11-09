@@ -57,6 +57,20 @@ const conformersNode = (id, settings = {}, output = null) => ({
   id, type: 'generate', title: `Ensemble ${id}`, state: 'ready', x: 0, y: 0, settings, output,
 });
 
+// ADR 0001: an imported ensemble is an input block plus a generate block.
+const importedPair = (id, settings = {}, output = null, input = {}) => [
+  {
+    id: `ens-${id}`, type: 'input', kind: 'Ensemble input', title: `Input ${id}`, state: 'ready', x: -160, y: 0,
+    input: {
+      kind: 'ensemble', path: input.path || 'conf.xyz', format: 'xyz',
+      energyUnit: input.energyUnit || 'hartree', energyMethod: input.energyMethod || '',
+      origin: input.origin || { program: '', version: '', method: '' },
+    },
+  },
+  conformersNode(id, { source: 'imported', ...settings }, output),
+];
+const importedEdge = (id) => [{ from: `ens-${id}`, to: id, type: 'dependency' }];
+
 const summary = (overrides = {}) => ({
   generator: 'import',
   method: '',
@@ -90,13 +104,14 @@ describe('#132 a group id round-trips through the schema', () => {
   });
 
   it('stores a group id on the block and in the ensemble summary', () => {
-    const result = validateProject(project([
-      conformersNode('conf1', { generator: 'import', importPath: 'a.xyz', group: 'tautomer-study' }, summary({ group: 'tautomer-study' })),
-    ]));
+    const result = validateProject(project(
+      importedPair('conf1', { group: 'tautomer-study' }, summary({ group: 'tautomer-study' }), { path: 'a.xyz' }),
+      importedEdge('conf1'),
+    ));
     expect(result.ok).toBe(true);
     const reloaded = parseProjectText(stringifyProject(result.project).text);
     expect(reloaded.ok).toBe(true);
-    const node = reloaded.project.nodes[0];
+    const node = reloaded.project.nodes.find((entry) => entry.type === 'generate');
     expect(node.settings.group).toBe('tautomer-study');
     expect(node.output.group).toBe('tautomer-study');
   });
@@ -158,14 +173,15 @@ describe('#132 the group is per block, never per member', () => {
 
   it('passes the block group into the task the queue receives', () => {
     const validated = validateProject(project([
-      conformersNode('conf1', { generator: 'import', importPath: 'conf.xyz', group: 'study-1' }),
-    ])).project;
-    const task = conformerSearchTask(validated, validated.nodes[0]);
+      ...importedPair('conf1', { group: 'study-1' }, null, { path: 'conf.xyz' }),
+    ], importedEdge('conf1'))).project;
+    const task = conformerSearchTask(validated, validated.nodes.find((entry) => entry.type === 'generate'));
     expect(task.generate.group).toBe('study-1');
-    const ungrouped = validateProject(project([
-      conformersNode('conf2', { generator: 'import', importPath: 'conf.xyz' }),
-    ])).project;
-    expect(conformerSearchTask(ungrouped, ungrouped.nodes[0]).generate.group).toBe('');
+    const ungrouped = validateProject(project(
+      importedPair('conf2', {}, null, { path: 'conf.xyz' }),
+      importedEdge('conf2'),
+    )).project;
+    expect(conformerSearchTask(ungrouped, ungrouped.nodes.find((entry) => entry.type === 'generate')).generate.group).toBe('');
   });
 });
 
@@ -364,17 +380,16 @@ describe('#132 the queue writes the group into conformers.json', () => {
       ...coords.map((atom) => `${atom.element} ${atom.x} ${atom.y + 0.8} ${atom.z}`),
       '',
     ].join('\n'), 'utf8');
-    const validated = validateProject(project([
-      conformersNode('conf', {
-        generator: 'import', importPath: ensemblePath, rmsdThreshold: 0.05, group: 'study-1',
-      }),
-    ]));
+    const validated = validateProject(project(
+      importedPair('conf', { rmsdThreshold: 0.05, group: 'study-1' }, null, { path: ensemblePath }),
+      importedEdge('conf'),
+    ));
     expect(validated.ok).toBe(true);
-    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'generate');
+    const plan = buildWorkflowPlan(validated.project);
     const started = await queueManager.start({
       projectName: validated.project.name,
-      tasks: [task],
-      edges: [],
+      tasks: plan.tasks,
+      edges: plan.edges,
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     });
     const done = await waitFor(async () => {
@@ -388,11 +403,12 @@ describe('#132 the queue writes the group into conformers.json', () => {
     expect(written.members.some((member) => 'group' in member)).toBe(false);
     // The summary the project stores carries it too, so save/load keeps the link.
     expect(conformers.ensemble.group).toBe('study-1');
-    const reloaded = parseProjectText(stringifyProject(project([
-      conformersNode('conf', { generator: 'import', importPath: ensemblePath, group: 'study-1' }, conformers.ensemble),
-    ])).text);
+    const reloaded = parseProjectText(stringifyProject(project(
+      importedPair('conf', { group: 'study-1' }, conformers.ensemble, { path: ensemblePath }),
+      importedEdge('conf'),
+    )).text);
     expect(reloaded.ok).toBe(true);
-    expect(reloaded.project.nodes[0].output.group).toBe('study-1');
+    expect(reloaded.project.nodes.find((entry) => entry.type === 'generate').output.group).toBe('study-1');
   });
 
   it('drops a hand-written queue group that is not a plain token instead of storing it', async () => {

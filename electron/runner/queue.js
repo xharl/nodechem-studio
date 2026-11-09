@@ -280,22 +280,31 @@ function routeSettings(raw) {
 }
 
 function conformerTaskRecord(raw, nodeId) {
-  const inputName = String(raw?.inputName || '');
-  if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
-    throw new Error(`Generate task "${nodeId}" must have a safe .xyz input name.`);
-  }
-  const inputText = String(raw?.inputText || '');
-  if (!inputText.trim()) throw new Error(`Generate task "${nodeId}" has no starting geometry.`);
-  if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
-    throw new Error(`Generate task "${nodeId}" input is larger than 2 MiB.`);
-  }
   const conf = raw?.generate && typeof raw.generate === 'object' ? raw.generate : {};
-  // Issue 144: three routes, three sources of geometry. Anything else is
+  // ADR 0001: a generate block either searches or ranks an imported ensemble.
+  // The import route needs no starting geometry: the upstream input owns it.
+  const source = conf.source === 'imported' ? 'imported' : 'search';
+  const ensembleFrom = source === 'imported' && SAFE_ID.test(String(conf.ensembleFrom || ''))
+    ? String(conf.ensembleFrom) : '';
+  if (source === 'imported' && !ensembleFrom) {
+    throw new Error(`Generate task "${nodeId}" is imported but names no ensemble input.`);
+  }
+  const inputName = String(raw?.inputName || '');
+  const inputText = String(raw?.inputText || '');
+  if (source === 'search') {
+    if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
+      throw new Error(`Generate task "${nodeId}" must have a safe .xyz input name.`);
+    }
+    if (!inputText.trim()) throw new Error(`Generate task "${nodeId}" has no starting geometry.`);
+    if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
+      throw new Error(`Generate task "${nodeId}" input is larger than 2 MiB.`);
+    }
+  }
+  // Issue 144: two search routes, two sources of geometry. Anything else is
   // treated as CREST, which is the historical default.
-  const generator = conf.generator === 'import'
-    ? 'import'
+  const generator = source === 'imported'
+    ? ''
     : (conf.generator === 'uff' ? 'uff' : (conf.generator === 'obabel' ? 'obabel' : 'crest'));
-  const importPath = oneLine(conf.importPath, 500);
   // A fanned-out member task (#80) carries one member of an ensemble that is
   // already stored in the project. It does not search, so it needs neither a
   // generator nor an import path — only the member row it stands for.
@@ -332,9 +341,6 @@ function conformerTaskRecord(raw, nodeId) {
     spreadKcal: Number.isFinite(Number(rawMember.spreadKcal)) ? Number(rawMember.spreadKcal) : null,
     temperature: Number.isFinite(Number(rawMember.temperature)) ? Number(rawMember.temperature) : null,
   } : null;
-  if (generator === 'import' && !importPath && !member) {
-    throw new Error(`Generate task "${nodeId}" has no ensemble file to import.`);
-  }
   const number = (value, fallback, min, max) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
@@ -362,7 +368,9 @@ function conformerTaskRecord(raw, nodeId) {
     runId: null,
     runDir: null,
     inputName,
-    outputName: /^[A-Za-z0-9._-]+\.(xyz|out|log)$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out',
+    outputName: source === 'imported'
+      ? 'conformers.json'
+      : (/^[A-Za-z0-9._-]+\.(xyz|out|log)$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out'),
     settings: null,
     gates: {},
     validity: null,
@@ -393,26 +401,16 @@ function conformerTaskRecord(raw, nodeId) {
     ensembleFile: null,
     inputText,
     generate: {
+      source,
       generator,
-      method: conf.method === 'gfnff' ? 'gfnff' : 'gfn2',
+      method: source === 'imported' ? '' : (conf.method === 'gfnff' ? 'gfnff' : 'gfn2'),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
       maxConformers: Math.round(number(conf.maxConformers, 20, 1, 200)),
       temperature: number(conf.temperature, 298.15, 1, 1000),
       spreadThresholdKcal: number(conf.spreadThresholdKcal, 2, 0, 50),
       selectedConformerId: /^c\d+$/.test(String(conf.selectedConformerId || '')) ? String(conf.selectedConformerId) : '',
-      importPath,
-      // Issues #129/#130: declared provenance and unit of the imported file.
-      // Bounded here so a hand-written queue payload cannot smuggle in an
-      // unbounded string, and never inferred from the generator.
-      energyUnit: conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
-      energyMethod: oneLine(conf.energyMethod, 40),
-      origin: {
-        program: oneLine(conf.origin?.program, 40),
-        version: oneLine(conf.origin?.version, 40),
-        method: oneLine(conf.origin?.method, 60),
-        sourceSha256: oneLine(conf.origin?.sourceSha256, 64),
-      },
+      ...(ensembleFrom ? { ensembleFrom } : {}),
       charge: Math.round(number(conf.charge, 0, -10, 10)),
       multiplicity: Math.round(number(conf.multiplicity, 1, 1, 10)),
       // Issue #132: the study the block belongs to, if any. Bounded here like
@@ -461,16 +459,30 @@ function scopeRecord(raw) {
     }
     : null;
   const input = raw?.input && typeof raw.input === 'object'
-    ? {
-      datasetId: text(raw.input.datasetId) || '',
-      datasetTitle: oneLine(raw.input.datasetTitle, 160) || '',
-      records: Array.isArray(raw.input.records)
-        ? raw.input.records.slice(0, LIMITS.records).map((entry) => ({
-          id: text(entry?.id) || '',
-          label: oneLine(entry?.label, 200) || text(entry?.id) || '',
-        })).filter((entry) => entry.id)
-        : [],
-    }
+    ? (raw.input.kind === 'ensemble'
+      ? {
+        kind: 'ensemble',
+        path: oneLine(raw.input.path, 500),
+        format: raw.input.format === 'xyz' ? 'xyz' : 'xyz',
+        energyUnit: raw.input.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
+        energyMethod: oneLine(raw.input.energyMethod, 40),
+        origin: {
+          program: oneLine(raw.input.origin?.program, 40),
+          version: oneLine(raw.input.origin?.version, 40),
+          method: oneLine(raw.input.origin?.method, 60),
+        },
+        ...(oneLine(raw.input.sourceSha256, 64) ? { sourceSha256: oneLine(raw.input.sourceSha256, 64) } : {}),
+      }
+      : {
+        datasetId: text(raw.input.datasetId) || '',
+        datasetTitle: oneLine(raw.input.datasetTitle, 160) || '',
+        records: Array.isArray(raw.input.records)
+          ? raw.input.records.slice(0, LIMITS.records).map((entry) => ({
+            id: text(entry?.id) || '',
+            label: oneLine(entry?.label, 200) || text(entry?.id) || '',
+          })).filter((entry) => entry.id)
+          : [],
+      })
     : null;
   return {
     flowId: text(raw?.flowId),
@@ -1137,7 +1149,11 @@ export class QueueManager {
       const inputPath = task.type === 'generate'
         ? this.conformerInputPath(id, task.nodeId)
         : this.inputPath(id, task.nodeId);
-      await fsp.writeFile(inputPath, task.inputText, 'utf8');
+      // ADR 0001: an imported generate task reads its upstream input's record
+      // and has no starting geometry of its own; nothing to stage.
+      if (task.inputText !== null && task.inputText !== undefined) {
+        await fsp.writeFile(inputPath, task.inputText, 'utf8');
+      }
     }
     await this.writeRecordFiles(queue);
     this.queues.set(id, queue);
@@ -1546,7 +1562,7 @@ export class QueueManager {
    */
   async runConformers(queue, task) {
     const conf = task.generate;
-    const dir = path.join(this.queueDir(queue.id), 'conformers', task.nodeId);
+    const dir = path.join(this.queueDir(queue.id), 'generate', task.nodeId);
     await fsp.mkdir(dir, { recursive: true });
 
     task.status = 'running';
@@ -1569,50 +1585,55 @@ export class QueueManager {
       }
       let ensembleText = '';
       let energies = [];
-      let source = conf.generator;
+      let source = conf.source === 'imported' ? 'imported' : conf.generator;
       let origin = null;
       // Issue 144: what an in-app UFF search did, kept beside the numbers.
       let search = null;
       // Its caveats (perceived bonds, truncated grid, unconverged trials) must
       // travel with the summary, not only into the run log.
       let searchWarnings = [];
-      // Issue #130: a CREST search writes Hartree energies; only an imported
-      // file can carry another unit, and only if the block says so. A UFF
-      // search writes kcal/mol force-field energies and nothing else.
-      let energyUnit = conf.generator === 'import'
-        ? (conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree')
+      // Issue #130: a CREST search writes Hartree energies; a UFF/Open Babel
+      // search writes kcal/mol. ADR 0001 moves the imported file's unit,
+      // method and provenance to the input block, which is read below.
+      let energyUnit = conf.source === 'imported'
+        ? 'hartree'
         : (conf.generator === 'uff' || conf.generator === 'obabel' ? 'kcal/mol' : 'hartree');
-      let energyMethod = conf.generator === 'import'
-        ? conf.energyMethod
+      let energyMethod = conf.source === 'imported'
+        ? ''
         : (conf.generator === 'uff'
           ? 'UFF'
           : (conf.generator === 'obabel' ? (obabelForceFieldKeyword(conf.ff) || 'MMFF94') : ''));
-      if (conf.generator === 'import') {
-        // Reading an ensemble is a file operation, not an engine call, so a dry
-        // run must use the real ensemble. It used to drop straight to the
-        // three-member fixture and then fail downstream on "no selected
-        // conformer": the dry run hid the data it exists to check.
-        const importPath = this.resolveImportPath(queue, conf.importPath);
-        const imported = await CrestRunner.readImport(importPath);
-        ensembleText = imported.ensembleText;
-        energies = imported.energies;
-        // Issue #129: the hash is of the bytes on disk, not of the parsed
-        // numbers, so a re-export that changes the file changes the digest.
-        const sourceSha256 = await sha256File(importPath).catch(() => '');
+      if (conf.source === 'imported') {
+        // ADR 0001: the input block already read, hashed and wrote the file.
+        // This block only ranks what that record contains; it never opens the
+        // user's path again.
+        const inputTask = queue.tasks.find((entry) => entry.nodeId === conf.ensembleFrom);
+        if (!inputTask) {
+          throw new Error(`The ensemble input "${conf.ensembleFrom}" is not part of this workflow.`);
+        }
+        if (inputTask.status !== 'completed' || !inputTask.runDir) {
+          throw new Error(`The ensemble input "${inputTask.title || conf.ensembleFrom}" has not produced its record.`);
+        }
+        const sourceDir = inputTask.runDir;
+        const record = JSON.parse(await fsp.readFile(path.join(sourceDir, 'ensemble.json'), 'utf8'));
+        ensembleText = await fsp.readFile(path.join(sourceDir, 'ensemble.xyz'), 'utf8');
+        energies = Array.isArray(record.energies) ? record.energies : [];
+        energyUnit = record.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree';
+        energyMethod = String(record.energyMethod || '');
         origin = {
-          program: conf.origin?.program || '',
-          version: conf.origin?.version || '',
-          method: conf.origin?.method || '',
-          sourceSha256,
+          program: String(record.origin?.program || ''),
+          version: String(record.origin?.version || ''),
+          method: String(record.origin?.method || ''),
+          sourceSha256: String(record.origin?.sourceSha256 || record.sourceSha256 || ''),
         };
+        source = origin.program || 'imported';
         this.emit({
           type: 'queue-output',
           queueId: queue.id,
           nodeId: task.nodeId,
-          // The origin is printed once, next to the file it describes: a reader
-          // of the log then knows what the numbers are before seeing them.
-          text: `Imported ensemble ${imported.ensemblePath} (${energyUnit}${energyMethod ? `, ${energyMethod}` : ''}${sourceSha256 ? `, sha256 ${sourceSha256.slice(0, 12)}…` : ''})`
-            + (origin.program ? ` from ${origin.program}${origin.version ? ` ${origin.version}` : ''}` : '; origin not recorded'),
+          text: `Ranking imported ensemble from input "${inputTask.title || conf.ensembleFrom}"`
+            + ` (${energyUnit}${energyMethod ? `, ${energyMethod}` : ''}`
+            + `${origin.sourceSha256 ? `, sha256 ${origin.sourceSha256.slice(0, 12)}…` : ''})`,
         });
       } else if (conf.generator === 'uff') {
         // Issue 144: the in-app route. It spawns nothing, so a dry run runs it
@@ -1829,10 +1850,13 @@ export class QueueManager {
       };
       const summary = ensembleSummary(ranked, {
         generator: source,
-        // Issue 144: a UFF search has no xTB method, and recording the block's
-        // `method` (gfn2 by default) beside a UFF ensemble would be a false
-        // provenance claim.
-        method: conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method,
+        // Issue 144: a UFF or Open Babel search has no xTB method, and
+        // recording the block's `method` beside its ensemble would be a false
+        // provenance claim. ADR 0001: an imported ensemble keeps the method its
+        // producing input declared.
+        method: conf.source === 'imported'
+          ? (origin?.method || energyMethod || '')
+          : (conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method),
         origin: recordedOrigin,
         energyUnit,
         energyMethod,
@@ -2499,9 +2523,13 @@ export class QueueManager {
   }
 
   async runControl(queue, task) {
-    // RFC 0001: an input block is a declaration, not work. It completes at once
-    // and records how many records the flow is iterating over; its geometry and
-    // chemistry already travelled with every downstream task.
+    // RFC 0001: an input block is a declaration, not work. An ensemble input
+    // is the exception ADR 0001 introduces: it materialises the external file
+    // once, so the generate block downstream ranks a record instead of a path.
+    if (task.type === 'input' && task.input?.kind === 'ensemble') {
+      await this.runEnsembleInput(queue, task);
+      return;
+    }
     if (task.type === 'input') {
       const count = Array.isArray(task.input?.records) ? task.input.records.length : 0;
       this.setTaskOutcome(task, 'completed',
@@ -2537,6 +2565,94 @@ export class QueueManager {
       return;
     } else {
       this.setTaskOutcome(task, 'blocked', 'this control block has no runtime');
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * ADR 0001: materialise an input(ensemble).
+   *
+   * The file is read once, hashed, and written to the input's own run folder as
+   * `ensemble.xyz` + `ensemble.json` (metadata and the energy list, not a second
+   * copy of the atoms). The generate block downstream reads that record; no
+   * later block ever touches the original path, so a file edited mid-run cannot
+   * change what the graph consumed.
+   */
+  async runEnsembleInput(queue, task) {
+    const dir = path.join(this.queueDir(queue.id), 'ensemble', task.nodeId);
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+    try {
+      const declaredPath = String(task.input?.path || '');
+      if (!declaredPath) throw new Error('The ensemble input names no file.');
+      const ensemblePath = this.resolveImportPath(queue, declaredPath);
+      const imported = await CrestRunner.readImport(ensemblePath);
+      const parsed = parseMultiXyz(imported.ensembleText);
+      if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
+      const merged = withEnergies(parsed.frames, imported.energies);
+      if (merged.error) throw new Error(merged.error);
+      // Issue #129: the digest is of the bytes on disk. The input block owns
+      // it now, so every downstream record can name the exact artifact.
+      const sourceSha256 = await sha256File(ensemblePath).catch(() => '');
+      const energyUnit = task.input?.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree';
+      const summary = {
+        kind: 'ensemble',
+        path: ensemblePath,
+        format: 'xyz',
+        energyUnit,
+        energyMethod: String(task.input?.energyMethod || ''),
+        origin: {
+          program: String(task.input?.origin?.program || ''),
+          version: String(task.input?.origin?.version || ''),
+          method: String(task.input?.origin?.method || ''),
+          sourceSha256,
+        },
+        ...(sourceSha256 ? { sourceSha256 } : {}),
+        frameCount: merged.frames.length,
+      };
+      await fsp.writeFile(path.join(dir, 'ensemble.xyz'), imported.ensembleText, 'utf8');
+      await writeJsonAtomic(path.join(dir, 'ensemble.json'), {
+        ...summary,
+        // The raw numbers, in the input's declared unit. withEnergies() and
+        // rankEnsemble() apply the unit together downstream; converting here
+        // would make an MM energy look like a Hartree total.
+        energies: merged.frames.map((frame) => frame.energyEh),
+      });
+      task.status = 'completed';
+      task.ensemble = summary;
+      task.ensembleFile = 'ensemble.json';
+      task.finishedAt = new Date().toISOString();
+      task.summary = `ensemble · ${summary.frameCount} frame${summary.frameCount === 1 ? '' : 's'}`
+        + (sourceSha256 ? ` · sha256 ${sourceSha256.slice(0, 12)}…` : '');
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `Ensemble input ${path.basename(ensemblePath)}: ${summary.frameCount} frame(s), ${energyUnit}`
+          + `${summary.energyMethod ? `, ${summary.energyMethod}` : ''}`
+          + (sourceSha256 ? `, sha256 ${sourceSha256.slice(0, 12)}…` : ''),
+      });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `Ensemble input failed: ${task.error}`,
+      });
     }
     await this.persist(queue);
     this.publish(queue);
@@ -2619,7 +2735,7 @@ export class QueueManager {
       return;
     }
     task.analyse = { ...analyse, ...evaluation };
-    const dir = path.join(this.queueDir(queue.id), 'compute', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
     try {
       await fsp.mkdir(dir, { recursive: true });
       await writeJsonAtomic(path.join(dir, 'run.json'), {
@@ -2716,7 +2832,7 @@ export class QueueManager {
       summary,
     };
 
-    const dir = path.join(this.queueDir(queue.id), 'compute', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
     try {
       await fsp.mkdir(dir, { recursive: true });
       await writeJsonAtomic(path.join(dir, 'run.json'), {

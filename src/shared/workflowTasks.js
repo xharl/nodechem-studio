@@ -113,6 +113,7 @@ export function conformerSettingsFor(node) {
   const source = node?.settings && typeof node.settings === 'object' ? node.settings : {};
   const pick = (key) => (source[key] === undefined || source[key] === null ? DEFAULT_CONFORMER_SETTINGS[key] : source[key]);
   return {
+    source: source.source === 'imported' ? 'imported' : 'search',
     generator: String(pick('generator') || 'crest'),
     method: String(pick('method') || 'gfn2'),
     energyWindowKcal: Number(pick('energyWindowKcal')),
@@ -121,20 +122,10 @@ export function conformerSettingsFor(node) {
     temperature: Number(pick('temperature')),
     spreadThresholdKcal: Number(pick('spreadThresholdKcal')),
     selectedConformerId: String(source.selectedConformerId || ''),
-    importPath: String(source.importPath || ''),
     fanOut: pick('fanOut') === true,
     // Issue #132: the study id the block carries. Passed through, never derived:
     // the app does not decide which blocks belong together.
     group: String(source.group || ''),
-    // Issues #129/#130: what an imported file is, and what its energies are.
-    // Passed through as declared — the queue records it, it does not guess it.
-    energyUnit: pick('energyUnit') === 'kcal/mol' ? 'kcal/mol' : 'hartree',
-    energyMethod: String(source.energyMethod || ''),
-    origin: {
-      program: String(source.origin?.program || ''),
-      version: String(source.origin?.version || ''),
-      method: String(source.origin?.method || ''),
-    },
     // Issue 144: the in-app UFF route's settings, passed through only when the
     // block states them. Absent by default, so a CREST or import task carries
     // exactly the fields it always did.
@@ -911,6 +902,35 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
     const records = scope ? scope.records : [null];
 
     if (node.type === 'input') {
+      // ADR 0001: an ensemble input is the source of candidates, not a dataset
+      // scope. It still gets a task because the file is read and hashed at run
+      // time; the frames land in the run folder, and the summary in
+      // `node.output`. No downstream calculation is planned from it directly.
+      if (node.input?.kind === 'ensemble') {
+        tasks.push({
+          nodeId: node.id,
+          type: 'input',
+          title: node.title,
+          kind: node.kind || 'Ensemble input',
+          executable: false,
+          flowId: flowKey,
+          input: {
+            kind: 'ensemble',
+            path: node.input.path || '',
+            format: node.input.format || 'xyz',
+            energyUnit: node.input.energyUnit || 'hartree',
+            energyMethod: node.input.energyMethod || '',
+            origin: {
+              program: node.input.origin?.program || '',
+              version: node.input.origin?.version || '',
+              method: node.input.origin?.method || '',
+            },
+            ...(node.input.sourceSha256 ? { sourceSha256: node.input.sourceSha256 } : {}),
+          },
+        });
+        idsFor.set(node.id, [node.id]);
+        continue;
+      }
       // An input block is the *source* of a scope, so `scopeFor` finds nothing
       // upstream of it; its records come straight from the dataset it names.
       // Issue 169: a series block's records are the N generated members, so the
@@ -1679,6 +1699,21 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
 }
 
 /**
+ * ADR 0001: the one upstream input(ensemble) a generate block reads when its
+ * source is `imported`. Validation refuses zero or several; the planner picks
+ * the declared wiring rather than guessing from node order.
+ */
+function ensembleInputFor(project, node) {
+  const flow = activeFlow(project);
+  const byId = new Map(nodesOfFlow(flow).map((entry) => [entry.id, entry]));
+  const edge = edgesOfFlow(flow).find((candidate) => candidate.to === node.id
+    && candidate.type === 'dependency'
+    && byId.get(candidate.from)?.type === 'input'
+    && byId.get(candidate.from)?.input?.kind === 'ensemble');
+  return edge?.from || '';
+}
+
+/**
  * The conformer-search task.
  *
  * It is executable but has no engine: CREST is not a calculation engine in this
@@ -1695,11 +1730,13 @@ export function conformerSearchTask(project, node, record = null) {
   const charge = chemistry.charge ?? 0;
   const multiplicity = chemistry.multiplicity ?? 1;
   const coords = chemistry.coords;
-  const inputName = `${safeBase(node.id)}.xyz`;
+  const ensembleFrom = settings.source === 'imported' ? ensembleInputFor(project, node) : '';
+  const inputName = settings.source === 'imported' ? '' : `${safeBase(node.id)}.xyz`;
   // Issue 144: the in-app UFF route reads the project's own bond table (the
-  // same 1-based `{ a, b, order }` list the schema validates). A CREST or
-  // import task does not carry it: CREST perceives its own topology.
-  const projectBonds = Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length > 0
+  // same 1-based `{ a, b, order }` list the schema validates). A CREST task
+  // does not carry it: CREST perceives its own topology. An imported ensemble
+  // is read from its input block and needs no starting geometry here.
+  const projectBonds = settings.generator === 'uff' && Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length > 0
     ? project.molecule.bonds.map((bond) => ({ a: bond.a, b: bond.b, order: bond.order }))
     : null;
   return {
@@ -1711,11 +1748,17 @@ export function conformerSearchTask(project, node, record = null) {
     engine: null,
     inputName,
     // The UFF route runs in-app and writes its own short log; CREST writes
-    // `crest.out` in the folder it ran in.
-    outputName: settings.generator === 'uff'
-      ? 'uff.log'
-      : (settings.generator === 'obabel' ? 'obabel.log' : 'crest.out'),
-    inputText: xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
+    // `crest.out` in the folder it ran in. An imported ensemble has no search
+    // log: the block writes the curated `conformers.json` from the input's
+    // record.
+    outputName: settings.source === 'imported'
+      ? 'conformers.json'
+      : (settings.generator === 'uff'
+        ? 'uff.log'
+        : (settings.generator === 'obabel' ? 'obabel.log' : 'crest.out')),
+    inputText: settings.source === 'imported'
+      ? null
+      : xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
     gates: null,
     validity: null,
     checkpointFrom: null,
@@ -1723,16 +1766,19 @@ export function conformerSearchTask(project, node, record = null) {
       ...settings,
       charge,
       multiplicity,
-      argv: settings.generator === 'crest'
-        ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
-        : (settings.generator === 'obabel'
-          ? obabelSearchArgv({
-            inputName,
-            nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
-            ff: settings.ff ?? OBABEL_DEFAULT_FF,
-          })
-          : []),
-      ...(settings.generator === 'uff' && projectBonds ? { bonds: projectBonds } : {}),
+      ...(ensembleFrom ? { ensembleFrom } : {}),
+      argv: settings.source === 'imported'
+        ? []
+        : (settings.generator === 'crest'
+          ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
+          : (settings.generator === 'obabel'
+            ? obabelSearchArgv({
+              inputName,
+              nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
+              ff: settings.ff ?? OBABEL_DEFAULT_FF,
+            })
+            : [])),
+      ...(projectBonds ? { bonds: projectBonds } : {}),
     },
     ...(record ? {
       record: {

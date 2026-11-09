@@ -70,7 +70,35 @@ const xyzFrames = (comments) => comments
   .join('\n');
 
 /** A conformer block feeding one optimisation, through a dependency edge. */
-function conformerProject({ output = null, settings = {}, edgeType = 'dependency' } = {}) {
+function conformerProject({ output = null, settings = {}, edgeType = 'dependency', ensemble = null } = {}) {
+  const nodes = [];
+  const edges = [];
+  // ADR 0001: an imported ensemble is an input block, not a generate setting.
+  if (ensemble) {
+    nodes.push({
+      id: 'ens', type: 'input', kind: 'Ensemble input', title: 'Imported ensemble', state: 'ready', x: -200, y: 0,
+      input: {
+        kind: 'ensemble',
+        path: ensemble.path,
+        format: 'xyz',
+        energyUnit: ensemble.energyUnit || 'hartree',
+        energyMethod: ensemble.energyMethod || '',
+        origin: ensemble.origin || { program: '', version: '', method: '' },
+      },
+    });
+    edges.push({ id: 'e0', from: 'ens', to: 'conf', type: 'dependency' });
+  }
+  nodes.push(
+    {
+      id: 'conf', type: 'generate', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
+      settings, output,
+    },
+    {
+      id: 'opt', type: 'calculate', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
+      settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null,
+    },
+  );
+  edges.push({ id: 'e1', from: 'conf', to: 'opt', type: edgeType });
   const raw = {
     schemaVersion: 3,
     name: 'Conformer workflow',
@@ -82,17 +110,8 @@ function conformerProject({ output = null, settings = {}, edgeType = 'dependency
       coords,
     },
     defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
-    nodes: [
-      {
-        id: 'conf', type: 'generate', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
-        settings, output,
-      },
-      {
-        id: 'opt', type: 'calculate', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
-        settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null,
-      },
-    ],
-    edges: [{ id: 'e1', from: 'conf', to: 'opt', type: edgeType }],
+    nodes,
+    edges,
   };
   const validated = validateProject(raw);
   expect(validated.ok).toBe(true);
@@ -490,13 +509,14 @@ describe('conformer queue path', () => {
 
     const project = conformerProject({
       output: selection(),
-      settings: { generator: 'import', importPath: ensemblePath, rmsdThreshold: 0.05 },
+      settings: { source: 'imported', rmsdThreshold: 0.05 },
+      ensemble: { path: ensemblePath },
     });
     const plan = buildWorkflowPlan(project);
     const started = await queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'generate'),
-      edges: [],
+      tasks: plan.tasks.filter((task) => task.type !== 'calculate'),
+      edges: plan.edges.filter((edge) => edge.to !== 'opt' && edge.from !== 'opt'),
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     });
     const done = await waitFor(async () => {
@@ -508,7 +528,7 @@ describe('conformer queue path', () => {
     const conformers = done.tasks.find((task) => task.nodeId === 'conf');
     expect(conformers.error).toBeNull();
     expect(conformers.status).toBe('completed');
-    expect(conformers.ensemble.generator).toBe('import');
+    expect(conformers.ensemble.generator).toBe('imported');
     expect(conformers.ensemble.count).toBe(2);
     expect(conformers.ensemble.spreadKcal).toBeCloseTo(0.005 * 627.5094740631, 2);
     expect(conformers.ensemble.members.find((member) => member.rank === 2).energyEh).toBeCloseTo(-76.395, 9);
@@ -525,13 +545,14 @@ describe('conformer queue path', () => {
 
     const project = conformerProject({
       output: selection(),
-      settings: { generator: 'import', importPath: ensemblePath, rmsdThreshold: 0.05 },
+      settings: { source: 'imported', rmsdThreshold: 0.05 },
+      ensemble: { path: ensemblePath },
     });
     const plan = buildWorkflowPlan(project);
     const started = await queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'generate'),
-      edges: [],
+      tasks: plan.tasks.filter((task) => task.type !== 'calculate'),
+      edges: plan.edges.filter((edge) => edge.to !== 'opt' && edge.from !== 'opt'),
       options: { dryRun: true, executable: null, crestExecutable: '', scratchDir: '' },
     });
     const done = await waitFor(async () => {
@@ -545,7 +566,7 @@ describe('conformer queue path', () => {
     expect(conformers.status).toBe('completed');
     // The fixture is labelled `fixture`; the imported ensemble keeps its own
     // generator and its own member count.
-    expect(conformers.ensemble.generator).toBe('import');
+    expect(conformers.ensemble.generator).toBe('imported');
     expect(conformers.ensemble.count).toBe(3);
   });
 
@@ -559,13 +580,14 @@ describe('conformer queue path', () => {
 
     const project = conformerProject({
       output: selection(),
-      settings: { generator: 'import', importPath: 'ens.xyz', rmsdThreshold: 0.05 },
+      settings: { source: 'imported', rmsdThreshold: 0.05 },
+      ensemble: { path: 'ens.xyz' },
     });
     const plan = buildWorkflowPlan(project);
     const started = await queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'generate'),
-      edges: [],
+      tasks: plan.tasks.filter((task) => task.type !== 'calculate'),
+      edges: plan.edges.filter((edge) => edge.to !== 'opt' && edge.from !== 'opt'),
       options: {
         dryRun: true,
         executable: null,
@@ -582,7 +604,7 @@ describe('conformer queue path', () => {
 
     const conformers = done.tasks.find((task) => task.nodeId === 'conf');
     expect(conformers.error).toBeNull();
-    expect(conformers.ensemble.generator).toBe('import');
+    expect(conformers.ensemble.generator).toBe('imported');
     expect(conformers.ensemble.count).toBe(2);
   });
 });

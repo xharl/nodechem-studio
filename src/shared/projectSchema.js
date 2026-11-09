@@ -45,7 +45,10 @@ import {
   CONFORMER_GENERATORS,
   CONFORMER_GROUP_MAX,
   CONFORMER_METHODS,
+  CONFORMER_SOURCES,
   DEFAULT_CONFORMER_SETTINGS,
+  DEFAULT_ENSEMBLE_INPUT,
+  ENSEMBLE_FORMATS,
   isConformerGroupId,
 } from './conformers.js';
 import {
@@ -246,7 +249,7 @@ const TYPE_LABELS = {
 const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'name', 'molecule', 'defaults', 'runner', 'datasets', 'flows', 'reports', 'activeFlowId', 'nodes', 'edges']);
 const NODE_COMMON_KEYS = new Set(['id', 'type', 'kind', 'title', 'state', 'x', 'y']);
 const NODE_TYPE_KEYS = {
-  input: new Set(['input']),
+  input: new Set(['input', 'output']),
   calculate: new Set(['settings', 'output', 'checkpointFrom']),
   generate: new Set(['settings', 'output']),
   condition: new Set(['condition']),
@@ -620,51 +623,50 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   const provided = raw === undefined || raw === null ? {} : raw;
   if (!isPlainObject(provided)) {
     c.error(path, 'must be an object.');
-    return { ...DEFAULT_CONFORMER_SETTINGS, origin: { ...DEFAULT_CONFORMER_SETTINGS.origin }, charge: 0, multiplicity: 1 };
+    return { ...DEFAULT_CONFORMER_SETTINGS, charge: 0, multiplicity: 1 };
   }
   warnUnknown(c, provided, new Set([
-    'generator', 'method', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
-    'temperature', 'spreadThresholdKcal', 'selectedConformerId', 'importPath',
-    'fanOut', 'charge', 'multiplicity', 'energyUnit', 'energyMethod', 'origin',
+    // ADR 0001: how the candidates arrive.
+    'source', 'generator', 'method', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
+    'temperature', 'spreadThresholdKcal', 'selectedConformerId',
+    'fanOut', 'charge', 'multiplicity',
     // Issue #132: a study id shared by blocks that belong together.
     'group',
     // Issue 144: the in-app UFF route's own two knobs. Optional; a block that
-    // stays on CREST or import never states them.
+    // stays on CREST or Open Babel never states them.
     'torsionStepDegrees', 'maxTrials',
     // The Open Babel route's knobs: how many conformers the genetic algorithm
     // is asked for, and which force field it uses.
     'nconf', 'ff',
   ]), path);
-  // A conformer block is new in this schema, so a file that names one setting
+  // A generate block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
   const source = { ...DEFAULT_CONFORMER_SETTINGS, charge: 0, multiplicity: 1, ...provided };
-  const generator = readEnum(c, source.generator, CONFORMER_GENERATORS, `${path}.generator`, {
-    legacy, fallback: DEFAULT_CONFORMER_SETTINGS.generator,
+  const sourceKind = readEnum(c, source.source, CONFORMER_SOURCES, `${path}.source`, {
+    legacy, fallback: DEFAULT_CONFORMER_SETTINGS.source,
   });
-  const importPath = readString(c, source.importPath, `${path}.importPath`, { legacy, fallback: '', max: 260 });
-  if (generator === 'import' && !importPath) {
-    c.warn(`${path}.importPath`, 'is empty; an imported ensemble needs a multi-XYZ file before this block can run.');
+  // ADR 0001: import is not a generator. A generate block either runs a search
+  // or ranks the ensemble an upstream input(ensemble) materialised.
+  const generator = sourceKind === 'imported'
+    ? ''
+    : readEnum(c, source.generator, CONFORMER_GENERATORS, `${path}.generator`, {
+      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.generator,
+    });
+  if (sourceKind === 'imported' && provided.generator !== undefined && provided.generator !== '') {
+    c.warn(`${path}.generator`, 'is not used when the source is an imported ensemble; the input block owns the file.');
   }
   const selected = readString(c, source.selectedConformerId, `${path}.selectedConformerId`, { legacy, fallback: '', max: 24 });
   if (selected && !/^c\d+$/.test(selected)) {
     c.error(`${path}.selectedConformerId`, 'must be a conformer id such as "c1", or empty for automatic selection.');
   }
-  const energyUnit = readEnum(c, source.energyUnit, CONFORMER_ENERGY_UNITS, `${path}.energyUnit`, {
-    legacy, fallback: DEFAULT_CONFORMER_SETTINGS.energyUnit,
-  });
-  if (generator === 'crest' && energyUnit === 'kcal/mol') {
-    c.warn(`${path}.energyUnit`, 'only applies to an imported ensemble; a CREST search writes Hartree energies.');
-  }
-  // Issue 144: the UFF route always records kcal/mol force-field energies, so a
-  // block that declares Hartree for it is describing a different route.
-  if (generator === 'uff' && provided.energyUnit !== undefined && energyUnit !== 'kcal/mol') {
-    c.warn(`${path}.energyUnit`, 'does not apply to the in-app UFF route: it always records kcal/mol force-field energies.');
-  }
   return {
+    source: sourceKind,
     generator,
-    method: readEnum(c, source.method, CONFORMER_METHODS, `${path}.method`, {
-      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.method,
-    }),
+    method: sourceKind === 'imported'
+      ? ''
+      : readEnum(c, source.method, CONFORMER_METHODS, `${path}.method`, {
+        legacy, fallback: DEFAULT_CONFORMER_SETTINGS.method,
+      }),
     energyWindowKcal: readNumber(c, source.energyWindowKcal, `${path}.energyWindowKcal`, {
       legacy, fallback: DEFAULT_CONFORMER_SETTINGS.energyWindowKcal, min: 0, max: 100,
     }),
@@ -681,19 +683,11 @@ function normalizeConformerSettings(c, raw, path, legacy) {
       legacy, fallback: DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal, min: 0, max: 50,
     }),
     selectedConformerId: selected,
-    importPath,
     fanOut: readBoolean(c, source.fanOut, `${path}.fanOut`, {
       legacy, fallback: DEFAULT_CONFORMER_SETTINGS.fanOut,
     }),
     charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, source.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
-    // Issue #130: the unit and method of the imported file's energies. A file
-    // that says nothing is Hartree, which is what every pre-#130 file meant.
-    energyUnit,
-    energyMethod: readString(c, source.energyMethod, `${path}.energyMethod`, { legacy, fallback: '', max: 40 }),
-    // Issue #129: what the user declares produced the file. The hash is not
-    // part of the declaration — the queue records the digest of the bytes read.
-    origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
     // Issue #132: the study this block belongs to, or '' for "stands alone".
     group: readConformerGroup(c, source.group, `${path}.group`),
     // Issue 144: the UFF route's own settings. Only present when the file
@@ -720,6 +714,79 @@ function normalizeConformerSettings(c, raw, path, legacy) {
       ff: readEnum(c, provided.ff, OBABEL_FORCE_FIELDS, `${path}.ff`, {
         legacy, fallback: OBABEL_DEFAULT_FF,
       }),
+    }),
+  };
+}
+
+/**
+ * ADR 0001: the payload of an `input` block whose kind is `ensemble`.
+ *
+ * The input stage owns the artifact: its path and format, the energy unit and
+ * method its producer declared, and the producer's provenance. The digest of
+ * the bytes actually read is recorded by the queue at run time; when it is
+ * present in a saved file it must still be a SHA-256 hex digest.
+ */
+function normalizeEnsembleInput(c, raw, path, legacy) {
+  const source = requiredObject(c, raw, path, legacy, {});
+  warnUnknown(c, source, new Set([
+    'kind', 'path', 'format', 'energyUnit', 'energyMethod', 'origin', 'sourceSha256',
+  ]), path);
+  const ensemblePath = readString(c, source.path, `${path}.path`, { legacy, fallback: '', max: 500, required: true });
+  if (!ensemblePath) {
+    c.error(`${path}.path`, 'is required for an ensemble input; name the multi-XYZ file to read.');
+  }
+  const format = readEnum(c, source.format, ENSEMBLE_FORMATS, `${path}.format`, {
+    legacy, fallback: DEFAULT_ENSEMBLE_INPUT.format,
+  });
+  const energyUnit = readEnum(c, source.energyUnit, CONFORMER_ENERGY_UNITS, `${path}.energyUnit`, {
+    legacy, fallback: DEFAULT_ENSEMBLE_INPUT.energyUnit,
+  });
+  const rawDigest = readString(c, source.sourceSha256, `${path}.sourceSha256`, { legacy, fallback: '', max: 64 });
+  const sourceSha256 = rawDigest && SHA256_HEX.test(rawDigest) ? rawDigest : '';
+  if (rawDigest && !sourceSha256) {
+    c.error(`${path}.sourceSha256`, 'must be a lowercase SHA-256 hex digest (64 characters).');
+  }
+  return {
+    kind: 'ensemble',
+    path: ensemblePath,
+    format,
+    energyUnit,
+    energyMethod: readString(c, source.energyMethod, `${path}.energyMethod`, { legacy, fallback: '', max: 40 }),
+    origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
+    ...(sourceSha256 ? { sourceSha256 } : {}),
+  };
+}
+
+/**
+ * ADR 0001: the summary an ensemble input records after its run. The frames
+ * themselves live in the run folder; the project file keeps only the facts the
+ * next block and the inspector need.
+ */
+function normalizeEnsembleOutput(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return null;
+  const source = requiredObject(c, raw, path, legacy, {});
+  warnUnknown(c, source, new Set([
+    'kind', 'path', 'format', 'energyUnit', 'energyMethod', 'origin', 'sourceSha256', 'frameCount',
+  ]), path);
+  const rawDigest = readString(c, source.sourceSha256, `${path}.sourceSha256`, { legacy, fallback: '', max: 64 });
+  const sourceSha256 = rawDigest && SHA256_HEX.test(rawDigest) ? rawDigest : '';
+  if (rawDigest && !sourceSha256) {
+    c.error(`${path}.sourceSha256`, 'must be a lowercase SHA-256 hex digest (64 characters).');
+  }
+  return {
+    kind: 'ensemble',
+    path: readString(c, source.path, `${path}.path`, { legacy, fallback: '', max: 500 }),
+    format: readEnum(c, source.format, ENSEMBLE_FORMATS, `${path}.format`, {
+      legacy, fallback: DEFAULT_ENSEMBLE_INPUT.format,
+    }),
+    energyUnit: readEnum(c, source.energyUnit, CONFORMER_ENERGY_UNITS, `${path}.energyUnit`, {
+      legacy, fallback: DEFAULT_ENSEMBLE_INPUT.energyUnit,
+    }),
+    energyMethod: readString(c, source.energyMethod, `${path}.energyMethod`, { legacy, fallback: '', max: 40 }),
+    origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
+    ...(sourceSha256 ? { sourceSha256 } : {}),
+    frameCount: readInteger(c, source.frameCount, `${path}.frameCount`, {
+      legacy, fallback: 0, min: 0, max: LIMITS.atoms,
     }),
   };
 }
@@ -1843,6 +1910,22 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
 
   if (type === 'input') {
     const source = requiredObject(c, raw.input, `${path}.input`, legacy, {});
+    // ADR 0001: an ensemble input is a different stage payload — it owns a
+    // multi-XYZ artifact, not a dataset row. The discriminator is explicit so a
+    // dataset input keeps saving exactly the bytes it did before.
+    if (source.kind === 'ensemble') {
+      return {
+        ...common,
+        kind: 'Ensemble input',
+        input: normalizeEnsembleInput(c, source, `${path}.input`, legacy),
+        ...(raw.output === undefined ? {} : {
+          output: normalizeEnsembleOutput(c, raw.output, `${path}.output`, legacy),
+        }),
+      };
+    }
+    if (source.kind !== undefined) {
+      c.error(`${path}.input.kind`, 'must be "ensemble" when present; a dataset input omits it.');
+    }
     warnUnknown(c, source, new Set(['datasetId', 'recordFilter', 'recordId', 'series', 'edits', 'complex']), `${path}.input`);
     const datasetId = readString(c, source.datasetId, `${path}.input.datasetId`, { legacy, fallback: '', max: 64, required: true });
     if (datasetId && !GRAPH_ID_RE.test(datasetId)) {
@@ -2354,7 +2437,7 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
         node.loop.target = '';
       }
     }
-    if (node.type === 'input') {
+    if (node.type === 'input' && node.input.kind !== 'ensemble') {
       const dataset = datasets.find((entry) => entry.id === node.input.datasetId) || null;
       if (!dataset) {
         c.error(`${nodePath}.input.datasetId`, `references unknown dataset "${node.input.datasetId}".`);
@@ -2375,6 +2458,20 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
           const key = node.input.complex ? 'complex' : node.input.edits ? 'edits' : 'series';
           c.error(`${nodePath}.input.${key}`, error.message);
         }
+      }
+    }
+    // ADR 0001: a generate block that ranks an imported ensemble must have
+    // exactly one upstream ensemble input. The input owns the file and its
+    // provenance; a second wiring would make the candidate set ambiguous.
+    if (node.type === 'generate' && node.settings.source === 'imported') {
+      const ensembleInputs = flow.edges
+        .filter((edge) => edge.to === node.id && edge.type === 'dependency')
+        .map((edge) => byId.get(edge.from))
+        .filter((upstream) => upstream?.type === 'input' && upstream.input?.kind === 'ensemble');
+      if (ensembleInputs.length === 0) {
+        c.error(`${nodePath}.settings.source`, 'is "imported" but no ensemble input is wired into this block.');
+      } else if (ensembleInputs.length > 1) {
+        c.error(`${nodePath}.settings.source`, 'is "imported" but more than one ensemble input is wired into this block; wire exactly one.');
       }
     }
     if (node.type !== 'calculate') return;

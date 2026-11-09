@@ -17,7 +17,11 @@ export const HARTREE_KCAL = 627.5094740631;
 /** Boltzmann constant in kcal/mol/K. */
 export const KB_KCAL = 0.00198720425864083;
 
-export const CONFORMER_GENERATORS = Object.freeze(['crest', 'import', 'uff', 'obabel']);
+export const CONFORMER_GENERATORS = Object.freeze(['crest', 'uff', 'obabel']);
+/** ADR 0001: how the candidate set arrives at a generate block. */
+export const CONFORMER_SOURCES = Object.freeze(['search', 'imported']);
+/** The only external ensemble format this build reads: one or more XYZ frames. */
+export const ENSEMBLE_FORMATS = Object.freeze(['xyz']);
 export const CONFORMER_METHODS = Object.freeze(['gfn2', 'gfnff']);
 
 /**
@@ -31,6 +35,9 @@ export const CONFORMER_ENERGY_UNITS = Object.freeze(['hartree', 'kcal/mol']);
 export const DEFAULT_ENERGY_UNIT = 'hartree';
 
 export const DEFAULT_CONFORMER_SETTINGS = Object.freeze({
+  // ADR 0001: `search` runs a generator; `imported` ranks the ensemble that an
+  // upstream input(ensemble) materialised. Import is no longer a generator.
+  source: 'search',
   generator: 'crest',
   method: 'gfn2',
   energyWindowKcal: 10,
@@ -39,14 +46,6 @@ export const DEFAULT_CONFORMER_SETTINGS = Object.freeze({
   temperature: 298.15,
   spreadThresholdKcal: 2,
   selectedConformerId: '',
-  importPath: '',
-  // Issue #130: what the imported file's energies are, and what produced them.
-  // Ignored by a CREST search, which always writes Hartree energies.
-  energyUnit: 'hartree',
-  energyMethod: '',
-  // Issue #129: the provenance the user declares for an imported file. The
-  // hash of the bytes actually read is recorded at run time, not typed in.
-  origin: Object.freeze({ program: '', version: '', method: '' }),
   // Issue #80: fan the retained ensemble out into one task per member instead
   // of carrying a single chosen geometry downstream. Off by default, so a file
   // written before the switch existed runs exactly as it did.
@@ -54,6 +53,21 @@ export const DEFAULT_CONFORMER_SETTINGS = Object.freeze({
   // Issue #132: an optional study id shared by blocks that belong together.
   // Empty means "this block stands alone", which is what every earlier file said.
   group: '',
+});
+
+/**
+ * ADR 0001: the settings an `input(kind: "ensemble")` block owns. The stage
+ * that owns the fact keeps it: the path and format are properties of the
+ * artifact, the unit and method are what its producer declared, and the origin
+ * is the producer's provenance. The digest of the bytes read is recorded by
+ * the queue at run time, not typed in.
+ */
+export const DEFAULT_ENSEMBLE_INPUT = Object.freeze({
+  path: '',
+  format: 'xyz',
+  energyUnit: 'hartree',
+  energyMethod: '',
+  origin: Object.freeze({ program: '', version: '', method: '' }),
 });
 
 /**
