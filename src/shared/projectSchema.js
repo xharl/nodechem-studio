@@ -264,6 +264,7 @@ const SETTINGS_KEYS = new Set([
   // vectors. Not in the defaults, so an existing project is unchanged; listed
   // here so an explicit value is not read as a typo.
   'recordTransitionDipoles',
+  'nmrSpinSpin',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
@@ -1387,6 +1388,12 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),
 
     vcd: readBoolean(c, source.vcd, `${path}.vcd`, { legacy, fallback: false, optional: true }),
+    // Issue 147: ask Gaussian for the spin-spin coupling tables on an NMR job.
+    // Optional, so an NMR block that never set it writes exactly `NMR` and the
+    // card's "the route did not ask for couplings" stays true.
+    ...(source.nmrSpinSpin === undefined || source.nmrSpinSpin === null
+      ? {}
+      : { nmrSpinSpin: readBoolean(c, source.nmrSpinSpin, `${path}.nmrSpinSpin`, { legacy: true, optional: true, fallback: false }) }),
     orbitals: readBoolean(c, source.orbitals, `${path}.orbitals`, { legacy, fallback: false, optional: true }),
     // Which excited state an accompanying Opt follows (#75). 0 = not stated.
     tdRoot: readOptionalInteger(c, source.tdRoot, `${path}.tdRoot`, { fallback: 0, min: 0, max: 200 }),

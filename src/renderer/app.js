@@ -2411,6 +2411,25 @@ function calcInspector(node) {
   // Raman (#76) is a modifier of the frequency keyword, so the switch only
   // appears where a frequency job exists to carry it.
   const frequencyJob = /Freq/i.test(String(s.jobType || ''));
+  // Issue 147: only an NMR job can print couplings, and only when the route asks
+  // for them. Off writes no key at all, so an NMR block from before this control
+  // serialises byte-identically and its card keeps saying the route did not ask
+  // for couplings.
+  const nmrJob = /NMR/i.test(String(s.jobType || ''));
+  const nmrGroup = group('NMR', s.nmrSpinSpin ? 'shieldings + couplings' : 'shieldings only', s.nmrSpinSpin, [
+    switchRow(
+      'Spin-spin couplings',
+      'adds SpinSpin to the NMR keyword; Gaussian then prints the K and J tables',
+      'nmrSpinSpin',
+      s.nmrSpinSpin,
+    ),
+    '<div class="field full"><span class="inspector-note">'
+      + 'A coupling run costs more than shieldings alone and prints one K and one J '
+      + 'table for every nucleus pair: on a 20-nucleus molecule that is 190 pairs. '
+      + 'Without this, the results card says couplings were not requested rather '
+      + 'than reporting none.'
+      + '</span></div>',
+  ]);
   const ramanGroup = group('Raman', s.raman ? 'activities on' : 'off', s.raman, [
     switchRow('Raman activities', 'adds =Raman to the frequency keyword', 'raman', s.raman, { disabled: !frequencyJob }),
     '<div class="field full"><span class="inspector-note">'
@@ -2513,6 +2532,7 @@ function calcInspector(node) {
     ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : compositeJob ? compositeNote : methodGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : excitedGroup}
     ${psi4TdGroup}
+    ${isXtb || isPsi4 || compositeJob || !nmrJob ? '' : nmrGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : ramanGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : vcdGroup}
     ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : gaussianSolvationGroup}

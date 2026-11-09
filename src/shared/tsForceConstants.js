@@ -167,7 +167,11 @@ export function jobKeywordFor(settings = {}) {
   const jobType = oneLine(settings.jobType, 'Opt');
   // An NMR job is a single point with the shielding keyword. Gaussian's default
   // gauge is GIAO; the output states which gauge produced the numbers.
-  if (jobType === 'NMR') return 'NMR';
+  // `NMR=SpinSpin` is what makes Gaussian print the K and J coupling tables after
+  // the shieldings (issue 147). It is opt-in and absent by default, so a block
+  // that never asked for it still writes exactly `NMR` — and the results card can
+  // still say honestly that couplings were not requested.
+  if (jobType === 'NMR') return settings.nmrSpinSpin === true ? 'NMR=SpinSpin' : 'NMR';
   if (jobType === 'IRC') {
     const direction = settings.ircDirection === 'both'
       ? 'forward,reverse'
