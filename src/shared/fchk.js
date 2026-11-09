@@ -89,6 +89,27 @@ const FIELDS = Object.freeze([
   { key: 'betaMOCoefficients', label: 'Beta MO coefficients', type: 'R', kind: 'realArray' },
   { key: 'pureDShells', label: 'Pure/Cartesian d shells', type: 'I', kind: 'integer' },
   { key: 'pureFShells', label: 'Pure/Cartesian f shells', type: 'I', kind: 'integer' },
+  // issue 164: the density matrix, which the electrostatic potential needs. It
+  // is written as the lower triangle in `NBasis(NBasis+1)/2` values, five per
+  // line — the same shape as the MO coefficient block but half as long. It is
+  // kept as a Float64Array because it is integrated against, not printed.
+  {
+    key: 'totalScfDensity',
+    label: 'Total SCF Density',
+    type: 'R',
+    kind: 'realArray',
+    triangular: true,
+  },
+  {
+    // Psi4 and some Gaussian versions spell the same block `Total SCD Density`.
+    // It is a separate field, never merged: a file that carries both is read
+    // from `Total SCF Density`, and one that carries only this is still readable.
+    key: 'totalScdDensity',
+    label: 'Total SCD Density',
+    type: 'R',
+    kind: 'realArray',
+    triangular: true,
+  },
   { key: 'mullikenCharges', label: 'Mulliken Charges', type: 'R', kind: 'realArray' },
   { key: 'espCharges', label: 'ESP Charges', type: 'R', kind: 'realArray' },
   { key: 'totalEnergyHartree', label: 'Total Energy', type: 'R', kind: 'real' },
@@ -249,7 +270,9 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
       if (located.count === undefined) {
         throw new FchkFormatError(`Line ${located.line}: field "${shown}" carries one value in this file, but the reader expects an array.`);
       }
-      parsed[field.key] = readArray(lines, located, { ...field, label: shown });
+      parsed[field.key] = field.triangular
+        ? Float64Array.from(readArray(lines, located, { ...field, label: shown }))
+        : readArray(lines, located, { ...field, label: shown });
     }
     found.push(field.key);
   }
@@ -323,6 +346,25 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
     if (nbf > 0 && parsed.alphaMOCoefficients.length % nbf !== 0) {
       throw new FchkFormatError(
         `"Alpha MO coefficients" has ${parsed.alphaMOCoefficients.length} values, which is not a whole number of ${nbf}-function orbitals.`,
+      );
+    }
+  }
+
+  // issue 164: a density matrix is a lower triangle, so its length is fixed by
+  // the basis. A block shorter than that is the shape a truncated write leaves
+  // behind, and reading it as "the density" would produce a potential from a
+  // matrix with rows missing — so it is refused by the name the file uses.
+  for (const key of ['totalScfDensity', 'totalScdDensity']) {
+    const block = parsed[key];
+    if (!block || !Number.isInteger(parsed.numberOfBasisFunctions)) continue;
+    const nbf = parsed.numberOfBasisFunctions;
+    const expected = (nbf * (nbf + 1)) / 2;
+    if (block.length !== expected) {
+      const label = key === 'totalScfDensity' ? 'Total SCF Density' : 'Total SCD Density';
+      throw new FchkFormatError(
+        `Field "${label}" holds ${block.length} values but a ${nbf}-function basis needs `
+        + `${nbf}×(${nbf}+1)/2 = ${expected}; the triangular block is truncated or the wrong length, `
+        + 'so it cannot be read as a density matrix.',
       );
     }
   }

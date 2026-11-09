@@ -1,0 +1,224 @@
+
+Scratch directory: /tmp/
+   => Libint2 <=
+
+    Primary   basis highest AM E, G, H:  7, 6, 3
+    Auxiliary basis highest AM E, G, H:  7, 7, 4
+    Onebody   basis highest AM E, G, H:  -, -, -
+    Solid Harmonics ordering:            Gaussian
+
+*** tstart() called on 07ce1e882cbb
+*** at Mon Nov  9 05:46:22 2026
+
+   => Loading Basis Set <=
+
+    Name: STO-3G
+    Role: ORBITAL
+    Keyword: BASIS
+    atoms 1 entry HE         line    25 file /opt/conda/share/psi4/basis/sto-3g.gbs 
+
+
+         ---------------------------------------------------------
+                                   SCF
+               by Justin Turney, Rob Parrish, Andy Simmonett
+                          and Daniel G. A. Smith
+                              RHF Reference
+                        1 Threads,    381 MiB Core
+         ---------------------------------------------------------
+
+  ==> Geometry <==
+
+    Molecular point group: c1
+    Geometry (in Angstrom), charge = 0, multiplicity = 1:
+
+       Center              X                  Y                   Z               Mass       
+    ------------   -----------------  -----------------  -----------------  -----------------
+         HE           0.000000000000     0.000000000000     0.000000000000     4.002603254130
+
+  Running in c1 symmetry.
+
+  Rotational constants: A = ************  B = ************  C = ************ [cm^-1]
+  Rotational constants: A = ************  B = ************  C = ************ [MHz]
+  Nuclear repulsion =    0.000000000000000
+
+  Charge       = 0
+  Multiplicity = 1
+  Electrons    = 2
+  Nalpha       = 1
+  Nbeta        = 1
+
+  ==> Algorithm <==
+
+  SCF Algorithm Type is DF.
+  DIIS enabled.
+  MOM disabled.
+  Fractional occupation disabled.
+  Guess Type is CORE.
+  Energy threshold   = 1.00e-06
+  Density threshold  = 1.00e-06
+  Integral threshold = 1.00e-12
+
+  ==> Primary Basis <==
+
+  Basis Set: STO-3G
+    Blend: STO-3G
+    Number of shells: 1
+    Number of basis functions: 1
+    Number of Cartesian functions: 1
+    Spherical Harmonics?: true
+    Max angular momentum: 0
+
+   => Loading Basis Set <=
+
+    Name: (STO-3G AUX)
+    Role: JKFIT
+    Keyword: DF_BASIS_SCF
+    atoms 1 entry HE         line    34 file /opt/conda/share/psi4/basis/def2-universal-jkfit.gbs 
+
+  ==> Integral Setup <==
+
+  DFHelper Memory: AOs need 0.000 GiB; user supplied 0.279 GiB. 
+  SCF_SUBTYPE=INCORE selected. In-core MEM_DF algorithm will be used.
+  Using in-core AOs.
+
+  ==> MemDFJK: Density-Fitted J/K Matrices <==
+
+    J tasked:                   Yes
+    K tasked:                   Yes
+    wK tasked:                   No
+    OpenMP threads:               1
+    Memory [MiB]:               286
+    Algorithm:                 Core
+    Schwarz Cutoff:           1E-12
+    Mask sparsity (%):       0.0000
+    Fitting Condition:        1E-10
+
+   => Auxiliary Basis Set <=
+
+  Basis Set: (STO-3G AUX)
+    Blend: DEF2-UNIVERSAL-JKFIT
+    Number of shells: 9
+    Number of basis functions: 23
+    Number of Cartesian functions: 25
+    Spherical Harmonics?: true
+    Max angular momentum: 2
+
+  Minimum eigenvalue in the overlap matrix is 1.0000000000E+00.
+  Reciprocal condition number of the overlap matrix is 1.0000000000E+00.
+    Using symmetric orthogonalization.
+
+  ==> Pre-Iterations <==
+
+  SCF Guess: Core (One-Electron) Hamiltonian.
+
+   -------------------------------------------------------
+    Irrep   Nso     Nmo     Nalpha   Nbeta   Ndocc  Nsocc
+   -------------------------------------------------------
+     A          1       1       1       1       1       0
+   -------------------------------------------------------
+    Total       1       1       1       1       1       0
+   -------------------------------------------------------
+
+  ==> Iterations <==
+
+                           Total Energy        Delta E     RMS |[F,P]|
+
+   @DF-RHF iter   1:    -2.80791335449294   -2.80791e+00   0.00000e+00 DIIS
+   @DF-RHF iter   2:    -2.80791335449294    0.00000e+00   0.00000e+00 DIIS
+  Energy and wave function converged.
+
+
+  ==> Post-Iterations <==
+
+    Orbital Energies [Eh]
+    ---------------------
+
+    Doubly Occupied:                                                      
+
+       1A     -0.876165  
+
+    Virtual:                                                              
+
+    
+
+    Final Occupation by Irrep:
+              A 
+    DOCC [     1 ]
+    NA   [     1 ]
+    NB   [     1 ]
+
+  @DF-RHF Final Energy:    -2.80791335449294
+
+   => Energetics <=
+
+    Nuclear Repulsion Energy =              0.0000000000000000
+    One-Electron Energy =                  -3.8634969002750466
+    Two-Electron Energy =                   1.0555835457821068
+    Total Energy =                         -2.8079133544929400
+
+Computation Completed
+
+
+Properties will be evaluated at   0.000000,   0.000000,   0.000000 [a0]
+
+Properties computed using the SCF density matrix
+
+
+ Multipole Moments:
+
+ ------------------------------------------------------------------------------------
+     Multipole            Electronic (a.u.)      Nuclear  (a.u.)        Total (a.u.)
+ ------------------------------------------------------------------------------------
+
+ L = 1.  Multiply by 2.5417464519 to convert [e a0] to [Debye]
+ Dipole X            :          0.0000000            0.0000000            0.0000000
+ Dipole Y            :          0.0000000            0.0000000            0.0000000
+ Dipole Z            :          0.0000000            0.0000000            0.0000000
+ Magnitude           :                                                    0.0000000
+
+ ------------------------------------------------------------------------------------
+
+*** tstop() called on 07ce1e882cbb at Mon Nov  9 05:46:22 2026
+Module time:
+	user time   =       0.08 seconds =       0.00 minutes
+	system time =       0.00 seconds =       0.00 minutes
+	total time  =          0 seconds =       0.00 minutes
+Total time:
+	user time   =       0.08 seconds =       0.00 minutes
+	system time =       0.00 seconds =       0.00 minutes
+	total time  =          0 seconds =       0.00 minutes
+FCHKWriter: !WARNING! method 'HF'' renamed to label 'HF'.
+FCHKWriter: Writing he-sto3g.fchk with label ' SCF Density'.
+  ==> One Electron Grid Properties (v2.0) <==
+
+  ==> CubicScalarGrid <==
+
+    Filepath     = .
+    Total Points =             4913
+    XYZ Blocking =               10
+    X Points     =               17
+    Y Points     =               17
+    Z Points     =               17
+    X Spacing    =        5.000E-01
+    Y Spacing    =        5.000E-01
+    Z Spacing    =        5.000E-01
+    X Minimum    =       -4.000E+00
+    Y Minimum    =       -4.000E+00
+    Z Minimum    =       -4.000E+00
+    X Maximum    =        4.000E+00
+    Y Maximum    =        4.000E+00
+    Z Maximum    =        4.000E+00
+
+  Basis Set: STO-3G
+    Blend: STO-3G
+    Number of shells: 1
+    Number of basis functions: 1
+    Number of Cartesian functions: 1
+    Spherical Harmonics?: true
+    Max angular momentum: 0
+
+
+    Psi4 stopped on: Monday, 09 November 2026 05:46AM
+    Psi4 wall time for execution: 0:00:00.14
+
+*** Psi4 exiting successfully. Buy a developer a beer!
