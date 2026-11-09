@@ -3,6 +3,11 @@
 Status: normative for `schemaVersion: 2`. This document is the contract between
 the app and anything that reads or writes a project file.
 
+> **Proposed change:** [ADR 0001](adr/0001-block-taxonomy.md) specifies a block
+> taxonomy (input · prepare · generate · calculate · analyse · output) and
+> `schemaVersion: 3`. It is not implemented yet; this document stays normative
+> for version 2 until it is.
+
 ## 1. File identity
 
 | Property | Value |
