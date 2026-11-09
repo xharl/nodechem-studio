@@ -214,6 +214,8 @@ const SETTINGS_KEYS = new Set([
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
   'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
+  // Issue #146: the vertical-emission block and the two-job NTO chain.
+  'emission', 'nto', 'ntoTransition',
   'counterpoise', 'counterpoiseChargeStates',
   // Issue #93: coordinate constraints and the extra QST2/QST3 structures.
   'constraints', 'qst',
@@ -272,6 +274,14 @@ export function defaultSettings(overrides = {}) {
     vcd: false,
     orbitals: false,
     tdRoot: 0,
+    // Issue #146: a vertical-emission block is an SP TD=(NStates=n,Root=1) at
+    // the geometry it receives; an NTO block is the second job of the two-job
+    // chain, and `ntoTransition` on the TD block selects the density stored in
+    // its checkpoint. All three are off by default so existing projects are
+    // byte-identical.
+    emission: false,
+    nto: false,
+    ntoTransition: 0,
     // A spin-state sweep enumerates multiplicities for the same system.
     spinSweep: null,
     // The block whose free energy is the reactant of this path, if declared.
@@ -1235,6 +1245,11 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     orbitals: readBoolean(c, source.orbitals, `${path}.orbitals`, { legacy, fallback: false, optional: true }),
     // Which excited state an accompanying Opt follows (#75). 0 = not stated.
     tdRoot: readOptionalInteger(c, source.tdRoot, `${path}.tdRoot`, { fallback: 0, min: 0, max: 200 }),
+    // Issue #146: vertical-emission and NTO blocks. A block that was never one
+    // reads exactly as before: false / false / 0.
+    emission: readBoolean(c, source.emission, `${path}.emission`, { legacy, fallback: false, optional: true }),
+    nto: readBoolean(c, source.nto, `${path}.nto`, { legacy, fallback: false, optional: true }),
+    ntoTransition: readOptionalInteger(c, source.ntoTransition, `${path}.ntoTransition`, { fallback: 0, min: 0, max: 200 }),
     spinSweep: normalizeSpinSweep(c, source.spinSweep, `${path}.spinSweep`, legacy),
     // Issue #77: Counterpoise=N with per-fragment charge/spin pairs when the
     // fragments are not all at the complex's charge state.
@@ -1809,13 +1824,18 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
  * is meaningless. The renderer's Validate action and the input builder enforce
  * `validity.blocking`.
  */
-function evaluateProjectValidity(c, { nodes, molecule, defaults }) {
+function evaluateProjectValidity(c, { nodes, molecule, defaults, edges = [] }) {
   const findingsReport = [];
   const blocking = [];
   const byId = new Map(nodes.map((node) => [node.id, node]));
   nodes.forEach((node, index) => {
     if (node.type !== 'calc') return;
-    const source = node.checkpointFrom ? byId.get(node.checkpointFrom) || null : null;
+    // The hand-off may be declared on the node (`checkpointFrom`) or by a
+    // `checkpoint` edge; the excited-state check must see both, or a Pop=NTO
+    // block fed by an edge would look unconnected (#146).
+    const checkpointEdge = edges.find((edge) => edge.to === node.id && edge.type === 'checkpoint');
+    const edgeSource = checkpointEdge ? byId.get(checkpointEdge.from) || null : null;
+    const source = node.checkpointFrom ? byId.get(node.checkpointFrom) || edgeSource : edgeSource;
     const upstream = source ? {
       id: source.id,
       title: source.title,
@@ -1953,6 +1973,7 @@ export function validateProject(raw) {
     nodes: project.nodes,
     molecule: project.molecule,
     defaults: project.defaults,
+    edges: project.edges,
   });
 
   return {

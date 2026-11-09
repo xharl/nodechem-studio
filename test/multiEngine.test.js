@@ -64,7 +64,10 @@ describe('per-block engines', () => {
 
   it('refuses a Gaussian-only setting on an xTB block at validation time', () => {
     const raw = twoEngineProject();
+    // An Opt with excited states also names its root (#146); the xTB refusal is
+    // what this test is about.
     raw.nodes[0].settings.tdStates = 5;
+    raw.nodes[0].settings.tdRoot = 1;
     const project = validateProject(raw).project;
     expect(() => buildRunInput(project, project.nodes[0]))
       .toThrow(/TD-DFT states cannot be used on an xTB block/);

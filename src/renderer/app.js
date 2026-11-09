@@ -1922,19 +1922,53 @@ function calcInspector(node) {
   // always present for Gaussian so the setting is discoverable; the note says
   // why a Freq/TS/IRC/Scan block cannot carry it.
   const tdEligible = s.jobType === 'SP' || s.jobType === 'Opt';
-  const tdSummary = s.tdStates > 0
-    ? `${s.tdStates} states${s.tdTriplets === 'triplets' ? ' · triplets' : s.tdTriplets === 'both' ? ' · 50/50' : ''}`
-    : 'off';
-  const excitedGroup = group('Excited states (TD)', tdSummary, s.tdStates > 0, [
+  const tdStates = Number(s.tdStates || 0);
+  const tdRoot = Number(s.tdRoot || 0);
+  const tdSummary = tdStates > 0
+    ? `${tdStates} states${tdRoot > 0 ? ` · root ${tdRoot}` : ''}${s.tdTriplets === 'triplets' ? ' · triplets' : s.tdTriplets === 'both' ? ' · 50/50' : ''}`
+    : (s.emission ? 'emission' : s.nto ? 'NTO' : 'off');
+  // issue 146: an excited-state optimisation without a root relaxes the ground state.
+  // The inspector says so next to the field; project validation turns it into a
+  // blocking error rather than a warning.
+  const needsRoot = (s.jobType === 'Opt' || s.jobType === 'Opt Freq') && tdStates > 0 && !(tdRoot > 0);
+  const excitedGroup = group('Excited states (TD)', tdSummary, tdStates > 0 || s.emission === true || s.nto === true, [
     inputField('States', 'tdStates', s.tdStates ?? 0, { type: 'number', min: 0, max: 200 }),
     selectField('Spin states', 'tdTriplets', [
       ['', 'Singlets only'],
       ['triplets', 'Triplets only'],
       ['both', '50/50 singlets + triplets'],
     ], s.tdTriplets || ''),
+    inputField('Root', 'tdRoot', s.tdRoot ?? 0, { type: 'number', min: 0, max: 200 }),
+    inputField('NTO transition', 'ntoTransition', s.ntoTransition ?? 0, { type: 'number', min: 0, max: 200 }),
     tdEligible
-      ? '<div class="field full"><span class="inspector-note">Emits <code>TD=(NStates=N)</code> on the route. Excitation energies, wavelengths, oscillator strengths and the dominant transitions are parsed from the output.</span></div>'
+      ? '<div class="field full"><span class="inspector-note">Emits <code>TD=(NStates=N)</code> on the route'
+        + `${tdRoot > 0 ? ` with <code>Root=${esc(tdRoot)}</code>` : ''}. Root is the state an <code>Opt</code> follows and the state an emission `
+        + 'block reports; 0 means "not stated". Excitation energies, wavelengths, oscillator strengths and the '
+        + 'dominant transitions are parsed from the output.</span></div>'
       : '<div class="field full"><span class="inspector-note">TD requires a single-point or optimisation job. Choose SP or Opt to enable it; the input builder refuses the other job types.</span></div>',
+    needsRoot
+      ? '<div class="field full"><span class="inspector-note"><strong>Root is unset.</strong> An Opt job with '
+        + `${esc(tdStates)} excited states and no Root optimises the <em>ground</em> state, not the excited state this block reads as. `
+        + 'Set Root to the state to follow; validation blocks the run until it is set.</span></div>'
+      : '',
+    s.emission === true
+      ? '<div class="field full"><span class="inspector-note"><strong>Emission (vertical).</strong> This block runs '
+        + '<code>SP TD=(NStates=n,Root=1)</code> at the geometry it receives and reports the vertical emission energy. '
+        + 'It reports no fluorescence lifetime, no quantum yield and no Stokes shift against an experimental band maximum. '
+        + 'Connect the excited-state optimisation above it: a checkpoint edge hands the optimised geometry over; a normal '
+        + 'edge only orders the run and leaves the geometry as the block input.</span></div>'
+      : '',
+    '<div class="field full"><span class="inspector-note">NTO transition adds '
+      + '<code>Density=(Check,Transition=k)</code> and writes this block’s checkpoint for a following '
+      + '<code>Pop=NTO</code> job (connect it with a checkpoint edge). The NTO block itself carries no TD: '
+      + 'tick <strong>NTO analysis</strong> on a separate SP block.</span></div>',
+    switchRow('NTO analysis (second job)', 'Guess=Only Pop=NTO', 'nto', s.nto === true, { disabled: tdStates > 0 }),
+    s.nto === true
+      ? '<div class="field full"><span class="inspector-note"><strong>Pop=NTO.</strong> This block emits '
+        + '<code>Guess=Only Pop=NTO</code> and reads its transition density over a checkpoint edge. It must not carry TD, '
+        + 'and the source block must. This build does not parse the printed NTO table: no real NTO log exists in the '
+        + 'repository, so the pair is shown as a route and the result is reported as not parsed.</span></div>'
+      : '',
   ].join(''));
 
   const gaussianSolvationGroup = group('Solvation', s.solvation ? `${s.solvationModel} · ${s.solvent}` : 'off', s.solvation, [
@@ -2567,6 +2601,8 @@ const BLOCKS = [
     { type: 'scan', icon: 'Scan', title: 'PES scan', note: 'coordinate scan' },
     { type: 'sp', icon: 'SP', title: 'Single point', note: 'energy at a geometry' },
     { type: 'pop', icon: 'Pop', title: 'Population analysis', note: 'charges + orbitals' },
+    { type: 'emission', icon: 'Em', title: 'Emission (vertical)', note: 'TD at the optimised excited-state geometry' },
+    { type: 'nto', icon: 'NTO', title: 'NTO analysis', note: 'second job of the Pop=NTO chain' },
   ] },
   { group: 'Structure', items: [
     { type: 'conformers', icon: 'CF', title: 'Conformer ensemble', note: 'rank + prune conformers' },
@@ -2704,6 +2740,16 @@ function addBlock(type) {
       scan: { jobType: 'Scan', title: 'PES scan' },
       sp: { jobType: 'SP', title: 'Single point', gates: { finalEnergy: true } },
       pop: { jobType: 'SP', title: 'Population analysis', population: 'NBO', gates: { finalEnergy: true } },
+      // issue 146: the vertical-emission block is a TD single point pinned to Root=1.
+      // The NTO block is the second job of the chain and carries no TD; it
+      // deliberately starts without dispersion so the written route is the
+      // documented `Guess=Only Pop=NTO` form.
+      emission: {
+        jobType: 'SP', title: 'Emission (vertical)', tdStates: 1, tdRoot: 1, emission: true, gates: { finalEnergy: true },
+      },
+      nto: {
+        jobType: 'SP', title: 'NTO analysis', nto: true, dispersion: '', gates: { finalEnergy: true },
+      },
     }[type] || { jobType: 'Opt', title: 'Calculation' };
     node = calcNode(id, kindForJob(template.jobType), template.title, position.x, position.y, {
       state: 'ready',
@@ -2937,7 +2983,7 @@ function updateNodeField(node, key, value) {
     } else if (key === 'xtbThreads') {
       const count = Number(value);
       node.settings.xtbThreads = value === '' || !Number.isInteger(count) || count < 1 || count > 256 ? '' : count;
-    } else if (['charge', 'multiplicity', 'imaginary', 'minMagnitude', 'tdStates'].includes(key)) {
+    } else if (['charge', 'multiplicity', 'imaginary', 'minMagnitude', 'tdStates', 'tdRoot', 'ntoTransition'].includes(key)) {
       const nullWhenEmpty = key === 'imaginary' || key === 'minMagnitude';
       node.settings[key] = value === '' ? (nullWhenEmpty ? null : 0) : Number(value);
     } else if (key === 'jobType') {
@@ -2988,6 +3034,10 @@ function updateNodeField(node, key, value) {
         node.settings.scf = '';
         node.settings.tdStates = 0;
         node.settings.tdTriplets = '';
+        node.settings.tdRoot = 0;
+        node.settings.ntoTransition = 0;
+        node.settings.emission = false;
+        node.settings.nto = false;
         node.settings.customKeywords = '';
         node.settings.stableOpt = false;
         node.kind = kindForJob(node.settings.jobType);
@@ -4815,7 +4865,13 @@ function renderQueue() {
           : '';
         const meta = [task.status, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
           .filter(Boolean).join(' · ');
-        return `<li class="queue-item is-${esc(task.status)}" data-run-id="${esc(task.runId || '')}" title="${esc(task.error || task.reason || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
+        // Issue 154: a finished row opens its results, so it must be reachable
+        // and activatable from the keyboard. An empty data-run-id is not a run.
+        const runId = String(task.runId || '');
+        const interactive = runId
+          ? ` tabindex="0" role="button" aria-label="Open results for ${esc(task.title)}"`
+          : '';
+        return `<li class="queue-item is-${esc(task.status)}" data-run-id="${esc(runId)}"${interactive} title="${esc(task.error || task.reason || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
       }).join('')
       : '<li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li>';
   }
@@ -5124,7 +5180,12 @@ async function refreshHistory() {
           ? importedSummary(run)?.badge
           : [run.status, run.gates?.overall ? `gates ${run.gates.overall}` : '', run.dryRun ? 'dry' : engineOrDefault(run.engine).label]
             .filter(Boolean).join(' · ');
-        return `<li class="queue-item is-${esc(run.status)}" data-run-id="${esc(run.id || '')}" title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
+        // issue 154: the same keyboard contract as the queue rows.
+        const runId = String(run.id || '');
+        const interactive = runId
+          ? ` tabindex="0" role="button" aria-label="Open results for ${esc(run.title || runId)}"`
+          : '';
+        return `<li class="queue-item is-${esc(run.status)}" data-run-id="${esc(runId)}"${interactive} title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
       }).join('')
       : '<li class="queue-empty">No runs recorded yet.</li>';
   } catch {

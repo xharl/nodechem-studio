@@ -134,6 +134,9 @@ function routeValues(settings = {}) {
     solvationModel: solvated ? oneLine(settings.solvationModel, 'PCM') : null,
     solvent: solvated ? oneLine(settings.solvent, 'Water') : null,
     td: tdKeywordFor(settings),
+    // NTO (#146): the first job of the two-job chain stores the transition
+    // density in its checkpoint; the second reads it with Pop=NTO.
+    density: densityKeywordFor(settings),
     // `Stable=Opt` re-optimises the geometry if the wavefunction is unstable,
     // so it needs a job that optimises. On a single point it asks Gaussian to
     // optimise with no coordinate system and l108 stops with "No variables in
@@ -172,6 +175,13 @@ export function orbitalsPopulation(settings = {}) {
  * The TD keyword for a TD-DFT/CIS job, or `null` when excited states were not
  * requested. `tdTriplets` chooses singlets only (default), triplets only, or a
  * 50/50 run, which is Gaussian's own vocabulary rather than a paraphrase.
+ *
+ * Root selects which state an accompanying Opt follows (#75) and which state a
+ * vertical-emission block reports (#146). Zero means "not stated". The root is
+ * **not** clamped to NStates: a root above the number of computed states is a
+ * validation error (`tdRoot`/`tdStates`) and the input builder refuses it,
+ * because rewriting `Root=5` to `Root=3` changes which state the job follows
+ * while the user sees a route that looks like what they asked for.
  */
 export function tdKeywordFor(settings = {}) {
   const raw = Number(settings.tdStates ?? 0);
@@ -179,11 +189,46 @@ export function tdKeywordFor(settings = {}) {
   const states = Math.max(1, Math.min(200, Math.floor(raw)));
   const mode = String(settings.tdTriplets || '');
   const suffix = mode === 'triplets' ? ',Triplets' : mode === 'both' ? ',50-50' : '';
-  // Root selects which state an accompanying Opt follows (#75). Zero means
-  // "not stated", so the keyword stays exactly as before for existing blocks.
+  // An emission block is defined as Root=1: the emitting state at the optimised
+  // excited-state geometry. Any other root on it is a contradiction, refused
+  // rather than overwritten.
+  if (settings.emission === true) {
+    const typed = Math.floor(Number(settings.tdRoot ?? 0));
+    if (Number.isFinite(typed) && typed > 1) {
+      throw new Error(`An emission block reports the emitting state (TD=(NStates=n,Root=1)), but this block has tdRoot=${typed}. `
+        + 'Set Root to 1, or use an ordinary TD single point for another state.');
+    }
+    return `TD=(NStates=${states}${suffix},Root=1)`;
+  }
   const root = Math.floor(Number(settings.tdRoot ?? 0));
-  const rootSuffix = Number.isFinite(root) && root > 0 ? `,Root=${Math.min(root, states)}` : '';
+  const rootSuffix = Number.isFinite(root) && root > 0 ? `,Root=${root}` : '';
   return `TD=(NStates=${states}${suffix}${rootSuffix})`;
+}
+
+/**
+ * The transition-density keyword that makes a TD job write what a following
+ * `Pop=NTO` job reads (#146):
+ *
+ *   #p <method>/<basis> SP TD=(NStates=n) Density=(Check,Transition=k)
+ *
+ * `k` is the excited state whose transition density is stored, and it is one of
+ * the states this block computed — a transition above `tdStates` does not exist,
+ * so it is refused rather than clamped.
+ */
+export function densityKeywordFor(settings = {}) {
+  const raw = Number(settings.ntoTransition ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const transition = Math.floor(raw);
+  const states = Number(settings.tdStates ?? 0);
+  if (!Number.isFinite(states) || states <= 0) {
+    throw new Error(`NTO transition ${transition} needs TD excited states on the same block: `
+      + 'Density=(Check,Transition=k) stores the transition density of a state the TD job computed.');
+  }
+  if (transition > states) {
+    throw new Error(`NTO transition ${transition} is above tdStates=${states}; `
+      + 'Transition= names one of the transitions this TD job computed, so it cannot exceed the state count.');
+  }
+  return `Density=(Check,Transition=${transition})`;
 }
 
 /**
@@ -282,6 +327,19 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
   }
   const basis = gaussianBasisKeyword(basisName || values.basis);
   const functional = gaussianMethodKeyword(values.functional);
+  // NTO (#146): the second job of the pair carries no job keyword and no TD —
+  // it reads the transition density the first job wrote to the checkpoint. The
+  // route is the documented `Guess=Only Pop=NTO` form; the checkpoint hand-off
+  // in `buildGaussianInput` adds `Geom=Check` so the geometry comes from that
+  // checkpoint and `Guess=Only` is not overridden by `Guess=Read`.
+  if (settings.nto === true) {
+    const nto = [`#p ${functional}/${basis}`, 'Guess=Only', 'Pop=NTO'];
+    if (values.dispersion) nto.push(`EmpiricalDispersion=${values.dispersion}`);
+    if (values.scf) nto.push(`SCF=${values.scf}`);
+    if (values.grid) nto.push(`Integral=${values.grid}`);
+    if (values.verbosity) nto.push(`Output=${values.verbosity}`);
+    return nto.join(' ');
+  }
   const tokens = [`#p ${functional}/${basis} ${values.job}`];
   const counterpoise = counterpoiseCount(settings);
   if (counterpoise === null) throw new Error('Counterpoise must be an integer between 2 and 10, or off.');
@@ -291,6 +349,9 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
   if (values.grid) tokens.push(`Integral=${values.grid}`);
   if (values.population) tokens.push(`Pop=${values.population}`);
   if (values.td) tokens.push(values.td);
+  // Density=(Check,Transition=k) follows TD: it names a transition the TD keyword
+  // computed, and Gaussian reads the two together.
+  if (values.density) tokens.push(values.density);
   if (values.stable) tokens.push(values.stable);
   if (values.verbosity) tokens.push(`Output=${values.verbosity}`);
   if (values.solvationModel) {
@@ -400,9 +461,57 @@ export function buildGaussianInput({
   // TD is a route keyword on top of a wavefunction job. Gaussian does not
   // combine it with a frequency, a saddle search, an IRC or a scan, so the
   // builder refuses those combinations instead of writing a route that fails.
-  if (tdKeywordFor(settings) && !['SP', 'Opt'].includes(String(settings.jobType || 'Opt'))) {
+  const jobType = String(settings.jobType || 'Opt');
+  const tdStates = Number(settings.tdStates ?? 0);
+  const tdRoot = Number(settings.tdRoot ?? 0);
+  // #146: an excited-state optimisation without a root relaxes the ground
+  // state. That is a refusal, not a warning: the route would look like a TD
+  // optimisation and produce a ground-state minimum. A root above the computed
+  // state count does not exist and is not silently clamped.
+  if (tdStates > 0 && (jobType === 'Opt' || jobType === 'Opt Freq') && !(tdRoot > 0)) {
+    throw new Error(`tdStates is ${tdStates} but tdRoot is not set. An Opt job with TD excited states `
+      + 'follows the root named by tdRoot; without one Gaussian optimises the ground state while the '
+      + `block reads as an excited-state optimisation. Set Root to the state to follow (1–${Math.min(200, Math.floor(tdStates))}).`);
+  }
+  if (tdRoot > 0 && !(tdStates > 0)) {
+    throw new Error(`tdRoot is ${tdRoot} but tdStates is 0: there is no TD calculation for the root to select. `
+      + 'Set States to the number of excited states, or clear Root.');
+  }
+  if (tdRoot > tdStates) {
+    throw new Error(`tdRoot is ${tdRoot} but tdStates is ${tdStates}. Root cannot name a state the TD job `
+      + 'does not compute; raise States or lower Root.');
+  }
+  if (settings.emission === true) {
+    if (jobType !== 'SP') {
+      throw new Error(`An emission block is a single point at the excited-state geometry; this block is ${jobType}. `
+        + 'Run the geometry optimisation as its own block and connect it to the emission block.');
+    }
+    if (!(tdStates > 0)) {
+      throw new Error('An emission block needs TD excited states: TD=(NStates=n,Root=1) at the optimised geometry. '
+        + 'Set States to at least 1.');
+    }
+  }
+  if (settings.nto === true) {
+    if (jobType !== 'SP') {
+      throw new Error(`Pop=NTO reads a transition density with Guess=Only, which is a single-point job; this block is ${jobType}. `
+        + 'Put the NTO analysis on its own SP block and connect the TD block with a checkpoint edge.');
+    }
+    if (tdStates > 0) {
+      throw new Error('An NTO block does not run TD itself: it reads the transition density from the checkpoint '
+        + `a TD block wrote. This block has tdStates=${tdStates}; move TD to the block that writes the checkpoint.`);
+    }
+    if (Number(settings.ntoTransition ?? 0) > 0) {
+      throw new Error('Density=(Check,Transition=k) belongs on the TD block that writes the checkpoint, not on the '
+        + 'Pop=NTO block that reads it.');
+    }
+    if (!oldCheckpoint) {
+      throw new Error('Pop=NTO reads its transition density from a checkpoint, but this block has no checkpoint edge '
+        + 'and no %OldChk hand-off. Connect the SP TD block that writes Density=(Check,Transition=k) with a checkpoint edge.');
+    }
+  }
+  if (tdKeywordFor(settings) && !['SP', 'Opt'].includes(jobType)) {
     throw new Error('Excited states (TD) are available for SP and Opt jobs only; '
-      + `${settings.jobType} cannot carry a TD keyword.`);
+      + `${jobType} cannot carry a TD keyword.`);
   }
 
   // Raman activities ride on the frequency keyword, so a job without a

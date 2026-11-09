@@ -62,7 +62,10 @@ describe('TD route keyword', () => {
   it('refuses job types Gaussian cannot combine with TD', () => {
     expect(() => inputFor({ tdStates: 5, jobType: 'Freq' })).toThrow(/SP and Opt/);
     expect(() => inputFor({ tdStates: 5, jobType: 'Opt=TS' })).toThrow(/SP and Opt/);
-    expect(() => inputFor({ tdStates: 5, jobType: 'Opt' })).not.toThrow();
+    // #146: an Opt with excited states also needs a root; the route is only
+    // written once the block says which state it follows.
+    expect(() => inputFor({ tdStates: 5, jobType: 'Opt' })).toThrow(/tdRoot/);
+    expect(() => inputFor({ tdStates: 5, jobType: 'Opt', tdRoot: 1 })).not.toThrow();
   });
 });
 

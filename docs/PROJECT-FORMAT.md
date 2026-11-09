@@ -117,6 +117,7 @@ Type-specific payloads:
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
 `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
 `optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
+`emission`, `nto`, `ntoTransition`,
 `raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`.
@@ -140,7 +141,10 @@ engine set — neither `settings.engine` nor `defaults.engine` — validates as 
 before.
 
 `ladder` declares method-ladder groups, `referenceNodeId` names the block a barrier or ΔG‡ is
-measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, `orbitals` adds the
+measured against, `tdStates`/`tdTriplets`/`tdRoot` configure excited states, `emission` marks a
+vertical-emission block (an SP pinned to `TD=(NStates=n,Root=1)`), `nto` marks the second job of the
+`Pop=NTO` chain and `ntoTransition` selects the transition density the TD job stores with
+`Density=(Check,Transition=k)`, `orbitals` adds the
 orbital-eigenvalue print (`Pop=Full` on Gaussian) that the frontier-orbital and Koopmans panel is
 read from, `raman` and `vcd` put `=Raman` / `=VCD` on the frequency keyword (`Freq=(Raman,VCD)`
 when both are on), and `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
