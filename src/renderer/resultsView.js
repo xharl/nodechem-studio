@@ -35,7 +35,10 @@ import { scaleToSpectrum } from '../shared/overlay.js';
 import {
   fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd, orbitalLevelsFigure,
 } from '../shared/figures/index.js';
-import { importSpectrumText, sameAxisUnits } from '../shared/spectrumImport.js';
+import {
+  importMeasuredSpectrum, importSpectrumText, overlayFromRecord, placeMeasuredOverlay,
+  sameAxisUnits, spectrumOverlayField,
+} from '../shared/spectrumImport.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 import { IMPORTED_BADGE_TEXT, importedBadgeHtml, importedSummary } from '../shared/importedRecord.js';
 import { UNVERIFIED_ESOPT_NOTE, excitedStateGate } from '../shared/excitedStates.js';
@@ -872,7 +875,7 @@ function orbitalsCard(parsed, flags) {
  * could not be computed prints `not reported` with the reason; an f = 0 state
  * prints `not finite (f = 0)` rather than a lifetime that does not exist.
  */
-function excitedStatesCard(parsed, flags, record = null) {
+function excitedStatesCard(parsed, flags, record = null, overlay = null, overlayNote = '') {
   const block = parsed?.excitedStates;
   const states = Array.isArray(block?.states) ? block.states.filter(isObject) : [];
   if (!Number.isFinite(block?.count) || block.count === 0 || states.length === 0) return '';
@@ -917,7 +920,7 @@ function excitedStatesCard(parsed, flags, record = null) {
     + (states.length > 20
       ? `<p class="results-missing">Showing the first 20 of ${esc(block.count)} parsed states.</p>`
       : '')
-    + spectrumFigure(states)
+    + excitedSpectrumHtml(states, overlay, overlayNote)
     + radiativeKineticsHtml(kinetics)
     + caveatHtml(flags, 'These excitation energies and the rates derived from them');
   return card('Excited states', body, 'is-wide');
@@ -956,20 +959,50 @@ function radiativeKineticsHtml(kinetics) {
  * workflow report cannot show different pictures of the same numbers. The
  * broadening is a stated parameter, not a hidden default: the caption prints the
  * FWHM and the number of transitions used.
+ *
+ * Issue 184: a measured trace, when the record carries one, is drawn on the same
+ * axes at the same scale. The trace is placed by `placeMeasuredOverlay()`, which
+ * refuses an axis it cannot honour; when the record's axis is cm⁻¹ it is plotted
+ * as the reciprocal on the nm axis and the caption says so. Nothing is resampled
+ * and nothing is invented: without a recorded overlay the figure is the computed
+ * one, and a malformed field prints the reason instead of half a curve.
  */
-function spectrumFigure(states) {
+function excitedSpectrumHtml(states, overlayField = null, overlayNote = '') {
   let spectrum;
   try {
     spectrum = broadenedSpectrum(states);
   } catch {
     return '';
   }
-  const figure = fromUvVis(spectrum);
+  const overlays = [];
+  let overlayError = '';
+  if (isObject(overlayField)) {
+    try {
+      const measured = overlayFromRecord(overlayField);
+      const placed = placeMeasuredOverlay(measured, { axis: 'wavelength', allowReciprocal: true });
+      overlays.push({ ...measured, note: placed.note, points: placed.points });
+    } catch (error) {
+      overlayError = error.message;
+    }
+  }
+  const figure = fromUvVis(spectrum, { overlays });
   if (!figure) return '';
+  const note = overlayError || overlayNote;
+  const caption = overlays.length > 0
+    ? figure.caption
+    : `${figure.caption} · oscillator strengths as computed, intensity relative to the `
+      + 'strongest point. This is a simulation, not a measured spectrum.';
   return '<figure class="results-spectrum" data-field="excited-spectrum">'
     + figure.svg
-    + `<figcaption>${esc(figure.caption)} · oscillator strengths as computed, intensity relative to the `
-    + 'strongest point. This is a simulation, not a measured spectrum.</figcaption>'
+    + '<div class="results-note" data-field="measured-overlay-control">'
+    + '<label>Measured spectrum (two-column CSV/TSV) '
+    + '<input type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" data-spectrum-overlay></label>'
+    + (overlays.length > 0
+      ? ' <button type="button" class="results-link" data-spectrum-overlay-clear>Remove measured trace</button>'
+      : '')
+    + '</div>'
+    + (note ? `<p class="results-note" data-field="spectrum-overlay-note">${esc(note)}</p>` : '')
+    + `<figcaption>${esc(caption)}</figcaption>`
     + '</figure>';
 }
 
@@ -1747,6 +1780,14 @@ export function resultsPanelHtml(record, options = {}) {
       : '',
   ].filter(Boolean).join('');
 
+  // Issue 184: the measured trace lives on the record. `options` carries the
+  // one imported in this session before it is written back, and the note explains
+  // the last import attempt (or its refusal).
+  const spectrumOverlay = isObject(options.spectrumOverlay)
+    ? options.spectrumOverlay
+    : (isObject(record.spectrumOverlay) ? record.spectrumOverlay : null);
+  const spectrumOverlayNote = text(options.spectrumOverlayNote);
+
   const cards = imported
     ? [
       importedEnergyCard(imported),
@@ -1760,7 +1801,7 @@ export function resultsPanelHtml(record, options = {}) {
       thermochemistryCard(parsed, flags),
       methodsCard(record),
       frequenciesCard(parsed, flags),
-      excitedStatesCard(parsed, flags, record),
+      excitedStatesCard(parsed, flags, record, spectrumOverlay, spectrumOverlayNote),
       emissionCard(parsed, flags, emission),
       ntoCard(flags, nto),
       excitedStateOptimizationCard(parsed, flags, jobSettings),
@@ -1868,7 +1909,15 @@ export function installResultsView({
     };
   };
 
-  const show = (record) => {
+  /**
+   * Issue 184: the measured trace is imported from the excited-state card. The
+   * file's bytes are hashed on the way in, so the figure can state which file it
+   * drew. The digest and the points go on the record this panel renders; nothing
+   * is written to `run.json` here — the runner owns that file.
+   */
+  let spectrumOverlayNote = '';
+
+  const show = (record, { note = null } = {}) => {
     if (!isObject(record)) {
       currentRecord = null;
       container.hidden = true;
@@ -1878,8 +1927,11 @@ export function installResultsView({
       consoleEl?.classList.remove('has-results');
       return;
     }
+    // A note about an import belongs to the record it was made on.
+    if (text(currentRecord?.id) !== text(record.id)) spectrumOverlayNote = '';
+    if (note !== null) spectrumOverlayNote = note;
     currentRecord = record;
-    container.innerHTML = resultsPanelHtml(record, reactionOptions(record));
+    container.innerHTML = resultsPanelHtml(record, { ...reactionOptions(record), spectrumOverlayNote });
     container.hidden = false;
     consoleEl?.classList.add('has-results');
     mountCompareBar(record);
@@ -2026,6 +2078,33 @@ export function installResultsView({
     rerenderThermo();
   };
 
+  /**
+   * Read the chosen file as bytes, not text: the sha256 in the record must be
+   * the digest of the file on disk, and a text round trip can renormalise line
+   * endings. A refusal is printed verbatim and never replaces the trace already
+   * on the figure.
+   */
+  const importSpectrumOverlay = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const bytes = new Uint8Array(reader.result || new ArrayBuffer(0));
+      try {
+        const imported = importMeasuredSpectrum({ name: file.name, bytes });
+        currentRecord = { ...currentRecord, spectrumOverlay: spectrumOverlayField(imported) };
+        spectrumOverlayNote = `Imported ${imported.points.length} points from “${file.name}” `
+          + `(${imported.columns.x}, ${imported.columns.y}; x in ${imported.units.x}), `
+          + `sha256 ${imported.sha256}.`;
+      } catch (error) {
+        spectrumOverlayNote = currentRecord?.spectrumOverlay
+          ? `${error.message} The figure still shows the previously imported trace.`
+          : error.message;
+      }
+      show(currentRecord);
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   container.addEventListener('input', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
@@ -2041,6 +2120,9 @@ export function installResultsView({
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
     if (target.matches('[data-vcd-fwhm]')) rerenderVcd();
+    if (target.matches('[data-spectrum-overlay]') && target.files && target.files[0]) {
+      importSpectrumOverlay(target.files[0]);
+    }
     if (target.matches('[data-raman-overlay]') && target.files && target.files[0]) {
       const file = target.files[0];
       const reader = new FileReader();
@@ -2080,6 +2162,11 @@ export function installResultsView({
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (target.closest('[data-thermo-export]')) exportThermoCsv();
+    if (target.closest('[data-spectrum-overlay-clear]') && isObject(currentRecord)) {
+      const next = { ...currentRecord };
+      delete next.spectrumOverlay;
+      show(next, { note: 'Removed the measured trace; the figure is the computed spectrum again.' });
+    }
   });
 
   /**

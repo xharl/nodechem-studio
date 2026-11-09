@@ -1,0 +1,1 @@
+UV-Vis (simulated) · oscillator strengths as computed · Gaussian broadening, FWHM 0.30 eV · 60 points

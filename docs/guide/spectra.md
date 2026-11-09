@@ -139,16 +139,77 @@ The three fixtures under `test/fixtures/jcamp/` are **hand-written for the tests
 JCAMP-DX and deliberately small, and none of them came off an instrument: no real `.jdx` is
 redistributed here, and no number in them is a measurement.
 
+## A measured trace beside the computed sticks (issue 184)
+
+The excited-states card takes a two-column CSV/TSV and draws it on the same
+axes as the computed UV-Vis curve and oscillator-strength sticks — one scale
+function, one plot area, no resampling of either series.
+
+| Column header | Axis | Unit |
+| --- | --- | --- |
+| `wavelength_nm`, `wavelength (nm)`, `lambda_nm`, `nm` | wavelength | nm |
+| `wavenumber_cm-1`, `wavenumber (cm⁻¹)`, `cm-1` | wavenumber | cm⁻¹ |
+
+The second column is the intensity, and the file must say which axis it is on:
+units come from the column name, never from the data's range. A headerless
+file is refused, because its axis would have to be guessed.
+
+The trace is recorded on the run as `spectrumOverlay`:
+
+```json
+{
+  "source": "absorbance-232nm.csv",
+  "sha256": "a780029af1586fc668f16ac0422f4d55ea884c5cfb6990ca023b7a76eff08912",
+  "columns": { "x": "wavelength_nm", "y": "intensity" },
+  "units": { "x": "nm", "y": "not declared" },
+  "points": [{ "x": 210, "y": 0.02 }]
+}
+```
+
+The digest is SHA-256 of the file's bytes, computed over the bytes as they were
+read — the same 64 characters `sha256sum` prints. The field is optional on both
+record schema versions, and it is absent (not null) when nothing was imported,
+so a record written before this existed still validates and the figure is
+byte-identical to the computed-only one.
+
+The caption of a figure carrying both traces says which is which: the file name,
+its digest, the point count, the FWHM the computed curve was broadened with, and
+the one scaling applied to the measured intensity (division by its own maximum,
+so heights are comparable in shape and not in absolute units).
+
+### Refusals
+
+Every one of these is a sentence naming the file, printed where the figure would
+have been — never a silently emptied plot:
+
+| Input | Refusal |
+| --- | --- |
+| a PNG/JPEG/GIF/TIFF/WebP, by extension or by magic bytes | names it as an image and states that this build does no digitisation |
+| a JCAMP-DX document | names the format and points at the Raman card, which reads it |
+| no header row | says the x axis unit is undeclared and will not be guessed |
+| one column, or more than two | names the column count and what two columns mean |
+| both a wavelength and a wavenumber column | names both units and refuses the conversion |
+| a non-numeric cell | names the line, the cell and the column |
+| an x axis that both rises and falls | names the turn; the trace is not sorted to fit |
+| fewer than 5 points, or more than 20000 | names the count and the bound |
+
+Units are never converted. A cm⁻¹ file drawn against the nm axis is one explicit
+exception: it is plotted as its reciprocal wavelength (λ = 10⁷/ν̄) and the caption
+says so. Requesting that plot is opt-in (`placeMeasuredOverlay(..., { allowReciprocal: true })`);
+the default answer to a unit mismatch is an error naming both units.
+
 ## What is not wired
 
 - **No CLI verb.** `ncs spectra import spectrum.jdx` does not exist yet. The reader is a shared
   module with a documented shape, so the verb is a thin wrapper over `readJcampDx`; `bin/ncs.js` was
   deliberately left to the workstream that owns it.
-- **One overlay slot.** The import lives on the Raman card's file input, which now accepts `.jdx`
-  and `.dx` as well as `.csv`/`.txt`. There is no separate "import a spectrum" surface beside the
-  other spectral cards.
-- **Reading `##NTUPLES`, `##RADATA` and peak tables** is out of scope in #119, as are vendor binary
+- **Import surfaces are per card.** The Raman card's file input accepts `.jdx`/`.dx` and
+  two-column text; the excited-states card takes the CSV/TSV measured trace described above. There
+  is no single "import a spectrum" dialog.
+- **Reading `##NTUPLES`, `##RADATA` and peak tables** is out of scope in issue 119, as are vendor binary
   formats. They are refused by name rather than half-read.
+- **Digitising an image** is not in this build at all. A picture of a spectrum is refused at the
+  import, with that sentence, rather than traced approximately and called measured.
 
 ## Next
 

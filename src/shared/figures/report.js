@@ -14,6 +14,7 @@ import { ecdSpectrum } from '../ecd.js';
 import { nmrShifts, nmrSpectrum } from '../nmr.js';
 import { ramanSpectrum } from '../raman.js';
 import { broadenedSpectrum } from '../spectrum.js';
+import { overlayFromRecord, placeMeasuredOverlay } from '../spectrumImport.js';
 import { trajectoryEnergies } from '../trajectory.js';
 import { vcdSpectrum } from '../vcd.js';
 import { broadenSticks, fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd, spectrumFigure } from './spectra.js';
@@ -62,10 +63,27 @@ function vcdFigure(parsed) {
   return fromVcd(vcdSpectrum(withStrength, { fwhmCm: IR_FWHM }));
 }
 
-function uvVisFigure(parsed) {
+/**
+ * The measured trace a record carries (issue 184), placed on the UV-Vis figure's
+ * nm axis. A recorded trace that cannot be placed is not swapped for an empty
+ * curve: the reason is returned and the report prints it beside the figure.
+ */
+function measuredOverlay(record) {
+  const field = isObject(record?.spectrumOverlay) ? record.spectrumOverlay : null;
+  if (!field) return { overlays: [], reason: '' };
+  try {
+    const measured = overlayFromRecord(field);
+    const placed = placeMeasuredOverlay(measured, { axis: 'wavelength', allowReciprocal: true });
+    return { overlays: [{ ...measured, note: placed.note, points: placed.points }], reason: '' };
+  } catch (error) {
+    return { overlays: [], reason: `the recorded measured trace could not be drawn: ${error.message}` };
+  }
+}
+
+function uvVisFigure(parsed, overlays = []) {
   const states = Array.isArray(parsed?.excitedStates?.states) ? parsed.excitedStates.states : [];
   if (states.length === 0) return null;
-  return fromUvVis(broadenedSpectrum(states));
+  return fromUvVis(broadenedSpectrum(states), { overlays });
 }
 
 function ecdFigure(parsed) {
@@ -126,11 +144,12 @@ function convergenceFigureFor(parsed) {
  */
 export function taskFigures(record, { volume = null, surfaces = null, level = 'basic' } = {}) {
   const parsed = isObject(record?.parsed) ? record.parsed : {};
+  const overlay = measuredOverlay(record);
   const entries = [
     ['ir', irFigure(parsed)],
     ['raman', ramanFigure(parsed)],
     ['vcd', vcdFigure(parsed)],
-    ['uvvis', uvVisFigure(parsed)],
+    ['uvvis', uvVisFigure(parsed, overlay.overlays)],
     ['ecd', ecdFigure(parsed)],
     ['nmr', nmrFigure(parsed)],
     ['levels', levelsFigure(parsed)],
@@ -138,6 +157,9 @@ export function taskFigures(record, { volume = null, surfaces = null, level = 'b
   ];
 
   const figures = entries.map(([key, figure]) => ({ key, figure: figure || null }));
+  // A measured trace the record names but this build cannot place is a fact
+  // about the record, so it is printed — not hidden by a computed-only figure.
+  if (overlay.reason) figures.push({ key: 'uvvis-overlay', figure: null, reason: overlay.reason });
 
   if (surfaces && Array.isArray(surfaces.meshes) && surfaces.meshes.length > 0) {
     const drawn = surfaceFigure({
