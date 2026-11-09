@@ -113,6 +113,94 @@ Verified against a real Gaussian 16 checkpoint (`test/fixtures/fchk/`) and read 
 independent Molden implementation: 60 basis functions, 60 orbitals, MO energies within 5·10⁻⁷ Eh and
 coefficients within 5·10⁻⁹ of the checkpoint, 70 electrons.
 
+## Bringing a structure in
+
+The other direction has the same rule: an import is only an import if the app can say what it read.
+Every reader below produces the same record — atoms, bonds when the format states them, charge,
+multiplicity, and a geometry with a `dimension`.
+
+| Format | What it carries | What it does **not** carry |
+| --- | --- | --- |
+| `.xyz` | atoms and Cartesian coordinates | bonds, charge, multiplicity |
+| `.mol` / `.sdf` | atoms, bonds, orders, `M  CHG` | — (2D files import, flagged as 2D) |
+| `.mol2` | atoms, bonds, aromatic bonds, charges | — |
+| `.pdb` / `.pdbqt` | atoms (CONECT is reported, not used as topology) | reliable bond orders |
+| `.gjf` / `.com` | atoms, charge, multiplicity (Cartesian only) | bond orders |
+| `.cdxml` | atoms, bonds, charges, 2D positions | a 3D geometry |
+| Gaussian `.log` / `.out` | every frame of the optimisation | bond orders |
+| `.nw`, `.inp`, `.qcin` | atoms, charge, multiplicity from a deck this app exported | bond orders |
+| `.smi` / `.smiles` | **a bond graph only** — see below | coordinates, which is why it is refused |
+| `.cdx` | **nothing** — no reader exists | everything |
+
+**A SMILES string is refused as a geometry, by name.** The reader in
+`src/shared/interop/smiles.js` understands the OpenSMILES organic subset: B, C, N, O, P, S, F, Cl,
+Br, I and aromatic `b c n o p s`, with branches, ring closures, `.` components, `- = # :`, formal
+charges of ±1, explicit H and implicit H by Daylight's valence rule. It stops, naming the token and
+its character position, at stereochemistry (`@`, `@@`, `/`, `\`), isotopes, charges above ±1,
+aromatic boron and phosphorus, metals, and SMARTS operators. Aromatic bonds stay aromatic (order
+1.5): the reader never Kekulises a ring, because assigning double bonds to six letters is a
+chemistry claim it cannot check — write the Kekulé form (`C1=CC=CC=C1`) if you want explicit orders.
+
+What it produces is a graph with **no coordinates**. That is why the importer refuses it rather than
+accepting it: the structure block, the project format (`geometry.dimension` is `2d` or `3d`) and the
+run builder all need atoms at positions, and a structure with an empty coordinate list would run as
+the app's demo water molecule. The refusal names the formula it read (for benzene: `C6H6 · 6 atoms ·
+6 bonds · charge 0`) and the way forward:
+
+```bash
+obabel -ismiles ligand.smi --gen3d -oxyz -O ligand.xyz && echo "import ligand.xyz"
+ncs smiles ligand.smi --json          # read the graph without an embedder
+ncs smiles 'CC(=O)[O-]'               # one line: formula, atoms, bonds, charge, multiplicity
+```
+
+Deck import is CLI-only for now: the project format has no `geometry.format` id for `nwchem`,
+`gamess` or `qchem`, so importing one in the window would produce a project that cannot be saved.
+The importer says that instead, and `ncs convert job.nw --format xyz` reads it.
+
+`.cdx` is refused for the same kind of reason with a different answer: ChemDraw's binary form has no
+public specification, so there is no reader here, and a reader written against a guessed tag stream
+would mis-read bond orders. Save the drawing as CDXML (File → Save As → CDXML) and import that.
+
+## Handing a job to NWChem, GAMESS or Q-Chem
+
+Three engines are **export-only**: the app writes their input and does not run them. There is no
+queue, no output parser and no gate — the deck is the deliverable.
+
+```bash
+ncs export-input project.ncs --node opt-1 --engine nwchem --out opt1.nw
+ncs export-input project.ncs --node opt-1 --engine gamess --out opt1.inp
+ncs export-input project.ncs --node opt-1 --engine qchem  --out opt1.qcin
+ncs export-input project.ncs --node opt-1 --engine nwchem --json
+```
+
+The deck is built from the same settings the Gaussian block would use: job type, method, basis,
+charge, multiplicity, memory, and the project geometry. Each engine has a capability table
+(`src/shared/interop/*.js`) and **refuses any combination it cannot spell**, naming the field:
+
+| | NWChem | GAMESS (US) | Q-Chem |
+| --- | --- | --- | --- |
+| job types | sp, opt, freq, saddle | sp, opt, freq | sp, opt, freq |
+| functionals | HF, B3LYP, PBE0, PBE, M06-2X | HF, B3LYP, PBE, PBE0 | HF, B3LYP, PBE, PBE0, M06-2X, ωB97X-D |
+| dispersion | `disp vdw 3`/`4` for BLYP, B3LYP, BHLYP, TPSS, TPSSh | — | `DFT_D` = `D3_ZERO`/`D3_BJ` |
+| solvation, TD-DFT, ECP, constraints, TS (GAMESS/Q-Chem) | refused by name | refused by name | refused by name |
+
+Refusals are a value, not an error: `ncs export-input` exits 2 and prints
+`{ "ok": false, "code": "export-refused", "engine": "...", "message": "..." }` on stderr, so a
+script can branch on it. A project with **no geometry** is refused with `export-no-geometry` — the
+builder would otherwise substitute the demo water molecule, and a deck that computes water is worse
+than no deck. A block that sets Gaussian-only fields (`customKeywords`, `scf`, `grid`, `population`,
+`solvation`, `tdStates`, constraints) is refused naming the field, because translating it would be a
+guess.
+
+`Opt Freq` is refused as one deck for all three: each program runs one job per input here, so export
+the Opt block, import the optimised geometry, and export the Freq block. The deck also states its
+units on the line that matters (`UNITS=ANGS` in GAMESS, `units angstroms` in NWChem).
+
+A deck this app wrote can be read back: `ncs convert opt1.nw --format xyz` uses the same reader the
+importer uses, and the round-trip test asserts the atoms, charge and multiplicity survive. A deck
+carries no bond table, so bonds are not part of that round trip — `.sdf` export is the format that
+does carry them.
+
 ## What is not written yet
 
 - **Cube downsampling.** A `.cube` is read at full resolution; the reader caps it at 4 M voxels and

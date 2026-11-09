@@ -2,12 +2,20 @@
  * Structure import for NodeChem Studio.
  *
  * Reads Cartesian geometries from .xyz, .mol, .sdf, .gjf, .com and the extra
- * readers in `structureParsers.js`, and ChemDraw drawings from .cdxml. Pure
- * module: text in, validated molecule out. Z-matrices are refused with a
- * specific message rather than converted silently.
+ * readers in `structureParsers.js`, ChemDraw drawings from .cdxml, and the
+ * input decks this app exports for NWChem (.nw/.nwi), GAMESS (`$CONTRL`/`$DATA`)
+ * and Q-Chem (.qcin). Pure module: text in, validated molecule out. Z-matrices
+ * are refused with a specific message rather than converted silently.
  *
  * A CDXML record is the exception to "geometry": it is a 2D drawing, so it
  * carries `geometry.dimension = '2d'` and must never be treated as a conformer.
+ *
+ * A SMILES string is **not** importable as a geometry and is refused by name,
+ * with the graph it parsed (issue #148). `interop/smiles.js` reads the graph;
+ * this file refuses to pad it with coordinates because the structure block,
+ * the project schema's `geometry.dimension` and the run builder all assume 3D
+ * atoms — and a structure with an empty coordinate list silently runs as the
+ * demo water molecule. The graph itself is available from `ncs smiles`.
  *
  * Every imported structure is checked for: known element symbols, finite
  * coordinates, charge/multiplicity range, and electron-count parity.
@@ -15,6 +23,8 @@
 
 import { atomicNumber, isElementSymbol } from './elements.js';
 import { isCdxmlDocument, logFrames, parseCdxml, parseCjson, parseMol2, parsePdb, parsePdbModels } from './structureParsers.js';
+import { parseGamessInput, parseNwchemInput, parseQchemInput } from './interop/deckImport.js';
+import { describeSmilesGraph, parseSmiles, parseSmilesList } from './interop/smiles.js';
 import { parseTrajectory } from './trajectory.js';
 
 export class StructureError extends Error {}
@@ -34,14 +44,26 @@ function integer(value) {
 }
 
 const SUPPORTED_EXTENSIONS = Object.freeze(['xyz', 'mol', 'sdf', 'gjf', 'com', 'cdxml']);
+// Extension → deck format id. GAMESS has no extension of its own (ORCA also
+// uses .inp), so a .inp deck is recognised by its `$CONTRL` header instead.
+const DECK_EXTENSIONS = Object.freeze({ nw: 'nwchem', nwi: 'nwchem', qcin: 'qchem' });
 const EXTRA_EXTENSIONS = Object.freeze(['mol2', 'pdb', 'ent', 'pdbqt', 'cjson', 'log', 'out']);
 // Extensions we recognise only in order to refuse them with a reason (#59/#58).
-// `cdx` is refused by name too: it is ChemDraw's binary form (#120).
-const REFUSED_EXTENSIONS = Object.freeze(['chk', 'fchk', 'smi', 'smiles', 'inchi', 'inchi1', 'cdx']);
+// `cdx` is refused by name too: it is ChemDraw's binary form (#148) — the
+// reader does not exist, and the message says so rather than guessing a tag
+// layout.
+const REFUSED_EXTENSIONS = Object.freeze(['chk', 'fchk', 'inchi', 'inchi1', 'cdx']);
+// SMILES is recognised by extension and then parsed — to name what was read —
+// before it is refused as a geometry. It left REFUSED_EXTENSIONS with #148
+// because "refused before anything is read" was the wrong message for a
+// format this build understands.
+const SMILES_EXTENSIONS = Object.freeze(['smi', 'smiles']);
 
 function formatFor(filename, text) {
   const extension = String(filename).toLowerCase().split('.').pop();
   if (REFUSED_EXTENSIONS.includes(extension)) return extension;
+  if (SMILES_EXTENSIONS.includes(extension)) return extension;
+  if (DECK_EXTENSIONS[extension]) return DECK_EXTENSIONS[extension];
   if (SUPPORTED_EXTENSIONS.includes(extension)) return extension;
   // Content wins over the extension, because a `.log` can be a Gaussian output
   // or a plain run log, and a MOL2 begins with `#` comment lines that used to
@@ -53,6 +75,14 @@ function formatFor(filename, text) {
   if (isCdxmlDocument(text)) return 'cdxml';
   if (/^\s*Standard orientation:/m.test(text) && /Gaussian|GINC|Entering Link 1/i.test(text)) return 'log';
   if (/^\{"molecule"|"conformer"\s*:\s*\{/m.test(text)) return 'cjson';
+  // Another program's input deck. These are sniffed before the `#` test below,
+  // because a hand-written NWChem deck may carry `#` comment lines and would
+  // otherwise be taken for a Gaussian route section.
+  if (/^\s*\$CONTRL\b/im.test(text)) return 'gamess';
+  if (/^\s*\$molecule\b/im.test(text) && /^\s*\$rem\b/im.test(text)) return 'qchem';
+  if (/^\s*(?:echo|start)\b/im.test(text) && /^\s*geometry\b/im.test(text) && /^\s*task\s+\w+/im.test(text)) {
+    return 'nwchem';
+  }
   if (/^(ATOM  |HETATM)/m.test(text)) {
     return extension === 'pdbqt' ? 'pdbqt' : 'pdb';
   }
@@ -358,12 +388,13 @@ function periodicFormatFor(filename, text) {
  * behaviour — parse record 1 and drop the rest — lost a 5-conformer file
  * without saying so.
  */
-export function parseStructureRecords(text, { filename = '' } = {}) {
+export function parseStructureRecords(text, { filename = '', allowDecks = false } = {}) {
   if (typeof text !== 'string' || !text.trim()) throw new StructureError('The structure file is empty.');
   const normalized = text.replace(/^\uFEFF/, '');
   const periodic = periodicFormatFor(filename, normalized);
   if (periodic) throw periodicError(filename, periodic);
   const format = formatFor(filename, normalized);
+  refuseDeckInApp(format, filename, allowDecks);
   const lines = normalized.split(/\r\n|\n|\r/);
 
   if (format === 'cdxml') {
@@ -418,7 +449,7 @@ export function parseStructureRecords(text, { filename = '' } = {}) {
     return { format: 'log', records: frames.map((frame) => finalize({ ...frame, format: 'xyz', parity: 'adjust' })) };
   }
 
-  const single = parseSingle(text, { filename });
+  const single = parseSingle(text, { filename, allowDecks });
   return { format: single.format, records: [single] };
 }
 
@@ -445,27 +476,90 @@ function cdxmlEntries(text, filename) {
  * A binary checkpoint is #59's scope; a SMILES string has no coordinates at all
  * and generating them needs an embedder this project does not ship.
  */
-function unsupportedFormatError(format, filename) {
+function unsupportedFormatError(format, filename, text = '') {
   if (format === 'chk' || format === 'fchk') {
     return new StructureError(`${String(format).toUpperCase()} is a binary checkpoint, not a structure file. `
       + 'Wavefunction ingest is tracked in #59; export coordinates to .xyz or .mol instead.');
   }
-  if (format === 'smiles' || format === 'smarts' || format === 'inchi') {
-    return new StructureError('A SMILES/InChI string carries no coordinates. Building a 3D structure from it '
-      + 'needs a chemistry engine, which is out of scope (decision recorded in #58/#79). '
-      + 'Supply a .xyz, .mol, .sdf, .mol2, .pdb or .cjson file.');
+  if (format === 'smiles' || format === 'smi') return smilesRefusal(format, filename, text);
+  if (format === 'smarts') {
+    return new StructureError('SMARTS is a substructure query language, not a molecule: it can match a structure '
+      + 'but it does not describe one. Supply the molecule as SMILES or a structure file.');
   }
-  if (format === 'smi') {
-    return new StructureError(`${filename || 'The file'} is a SMILES list, which carries no coordinates. `
-      + 'Export the structures as .sdf or .mol2 and import that instead.');
+  if (format === 'inchi') {
+    return new StructureError('InChI is not read here. It needs the official InChI library to be correct — a '
+      + 'reimplementation would be a guess, which this app does not ship. Convert it with Open Babel '
+      + '(`obabel -iinchi molecule.inchi -oxyz -O molecule.xyz`) and import the .xyz.');
   }
   if (format === 'cdx') {
-    return new StructureError(`${filename || 'This file'} is a ChemDraw .cdx document, a proprietary binary drawing format `
-      + 'this reader does not decode: it has no public specification and this project does not guess at one. '
-      + 'Open it in ChemDraw and save it as CDXML (.cdxml), the documented XML form, which imports here; '
-      + 'an SDF export also works.');
+    return new StructureError(`${filename || 'This file'} is a ChemDraw .cdx document, the binary form of the `
+      + 'drawing. This build has no CDX reader: the format is proprietary and its tag stream is not publicly '
+      + 'specified, and a reader written against a guessed layout would silently mis-read bond orders — the one '
+      + 'failure this project refuses. Open the file in ChemDraw and save it as CDXML (File → Save As → CDXML), '
+      + 'the documented XML form this reader does parse; an SDF export also imports.');
   }
   return null;
+}
+
+/**
+ * A SMILES string read as a **graph**, refused as a **geometry**.
+ *
+ * The refusal carries what the reader found, because "no coordinates" alone
+ * used to be the whole story even when the string was unreadable. Issue #148:
+ * the graph exists, the coordinates do not, and every surface that consumes a
+ * structure (the block inspector, the project schema's `geometry.dimension`,
+ * `moleculeForNode`) needs 3D atoms. A record with no coordinates would run as
+ * the demo water molecule, so the honest answer is this refusal.
+ */
+function smilesRefusal(format, filename, text) {
+  const label = filename ? `${filename}` : (format === 'smi' ? 'This SMILES file' : 'This SMILES string');
+  let summary;
+  try {
+    if (format === 'smi') {
+      const { records } = parseSmilesList(text, { name: baseName(filename) });
+      const readable = records.filter((record) => !record.error);
+      if (readable.length === 0) {
+        throw new StructureError(`${label} is a SMILES list, but no line in it could be read: `
+          + `${records[0].error}. This reader supports the OpenSMILES organic subset (B, C, N, O, P, S, F, Cl, Br, I, `
+          + 'and aromatic b c n o p s) with branches, ring closures, ±1 charges and explicit H; stereochemistry, '
+          + 'isotopes, metals and SMARTS are refused by name.');
+      }
+      summary = readable.length === 1
+        ? `it holds one structure (${describeSmilesGraph(readable[0])})`
+        : `it holds ${records.length} structures; the first is ${describeSmilesGraph(readable[0])}`;
+    } else {
+      const graph = parseSmiles(String(text).split(/\r\n|\n|\r/).find((line) => line.trim()) || '');
+      summary = `it parses as ${describeSmilesGraph(graph)}`;
+    }
+  } catch (error) {
+    // A string outside the subset is a different failure, and naming the token
+    // is more useful than "no coordinates" for a string the reader cannot read.
+    return new StructureError(`${label} could not be read as SMILES: ${error.message}`);
+  }
+  const noun = format === 'smi' ? 'SMILES file' : 'SMILES string';
+  return new StructureError(`${label} is a ${noun}: ${summary}. A SMILES string carries no coordinates — `
+    + 'it states atoms, bonds and charge, and nothing about where the atoms are. NodeChem\'s structure block, the '
+    + 'project format (`geometry.dimension` is 2d or 3d) and the run builder all need a 3D geometry; with an empty '
+    + 'coordinate list the builder would fall back to its demo water molecule. Generate coordinates with an '
+    + 'embedder first (Open Babel `obabel -ismiles molecule.smi --gen3d -oxyz -O molecule.xyz`, RDKit, or crest) '
+    + 'and import that, or run `ncs smiles ' + (filename || 'molecule.smi') + '` to read the graph here.');
+}
+
+/**
+ * A deck this app writes can be read back, but the **project format** has no
+ * `geometry.format` id for `nwchem`, `gamess` or `qchem` yet (that enum lives
+ * in `projectSchema.js`, issue #148), so importing one into the app would
+ * produce a project that cannot be saved. Until that one line lands, the
+ * readers are reachable from the CLI (`ncs convert job.nw --format xyz`) and
+ * this path says so rather than half-importing.
+ */
+function refuseDeckInApp(format, filename, allowDecks) {
+  if (allowDecks) return;
+  if (format !== 'nwchem' && format !== 'gamess' && format !== 'qchem') return;
+  throw new StructureError(`${filename || 'This file'} is a ${format === 'nwchem' ? 'NWChem' : format === 'gamess' ? 'GAMESS' : 'Q-Chem'} `
+    + 'input deck. This build reads the geometry out of one, but the project file has no geometry format for it '
+    + 'yet, so importing it here would leave a project that cannot be saved. Read it with '
+    + `\`ncs convert ${filename || 'job'} --format xyz\` and import the .xyz, or use the deck as it is.`);
 }
 
 function periodicError(filename, periodic) {
@@ -474,16 +568,17 @@ function periodicError(filename, periodic) {
     + 'or band structure. Convert the system to a molecular cluster (.xyz, .gjf, .mol) first.');
 }
 
-export function parseStructure(text, { filename = '' } = {}) {
-  return parseSingle(text, { filename });
+export function parseStructure(text, { filename = '', allowDecks = false } = {}) {
+  return parseSingle(text, { filename, allowDecks });
 }
 
-function parseSingle(text, { filename = '' } = {}) {
+function parseSingle(text, { filename = '', allowDecks = false } = {}) {
   if (typeof text !== 'string' || !text.trim()) throw new StructureError('The structure file is empty.');
   const normalized = text.replace(/^\uFEFF/, '');
   const periodic = periodicFormatFor(filename, normalized);
   if (periodic) throw periodicError(filename, periodic);
   const format = formatFor(filename, normalized);
+  refuseDeckInApp(format, filename, allowDecks);
   const lines = normalized.split(/\r\n|\n|\r/);
 
   let parsed;
@@ -516,13 +611,32 @@ function parseSingle(text, { filename = '' } = {}) {
     const frames = logFrames(parseTrajectory(normalized)?.steps ?? [], { name: baseName(filename) });
     if (frames.length === 0) throw new StructureError('This Gaussian log contains no Standard orientation block.');
     parsed = frames[frames.length - 1];
-  } else if (unsupportedFormatError(format, filename)) throw unsupportedFormatError(format, filename);
-  else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com, .mol2, .pdb, .pdbqt, .cjson, .cdxml, .log.');
+  } else if (format === 'nwchem' || format === 'gamess' || format === 'qchem') {
+    parsed = parseDeck(format, normalized);
+  } else if (unsupportedFormatError(format, filename, normalized)) {
+    throw unsupportedFormatError(format, filename, normalized);
+  } else throw new StructureError('Unrecognised structure format. Supported: .xyz, .mol, .sdf, .gjf, .com, .mol2, '
+    + '.pdb, .pdbqt, .cjson, .cdxml, .log, and the NWChem/GAMESS/Q-Chem decks this app exports.');
 
   // Only .mol/.sdf/.gjf state charge or multiplicity, so only they are held to
   // the parity rule as an error.
-  const statesSpin = format === 'mol' || format === 'sdf' || format === 'gjf' || format === 'com';
+  const statesSpin = format === 'mol' || format === 'sdf' || format === 'gjf' || format === 'com'
+    || format === 'nwchem' || format === 'gamess' || format === 'qchem';
   return finalize({ ...parsed, format, parity: statesSpin ? 'error' : 'adjust' });
+}
+
+/**
+ * One reader per exported deck. A deck reader's own error class is translated
+ * so every caller sees `StructureError` — the app has one import error type.
+ */
+function parseDeck(format, text) {
+  try {
+    if (format === 'nwchem') return parseNwchemInput(text);
+    if (format === 'gamess') return parseGamessInput(text);
+    return parseQchemInput(text);
+  } catch (error) {
+    throw new StructureError(error.message);
+  }
 }
 
 /** Deterministic text form used by tests and the provenance record. */
