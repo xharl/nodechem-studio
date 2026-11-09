@@ -40,6 +40,13 @@ import {
 } from '../shared/flows.js';
 import { GEOMETRY_NOTE, GEOMETRY_STATUS } from '../shared/derivative.js';
 import {
+  COMPUTE_FIELDS,
+  COMPUTE_FUNCTIONS,
+  ComputeError,
+  evaluateCompute,
+  formatComputeNumber,
+} from '../shared/compute.js';
+import {
   COMPLEX_GEOMETRY_NOTE,
   COMPLEX_GEOMETRY_STATUS,
   COMPLEX_MAX_MEMBERS,
@@ -510,6 +517,15 @@ function nodeDetail(node) {
     return routeShort(node.settings);
   }
   if (node.type === 'condition') return node.condition.expression.replace(/\s*\n\s*/g, ' · ');
+  if (node.type === 'compute') {
+    // The card names the expression and the inputs it reads (issue 175): a
+    // derived number must never look like a route a block ran.
+    const expression = String(node.compute?.expression || '').trim();
+    const names = (Array.isArray(node.compute?.inputs) ? node.compute.inputs : [])
+      .map((input) => String(input?.name || '').trim()).filter(Boolean);
+    if (!expression) return 'no expression yet';
+    return names.length ? `${expression} · ${names.join(', ')}` : expression;
+  }
   if (node.type === 'conformers') {
     const output = node.output;
     if (!output) return `${node.settings.generator === 'import' ? 'import' : 'CREST'} · not run`;
@@ -626,11 +642,16 @@ function nodeFoot(node) {
     };
   }
   if (node.type === 'note') return { left: 'annotation', right: '' };
+  if (node.type === 'compute') {
+    const inputs = Array.isArray(node.compute?.inputs) ? node.compute.inputs : [];
+    return { left: 'derived', right: `${inputs.length} input${inputs.length === 1 ? '' : 's'}` };
+  }
   return { left: '', right: '' };
 }
 
 function kindCode(node) {
   if (node.type === 'condition') return 'IF';
+  if (node.type === 'compute') return 'fx';
   if (node.type === 'conformers') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
@@ -642,6 +663,7 @@ function kindCode(node) {
 
 function kindLabel(node) {
   if (node.type === 'condition') return 'Control';
+  if (node.type === 'compute') return 'Derived';
   if (node.type === 'conformers') return 'Structure';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
@@ -2308,6 +2330,141 @@ function branchRow(edge, branch, conditionId) {
   </div>`;
 }
 
+/**
+ * Compute block inspector (issue 175).
+ *
+ * The preview is not a second implementation of the arithmetic: it calls
+ * `shared.computeContext()` and `evaluateCompute()` — the same pair the plan
+ * and the queue use — so the number in the inspector is the number the plan
+ * will write. It reads the upstream blocks' attached `parsed` results, which is
+ * exactly what the plan falls back to when no run records are supplied.
+ */
+function computeUpstreamBlocks(node) {
+  return state.project.edges
+    .filter((edge) => edge.to === node.id
+      && (edge.type === 'dependency' || edge.type === 'checkpoint' || edge.type === 'barrier'))
+    .map((edge) => nodeById(edge.from))
+    .filter((item) => item && item.type !== 'note');
+}
+
+function computePreviewOf(node) {
+  try {
+    const context = shared.computeContext(state.project, node);
+    return {
+      error: null,
+      result: evaluateCompute(node.compute || { expression: '', inputs: [] }, {
+        recordId: null,
+        resolveSource: context.resolveSource,
+        allRecords: context.allRecords,
+      }),
+    };
+  } catch (error) {
+    return { error: error instanceof ComputeError ? error.message : String(error?.message || error), result: null };
+  }
+}
+
+function computePreviewHtml(node) {
+  const { error, result } = computePreviewOf(node);
+  if (error) return `<p class="inspector-note" data-role="compute-preview">${esc(error)}</p>`;
+  if (result.status === 'computed') {
+    return `<div class="code-block" data-role="compute-preview">`
+      + `<div>${esc(result.expression)} = ${esc(formatComputeNumber(result.value))}${result.unit ? ` ${esc(result.unit)}` : ''}</div>`
+      + '</div>'
+      + `<p class="inspector-note">Derived from ${result.inputs.length} upstream value${result.inputs.length === 1 ? '' : 's'}: `
+      + `${esc(result.inputs.map((input) => `${input.field} of ${input.recordId}`).join(', '))}. `
+      + 'This is a derived quantity, not a result an engine printed.</p>'
+      + (result.notes.length ? `<p class="inspector-note">${result.notes.map((note) => esc(note)).join(' ')}</p>` : '');
+  }
+  return `<p class="inspector-note" data-role="compute-preview">${esc(result.notComputed || 'not computed')}</p>`;
+}
+
+/** Replace only the preview, so typing in the expression field keeps focus. */
+function refreshComputePreview() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  const slot = $('#compute-preview-slot');
+  if (!node || node.type !== 'compute' || !slot) return;
+  slot.innerHTML = computePreviewHtml(node);
+}
+
+function computeInputRow(input, index, upstream) {
+  const fields = COMPUTE_FIELDS.map((field) => `<option value="${esc(field.key)}"${input.field === field.key ? ' selected' : ''}>`
+    + `${esc(field.label)}${field.unit ? ` · ${esc(field.unit)}` : ''}</option>`).join('');
+  const sources = [`<option value="">${upstream.length === 1 ? 'the only upstream block' : 'choose a block'}</option>`]
+    .concat(upstream.map((source) => `<option value="${esc(source.id)}"${input.source === source.id ? ' selected' : ''}>${esc(source.title || source.id)}</option>`))
+    .join('');
+  return `<tr>
+    <td><input class="input" data-compute-input="${index}" data-compute-input-field="name" data-role="compute-input-name" value="${esc(input.name || '')}" aria-label="Input name"></td>
+    <td><select class="select" data-compute-input="${index}" data-compute-input-field="field" data-role="compute-input-field" aria-label="Field">${fields}</select></td>
+    <td><select class="select" data-compute-input="${index}" data-compute-input-field="source" data-role="compute-input-source" aria-label="Upstream block">${sources}</select></td>
+    <td><button type="button" class="btn small" data-action="compute-remove-input" data-compute-index="${index}" aria-label="Remove input">×</button></td>
+  </tr>`;
+}
+
+function computeInspector(node) {
+  const upstream = computeUpstreamBlocks(node);
+  const ins = incoming(node.id);
+  const definition = node.compute && typeof node.compute === 'object'
+    ? node.compute : { expression: '', inputs: [] };
+  const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
+  const inputRows = inputs.length
+    ? inputs.map((input, index) => computeInputRow(input, index, upstream)).join('')
+    : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
+  const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
+  return `${inspectorHead('Derived · compute', node.title, `${upstream.length} upstream · derived quantity`)}
+  <div class="inspector-scroll">
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · evaluated from upstream records</span></div>
+    <div class="callout"><strong>Derived, not measured.</strong> This block computes a number from other blocks' results — a CBS limit, a ΔE, a ratio. Its value is never presented as a QM result, and a missing field is a refusal that names the field, never a zero.</div>
+    ${group('Expression', 'safe arithmetic', true, [
+      `<div class="field full"><label>Expression</label><textarea class="textarea" rows="3" data-compute-field="expression" data-role="compute-expression" aria-label="Expression">${esc(definition.expression || '')}</textarea></div>`,
+      `<div class="field full"><label>Preview</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
+    ].join(''))}
+    ${group('Inputs', `${inputs.length}`, true, [
+      `<div class="full"><table class="mini-table"><thead><tr><th>Name</th><th>Field</th><th>From</th><th></th></tr></thead><tbody>${inputRows}</tbody></table></div>`,
+      `<div class="field full"><button type="button" class="btn small" data-action="compute-add-input">Add input</button></div>`,
+    ].join(''))}
+    ${group('Functions', `${COMPUTE_FUNCTIONS.length}`, false, [`<div class="code-block">${functions}</div>`])}
+    ${group('Connections', upstream.length ? `${upstream.length} upstream` : 'not connected', false, [`<div class="full">${incomingList(node.id)}</div>`])}
+    <div class="inspector-actions-row">
+      <button type="button" class="btn small" data-action="validate">Validate</button>
+      <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
+    </div>
+  </div>
+  <div class="inspector-footer">
+    <button type="button" class="btn primary" data-action="validate">Validate workflow</button>
+  </div>`;
+}
+
+/** One more input row (issue 175), named after the next free letter. */
+function addComputeInput() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'compute') return;
+  if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
+  if (!Array.isArray(node.compute.inputs)) node.compute.inputs = [];
+  const upstream = computeUpstreamBlocks(node);
+  const used = new Set(node.compute.inputs.map((input) => input.name));
+  let name = 'E';
+  for (let index = 1; used.has(name); index += 1) name = `E${index}`;
+  node.compute.inputs.push({
+    name,
+    field: 'finalEnergyHartree',
+    source: upstream.length === 1 ? upstream[0].id : '',
+  });
+  renderGraph();
+  renderInspector();
+}
+
+function removeComputeInput(index) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  const inputs = node?.compute?.inputs;
+  if (!Array.isArray(inputs) || index < 0 || index >= inputs.length) return;
+  inputs.splice(index, 1);
+  renderGraph();
+  renderInspector();
+}
+
 function conditionInspector(node) {
   const ins = incoming(node.id);
   const branches = state.project.edges.filter((edge) => edge.from === node.id && edge.type === 'branch');
@@ -3401,6 +3558,7 @@ function renderInspector() {
     if (node.type === 'calc') { el.innerHTML = calcInspector(node); mountStructureViewer(el, node); return; }
     if (node.type === 'conformers') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
     if (node.type === 'condition') { el.innerHTML = conditionInspector(node); return; }
+    if (node.type === 'compute') { el.innerHTML = computeInspector(node); return; }
     if (node.type === 'loop') { el.innerHTML = loopInspector(node); return; }
     if (node.type === 'input') { el.innerHTML = inputInspector(node); return; }
     el.innerHTML = simpleInspector(node);
@@ -3430,6 +3588,7 @@ const BLOCKS = [
     { type: 'condition', icon: 'IF', title: 'Condition', note: 'TRUE / FALSE branches' },
     { type: 'loop', icon: '↻', title: 'Loop', note: 'retry with max attempts' },
     { type: 'merge', icon: '⋈', title: 'Join', note: 'merge branches' },
+    { type: 'compute', icon: 'fx', title: 'Compute', note: 'derived arithmetic: CBS, ΔE, ratios' },
   ] },
   { group: 'Data', items: [
     { type: 'input', icon: 'IN', title: 'Dataset input', note: 'run the graph once per record' },
@@ -3526,6 +3685,13 @@ function addBlock(type) {
     node = {
       id, type: 'merge', kind: 'Merge', title: 'Join branches', state: 'ready', ...position,
       merge: { policy: 'all', notes: '' },
+    };
+  } else if (type === 'compute') {
+    // Issue 175: one input named `E` reading the upstream final energy, so a
+    // new block previews a real number the moment it is wired.
+    node = {
+      id, type: 'compute', kind: 'Compute', title: 'Compute', state: 'ready', ...position,
+      compute: { expression: 'E', inputs: [{ name: 'E', field: 'finalEnergyHartree', source: '' }] },
     };
   } else if (type === 'input') {
     const dataset = Array.isArray(state.project.datasets) ? state.project.datasets[0] : null;
@@ -7397,6 +7563,9 @@ function handleAction(action, element) {
     case 'complex-remove-member': removeComplexMember(Number(element?.dataset?.complexIndex)); break;
     case 'derivative-add-edit': addDerivativeEdit(); break;
     case 'derivative-remove-edit': removeDerivativeEdit(Number(element?.dataset?.derivativeIndex)); break;
+    // Issue 175: the input rows of a compute block.
+    case 'compute-add-input': addComputeInput(); break;
+    case 'compute-remove-input': removeComputeInput(Number(element?.dataset?.computeIndex)); break;
     case 'validate': validateGraph(); break;
     case 'zoom-in': setZoom(state.zoom + 0.05); break;
     case 'zoom-out': setZoom(state.zoom - 0.05); break;
@@ -7746,6 +7915,30 @@ function onDocumentChange(event) {
     if (!node || node.type !== 'calc') return;
     updateValidityCheck(node, target.dataset.validityCheck, target.checked);
     renderInspector();
+    return;
+  }
+  if (target.dataset.computeField) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'compute') return;
+    if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
+    node.compute[target.dataset.computeField] = target.value;
+    refreshDirty();
+    // Only the preview redraws: re-rendering the inspector on every keystroke
+    // would take the caret out of the expression field.
+    refreshComputePreview();
+    return;
+  }
+  if (target.dataset.computeInput !== undefined) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    const index = Number(target.dataset.computeInput);
+    const key = target.dataset.computeInputField;
+    const input = node?.compute?.inputs?.[index];
+    if (!node || node.type !== 'compute' || !input || !key) return;
+    input[key] = target.value;
+    refreshDirty();
+    refreshComputePreview();
     return;
   }
   if (target.dataset.conditionField) {

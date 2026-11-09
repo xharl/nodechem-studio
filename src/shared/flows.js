@@ -425,6 +425,28 @@ export function orderingEdgesOf(edges) {
 }
 
 /**
+ * The blocks that hand data to a node, in edge order, without duplicates.
+ *
+ * A compute block (issue 175) reads its inputs from these blocks: `dependency`
+ * and `barrier` both mean "this block runs after that one", and only the blocks
+ * that actually order the node can supply a number. Routing edges (`branch`,
+ * `loop`) are not data, so they are not listed.
+ */
+export function orderingSourceIds(edges, nodeId) {
+  const wanted = String(nodeId || '');
+  const seen = new Set();
+  const out = [];
+  for (const edge of orderingEdgesOf(edges)) {
+    if (String(edge.to) !== wanted) continue;
+    const from = String(edge.from);
+    if (seen.has(from)) continue;
+    seen.add(from);
+    out.push(from);
+  }
+  return out;
+}
+
+/**
  * The input block that scopes a node, found by walking upstream.
  *
  * Returns `{ input, dataset, records }` when exactly one input feeds the node,

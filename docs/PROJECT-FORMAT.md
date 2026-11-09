@@ -109,6 +109,7 @@ Type-specific payloads:
 | `merge` | `merge { policy, notes }` |
 | `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
+| `compute` | `compute { expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block |
 | `note` | `note { text }` |
 
 `calc.settings` accepts exactly these keys — anything else is dropped:

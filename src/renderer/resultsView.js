@@ -1723,11 +1723,50 @@ function trajectoryCard(parsed, flags) {
 }
 
 /**
+ * A computed record: a derived quantity, never a QM result (issue 175).
+ *
+ * The card names the expression, the value and its unit, and every upstream
+ * (record, field, value, unit) it was built from. There is no `parsed` block to
+ * show, so it is not rendered as a run at all; a refusal is printed verbatim
+ * with the field and record it names.
+ */
+function computeCard(compute) {
+  const inputs = Array.isArray(compute?.inputs) ? compute.inputs : [];
+  const value = finite(compute?.value);
+  const unit = text(compute?.unit);
+  const rows = [
+    fieldValue('Expression', `<code data-field="compute-expression">${esc(text(compute?.expression) ?? MISSING_TEXT)}</code>`, 'compute-expression'),
+    fieldValue('Value', value === null ? missingHtml() : `${esc(numberText(value, 9))}${unit ? ` ${esc(unit)}` : ''}`, 'compute-value'),
+    fieldValue('Kind', '<span class="results-chip">derived quantity</span>', 'compute-kind'),
+  ];
+  const notes = Array.isArray(compute?.notes) ? compute.notes.filter((note) => text(note)) : [];
+  const inputRows = inputs.length
+    ? `<table class="results-table"><thead><tr><th>Record</th><th>Field</th><th>Value</th><th>Unit</th></tr></thead><tbody>`
+      + inputs.map((input) => `<tr data-role="compute-input">`
+        + `<td>${esc(text(input.recordId) ?? MISSING_TEXT)}</td>`
+        + `<td><code>${esc(text(input.field) ?? MISSING_TEXT)}</code></td>`
+        + `<td class="num">${finite(input.value) === null ? missingHtml() : esc(numberText(input.value, 9))}</td>`
+        + `<td>${esc(text(input.unit) ?? '—')}</td></tr>`).join('')
+      + '</tbody></table>'
+    : `<p class="results-note">${esc(MISSING_TEXT)}</p>`;
+  return '<div class="results-stack">'
+    + '<p class="results-banner" data-role="compute-banner">Derived quantity — computed from other blocks\' results, '
+    + 'not a result an engine printed.</p>'
+    + card('Derived value', kv(rows) + (notes.length
+      ? `<p class="results-note" data-role="compute-notes">${notes.map((note) => esc(note)).join(' ')}</p>`
+      : ''))
+    + card('Inputs', inputRows)
+    + '</div>';
+}
+
+/**
  * Render one run record. Missing sections are omitted or marked
  * "not reported"; nothing is derived from a field the record does not carry.
  */
 export function resultsPanelHtml(record, options = {}) {
   if (!isObject(record)) return emptyStateHtml();
+  // Issue 175: a compute block's record carries `compute` and no `parsed` block.
+  if (isObject(record.compute)) return computeCard(record.compute);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
   const flags = flagsFor(record);

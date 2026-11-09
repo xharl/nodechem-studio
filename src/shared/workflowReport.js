@@ -328,6 +328,56 @@ function recordGroup(recordId, rows, info = null) {
 }
 
 /**
+ * Issue 175: one compute task, as the report needs it.
+ *
+ * The paragraph is the methods text for a derived record: it states the
+ * expression, every upstream value the expression read, and the fact that the
+ * result is arithmetic over recorded results rather than a calculated quantity.
+ * A refusal is carried verbatim so the field and record it names survive.
+ */
+function derivedModel(task) {
+  const compute = task.compute;
+  const inputs = (Array.isArray(compute.inputs) ? compute.inputs : []).map((input) => ({
+    recordId: text(input?.recordId),
+    field: text(input?.field),
+    value: num(input?.value),
+    unit: text(input?.unit),
+  }));
+  const model = {
+    nodeId: text(task.nodeId),
+    title: text(task.title) || text(task.nodeId),
+    recordId: text(task.recordId),
+    status: text(compute.status) || (task.status === 'completed' ? 'computed' : 'refused'),
+    expression: text(compute.expression),
+    value: num(compute.value),
+    unit: text(compute.unit),
+    inputs,
+    sources: Array.isArray(compute.sources) ? compute.sources.map(String) : [],
+    notes: (Array.isArray(compute.notes) ? compute.notes : []).map((note) => text(note)).filter(Boolean),
+    notComputed: text(compute.notComputed),
+    paragraph: '',
+  };
+  model.paragraph = derivedParagraph(model);
+  return model;
+}
+
+/** The one sentence a computed record's methods text is: what, from what. */
+function derivedParagraph(model) {
+  if (model.value === null) {
+    return `Derived quantity not computed: ${model.notComputed || 'no reason was recorded'}`
+      + `${model.expression ? ` (expression: ${model.expression})` : ''}.`;
+  }
+  const reads = model.inputs.length
+    ? model.inputs.map((input) => `${input.field} of ${input.recordId}`
+      + ` (${value(input.value, 9)}${input.unit ? ` ${input.unit}` : ''})`).join(', ')
+    : 'no upstream value recorded';
+  return `The value ${value(model.value, 9)}${model.unit ? ` ${model.unit}` : ''} is a derived quantity,`
+    + ` not a computed QM result: it was evaluated as ${model.expression ? `"${model.expression}"` : 'an expression'}`
+    + ` from ${reads}.`
+    + (model.notes.length ? ` ${model.notes.join(' ')}` : '');
+}
+
+/**
  * @param {object} queue the queue record written by the queue manager
  * @param {Object<string, object>} records run records keyed by run id (or by node id)
  * @param {object} [options]
@@ -576,6 +626,13 @@ export function buildWorkflowReport(queue, records = {}, {
       title: row.title,
       ...row.imported,
     })),
+    // Issue 175: one entry per compute block, with the expression it evaluated,
+    // the upstream values it read and — when a field was missing — the refusal
+    // that names the field. A derived value is not a calculation result, so it
+    // is never put in an energy column; it is reported in its own section.
+    derived: tasks
+      .filter((task) => task?.compute && typeof task.compute === 'object')
+      .map((task) => derivedModel(task)),
     // One entry per conformer block whose branches were fanned out, with the
     // target-level ΔE the run energies actually support.
     conformers,
@@ -1009,6 +1066,29 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
 
+  // Issue 175: derived quantities have their own section — never an energy
+  // column. Each block names its expression, the upstream values it read, and
+  // the methods sentence that says what kind of number this is.
+  const derivedBlocks = (Array.isArray(model.derived) ? model.derived : []).map((entry) => {
+    const heading = `<${sectionHeading}>Derived quantity — ${escapeHtml(entry.title || entry.nodeId || MISSING)}</${sectionHeading}>`;
+    const headline = entry.value === null
+      ? `<p class="warn" data-field="derived-refusal">${escapeHtml(entry.notComputed || 'not computed')}</p>`
+      : `<p class="cbs" data-field="derived-value"><strong>${escapeHtml(entry.expression || MISSING)} = `
+        + `${escapeHtml(value(entry.value, 9))}${entry.unit ? ` ${escapeHtml(entry.unit)}` : ''}</strong>`
+        + ' — derived quantity, not a computed QM result.</p>';
+    const rows = entry.inputs.map((input) => '<tr data-field="derived-input">'
+      + `<td>${escapeHtml(input.recordId ?? MISSING)}</td>`
+      + `<td class="mono">${escapeHtml(input.field ?? MISSING)}</td>`
+      + `<td class="num">${escapeHtml(value(input.value, 9))}</td>`
+      + `<td>${escapeHtml(input.unit ?? '—')}</td></tr>`).join('');
+    const table = entry.inputs.length
+      ? '<table><thead><tr><th>Record</th><th>Field</th><th class="num">Value</th><th>Unit</th></tr></thead>'
+        + `<tbody>${rows}</tbody></table>`
+      : '';
+    return heading + headline + table
+      + `<p class="meta" data-field="derived-methods">${escapeHtml(entry.paragraph || MISSING)}</p>`;
+  }).join('');
+
   // Issue #131: results another program computed. They are named here whether
   // or not their number was allowed into an energy column, with the program,
   // version and source hash, so a reader can see what is imported and what is
@@ -1078,6 +1158,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + conformerBlocks
     + spinBlocks
     + reactionBlocks
+    + derivedBlocks
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
