@@ -155,6 +155,35 @@ until you choose one. The validity check reports the same condition.
 Protomer labels are read from the frame comment (`protomer=A` or `tautomer=A`). A file without
 labels is treated as one protomer, which is what a plain conformer search produces.
 
+## Deriving a related structure by one edit
+
+A protomer search explores states; a single-atom derivative — the fluorinated analogue, the
+deprotonated form, the ²H isotopologue — is a graph edit on a structure that already exists, with its
+parent recorded.
+
+`src/shared/derivative.js` is that edit engine. It applies one of `substitute`, `add`, `remove`,
+`isotope`, `protonate` or `deprotonate` to a molecule that states its bonds, and returns a new record
+instead of changing the input. Atom indices are 1-based, as they are everywhere in the project, and
+each edit is recorded in the provenance with the index it used, the before/after element and the
+resulting formula.
+
+What the record claims, and what it does not:
+
+- **Geometry.** A substituted atom keeps the direction of the bond it replaces, with the new bond set
+  to the sum of the two Cordero covalent radii; an added atom goes opposite the parent's existing
+  bonds (the bisector when there are several). Every coordinate the edit did not touch is copied bit
+  for bit. The result is a topology with a plausible starting geometry, **not a minimum**, so the
+  record carries `needs optimisation` and has to be optimised before it is compared with anything.
+- **Chemistry.** `protonate`/`deprotonate` require the resulting charge and multiplicity: they are
+  never inferred. A pair that disagrees with the electron count is refused rather than written.
+- **Refusals.** An out-of-range atom, a substitution on an atom that is not a single bond, a valence
+  overrun, an `add` to a full-valence atom, an isotope the element does not have, and a molecule that
+  states no bonds (the valence check would be a guess) are all refused by name, with the atom index
+  and element.
+
+The structure block that would expand one edit per record on the canvas is not wired yet; the engine
+and its unit tests are.
+
 ## Groups: ensembles that belong to one study
 
 A block ranks one ensemble, so a study with eleven distributions of one system — or one ensemble per
