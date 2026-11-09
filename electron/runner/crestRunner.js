@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { parseCrestEnergies } from '../../src/shared/conformers.js';
+import { terminateTree, treeSpawnOptions } from './processTree.js';
 
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const MAX_ENSEMBLE_BYTES = 64 * 1024 * 1024;
@@ -22,6 +23,7 @@ export class CrestRunner {
   constructor() {
     this.child = null;
     this.cancelled = false;
+    this.timedOut = false;
   }
 
   async run({
@@ -36,17 +38,16 @@ export class CrestRunner {
     if (args.length === 0) throw new Error('The conformer search has no arguments.');
     if (!executable) throw new Error('No CREST executable is configured; set it in the block or in Preferences.');
 
+    this.timedOut = false;
     let stdout = '';
     let stderr = '';
     let truncated = false;
     let timeout = null;
 
-    const child = spawn(executable, args, {
+    const child = spawn(executable, args, treeSpawnOptions({
       cwd,
-      windowsHide: true,
-      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    }));
     this.child = child;
 
     child.stdout.on('data', (chunk) => {
@@ -63,7 +64,15 @@ export class CrestRunner {
       onOutput({ stream: 'stderr', text });
     });
 
-    if (timeoutMs > 0) timeout = setTimeout(() => this.cancel(), timeoutMs);
+    if (timeoutMs > 0) {
+      // Issue 177: a conformer search that hangs holds a queue slot exactly like
+      // a hung calculation. The limit is a wall clock, and reaching it is its
+      // own outcome — not a cancellation the user asked for.
+      timeout = setTimeout(() => {
+        this.timedOut = true;
+        this.cancel();
+      }, timeoutMs);
+    }
 
     const exit = await new Promise((resolve, reject) => {
       child.once('error', reject);
@@ -76,11 +85,14 @@ export class CrestRunner {
     const outputText = stderr.trim() ? `${stdout}\n${stderr}` : stdout;
     await fsp.writeFile(path.join(cwd, outputName), outputText, 'utf8');
 
-    const ensemble = await CrestRunner.readEnsemble(cwd);
+    // A killed search left a partial ensemble behind. Reading it would rank
+    // frames the search never finished, so a timed-out run reports no ensemble.
+    const ensemble = this.timedOut ? {} : await CrestRunner.readEnsemble(cwd);
     return {
       exitCode: exit.code,
       signal: exit.signal,
       cancelled: this.cancelled,
+      timedOut: this.timedOut,
       outputText,
       outputName,
       truncated,
@@ -172,19 +184,9 @@ export class CrestRunner {
 
   cancel() {
     const child = this.child;
-    if (!child) return;
+    if (!child) return undefined;
     this.cancelled = true;
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      killer.unref();
-    } else {
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
-      }, 2000).unref();
-    }
+    // Issue 177: CREST forks its own workers; the whole tree has to stop.
+    return terminateTree(child);
   }
 }

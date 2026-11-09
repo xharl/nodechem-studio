@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { terminateTree, treeSpawnOptions } from './processTree.js';
 
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
@@ -66,16 +67,13 @@ export class Psi4Runner {
     let truncated = false;
     let timeout = null;
 
-    const child = spawn(executable, args, {
+    const child = spawn(executable, args, treeSpawnOptions({
       cwd,
       env: Psi4Runner.environmentFor({ threads }),
-      windowsHide: true,
-      shell: false,
-      // Psi4 starts helper processes; a signal to the driver alone can leave
-      // them holding the pipes open, so cancellation targets the group.
-      detached: process.platform !== 'win32',
+      // Psi4 starts helper processes; the group is what a signal has to reach
+      // (issue 177).
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    }));
     this.child = child;
 
     child.stdout.on('data', (chunk) => {
@@ -142,24 +140,8 @@ export class Psi4Runner {
 
   cancel() {
     const child = this.child;
-    if (!child) return;
+    if (!child) return undefined;
     this.cancelled = true;
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      killer.unref();
-    } else {
-      const signal = (name) => {
-        try {
-          process.kill(-child.pid, name);
-        } catch {
-          child.kill(name);
-        }
-      };
-      signal('SIGTERM');
-      setTimeout(() => signal('SIGKILL'), 1000).unref();
-    }
+    return terminateTree(child);
   }
 }

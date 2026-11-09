@@ -26,6 +26,48 @@ Task statuses you will see:
 | `skipped` | The condition did not release this branch |
 | `interrupted` | The app stopped while the task was running; reconciled on restart |
 | `cancelled` | Stopped by **Cancel all** |
+| `timed out` | Stopped at its wall-clock limit; the output was **not** parsed |
+
+## Time limits
+
+A hung engine must not hold a queue slot, so every task has a wall-clock limit. The limit is read
+from three places, in this order:
+
+1. the block's own **Time limit (s)** in its inspector;
+2. the project's **Task time limit** in **Run → Setup**, beside *Parallel tasks*;
+3. the built-in default, **3600 s**.
+
+The project setting is optional and is only written to the file when you set it — a project saved
+before this existed serialises byte-identically, and the default applies at run time.
+
+When a task reaches its limit the engine's **whole process tree** is stopped: `SIGTERM` first (a
+program with a checkpoint may want to write one), then `SIGKILL` after a two-second grace period.
+On Windows the tree is stopped with `taskkill /T /F`. The tree is then checked until it is gone, and
+`run.json` records what the kill reported.
+
+The outcome is `timed out`, which is **not** `failed`: the engine never gave a verdict, the queue
+stopped waiting. Recording it as a failure with exit code 143 would make the report unable to tell
+"the engine said no" from "we gave up". `run.json` carries:
+
+```json
+"status": "timed out",
+"parsed": null,
+"gates": null,
+"timeout": { "limitSeconds": 60, "elapsedSeconds": 60.4, "lastOutput": " SCF Done:  E(RB3LYP) = …" }
+```
+
+`parsed` and `gates` are `null` on purpose: a log cut off mid-block is a fragment, not a result, and
+it is never parsed. The queue row shows the elapsed time against the limit while a task runs, and
+the block card and Next Action say it timed out and to raise the limit — there is no output to
+review. Dependents are blocked, because there is no result to hand on.
+
+Because a limit has to be chosen before the run, **Setup** also names the blocks whose own
+parameters make a long run likely — many excited states, an IRC path, a transition-state search,
+counterpoise, a frequency job on a large system, a CREST search. That is a list of parameters, not
+an estimate: no run time is predicted from them.
+
+Under `ncs run`, a project's `runner.timeoutSeconds` is used, and a queue with a timed-out task
+exits with the engine-failure code (4) rather than reporting success.
 
 ### What counts as an ordering constraint
 

@@ -89,6 +89,9 @@ export const LIMITS = Object.freeze({
   flows: 32,
   planTasks: 5000,
   maxParallel: 64,
+  // Issue 177: one day. A wall-clock limit longer than this is not a limit a
+  // person can reason about, and the field is here to catch a hang.
+  timeoutSeconds: 86400,
   errorsReported: 100,
   warningsReported: 200,
 });
@@ -100,6 +103,9 @@ export const NODE_TYPES = Object.freeze([
 /** States a project file may carry. Queue states are reserved for GN-003. */
 export const NODE_STATES = Object.freeze([
   'ready', 'running', 'passed', 'review', 'blocked', 'failed', 'skipped', 'cancelled', 'interrupted',
+  // Issue 177: a block stopped by its wall-clock limit. Its own state, because
+  // `review` asks a person to look at an output and this block has none.
+  'timed out',
 ]);
 
 /**
@@ -226,6 +232,9 @@ const SETTINGS_KEYS = new Set([
   // Issue 174: the core-correlation choice. Not in the defaults, so an existing
   // project is unchanged; listed here so an explicit value is not read as a typo.
   'freezeCore',
+  // Issue 177: a per-block wall-clock limit. Also not in the defaults: a project
+  // that never set one must serialise exactly as it did before.
+  'timeoutSeconds',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
@@ -1204,6 +1213,14 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   if (counterpoise === 1) {
     c.error(`${path}.counterpoise`, 'must be 0 (off) or at least 2 fragments.');
   }
+  // Issue 177: the block's own wall-clock limit, in seconds. Null means "no
+  // opinion"; the project's runner setting (or the built-in default) applies.
+  // Kept out of the returned object when absent so the file is unchanged.
+  const timeoutSeconds = source.timeoutSeconds === undefined || source.timeoutSeconds === null || source.timeoutSeconds === ''
+    ? null
+    : readOptionalInteger(c, source.timeoutSeconds, `${path}.timeoutSeconds`, {
+      fallback: null, min: 1, max: LIMITS.timeoutSeconds,
+    });
   return {
     // Per-block engine override. Empty means "use the project default", which is
     // what every .ncs written before this setting existed says.
@@ -1270,6 +1287,9 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     gates: normalizeGates(c, source.gates, `${path}.gates`, legacy),
     ladder: normalizeLadder(c, source.ladder, `${path}.ladder`, legacy),
     disabledChecks: normalizeDisabledChecks(c, source.disabledChecks, `${path}.disabledChecks`, legacy),
+    // Issue 177: only when the block declared one. A block that never did keeps
+    // no key, so a project from before this setting is byte-identical.
+    ...(timeoutSeconds !== null ? { timeoutSeconds } : {}),
   };
 }
 
@@ -1834,12 +1854,21 @@ function normalizeRunner(c, raw, legacy) {
     c.error('runner', 'must be an object.');
     return { maxParallel: 1 };
   }
-  warnUnknown(c, source, new Set(['maxParallel']), 'runner');
+  warnUnknown(c, source, new Set(['maxParallel', 'timeoutSeconds']), 'runner');
+  // Issue 177: the project's wall-clock limit for one queued task. Absent means
+  // the built-in default (3600 s) applies at enforcement time; it is never
+  // written back into the file, so an old project serialises unchanged.
+  const timeoutSeconds = source.timeoutSeconds === undefined || source.timeoutSeconds === null || source.timeoutSeconds === ''
+    ? null
+    : readOptionalInteger(c, source.timeoutSeconds, 'runner.timeoutSeconds', {
+      fallback: null, min: 1, max: LIMITS.timeoutSeconds,
+    });
   return {
     // RFC 0001: 1 keeps the sequential drain every existing project has.
     maxParallel: readOptionalInteger(c, source.maxParallel, 'runner.maxParallel', {
       fallback: 1, min: 1, max: LIMITS.maxParallel,
     }),
+    ...(timeoutSeconds !== null ? { timeoutSeconds } : {}),
   };
 }
 

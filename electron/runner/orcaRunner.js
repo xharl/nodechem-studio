@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { terminateTree, treeSpawnOptions } from './processTree.js';
 
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
@@ -62,16 +63,12 @@ export class OrcaRunner {
     let truncated = false;
     let timeout = null;
 
-    const child = spawn(executable, args, {
+    const child = spawn(executable, args, treeSpawnOptions({
       cwd,
-      windowsHide: true,
-      shell: false,
-      // ORCA's driver is a script that starts the real modules as children. A
-      // SIGTERM to the driver alone leaves those modules holding the pipes open,
-      // so cancellation stops the whole group instead.
-      detached: process.platform !== 'win32',
+      // ORCA's driver is a script that starts the real modules as children. The
+      // group is what lets cancellation stop the whole tree (issue 177).
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    }));
     this.child = child;
 
     child.stdout.on('data', (chunk) => {
@@ -128,24 +125,8 @@ export class OrcaRunner {
 
   cancel() {
     const child = this.child;
-    if (!child) return;
+    if (!child) return undefined;
     this.cancelled = true;
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      killer.unref();
-    } else {
-      const signal = (name) => {
-        try {
-          process.kill(-child.pid, name);
-        } catch {
-          child.kill(name);
-        }
-      };
-      signal('SIGTERM');
-      setTimeout(() => signal('SIGKILL'), 1000).unref();
-    }
+    return terminateTree(child);
   }
 }

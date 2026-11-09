@@ -319,6 +319,11 @@ async function commandRun({ positional, flags }) {
       crestExecutable: flags.crest ? String(flags.crest) : '',
       scratchDir: '',
       maxParallel,
+      // Issue 177: the project's per-task wall clock. Absent from the project
+      // means the queue applies its own 3600 s default — never "no limit".
+      ...(Number(result.project.runner?.timeoutSeconds) > 0
+        ? { timeoutSeconds: Number(result.project.runner.timeoutSeconds) }
+        : {}),
     },
   }).catch((error) => fail(`queue did not start: ${error.message}`, EXIT.engine));
 
@@ -384,7 +389,10 @@ async function commandRun({ positional, flags }) {
   // failed" from "nothing ran" (4) and from "results exist but need review" (3).
   const gateFailed = summary.runs.filter((run) => run.gates === 'fail' || run.status === 'needs-review');
   const engineFailed = summary.runs.filter((run) => !gateFailed.includes(run)
-    && (run.error || run.status === 'failed' || run.status === 'cancelled'));
+    && (run.error || run.status === 'failed' || run.status === 'cancelled'
+      // Issue 177: a task the queue stopped at its wall clock did not produce a
+      // result; a script that treated that as success would ship nothing.
+      || run.status === 'timed out'));
   if (queue.status === 'partial') process.exit(EXIT.partial);
   if (engineFailed.length > 0) process.exit(EXIT.engine);
   if (gateFailed.length > 0 || queue.status === 'needs-review') process.exit(EXIT.gate);

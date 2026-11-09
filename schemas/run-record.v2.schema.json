@@ -109,8 +109,10 @@
             "completed",
             "failed",
             "needs-review",
-            "cancelled"
-          ]
+            "cancelled",
+            "timed out"
+          ],
+          "description": "`timed out` is the queue giving up at the task's wall-clock limit. It is deliberately not `failed`: the engine never reported a verdict, so a report can tell \"the engine said no\" from \"we stopped waiting\"."
         },
         "engine": {
           "type": "string",
@@ -301,6 +303,17 @@
             "string",
             "null"
           ]
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timeout"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present only when the run was stopped at its wall-clock limit (issue 177). A run that finished inside its limit carries no such key, so its record is unchanged."
         }
       }
     },
@@ -384,6 +397,61 @@
           "type": "string",
           "format": "date-time",
           "description": "When this record was written, not when the other program ran."
+        }
+      }
+    },
+    "timeout": {
+      "type": "object",
+      "description": "What a run stopped at its wall-clock limit recorded (issue 177): the limit it was given, the measured elapsed time, and the last line the engine wrote. `parsed` and `gates` are null on such a run — a log cut off mid-block is not a result.",
+      "required": [
+        "limitSeconds",
+        "elapsedSeconds",
+        "lastOutput"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "limitSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The wall-clock limit the task was given, in seconds."
+        },
+        "elapsedSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Measured from the moment the engine was launched to the moment the limit fired, to 0.1 s."
+        },
+        "lastOutput": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The last non-empty line the engine wrote before it was stopped."
+        },
+        "tree": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": [
+                "escalated",
+                "survived"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "escalated": {
+                  "type": "boolean",
+                  "description": "SIGTERM did not stop the tree inside the grace period, so SIGKILL was sent."
+                },
+                "survived": {
+                  "type": "boolean",
+                  "description": "The tree was still alive after SIGKILL."
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the process-tree kill reported; null when the runner could not report it."
         }
       }
     },

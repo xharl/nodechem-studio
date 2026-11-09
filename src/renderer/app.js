@@ -174,6 +174,8 @@ const STATUS = {
   ready: { label: 'Ready', dot: 'blue' },
   review: { label: 'Needs review', dot: 'red' },
   blocked: { label: 'Blocked', dot: 'slate' },
+  // Issue 177: stopped at its wall-clock limit. Not red: nothing was rejected.
+  'timed out': { label: 'Timed out', dot: 'slate' },
 };
 
 const METHODS = [
@@ -778,7 +780,7 @@ function renderNodeCard(node) {
     ? '<span class="chk-badge">chk</span>'
     : '';
   return `
-    <article class="node node-${node.type} state-${node.state}${selected ? ' is-selected' : ''}${runState ? ` is-${runState}` : ''}"
+    <article class="node node-${node.type} state-${String(node.state).replace(/\s+/g, '-')}${selected ? ' is-selected' : ''}${runState ? ` is-${runState}` : ''}"
       data-node-id="${node.id}" data-run="${runState || 'idle'}" tabindex="0" role="group" aria-label="${esc(node.title)}, ${showStatus ? status.label : 'note'}"
       style="left:${node.x}px;top:${node.y}px">
       ${checkpointBadge}
@@ -1191,7 +1193,7 @@ function applyHistorySnapshot(snapshot) {
   updateCounts();
   updateRunConsoleCopy();
   refreshEngineChips();
-  syncMaxParallelInput();
+  syncRunnerInputs();
 }
 
 function undoEdit() {
@@ -1389,7 +1391,7 @@ function restoreDraft(draft) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
-  syncMaxParallelInput();
+  syncRunnerInputs();
   toast('Draft restored. Save it to keep it.');
 }
 
@@ -1521,14 +1523,14 @@ function incomingList(id) {
 
 function renderProjectInspector() {
   const nodes = state.project.nodes;
-  const counts = { passed: 0, ready: 0, review: 0, blocked: 0 };
-  nodes.forEach((node) => { if (node.type !== 'note') counts[node.state] += 1; });
+  const counts = { passed: 0, ready: 0, review: 0, blocked: 0, 'timed out': 0 };
+  nodes.forEach((node) => { if (node.type !== 'note') counts[node.state] = (counts[node.state] || 0) + 1; });
   // One definition of "what next", shared with the start-up reconciliation so
   // the prompt cannot disagree with the queue it was derived from (issue 160).
   const next = nextAction(nodes)?.node ?? null;
-  const segments = ['passed', 'ready', 'review', 'blocked']
+  const segments = ['passed', 'ready', 'review', 'blocked', 'timed out']
     .filter((key) => counts[key] > 0)
-    .map((key) => `<span class="${key}" style="flex:${counts[key]}"></span>`)
+    .map((key) => `<span class="${key.replace(/\s+/g, '-')}" style="flex:${counts[key]}"></span>`)
     .join('');
   const loopCount = state.project.edges.filter((edge) => edge.type === 'loop').length;
   const condCount = nodes.filter((node) => node.type === 'condition').length;
@@ -1554,10 +1556,12 @@ function renderProjectInspector() {
       <div class="section-label">Next action</div>
       ${next ? `<div class="next-card">
         <div class="next-meta"><i class="dot ${statusFor(next).dot}"></i>${statusPill(next.state)}</div>
-        <h3>${next.state === 'review' ? 'Review the output' : 'Run the next block'}</h3>
+        <h3>${next.state === 'review' ? 'Review the output' : next.state === 'timed out' ? 'Give it more time' : 'Run the next block'}</h3>
         <p>${next.state === 'review'
           ? `${esc(next.title)} needs a human decision before the condition can release a branch.`
-          : `${esc(next.title)} has all prerequisites and is ready to export.`}</p>
+          : next.state === 'timed out'
+            ? `${esc(next.title)} was stopped at its wall-clock limit before it produced a result. There is no output to review: raise the limit in the block's inspector or in Setup, then run it again.`
+            : `${esc(next.title)} has all prerequisites and is ready to export.`}</p>
         <button type="button" class="btn primary" data-select-node="${next.id}">Select ${esc(next.title)}</button>
       </div>` : `<div class="next-card"><h3>Everything passed</h3><p>No task is waiting in this project.</p></div>`}
     </section>
@@ -1569,6 +1573,7 @@ function renderProjectInspector() {
         <span><i class="dot green"></i>${counts.passed} passed</span>
         <span><i class="dot blue"></i>${counts.ready} ready</span>
         <span><i class="dot red"></i>${counts.review} review</span>
+        ${counts['timed out'] > 0 ? `<span><i class="dot slate"></i>${counts['timed out']} timed out</span>` : ''}
         <span><i class="dot slate"></i>${counts.blocked} blocked</span>
       </div>
     </section>
@@ -1863,6 +1868,18 @@ function calcInspector(node) {
       <button type="button" class="btn small" data-action="import-log">Import log</button></div>`;
   } else if (node.state === 'review') {
     callout = '<div class="callout"><strong>Needs review.</strong> The parsed output does not satisfy every required gate. The next action is a human decision, not an automatic pass.</div>';
+  } else if (node.state === 'timed out') {
+    // Issue 177: the card says why it stopped and that there is no result to
+    // review. The numbers come from the task's own record, never an estimate.
+    const own = (state.queue?.tasks || [])
+      .filter((entry) => String(entry.nodeId || '').split('~')[0] === node.id && entry.timeout)
+      .pop();
+    const detail = own?.timeout
+      ? `The queue stopped it after ${formatDuration(own.timeout.elapsedSeconds)} (limit ${formatDuration(own.timeout.limitSeconds)}).`
+      : 'The queue stopped it when its wall-clock limit was reached.';
+    const last = own?.timeout?.lastOutput ? ` Last output: “${esc(own.timeout.lastOutput)}”.` : '';
+    callout = `<div class="callout"><strong>Timed out.</strong> ${esc(detail)}${last} `
+      + 'The output was not parsed, so there is no result to review — raise the limit for this block or in Setup, or check whether the engine is stuck.</div>';
   } else if (node.state === 'ready') {
     callout = '<div class="callout green"><strong>Ready.</strong> All prerequisites passed; export the input and run it externally.</div>';
   }
@@ -1922,6 +1939,11 @@ function calcInspector(node) {
       <select class="select" aria-label="Memory unit" data-node-field="memoryUnit">${MEMORY_UNITS.map(([value, label]) => `<option value="${value}"${s.memoryUnit === value ? ' selected' : ''}>${label}</option>`).join('')}</select>
     </div></div>` : '',
     gaussianResources ? inputField('Cores (nproc)', 'nproc', s.nproc, { type: 'number', min: 1, max: 256 }) : '',
+    // Issue 177: an optional wall clock for this block. Blank inherits the
+    // project's limit; the field exists because a TD-DFT block on a 40-atom
+    // dimer and a single-point on water do not deserve the same hour.
+    inputField('Time limit (s)', 'timeoutSeconds', s.timeoutSeconds ?? '', { type: 'number', min: 1, max: LIMITS.timeoutSeconds, full: true }),
+    `<div class="field full"><span class="inspector-note">Blank uses the project limit${Number(state.project?.runner?.timeoutSeconds) > 0 ? ` (${Number(state.project.runner.timeoutSeconds)} s)` : ' (3600 s default)'}. A task that reaches it is stopped and recorded as timed out.</span></div>`,
     !isPsi4 && gaussianResources ? inputField('Checkpoint file', 'checkpoint', s.checkpoint || chkName(node.id), { full: true }) : '',
     !gaussianResources
       ? '<div class="field full"><span class="inspector-note">xTB writes <code>xtbrestart</code> in the run folder; a checkpoint hand-off copies that file.</span></div>'
@@ -3468,6 +3490,20 @@ function updateNodeField(node, key, value) {
     node.settings.gates[key] = value === '' ? null : Number(value);
     return;
   }
+  if (key === 'timeoutSeconds') {
+    // Issue 177: absent means "inherit the project limit", so clearing the field
+    // removes the key instead of storing a zero or the inherited number.
+    const text = String(value ?? '').trim();
+    if (text === '') {
+      delete node.settings.timeoutSeconds;
+      return;
+    }
+    const seconds = Math.trunc(Number(text));
+    if (Number.isFinite(seconds) && seconds >= 1) {
+      node.settings.timeoutSeconds = Math.min(seconds, LIMITS.timeoutSeconds);
+    }
+    return;
+  }
   if (key === 'routePreset') {
     const preset = ROUTE_PRESETS.find((item) => item.id === value);
     if (!preset) return;
@@ -4672,10 +4708,19 @@ function updateRunProgressChip() {
   if (!chip) return;
   const tasks = Array.isArray(state.queue?.tasks) ? state.queue.tasks : [];
   const total = tasks.length;
-  const done = tasks.filter((task) => ['completed', 'failed', 'skipped', 'blocked', 'cancelled'].includes(task.status)).length;
+  const done = tasks.filter((task) => ['completed', 'failed', 'skipped', 'blocked', 'cancelled', 'timed out'].includes(task.status)).length;
   chip.hidden = total === 0;
   chip.textContent = `${done}/${total}`;
   chip.classList.toggle('is-live', /^(running|queued)$/.test(String(state.queue?.status || '')));
+}
+
+/**
+ * The runner settings that belong to a queue: concurrency and the per-task wall
+ * clock (issue 177). They are synced together because they are read together.
+ */
+function syncRunnerInputs() {
+  syncMaxParallelInput();
+  syncTimeoutInput();
 }
 
 function syncMaxParallelInput() {
@@ -4709,6 +4754,148 @@ function maxParallelForQueue() {
   const input = $('#run-max-parallel');
   const value = input ? Number(input.value) : Number(state.project?.runner?.maxParallel);
   return applyMaxParallel(Number.isFinite(value) && value > 0 ? value : 1);
+}
+
+/**
+ * The wall-clock limit a queued task gets when neither the block nor the
+ * project names one (issue 177). Kept in step with `DEFAULT_TIMEOUT_SECONDS` in
+ * the queue, which is where it is actually enforced; this copy only labels the
+ * empty field so the user knows what "blank" means.
+ */
+const DEFAULT_TASK_TIMEOUT_SECONDS = 3600;
+
+/**
+ * Show the project's per-task limit. Absent is not a value: the field stays
+ * empty and its placeholder says which default applies, so a project that never
+ * set one keeps no key in the file.
+ */
+function syncTimeoutInput() {
+  const input = $('#run-timeout');
+  if (!input) return;
+  const configured = Number(state.project?.runner?.timeoutSeconds);
+  input.value = Number.isInteger(configured) && configured >= 1 ? String(configured) : '';
+  input.placeholder = `${DEFAULT_TASK_TIMEOUT_SECONDS} (default)`;
+  updateTimeoutHint();
+}
+
+/**
+ * Apply one wall-clock limit to the project. An empty or invalid value removes
+ * the setting instead of writing a default, so the saved project stays
+ * byte-identical to one written before this setting existed.
+ */
+function applyTimeout(value) {
+  const text = String(value ?? '').trim();
+  if (!state.project.runner || typeof state.project.runner !== 'object') state.project.runner = {};
+  const input = $('#run-timeout');
+  if (text === '') {
+    delete state.project.runner.timeoutSeconds;
+    if (input) input.value = '';
+    refreshDirty();
+    return null;
+  }
+  const seconds = Math.trunc(Number(text));
+  if (!Number.isFinite(seconds) || seconds < 1) {
+    // Refuse rather than clamp silently: a limit the user did not choose is a
+    // number the queue would then enforce against their expectation.
+    if (input) input.value = state.project.runner.timeoutSeconds ? String(state.project.runner.timeoutSeconds) : '';
+    return state.project.runner.timeoutSeconds ?? null;
+  }
+  const clamped = Math.min(seconds, LIMITS.timeoutSeconds);
+  state.project.runner.timeoutSeconds = clamped;
+  if (input) input.value = String(clamped);
+  updateTimeoutHint();
+  refreshDirty();
+  return clamped;
+}
+
+/** The project's limit for a queue, or null when it was never set. */
+function timeoutForQueue() {
+  const input = $('#run-timeout');
+  if (!input) {
+    return Number.isInteger(Number(state.project?.runner?.timeoutSeconds))
+      ? Number(state.project.runner.timeoutSeconds) : null;
+  }
+  const stored = Number(state.project?.runner?.timeoutSeconds);
+  const text = String(input.value ?? '').trim();
+  if (text === '') return Number.isInteger(stored) ? applyTimeout('') : null;
+  const value = Math.trunc(Number(text));
+  // A queue start must not mark the project dirty for a value it already has.
+  if (!Number.isFinite(value) || value < 1) return Number.isInteger(stored) ? stored : null;
+  return value === stored ? stored : applyTimeout(text);
+}
+
+/**
+ * The limit for one block: its own value first, then the project's, then the
+ * default. Mirrors `QueueManager.taskTimeoutSeconds()` so a single-block run and
+ * a queued run stop at the same hour.
+ */
+function timeoutForNode(node) {
+  const own = Number(node?.settings?.timeoutSeconds);
+  if (Number.isInteger(own) && own >= 1) return Math.min(own, LIMITS.timeoutSeconds);
+  return timeoutForQueue() ?? DEFAULT_TASK_TIMEOUT_SECONDS;
+}
+
+/** The limit the Setup field currently means, without editing the project. */
+function configuredTimeoutSeconds() {
+  const input = $('#run-timeout');
+  const value = input ? Math.trunc(Number(input.value)) : Number(state.project?.runner?.timeoutSeconds);
+  return Number.isFinite(value) && value >= 1
+    ? Math.min(value, LIMITS.timeoutSeconds) : DEFAULT_TASK_TIMEOUT_SECONDS;
+}
+
+/**
+ * Why a block looks like a long run (issue 177), from its own parameters.
+ *
+ * Deliberately not an estimate: this says *which* parameters make a block
+ * expensive (many excited states, an IRC path, a big frequency job) so the user
+ * can raise its limit before starting. It never prints a predicted duration —
+ * nobody measured one.
+ */
+function longRunReason(node) {
+  if (!node || (node.type !== 'calc' && node.type !== 'conformers')) return '';
+  const s = node.settings || {};
+  const atoms = Number(state.project?.molecule?.coords?.length) || 0;
+  const states = Number(s.tdStates) || 0;
+  const jobType = String(s.jobType || '');
+  const reasons = [];
+  if (states >= 10) reasons.push(`${states} excited states`);
+  if (jobType.startsWith('IRC')) reasons.push('an IRC path');
+  if (jobType === 'Opt=TS' || jobType === 'Opt=QST2' || jobType === 'Opt=QST3') reasons.push('a transition-state search');
+  if (Number(s.counterpoise) > 1) reasons.push(`counterpoise over ${Number(s.counterpoise)} fragments`);
+  if (/Freq/.test(jobType) && atoms >= 30) reasons.push(`a frequency job on ${atoms} atoms`);
+  if (node.type === 'conformers' && s.generator === 'crest' && !s.member) {
+    reasons.push(`a CREST search for up to ${Number(s.maxConformers) || 20} conformers`);
+  }
+  return reasons.join(', ');
+}
+
+/**
+ * Say which blocks look like long runs, and at what limit they will be stopped.
+ * Shown in Setup beside the field so the limit can be chosen before the run.
+ */
+function updateTimeoutHint() {
+  const el = $('#run-timeout-hint');
+  if (!el) return;
+  const long = (state.project?.nodes || [])
+    .map((node) => ({ node, reason: longRunReason(node) }))
+    .filter((entry) => entry.reason);
+  if (long.length === 0) {
+    el.hidden = true;
+    el.textContent = '';
+    el.classList.remove('is-budget');
+    return;
+  }
+  const limit = configuredTimeoutSeconds();
+  const named = long.slice(0, 3)
+    .map((entry) => `${entry.node.title} (${entry.reason})`)
+    .join('; ');
+  const more = long.length > 3 ? ` and ${long.length - 3} more` : '';
+  const raised = long.filter((entry) => Number(entry.node.settings?.timeoutSeconds) > limit);
+  el.hidden = false;
+  el.classList.add('is-budget');
+  el.textContent = `${countLabel(long.length, 'block')} ${long.length === 1 ? 'here looks like a long run' : 'here look like long runs'}: ${named}${more}. `
+    + `Each task is stopped at ${limit} s${raised.length > 0 ? ' unless its own Time limit is higher' : ''}. `
+    + 'Raise the limit or set one on the block before starting.';
 }
 
 function openRunConsole() {
@@ -4766,7 +4953,7 @@ function updateRunTabBadges() {
   if (badge) {
     const tasks = Array.isArray(state.queue?.tasks) ? state.queue.tasks : [];
     const total = tasks.length;
-    const done = tasks.filter((task) => ['completed', 'failed', 'skipped', 'blocked', 'cancelled'].includes(task.status)).length;
+    const done = tasks.filter((task) => ['completed', 'failed', 'skipped', 'blocked', 'cancelled', 'timed out'].includes(task.status)).length;
     badge.hidden = total === 0;
     badge.textContent = `${done}/${total}`;
   }
@@ -5155,6 +5342,9 @@ async function startSelectedRun() {
       dryRun,
       gates: gatesForNode(node),
       validity: validityForNode(node),
+      // Issue 177: a single block launched from the console gets the same
+      // limit a queued one does, so a hang cannot sit there either.
+      timeoutSeconds: timeoutForNode(node),
     });
     state.run.id = response.runId;
     state.run.dir = response.runDir;
@@ -5220,6 +5410,9 @@ async function startSelectedConformerRun(node) {
         crestExecutable,
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
+        // Issue 177: the project's per-task wall clock; null lets the queue
+        // apply its 3600 s default, so an untouched project sends nothing.
+        timeoutSeconds: timeoutForQueue(),
         // A relative conformer importPath resolves against the project folder.
         projectFile: state.projectPath || null,
       },
@@ -5342,6 +5535,9 @@ function applyQueue(queue) {
     flowId: queue.flowId || null,
     tasks: Array.isArray(queue.tasks) ? queue.tasks : [],
     reason: queue.reason || null,
+    // Issue 177: the queue's per-task wall clock, so a running row can show
+    // "elapsed / limit" without reading the project.
+    timeoutSeconds: Number.isInteger(Number(queue.timeoutSeconds)) ? Number(queue.timeoutSeconds) : null,
   };
   const reconciled = syncNodeStatesFromQueue(queue);
   renderQueue();
@@ -5363,6 +5559,52 @@ function applyQueue(queue) {
   if (reconciled) renderInspector();
 }
 
+/** A duration a person reads at a glance: `1.4 s`, `3m 12s`. */
+function formatDuration(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  if (value < 60) return `${value.toFixed(1)} s`;
+  const minutes = Math.floor(value / 60);
+  const rest = Math.round(value % 60);
+  return `${minutes}m ${String(rest).padStart(2, '0')}s`;
+}
+
+/** `elapsed / limit` for a running row: measured, never estimated. */
+function budgetLabel(startedMs, limitSeconds) {
+  const elapsed = Math.max(0, (Date.now() - startedMs) / 1000);
+  return `${formatDuration(elapsed)} / ${formatDuration(limitSeconds)}`;
+}
+
+let queueTicker = null;
+
+/**
+ * Keep a running row's elapsed time moving between queue events (issue 177).
+ * Only the budget spans are rewritten — not the list — so a family of thousands
+ * of tasks is not rebuilt once a second.
+ */
+function syncQueueTicker() {
+  const spans = document.querySelectorAll('#queue-list .queue-budget');
+  if (spans.length === 0) {
+    if (queueTicker) clearInterval(queueTicker);
+    queueTicker = null;
+    return;
+  }
+  if (queueTicker) return;
+  queueTicker = setInterval(() => {
+    const live = document.querySelectorAll('#queue-list .queue-budget');
+    if (live.length === 0) {
+      clearInterval(queueTicker);
+      queueTicker = null;
+      return;
+    }
+    live.forEach((span) => {
+      const started = Number(span.dataset.elapsed);
+      const limit = Number(span.dataset.limit);
+      if (!Number.isFinite(started) || !limit) return;
+      span.textContent = budgetLabel(started, limit);
+    });
+  }, 1000);
+}
+
 function renderQueue() {
   const queue = state.queue;
   const stateEl = $('#queue-state');
@@ -5378,18 +5620,39 @@ function renderQueue() {
         const retry = task.loopAttempts
           ? `retry ${Math.min(task.loopAttempts, task.loop?.maxAttempts ?? task.loopAttempts)}/${task.loop?.maxAttempts ?? '?'}`
           : '';
-        const meta = [task.status, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
+        // Issue 177: the running row shows the wall clock it is spending
+        // against the limit it was given. Nothing is estimated here — the
+        // elapsed side is `startedAt` and the limit is what the queue enforces.
+        const limit = Number(task.timeoutSeconds ?? queue.timeoutSeconds) || null;
+        const startedMs = task.status === 'running' ? Date.parse(task.startedAt || '') : NaN;
+        const budget = Number.isFinite(startedMs) && limit ? budgetLabel(startedMs, limit) : '';
+        const timedOut = task.timeout && typeof task.timeout === 'object' ? task.timeout : null;
+        const timeoutNote = timedOut
+          ? `after ${formatDuration(timedOut.elapsedSeconds)}${timedOut.limitSeconds ? ` · limit ${formatDuration(timedOut.limitSeconds)}` : ''}`
+          : '';
+        const meta = [task.status, timeoutNote, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
           .filter(Boolean).join(' · ');
+        // The last output line a stopped task wrote is the evidence of where it
+        // was, so the row's tooltip carries it rather than the meta line.
+        const title = [task.error || task.reason || '', timedOut?.lastOutput ? `Last output: ${timedOut.lastOutput}` : '']
+          .filter(Boolean).join('\n');
         // Issue 154: a finished row opens its results, so it must be reachable
         // and activatable from the keyboard. An empty data-run-id is not a run.
         const runId = String(task.runId || '');
         const interactive = runId
           ? ` tabindex="0" role="button" aria-label="Open results for ${esc(task.title)}"`
           : '';
-        return `<li class="queue-item is-${esc(task.status)}" data-run-id="${esc(runId)}"${interactive} title="${esc(task.error || task.reason || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
+        // `timed out` has a space; a class attribute would split it in two.
+        const statusClass = esc(String(task.status).replace(/\s+/g, '-'));
+        const budgetAttrs = Number.isFinite(startedMs) && limit
+          ? ` data-elapsed="${Math.trunc(startedMs)}" data-limit="${Math.trunc(limit)}"`
+          : '';
+        const budgetHtml = budget ? ` · <span class="queue-budget"${budgetAttrs}>${esc(budget)}</span>` : '';
+        return `<li class="queue-item is-${statusClass}" data-run-id="${esc(runId)}"${interactive} title="${esc(title)}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}${budgetHtml}</span></li>`;
       }).join('')
       : '<li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li>';
   }
+  syncQueueTicker();
   const running = queue.status === 'running';
   const canResume = queue.status === 'paused' || queue.status === 'needs-review';
   const active = running || canResume;
@@ -5419,9 +5682,9 @@ function renderRecordSummary() {
   }
   const failed = group.records.filter((record) => record.failed);
   const rows = group.records.map((record) => `
-    <tr class="is-${esc(record.status)}">
+    <tr class="is-${esc(String(record.status).replace(/\s+/g, '-'))}">
       <td><span class="record-label">${esc(record.label)}</span><span class="record-id">${esc(record.id)}</span></td>
-      <td><span class="record-status is-${esc(record.status)}">${esc(record.status)}</span></td>
+      <td><span class="record-status is-${esc(String(record.status).replace(/\s+/g, '-'))}">${esc(record.status)}</span></td>
       <td>${esc(record.gates || '—')}</td>
       <td class="record-error" title="${esc(record.error)}">${esc(record.error || '')}</td>
     </tr>`).join('');
@@ -5493,6 +5756,9 @@ async function startWorkflowUnlocked() {
         crestExecutable: $('#run-crest').value.trim(),
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
+        // Issue 177: the project's per-task wall clock; null lets the queue
+        // apply its 3600 s default, so an untouched project sends nothing.
+        timeoutSeconds: timeoutForQueue(),
         projectFile: state.projectPath || null,
       },
     });
@@ -5745,7 +6011,7 @@ function applyOpenedProject(result) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
-  syncMaxParallelInput();
+  syncRunnerInputs();
   toast(result.migrated ? 'Project opened and migrated to schema v1.' : 'Project opened.');
   return true;
 }
@@ -6120,7 +6386,7 @@ function applyTemplateProject(templateId) {
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
-  syncMaxParallelInput();
+  syncRunnerInputs();
   toast(templateId === BLANK_TEMPLATE.id ? 'Blank project created.' : 'Template applied.');
 }
 
@@ -6667,7 +6933,7 @@ function closeProject() {
     renderInspector();
     updateCounts();
     updateRunConsoleCopy();
-    syncMaxParallelInput();
+    syncRunnerInputs();
     toast('Project closed. The canvas now holds a blank project.');
   });
 }
@@ -6736,7 +7002,7 @@ function toggleAppMenu() {
   menu.querySelector('.overflow-item:not(:disabled)')?.focus();
 }
 
-const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'interrupted']);
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'interrupted', 'timed out']);
 const TERMINAL_QUEUE_STATUSES = new Set(['completed', 'failed', 'needs-review', 'blocked', 'cancelled', 'interrupted', 'skipped']);
 
 /**
@@ -7069,6 +7335,10 @@ function onDocumentChange(event) {
   }
   if (target.id === 'run-max-parallel') {
     applyMaxParallel(target.value);
+    return;
+  }
+  if (target.id === 'run-timeout') {
+    applyTimeout(target.value);
     return;
   }
   if (target.dataset.inputField) {
@@ -7643,7 +7913,7 @@ function init() {
   readRunConfig();
   updateRunConsoleCopy();
   refreshEngineChips();
-  syncMaxParallelInput();
+  syncRunnerInputs();
   if (desktop?.onRunEvent) desktop.onRunEvent(handleRunEvent);
   if (desktop?.onQueueEvent) desktop.onQueueEvent(handleQueueEvent);
   if (desktop?.onOpenProjectPath) desktop.onOpenProjectPath((filePath) => { openProjectPath(filePath); });
