@@ -526,6 +526,161 @@ The WebGL viewport is not colour-mapped yet: it prints the potential's range and
 in its numbers row, and the coloured picture is the vector figure in the report. That distinction is
 deliberate — a colour bar beside an uncoloured surface would be worse than no colour bar.
 
+## QTAIM bond critical points and the NCI plot (issue 59)
+
+Two analyses of the same density the rest of this page evaluates: the topology of ρ
+(`src/shared/qtaim.js`) and the reduced density gradient (`src/shared/nci.js`). Both read the
+checkpoint's `Total SCF Density` and basis through `esp.js`, so a qtaim number and an ESP number for
+one file cannot come from two different densities.
+
+### Derivatives: analytic, not differenced
+
+ρ = Σ_μν D_μν χ_μ χ_ν is differentiated **term by term** from the same primitive monomials the
+orbital evaluator walks — a Gaussian factor times a monomial, product rule, once for ∇ρ and twice
+for the Hessian. There is no finite-difference step in any reported number, so there is no
+finite-difference truncation error in any reported number. The Hessian is symmetric by construction,
+and its eigenvalues come from a cyclic Jacobi decomposition (a 3×3 closed form loses digits exactly
+where a critical point is near-degenerate).
+
+### Bond critical points
+
+A BCP is a (3,−1) critical point: ∇ρ = 0 with two negative eigenvalues across the bond and one
+positive along it. The search starts at each candidate bond's midpoint and is a Levenberg–Marquardt
+iteration on ½|∇ρ|²:
+
+    (H² + µI) Δp = −H∇ρ
+
+with H the Hessian of ρ. H² is positive semi-definite whatever the signature of H, so the step is
+always a descent direction for |∇ρ|² and a (3,−1) point is reachable from an indefinite start — which
+a plain Newton step on ∇ρ is not. µ starts at 0, is raised ×10 when a step fails, the step is capped
+at 0.4 bohr, and a backtracking line search keeps it only if |∇ρ| falls. Convergence is
+**|∇ρ| ≤ 1e-8 e/bohr⁴ and |step| ≤ 1e-9 bohr within 200 iterations**; the achieved |∇ρ| and the
+iteration count are in the result.
+
+Candidate bonds: every atom pair closer than **1.3 × (r_cov(A) + r_cov(B))** with the Cordero
+single-bond covalent radii (*Dalton Trans.* 2008, 2832). An element with no tabulated radius makes
+every pair it belongs to **not searched, by name** — a guessed radius would decide the bond list, and
+the bond list decides which BCPs exist.
+
+**A bond with no BCP is reported as such.** The failure modes are explicit and each carries its
+numbers: no convergence in 200 iterations (with |∇ρ|), no step lowering |∇ρ| (with where it stalled),
+the search leaving the bond's neighbourhood (with the distance reached), a stationary point outside
+the bond's own span, and a stationary point whose signature is not (3,−1) (with all three
+eigenvalues). None of them returns a ρ, a Laplacian or an ellipticity — those fields are absent, and
+the table prints a dash.
+
+### The numbers for the committed water checkpoint
+
+Psi4 1.11, B3LYP/6-31G*, `test/fixtures/psi4/water-b3lyp-631gd.fchk` (byte-identical to
+`test/fixtures/esp/water-esp.fchk`), 18 basis functions, 10 electrons:
+
+| Bond | ρ (e/bohr³) | ∇²ρ (e/bohr⁵) | λ₁, λ₂, λ₃ | ε | bond path (Å) | class |
+| --- | --- | --- | --- | --- | --- | --- |
+| O1–H2 | 0.35605 | −1.8667 | −1.7393, −1.6987, 1.5714 | 0.0239 | 0.95745 | shared-shell |
+| O1–H3 | 0.35605 | −1.8667 | −1.7393, −1.6987, 1.5714 | 0.0239 | 0.95745 | shared-shell |
+
+The O–H distance is 0.95731 Å, so the path is 0.00014 Å longer than the straight line — the expected
+sign and the expected size for a near-linear bond. Both searches converged in **5 iterations to
+|∇ρ| = 3.0e-12 e/bohr⁴**; the BCPs sit at (±0.5995, 0, 0.4048) Å, between O and H and nearer H.
+
+Classification uses the two standard criteria, printed with every result:
+
+| ∇²ρ at the BCP | ρ at the BCP | class |
+| --- | --- | --- |
+| < 0 | ≥ 0.10 e/bohr³ | shared-shell (covalent) |
+| > 0 | < 0.10 e/bohr³ | closed-shell (ionic, van der Waals, hydrogen bond) |
+| otherwise | | intermediate |
+
+The Laplacian-sign criterion is Bader's (*Atoms in Molecules: A Quantum Theory*, Clarendon, 1990,
+ch. 7); the 0.10 e/bohr³ band is the one used for closed-shell contacts in the hydrogen-bond QTAIM
+literature (Koch & Popelier, *J. Phys. Chem.* 1995, 99, 9747). They are data in the result, not
+prose in this page: `bond.criteria` and `parameters.criteria` carry exactly those three lines, and the
+card prints the criterion it used.
+
+### The bond path
+
+The bond path is the pair of steepest-ascent trajectories of ρ from the BCP to its two nuclei: RK4 on
+dr/ds = ∇ρ/|∇ρ| at a **0.01 bohr step**, each branch starting 0.02 bohr off the BCP along the λ₃
+eigenvector, with those two straight 0.02 bohr stubs added back to the length. Inside one step of a
+nucleus the remaining stretch is added as a straight segment, because the field there is a cusp and a
+step would orbit it; the length therefore carries one stated approximation (the stubs and the final
+sub-step), not an unstated one. A branch that does not reach its nucleus in 1200 steps makes the path
+**incomplete**: `complete: false`, the distance at which it stopped, and no length printed as a
+number.
+
+### NCI: the reduced density gradient
+
+    s(r) = |∇ρ(r)| / (2 (3π²)^{1/3} ρ(r)^{4/3}),   FERMI_CONSTANT = (3π²)^{1/3} = 3.0936677…
+
+on a regular grid around the molecule, with λ₂ — the middle eigenvalue of the Hessian of ρ — from the
+**analytic Hessian**, i.e. no finite-difference step and no differencing error of its own. Every
+parameter is in the result and in the caption:
+
+| Parameter | Value |
+| --- | --- |
+| Grid spacing | 0.2 bohr (0.106 Å) — `NCI_SPACING_BOHR` |
+| Padding | 2.5 bohr — `NCI_PADDING_BOHR` |
+| Density cutoff | ρ ≤ 0.05 e/bohr³ — `NCI_RHO_CUTOFF` |
+| Gradient cutoff | s ≤ 2.0 — `NCI_S_MAX` |
+| Isosurface value | s = 0.5 — `NCI_S_ISOVALUE`, drawn as a line on the figure and named in the caption |
+| Grid cap | 600,000 points; a finer request is refused by name rather than truncated |
+
+For the water checkpoint that is a 41×26×32 = 34,112-point grid, of which 6,462 points lie inside
+both cutoffs: 5,624 with λ₂ < 0 (attractive) and 838 with λ₂ > 0 (repulsive). The figure
+(`src/shared/figures/nci.js`, `nciFigure`, also reachable as `figure('nci', analysis)`) is the
+standard s-versus-sign(λ₂)ρ plot, drawn as a **180×140 histogram** of those points rather than a
+scatter of every mark — a scatter would claim a resolution the 0.2 bohr grid does not have and would
+bloat the self-contained report. One sequential ramp, log-scaled by count.
+
+**And the absence is stated.** For this file the lowest s inside the cutoffs is **1.034**, so **no
+point reaches the s = 0.5 isosurface**, and the caption says so with that number instead of leaving a
+dashed line with nothing beneath it to be read as a feature. That is the honest result for a single
+water molecule in 6-31G*: NCI features appear at a weak contact's critical point — where ∇ρ vanishes
+at low ρ — and a lone molecule with a basis that has **no diffuse functions** has neither. The
+covalent O–H critical points do have ∇ρ = 0, but at ρ = 0.356 e/bohr³, far above the 0.05 cutoff.
+A study that wants an NCI feature needs a dimer and a diffuse basis; this app will draw it and state
+the same parameters when it gets one.
+
+### Where it is shown, and what was checked
+
+- **The card.** The wavefunction view's numbers row gains the BCP rows (bond, ρ, ∇²ρ, ε, class) and
+  the NCI summary (points, cutoffs, grid, λ₂ method), computed once per parsed checkpoint and cached.
+  The card samples the NCI grid at **0.3 bohr** to stay off the redraw path; the row names the grid it
+  used, so it cannot be confused with the figure's 0.2 bohr. It skips the bond-path integration
+  (`bondPath: false`) — that number is a report figure, not a row that has to survive a slider.
+- **The report.** `buildWorkflowReport(queue, records, { wavefunction })` takes a parsed checkpoint and
+  adds a **Wavefunction analysis** section: the BCP table (`bcpTableHtml`) and the NCI figure with its
+  caption, the same budget rule as the other figures. No `run.json` carries a density block and
+  `ncs report` does not attach one yet, so the section is absent from CLI reports — and a checkpoint
+  it *is* given without a density block prints `no density in this file` rather than an empty table.
+- **ρ against Psi4.** On all 14,616 points of Psi4's own density cube, the worst |Δρ| is **8.8e-4
+  e/bohr³**, which is the cube's six-significant-digit rounding.
+- **∇ρ against Psi4.** At a point 1.7 Å from oxygen, where the cube's 0.4 bohr spacing can resolve the
+  field, central differences of the cube give a gradient **0.17 % different in magnitude** with a
+  direction cosine of **0.9993**. At 0.9 Å from a nucleus the same check is 20 % off — that is the
+  cube's truncation error, not the derivative's, which is why the check is quoted at a smooth point
+  and the coarse-grid number is quoted too.
+- **The Hessian against itself.** Finite differences of the analytic gradient at a **1e-4 bohr** step
+  reproduce the analytic Hessian to 1e-6; that pins the second-derivative algebra without pretending
+  to be an independent oracle.
+- **The BCP against the literature.** The cited water values are ρ = 0.3780 e/bohr³, ∇²ρ = −2.7083
+  e/bohr⁵, ε = 0.0215 and a 1.7968 bohr bond path (ESI Table S1(a) of *Phys. Chem. Chem. Phys.* 2013,
+  DOI 10.1039/c3cp52687a, modified ANO-RCC basis). This calculation gives 0.35605, −1.8667, 0.0239 and
+  1.810 bohr: **−5.8 %, −31 %, +11 %, +0.7 %**. The band in the test is set wide enough to hold those
+  deviations and the test states them, because the two calculations differ in functional *and* basis;
+  an agreement claim would need the same level of theory, and Psi4 does not do QTAIM, so no such
+  claim is made anywhere.
+
+### What is not claimed
+
+No QTAIM-versus-Psi4 agreement — Psi4 has no QTAIM, and the only cross-checks available are the
+density cube and the cited literature band above. No basin charges, no delocalisation index, no
+atomic integration (those need the zero-flux surfaces, which this module does not build). No
+isosurface of s in 3D: the figure is the 2D histogram, and the isovalue is a line on it. No
+interaction energy and no "hydrogen bond found" list from the NCI grid — a cluster at low s is where
+NCI analysis looks, and the sign of λ₂ is what separates attractive from repulsive. No ELF/LOL and no
+deformation density.
+
 ## What the readers refuse
 
 The readers are bounded, and they say what they refused instead of returning a partial answer.
@@ -674,8 +829,9 @@ ignored Psi4's value order.
 
 ## What is not here yet
 
-The ingest half of issue #59 is implemented. The visual half is not, and this page would rather say
-so than show a picture that implies otherwise:
+The ingest half of the wavefunction work is implemented, and so are the orbital, ESP, QTAIM and NCI
+analyses above. What follows is still missing, named rather than shown as a picture that implies
+otherwise:
 
 - **Isosurfaces in the report from the CLI.** `ncs report --figures=surfaces` meshes the cubes and
   draws them, and draws the ESP-coloured form when a caller supplies the potential on the mesh; the
@@ -683,9 +839,13 @@ so than show a picture that implies otherwise:
 - **ESP colour-mapped surfaces in the 3D viewport.** The potential is computed and its range is
   printed (`## The electrostatic potential on a surface`), and the report's vector figure is
   colour-mapped; the WebGL surface still shades by phase, so it gets numbers rather than a bar.
-- **QTAIM/AIM critical points, bond paths and basin charges.** A separate analysis with its own
-  numerical requirements.
-- **NCI/RDG surfaces, ELF/LOL, deformation density.** Also separate analyses, not another cube read.
+- **QTAIM basin charges, delocalisation indices and atomic integration.** The bond critical points,
+  their properties and the bond paths are implemented (`## QTAIM bond critical points and the NCI
+  plot`); the zero-flux surfaces those other quantities need are not built, so no atomic charge is
+  attributed to a QTAIM basin.
+- **An isosurface of s, and NCI on anything but a checkpoint's own density.** The s-versus-sign(λ₂)ρ
+  figure is a 2D histogram of a grid; there is no s isosurface in 3D, and a `.wfn`/`.wfx` file has no
+  density matrix to build one from. ELF/LOL and deformation density are still separate analyses.
 - **Cube *density* and ESP cubes from the CLI.** `ncs cube` writes one orbital. `fchk.js` now reads
   the density matrix and `esp.js` computes the potential from it, but neither `ncs cube` nor
   `ncs report` writes a density or ESP cube yet — the report's ESP figure is supplied by the caller.
