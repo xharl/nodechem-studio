@@ -614,6 +614,9 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     'fanOut', 'charge', 'multiplicity', 'energyUnit', 'energyMethod', 'origin',
     // Issue #132: a study id shared by blocks that belong together.
     'group',
+    // Issue 144: the in-app UFF route's own two knobs. Optional; a block that
+    // stays on CREST or import never states them.
+    'torsionStepDegrees', 'maxTrials',
   ]), path);
   // A conformer block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
@@ -634,6 +637,11 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   });
   if (generator === 'crest' && energyUnit === 'kcal/mol') {
     c.warn(`${path}.energyUnit`, 'only applies to an imported ensemble; a CREST search writes Hartree energies.');
+  }
+  // Issue 144: the UFF route always records kcal/mol force-field energies, so a
+  // block that declares Hartree for it is describing a different route.
+  if (generator === 'uff' && provided.energyUnit !== undefined && energyUnit !== 'kcal/mol') {
+    c.warn(`${path}.energyUnit`, 'does not apply to the in-app UFF route: it always records kcal/mol force-field energies.');
   }
   return {
     generator,
@@ -671,6 +679,19 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
     // Issue #132: the study this block belongs to, or '' for "stands alone".
     group: readConformerGroup(c, source.group, `${path}.group`),
+    // Issue 144: the UFF route's own settings. Only present when the file
+    // states them, so a project that never chose the route serialises exactly
+    // as it did before (the defaults live in uffConformers.js: 120° and 200).
+    ...(provided.torsionStepDegrees === undefined ? {} : {
+      torsionStepDegrees: readNumber(c, provided.torsionStepDegrees, `${path}.torsionStepDegrees`, {
+        legacy, fallback: 120, min: 15, max: 360,
+      }),
+    }),
+    ...(provided.maxTrials === undefined ? {} : {
+      maxTrials: readInteger(c, provided.maxTrials, `${path}.maxTrials`, {
+        legacy, fallback: 200, min: 1, max: 2000,
+      }),
+    }),
   };
 }
 
@@ -701,6 +722,61 @@ function normalizeConformerAtoms(c, raw, path, legacy) {
     });
   });
   return atoms;
+}
+
+/**
+ * Issue 144: the search record an in-app UFF ensemble carries — grid, dedupe
+ * threshold, trial count and what the result is not. Absent for every other
+ * generator, and absent from a file written before the route existed, so
+ * nothing gains an empty `search: null` key on the way through.
+ */
+function normalizeConformerSearch(c, raw, path) {
+  if (!isPlainObject(raw)) return null;
+  const rotors = Array.isArray(raw.rotors)
+    ? raw.rotors.slice(0, 40).map((rotor) => {
+      const bond = Array.isArray(rotor?.bond) ? rotor.bond.slice(0, 2).map(Number) : [];
+      const torsion = Array.isArray(rotor?.torsion) ? rotor.torsion.slice(0, 4).map(Number) : [];
+      if (bond.length !== 2 || torsion.length !== 4) return null;
+      if (![...bond, ...torsion].every((value) => Number.isInteger(value) && value > 0)) return null;
+      return { bond, torsion };
+    }).filter(Boolean)
+    : [];
+  return {
+    method: readString(c, raw.method, `${path}.method`, { legacy: true, fallback: '', max: 80 }),
+    engine: readString(c, raw.engine, `${path}.engine`, { legacy: true, fallback: '', max: 20 }),
+    torsionStepDegrees: readNumber(c, raw.torsionStepDegrees, `${path}.torsionStepDegrees`, {
+      legacy: true, fallback: 0, min: 0, max: 360,
+    }),
+    rmsdThreshold: readNumber(c, raw.rmsdThreshold, `${path}.rmsdThreshold`, {
+      legacy: true, fallback: 0, min: 0, max: 10,
+    }),
+    trials: readInteger(c, raw.trials, `${path}.trials`, { legacy: true, fallback: 0, min: 0, max: 100000 }),
+    trialsPlanned: readInteger(c, raw.trialsPlanned, `${path}.trialsPlanned`, { legacy: true, fallback: 0, min: 0, max: 10000000 }),
+    unique: readInteger(c, raw.unique, `${path}.unique`, { legacy: true, fallback: 0, min: 0, max: 100000 }),
+    deduplicated: readInteger(c, raw.deduplicated, `${path}.deduplicated`, { legacy: true, fallback: 0, min: 0, max: 100000 }),
+    rotatableBonds: readInteger(c, raw.rotatableBonds, `${path}.rotatableBonds`, { legacy: true, fallback: 0, min: 0, max: 1000 }),
+    relaxMaxIterations: readInteger(c, raw.relaxMaxIterations, `${path}.relaxMaxIterations`, { legacy: true, fallback: 0, min: 0, max: 100000 }),
+    truncated: Boolean(raw.truncated),
+    randomized: Boolean(raw.randomized),
+    electrostatics: Boolean(raw.electrostatics),
+    ringSampling: Boolean(raw.ringSampling),
+    comparableWithQuantumChemistry: Boolean(raw.comparableWithQuantumChemistry),
+    bondSource: readString(c, raw.bondSource, `${path}.bondSource`, { legacy: true, fallback: '', max: 12 }),
+    seed: raw.seed === null || raw.seed === undefined ? null : readInteger(c, raw.seed, `${path}.seed`, { legacy: true, fallback: 0, min: 0, max: 1e9 }),
+    energyKind: readString(c, raw.energyKind, `${path}.energyKind`, { legacy: true, fallback: '', max: 80 }),
+    note: readString(c, raw.note, `${path}.note`, { legacy: true, fallback: '', max: 400 }),
+    accuracyNote: readString(c, raw.accuracyNote, `${path}.accuracyNote`, { legacy: true, fallback: '', max: 400 }),
+    rotors,
+    // Bonds the search refused to turn, and why. Kept so a reopened project can
+    // still say which ring, amide or terminal bond was left alone.
+    excluded: Array.isArray(raw.excluded)
+      ? raw.excluded.slice(0, 40).map((entry) => ({
+        bond: Array.isArray(entry?.bond) ? entry.bond.slice(0, 2).map(Number) : [],
+        elements: Array.isArray(entry?.elements) ? entry.elements.slice(0, 2).map((element) => String(element ?? '').slice(0, 3)) : [],
+        reason: readString(c, entry?.reason, `${path}.excluded.reason`, { legacy: true, fallback: '', max: 12 }),
+      }))
+      : [],
+  };
 }
 
 /**
@@ -765,6 +841,9 @@ function normalizeConformerOutput(c, raw, path, legacy) {
     protomer: readString(c, selectedRaw.protomer, `${path}.selected.protomer`, { legacy: true, fallback: '', max: 40 }),
     atoms: normalizeConformerAtoms(c, selectedRaw.atoms, `${path}.selected.atoms`, legacy),
   } : null;
+  // Issue 144: present only on an in-app UFF ensemble, so a CREST or imported
+  // summary keeps exactly the keys it had.
+  const search = normalizeConformerSearch(c, raw.search, `${path}.search`);
   return {
     generator: readString(c, raw.generator, `${path}.generator`, { legacy: true, fallback: '', max: 24 }),
     method: readString(c, raw.method, `${path}.method`, { legacy: true, fallback: '', max: 24 }),
@@ -779,6 +858,7 @@ function normalizeConformerOutput(c, raw, path, legacy) {
     // Issue #132: the study id the summary was written with, copied from the
     // block. A legacy summary has none, which reads as "no group".
     group: readConformerGroup(c, raw.group, `${path}.group`),
+    ...(search ? { search } : {}),
     count: readInteger(c, raw.count, `${path}.count`, { legacy: true, fallback: members.filter((member) => member.kept).length, min: 0, max: 200 }),
     total: readInteger(c, raw.total, `${path}.total`, { legacy: true, fallback: members.length, min: 0, max: 5000 }),
     spreadKcal: raw.spreadKcal === null || raw.spreadKcal === undefined

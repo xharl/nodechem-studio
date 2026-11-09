@@ -131,6 +131,13 @@ export function conformerSettingsFor(node) {
       version: String(source.origin?.version || ''),
       method: String(source.origin?.method || ''),
     },
+    // Issue 144: the in-app UFF route's settings, passed through only when the
+    // block states them. Absent by default, so a CREST or import task carries
+    // exactly the fields it always did.
+    ...(Number.isFinite(Number(source.torsionStepDegrees))
+      ? { torsionStepDegrees: Number(source.torsionStepDegrees) } : {}),
+    ...(Number.isFinite(Number(source.maxTrials))
+      ? { maxTrials: Number(source.maxTrials) } : {}),
   };
 }
 
@@ -1502,6 +1509,12 @@ export function conformerSearchTask(project, node, record = null) {
   const multiplicity = chemistry.multiplicity ?? 1;
   const coords = chemistry.coords;
   const inputName = `${safeBase(node.id)}.xyz`;
+  // Issue 144: the in-app UFF route reads the project's own bond table (the
+  // same 1-based `{ a, b, order }` list the schema validates). A CREST or
+  // import task does not carry it: CREST perceives its own topology.
+  const projectBonds = Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length > 0
+    ? project.molecule.bonds.map((bond) => ({ a: bond.a, b: bond.b, order: bond.order }))
+    : null;
   return {
     nodeId: node.id,
     type: 'conformers',
@@ -1510,7 +1523,9 @@ export function conformerSearchTask(project, node, record = null) {
     executable: true,
     engine: null,
     inputName,
-    outputName: 'crest.out',
+    // The UFF route runs in-app and writes its own short log; CREST writes
+    // `crest.out` in the folder it ran in.
+    outputName: settings.generator === 'uff' ? 'uff.log' : 'crest.out',
     inputText: xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
     gates: null,
     validity: null,
@@ -1522,6 +1537,7 @@ export function conformerSearchTask(project, node, record = null) {
       argv: settings.generator === 'crest'
         ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
         : [],
+      ...(settings.generator === 'uff' && projectBonds ? { bonds: projectBonds } : {}),
     },
     ...(record ? {
       record: {

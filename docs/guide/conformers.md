@@ -23,15 +23,60 @@ calculation: it has no route, no gates and no termination record, and it is deli
 engine. A calculation block downstream of it runs the selected member's geometry instead of the
 project geometry.
 
-## Two sources
+## Three sources
 
 | `generator` | What happens |
 | --- | --- |
 | `crest` | The app runs the CREST executable you chose in the run console, with `--gfn2` (or `--gfnff`) and `--nci`, plus `--chrg`/`--uhf` when charge or multiplicity are non-default. Each search runs in its own folder under the queue directory: the starting geometry is staged there as `ensemble.xyz`, so `crest_conformers.xyz`, `crest.energies` and `crest.out` land beside the file CREST was given. |
 | `import` | The app reads a multi-XYZ file you point it at. Use this when CREST ran elsewhere, or when a collaborator sent the ensemble. A `crest.energies` file beside it (or `<stem>.energies`) supplies the energies for frames whose comment does not carry one. |
+| `uff` | The app generates the ensemble here, with UFF, and needs no external binary. See [Generating with UFF](#generating-with-uff-in-app) for what it does and does not claim. |
 
 The app never bundles CREST. If the generator is `crest` and no executable is configured, the
 queue refuses to start and says so; it does not fabricate an ensemble.
+
+## Generating with UFF (in-app)
+
+The `uff` route exists for machines with no CREST, and for pre-relaxing a structure before a real
+calculation. It is a small, documented search — not a stand-in for CREST's basin hopping:
+
+- **Torsion grid.** The app perceives the rotatable bonds (single, not in a ring, between two heavy
+  atoms that each carry another heavy neighbour, never an amide C–N), writes the current torsion
+  angle of each, and sets each one in turn to `current + k × step` for `k = 0 … 360/step − 1`. The
+  grid resolution is 120° by default (60°, 90° or 180° can be chosen) and every combination is run
+  in a fixed odometer order. There is no Monte-Carlo component and **no random number is drawn** —
+  so there is no seed, and the same input gives the same ensemble, member for member, on every run.
+- **Relaxation.** Every trial is minimised with UFF (`optimizeUff`: L-BFGS to a 0.05 kcal/mol/Å
+  maximum force component, at most 800 steps per trial). A trial that stops at that cap is reported
+  as such, and its last energy is shown, not called a minimum.
+- **Deduplication.** Relaxed trials are sorted by energy and a trial is dropped when its
+  **heavy-atom RMSD** to an already-kept member is below the block's RMSD threshold (0.5 Å by
+  default). The number of collapsed trials is recorded in the ensemble's `search` record.
+- **Ranking.** The survivors are ranked by the same code the CREST and import routes use, so the
+  window, the population column, the spread and the table behave identically.
+- **Trial cap.** The grid is `(360/step)^(rotatable bonds)`; above `maxTrials` (200 by default) it
+  is truncated in the same fixed order and the ensemble says the grid was incomplete.
+- **No rotatable bonds.** A rigid molecule yields exactly one member: the input geometry relaxed
+  with UFF. The block says that this is a pre-relaxation, not a search.
+- **Refusals.** An element outside UFF's table here (H, C, N, O, F, P, S, Cl, Br, I) is refused by
+  name — e.g. `Atom 3 is Si, which UFF here does not type` — never silently treated as carbon.
+
+**These are force-field structures and a UFF ranking, not QM results.** Every member stores its
+energy in `energyKcal` (unit `kcal/mol`, method `UFF`) and `energyEh` stays `null`, because a UFF
+energy is not a total electronic energy. A UFF number is not comparable with a Hartree value
+anywhere in this app, and the ensemble's `search` record states that beside the numbers. What the
+route cannot do, it does not pretend to do:
+
+- **No electrostatics.** UFF here has no charge term, so polar molecules and salts are ranked
+  worse than a method with one would rank them.
+- **No ring-conformer sampling.** Ring bonds are never turned, so a flexible ring (and especially a
+  macrocycle) keeps the conformation it arrived with; only its exocyclic torsions are searched.
+- **Bond perception is a fallback.** With no bond table (an XYZ import) the app perceives
+  connectivity at 1.3× the covalent-radius sum and treats every bond as single. An sp2 or aromatic
+  atom is then typed as sp3, and the ensemble carries a warning saying so. Import an SDF or a
+  project with bonds for a trustworthy UFF result.
+- **It is not CREST and not MMFF94.** The geometries differ from GFN2/MMFF94 minima by roughly
+  0.1–0.5 Å; the deliverable is "reproducible, documented, different".
+
 
 ## Imported ensembles: what the block records
 
@@ -86,8 +131,11 @@ running the block.
 | Temperature | 298.15 K | Boltzmann populations in the table. They describe the ensemble, not a free energy. |
 | Spread warning | 2 kcal/mol | If the retained ensemble spans more than this, the downstream calculation's validity report carries a warning. |
 | Fan out | off | When on, every retained member becomes its own task downstream instead of one chosen geometry. See below. |
+| Torsion grid | 120° | `uff` route only: the angle between trial values. Written to the project only when set. |
+| Max trials | 200 | `uff` route only: the cap on relaxed trials. A grid above it is truncated and labelled as such. |
 
 Charge and multiplicity are sent to CREST (`--chrg`, `--uhf` as 2S) and travel with the summary.
+The UFF route ignores them: UFF here has no charge term.
 
 ## Reading the table
 

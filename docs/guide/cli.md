@@ -179,7 +179,7 @@ ncs run my-project.ncs --out ./runs --executable /opt/g16/g16
 ```
 
 If the workflow contains a conformer block, `ncs run` also needs CREST unless the block imports its
-ensemble:
+ensemble or uses the in-app `uff` route (which spawns nothing):
 
 ```
 ncs run my-project.ncs --out ./runs --executable /opt/g16/g16 --crest /opt/crest/crest

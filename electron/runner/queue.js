@@ -28,6 +28,7 @@ import {
   withEnergies,
   xyzText,
 } from '../../src/shared/conformers.js';
+import { generateUffEnsemble, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 
 // `~` joins a block id to the conformer member it was expanded for (#80); it
 // is not a path separator and is legal inside a file name on every target OS.
@@ -279,7 +280,11 @@ function conformerTaskRecord(raw, nodeId) {
     throw new Error(`Conformer task "${nodeId}" input is larger than 2 MiB.`);
   }
   const conf = raw?.conformers && typeof raw.conformers === 'object' ? raw.conformers : {};
-  const generator = conf.generator === 'import' ? 'import' : 'crest';
+  // Issue 144: three routes, three sources of geometry. Anything else is
+  // treated as CREST, which is the historical default.
+  const generator = conf.generator === 'import'
+    ? 'import'
+    : (conf.generator === 'uff' ? 'uff' : 'crest');
   const importPath = oneLine(conf.importPath, 500);
   // A fanned-out member task (#80) carries one member of an ensemble that is
   // already stored in the project. It does not search, so it needs neither a
@@ -347,7 +352,7 @@ function conformerTaskRecord(raw, nodeId) {
     runId: null,
     runDir: null,
     inputName,
-    outputName: /^[A-Za-z0-9._-]+\.xyz$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out',
+    outputName: /^[A-Za-z0-9._-]+\.(xyz|out|log)$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out',
     settings: null,
     gates: {},
     validity: null,
@@ -404,6 +409,21 @@ function conformerTaskRecord(raw, nodeId) {
       // every other string a hand-written queue payload could carry; an
       // invalid value is dropped rather than guessed at.
       group: isConformerGroupId(String(conf.group ?? '')) ? String(conf.group) : '',
+      // Issue 144: the UFF route's own settings and the project's bond table.
+      // Bounded here like everything else, and absent for CREST/import tasks.
+      ...(generator === 'uff' && Number.isFinite(Number(conf.torsionStepDegrees))
+        ? { torsionStepDegrees: number(conf.torsionStepDegrees, 120, 15, 360) } : {}),
+      ...(generator === 'uff' && Number.isFinite(Number(conf.maxTrials))
+        ? { maxTrials: Math.round(number(conf.maxTrials, 200, 1, 2000)) } : {}),
+      ...(generator === 'uff' && Array.isArray(conf.bonds)
+        ? {
+          bonds: conf.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
+            a: Number(bond?.a),
+            b: Number(bond?.b),
+            order: [1, 1.5, 2, 3].includes(Number(bond?.order)) ? Number(bond.order) : 1,
+          })).filter((bond) => Number.isInteger(bond.a) && Number.isInteger(bond.b)
+            && bond.a > 0 && bond.b > 0 && bond.a !== bond.b),
+        } : {}),
       argv: Array.isArray(conf.argv) ? conf.argv.map(String).slice(0, 32) : [],
       member,
     },
@@ -1475,13 +1495,18 @@ export class QueueManager {
       let energies = [];
       let source = conf.generator;
       let origin = null;
+      // Issue 144: what an in-app UFF search did, kept beside the numbers.
+      let search = null;
+      // Its caveats (perceived bonds, truncated grid, unconverged trials) must
+      // travel with the summary, not only into the run log.
+      let searchWarnings = [];
       // Issue #130: a CREST search writes Hartree energies; only an imported
-      // file can carry another unit, and only if the block says so.
+      // file can carry another unit, and only if the block says so. A UFF
+      // search writes kcal/mol force-field energies and nothing else.
       const energyUnit = conf.generator === 'import'
         ? (conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree')
-        : 'hartree';
-      const energyMethod = conf.generator === 'import' ? conf.energyMethod : '';
-
+        : (conf.generator === 'uff' ? 'kcal/mol' : 'hartree');
+      const energyMethod = conf.generator === 'import' ? conf.energyMethod : (conf.generator === 'uff' ? 'UFF' : '');
       if (conf.generator === 'import') {
         // Reading an ensemble is a file operation, not an engine call, so a dry
         // run must use the real ensemble. It used to drop straight to the
@@ -1508,6 +1533,56 @@ export class QueueManager {
           // of the log then knows what the numbers are before seeing them.
           text: `Imported ensemble ${imported.ensemblePath} (${energyUnit}${energyMethod ? `, ${energyMethod}` : ''}${sourceSha256 ? `, sha256 ${sourceSha256.slice(0, 12)}…` : ''})`
             + (origin.program ? ` from ${origin.program}${origin.version ? ` ${origin.version}` : ''}` : '; origin not recorded'),
+        });
+      } else if (conf.generator === 'uff') {
+        // Issue 144: the in-app route. It spawns nothing, so a dry run runs it
+        // for real: "dry" here means "no external binary", which is exactly
+        // what this route does anyway.
+        const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+        const parsedInput = parseMultiXyz(inputText);
+        if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+          throw new Error(`The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
+        }
+        const generated = generateUffEnsemble({
+          atoms: parsedInput.frames[0].atoms,
+          bonds: Array.isArray(conf.bonds) ? conf.bonds : null,
+          torsionStepDegrees: conf.torsionStepDegrees,
+          maxTrials: conf.maxTrials,
+          rmsdThreshold: conf.rmsdThreshold,
+          energyWindowKcal: conf.energyWindowKcal,
+          maxConformers: conf.maxConformers,
+          temperature: conf.temperature,
+          spreadThresholdKcal: conf.spreadThresholdKcal,
+          selectedConformerId: conf.selectedConformerId,
+        });
+        if (generated.error) throw new Error(generated.error);
+        ensembleText = generated.ensembleText;
+        energies = generated.energies;
+        search = generated.search;
+        searchWarnings = generated.warnings || [];
+        source = 'uff';
+        origin = { program: 'NodeChem Studio', version: '', method: 'UFF', sourceSha256: '' };
+        // The log says what ran, on what grid, and what these numbers are. It
+        // is written into the task folder, so a reader of the artifacts alone
+        // is not left guessing whether this was QM or CREST.
+        await fsp.writeFile(path.join(dir, task.outputName || 'uff.log'), [
+          `${task.title} · in-app conformer search`,
+          `Method: ${UFF_SEARCH_METHOD}`,
+          `Grid: ${search.torsionStepDegrees}° over ${search.rotatableBonds} rotatable bond(s); `
+            + `${search.trials} trial(s) run of ${search.trialsPlanned ?? 'more than reported'} in the full grid`
+            + `${search.truncated ? ' (grid truncated)' : ''}`,
+          `Dedupe: ${search.deduplicated} trial(s) collapsed at ${search.rmsdThreshold} Å heavy-atom RMSD; `
+            + `${search.unique} unique member(s)`,
+          `Bonds: ${search.bondSource === 'supplied' ? 'from the project bond table' : 'perceived from geometry, all single (see warnings)'}`,
+          'Energies: UFF force-field energies in kcal/mol. Not QM, not comparable with a Hartree value.',
+        ].join('\n') + '\n', 'utf8');
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: `In-app UFF search: ${UFF_SEARCH_METHOD}; ${search.torsionStepDegrees}° grid, `
+            + `${search.trials} trial(s), ${search.unique} unique at ${search.rmsdThreshold} Å. `
+            + 'Force-field structures, not QM; no external binary was run.',
         });
       } else if (queue.options.dryRun) {
         const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
@@ -1579,12 +1654,13 @@ export class QueueManager {
         spreadThresholdKcal: conf.spreadThresholdKcal,
         selectedConformerId: conf.selectedConformerId,
         energyUnit,
-        energyMethod: conf.generator === 'import' ? energyMethod : '',
+        energyMethod,
       });
       if (ranked.error) throw new Error(ranked.error);
 
-      // Issue #129: a generated ensemble names what ran here (crest, or the
-      // labelled dry-run fixture); an imported one keeps only what was declared.
+      // Issue #129: a generated ensemble names what ran here (crest, the
+      // in-app UFF search, or the labelled dry-run fixture); an imported one
+      // keeps only what was declared.
       const recordedOrigin = origin || {
         program: source,
         version: '',
@@ -1593,14 +1669,26 @@ export class QueueManager {
       };
       const summary = ensembleSummary(ranked, {
         generator: source,
-        method: conf.method,
+        // Issue 144: a UFF search has no xTB method, and recording the block's
+        // `method` (gfn2 by default) beside a UFF ensemble would be a false
+        // provenance claim.
+        method: conf.generator === 'uff' ? '' : conf.method,
         origin: recordedOrigin,
         energyUnit,
         energyMethod,
         // Issue #132: the study id travels with the ensemble, so a reader of
         // conformers.json alone can see the block belongs with others.
         group: conf.group,
+        // Issue 144: absent for every other route, so their summary is
+        // unchanged. Carries the grid, the dedupe threshold and the trials.
+        search,
       });
+      if (search && searchWarnings.length > 0) {
+        summary.warnings = [
+          ...summary.warnings,
+          ...searchWarnings.map(({ id, status, message }) => ({ id, status, message })),
+        ];
+      }
       summary.generatedAt = new Date().toISOString();
       const summaryPath = path.join(dir, 'conformers.json');
       await writeJsonAtomic(summaryPath, summary);
