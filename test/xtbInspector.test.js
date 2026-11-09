@@ -135,7 +135,9 @@ describe('rendered calculation inspector', () => {
     expect(nodeFields(renderFor('xtb'))).toEqual([
       'title', 'engine', 'jobType', 'timeoutSeconds', 'xtbMethod', 'xtbOptLevel', 'xtbThreads',
       'solvation', 'solvationModel', 'solvent',
-      'charge', 'multiplicity', 'imaginary', 'minMagnitude',
+      // Issue 186: the spin-state sweep is offered on every calculation block;
+      // its legal multiplicities follow the electron count, not the engine.
+      'charge', 'multiplicity', 'spinSweepEnabled', 'imaginary', 'minMagnitude',
     ]);
   });
 
@@ -147,7 +149,7 @@ describe('rendered calculation inspector', () => {
       'tdStates', 'tdTriplets', 'tdRoot', 'ntoTransition', 'nto',
       'raman', 'vcd',
       'solvation', 'solvationModel', 'solvent',
-      'charge', 'multiplicity', 'imaginary', 'minMagnitude',
+      'charge', 'multiplicity', 'spinSweepEnabled', 'imaginary', 'minMagnitude',
       'checkpointFrom', 'customKeywords',
     ]);
   });

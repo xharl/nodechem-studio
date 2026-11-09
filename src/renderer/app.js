@@ -94,6 +94,7 @@ import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../sha
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
+import { SPIN_SWEEP_MAX, multiplicitiesFor, spinSweepFor } from '../shared/spinSweep.js';
 import { estimateCost } from '../shared/costEstimate.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
 import {
@@ -383,6 +384,7 @@ const state = {
     tasks: [],
     reason: null,
     starting: false,
+    spins: {},
   },
 };
 
@@ -444,6 +446,41 @@ function gateChips(node) {
   }
   if (gates.finalEnergy) parts.push('final E');
   return parts.length ? parts : ['standard gates'];
+}
+
+/* ── Spin-state sweeps (issue 186) ──────────────────────────
+ * The model and the planner half already exist in shared/spinSweep.js and
+ * shared/workflowTasks.js. The renderer only asks for one, says that it
+ * happened, and shows the comparison. A sweep is a set of separate runs over
+ * one geometry; nothing here calls its lowest state a ground state.
+ */
+
+/** Electrons and the legal multiplicities for a block's own molecule. */
+function spinMultiplicitiesForNode(node) {
+  const molecule = moleculeForNode(node);
+  const atoms = Array.isArray(molecule?.coords) ? molecule.coords : [];
+  if (atoms.length === 0) return { electrons: null, values: [] };
+  const electrons = atoms.reduce((total, atom) => total + (atomicNumber(atom.element) || 0), 0)
+    - Number(molecule.charge || 0);
+  if (!Number.isInteger(electrons) || electrons < 0) return { electrons: null, values: [] };
+  return { electrons, values: multiplicitiesFor({ electrons }).slice(0, SPIN_SWEEP_MAX) };
+}
+
+/** The card/footer line: `spin states 1, 3, 5`, or '' when the block is plain. */
+function spinSweepLabel(node) {
+  const sweep = node && node.settings ? spinSweepFor(node.settings) : null;
+  return sweep ? `spin states ${sweep.multiplicities.join(', ')}` : '';
+}
+
+/** A queue row's own multiplicity, named rather than left in the id suffix. */
+function spinTaskMeta(task) {
+  const spin = task && typeof task.spin === 'object' ? task.spin : null;
+  if (!spin || !Number.isInteger(spin.multiplicity)) return '';
+  const count = Number.isInteger(spin.count) ? spin.count : null;
+  const index = Number.isInteger(spin.index) ? spin.index + 1 : null;
+  return count && index
+    ? `m${spin.multiplicity} · state ${index}/${count}`
+    : `m${spin.multiplicity}`;
 }
 
 function datasetForInputNode(node) {
@@ -582,7 +619,10 @@ function nodeFoot(node) {
   if (node.type === 'calc') {
     const familyDone = (state.queue?.tasks || []).some((task) => String(task.nodeId || '').startsWith(`${node.id}~`) && task.status === 'completed');
     const output = node.parsed || familyDone ? 'parsed' : node.state === 'ready' ? 'ready to run' : 'no output';
-    return { left: gateChips(node).join(' · '), right: output };
+    // Issue 186: a sweeping block says so on its own card — this block queues
+    // one run per multiplicity, it is not one run.
+    const sweep = spinSweepLabel(node);
+    return { left: [gateChips(node).join(' · '), sweep].filter(Boolean).join(' · '), right: output };
   }
   if (node.type === 'condition') return { left: `unknown → ${node.condition.unknown.replace('-', ' ')}`, right: '2 branches' };
   if (node.type === 'conformers') {
@@ -749,6 +789,31 @@ function resultFacts(node) {
         main: `${done}/${family.length} records${running ? ' · running' : ''}`,
         sub: `${passed}/${family.length} gates pass`,
         tone: done === family.length ? (passed === family.length ? 'ok' : 'warn') : '',
+      };
+    }
+    // Issue 186: the same block is also a sweep, so its card reports the
+    // comparison the queue wrote — never a single state dressed as the answer.
+    const sweep = spinSweepFor(node.settings);
+    const verdict = sweep && state.queue?.spins ? state.queue.spins[node.id] : null;
+    if (sweep && verdict && typeof verdict === 'object') {
+      const rows = Array.isArray(verdict.rows) ? verdict.rows : [];
+      const missing = rows.filter((row) => !Number.isFinite(row.energyHartree));
+      if (verdict.available === true) {
+        const ran = rows.length - missing.length;
+        const spread = rows.reduce((max, row) => (Number.isFinite(row.relativeKcalPerMol)
+          ? Math.max(max, row.relativeKcalPerMol) : max), 0);
+        return {
+          main: `m${verdict.groundMultiplicity} lowest computed`,
+          sub: missing.length
+            ? `${ran}/${rows.length} states ran · ${missing.map((row) => `m${row.multiplicity}`).join(', ')} no energy`
+            : `states ${rows.map((row) => row.multiplicity).join(', ')} · ΔE ${spread.toFixed(1)} kcal/mol`,
+          tone: missing.length ? 'warn' : 'ok',
+        };
+      }
+      return {
+        main: 'spin sweep · no comparison',
+        sub: String(verdict.reason || 'no state reported a final energy'),
+        tone: 'warn',
       };
     }
     const parsed = node.parsed && typeof node.parsed === 'object' ? node.parsed : null;
@@ -2283,6 +2348,58 @@ function calcInspector(node) {
     </div></div>`,
   ].join(''));
 
+  // Issue 186: the spin-state sweep is a control on the block, not a second
+  // block. It is off by default and writes nothing until it is switched on, so
+  // a project that never used it stays byte-identical. The offered states are
+  // the ones the electron count allows — the same rule the planner follows.
+  const spinInfo = spinMultiplicitiesForNode(node);
+  const storedSweep = s.spinSweep && s.spinSweep.enabled === true ? s.spinSweep : null;
+  const sweepOn = Boolean(storedSweep);
+  const chosenSpin = new Set((storedSweep?.multiplicities || []).map(Number));
+  const impossibleSpin = [...chosenSpin].filter((value) => !spinInfo.values.includes(value));
+  const spinMeta = !spinInfo.values.length
+    ? 'no electron count'
+    : sweepOn
+      ? `states ${[...chosenSpin].sort((a, b) => a - b).join(', ')} · one geometry`
+      : `off · ${spinInfo.values.length} legal`;
+  // A stored sweep may name a multiplicity this electron count cannot have (a
+  // hand-edited file, or a charge change after the sweep was set). It is shown
+  // so it can be unticked, and named in the warning below.
+  const offeredSpin = [...spinInfo.values, ...impossibleSpin.filter((value) => !spinInfo.values.includes(value))]
+    .sort((a, b) => a - b);
+  const spinGroup = group('Spin states', spinMeta, sweepOn, [
+    switchRow('Spin-state sweep', `one run per multiplicity · up to ${SPIN_SWEEP_MAX} states`,
+      'spinSweepEnabled', sweepOn, { disabled: spinInfo.values.length < 2 }),
+    sweepOn && offeredSpin.length
+      ? `<div class="field full"><label>Multiplicities</label><div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">`
+        + offeredSpin.map((multiplicity) => {
+          const legal = spinInfo.values.includes(multiplicity);
+          const checked = chosenSpin.has(multiplicity);
+          // A sweep needs at least two distinct states; the last two cannot be
+          // cleared here, or the project would be invalid on the next keystroke.
+          const locked = checked && legal && chosenSpin.size <= 2;
+          return `<label class="inspector-note" style="display:inline-flex;gap:5px;align-items:center;cursor:pointer${legal ? '' : ';text-decoration:line-through'}"`
+            + `${legal ? '' : ` title="Not allowed for ${spinInfo.electrons} electrons"`}>`
+            + `<input type="checkbox" data-spin-state="${multiplicity}" aria-label="Multiplicity ${multiplicity}${legal ? '' : ' (not allowed)'}"`
+            + `${checked ? ' checked' : ''}${locked ? ' disabled' : ''}> m${multiplicity}</label>`;
+        }).join('')
+        + '</div></div>'
+      : '',
+    sweepOn && impossibleSpin.length
+      ? `<div class="field full"><span class="inspector-note"><strong>Not allowed:</strong> `
+        + `${impossibleSpin.map((value) => `multiplicity ${value}`).join(', ')} for ${spinInfo.electrons} electrons. `
+        + `An ${spinInfo.electrons % 2 === 0 ? 'even' : 'odd'} electron count allows `
+        + `${spinInfo.electrons % 2 === 0 ? 'odd' : 'even'} multiplicities only; untick or replace it before queueing.</span></div>`
+      : '',
+    '<div class="field full"><span class="inspector-note">'
+      + (spinInfo.values.length
+        ? `Each state is a separate calculation at the same geometry (${spinInfo.electrons} electrons). `
+          + 'The comparison names the lowest of the states that ran — it is not a ground-state determination, '
+          + 'because no state beyond those listed is computed.'
+        : 'No electron count is available for this block, so no multiplicity can be offered.')
+      + '</span></div>',
+  ].join(''));
+
   // Raman (#76) is a modifier of the frequency keyword, so the switch only
   // appears where a frequency job exists to carry it.
   const frequencyJob = /Freq/i.test(String(s.jobType || ''));
@@ -2392,6 +2509,7 @@ function calcInspector(node) {
     ${isXtb || isPsi4 || compositeJob ? '' : vcdGroup}
     ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : gaussianSolvationGroup}
     ${moleculeGroup}
+    ${spinGroup}
     ${gatesGroup}
     ${isXtb ? '' : validityGroup}
     ${dependencyGroup}
@@ -4057,6 +4175,24 @@ function updateNodeField(node, key, value) {
     node.settings.dispersion = next.dispersion;
     return;
   }
+  // Issue 186: the switch is ours, not a schema field. Off writes `null`, which
+  // is exactly what a block that never asked for a sweep carries.
+  if (key === 'spinSweepEnabled') {
+    if (!value) {
+      node.settings.spinSweep = null;
+      return;
+    }
+    const { values } = spinMultiplicitiesForNode(node);
+    if (values.length < 2) return;
+    const current = Number(node.settings.multiplicity);
+    const first = values.includes(current) ? current : values[0];
+    const second = values.find((multiplicity) => multiplicity !== first);
+    node.settings.spinSweep = {
+      enabled: true,
+      multiplicities: [first, second].sort((a, b) => a - b),
+    };
+    return;
+  }
   if (key in node.settings) {
     if (key === 'solvation') {
       node.settings.solvation = Boolean(value);
@@ -4152,6 +4288,30 @@ function updateNodeField(node, key, value) {
 function updateGate(node, key, checked) {
   if (!node.settings?.gates) return;
   node.settings.gates[key] = checked;
+}
+
+/**
+ * Issue 186: tick or untick one multiplicity of a sweep. A sweep needs at least
+ * two distinct states, so the last two cannot be cleared here; the switch turns
+ * the whole sweep off. Adding is capped by SPIN_SWEEP_MAX, the same bound the
+ * normaliser applies.
+ */
+function updateSpinSweepState(node, multiplicity, checked) {
+  const sweep = node.settings?.spinSweep;
+  if (!sweep || sweep.enabled !== true || !Number.isInteger(multiplicity)) return;
+  const values = Array.isArray(sweep.multiplicities) ? sweep.multiplicities.map(Number) : [];
+  if (checked) {
+    if (!values.includes(multiplicity) && values.length < SPIN_SWEEP_MAX) values.push(multiplicity);
+  } else {
+    if (values.length <= 2) return;
+    const index = values.indexOf(multiplicity);
+    if (index === -1) return;
+    values.splice(index, 1);
+  }
+  node.settings.spinSweep = {
+    enabled: true,
+    multiplicities: values.sort((a, b) => a - b).slice(0, SPIN_SWEEP_MAX),
+  };
 }
 
 /** Issue #25: a disabled validity check is stored by id; enabling removes it. */
@@ -6155,6 +6315,9 @@ function applyQueue(queue) {
     // Issue 177: the queue's per-task wall clock, so a running row can show
     // "elapsed / limit" without reading the project.
     timeoutSeconds: Number.isInteger(Number(queue.timeoutSeconds)) ? Number(queue.timeoutSeconds) : null,
+    // Issue 186: the comparisons the queue wrote for each swept block, so a
+    // card can report the lowest computed state without re-reading run folders.
+    spins: queue.spins && typeof queue.spins === 'object' ? queue.spins : {},
   };
   const reconciled = syncNodeStatesFromQueue(queue);
   renderQueue();
@@ -6247,7 +6410,10 @@ function renderQueue() {
         const timeoutNote = timedOut
           ? `after ${formatDuration(timedOut.elapsedSeconds)}${timedOut.limitSeconds ? ` · limit ${formatDuration(timedOut.limitSeconds)}` : ''}`
           : '';
-        const meta = [task.status, timeoutNote, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
+        // Issue 186: a sweep member row names the state it runs, so three rows
+        // from one block are three multiplicities, not three anonymous runs.
+        const spinMeta = spinTaskMeta(task);
+        const meta = [task.status, spinMeta, timeoutNote, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
           .filter(Boolean).join(' · ');
         // The last output line a stopped task wrote is the evidence of where it
         // was, so the row's tooltip carries it rather than the meta line.
@@ -8081,6 +8247,17 @@ function onDocumentChange(event) {
     renderInspector();
     return;
   }
+  // Issue 186: one multiplicity of a sweep's checkbox row. This is not a
+  // settings key — the sweep object itself is rewritten.
+  if (target.dataset.spinState) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'calc') return;
+    updateSpinSweepState(node, Number(target.dataset.spinState), target.checked);
+    renderGraph();
+    renderInspector();
+    return;
+  }
   if (target.dataset.computeField) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
@@ -8552,7 +8729,27 @@ function wireEvents() {
 
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
-export { calcInspector, costCardText, formatCostDuration, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, resultFacts, runStateOf, simpleInspector, state, syncNodeStatesFromQueue, reconcileNodesWithQueue };
+export {
+  calcInspector,
+  costCardText,
+  formatCostDuration,
+  inputInspector,
+  nodeDetail,
+  nodeFoot,
+  renderFlowTabs,
+  renderRecordSummary,
+  resultFacts,
+  runStateOf,
+  simpleInspector,
+  spinMultiplicitiesForNode,
+  spinSweepLabel,
+  spinTaskMeta,
+  state,
+  syncNodeStatesFromQueue,
+  reconcileNodesWithQueue,
+  updateNodeField,
+  updateSpinSweepState,
+};
 
 function applyAppInfo() {
   const chip = $('#app-version-chip');

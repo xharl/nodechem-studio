@@ -130,6 +130,25 @@ A value that came from a ladder or an ensemble is shown with its spread and what
 
 A ladder whose rungs did not all run keeps its existing verdict `unknown`, and no mean is taken over the rungs that happened to finish.
 
+## Spin-state comparison
+
+A block with **Spin states** switched on runs one calculation per multiplicity over the same
+geometry. Each state is its own `run.json`; the comparison is written once, to the queue record
+(`queue.spins.<nodeId>`), when every state has finished.
+
+Open any state's run and the panel carries a **Spin-state comparison** card: multiplicity, that
+state's queue status, final energy, ΔE to the lowest computed state in kcal/mol, and ⟨S²⟩. The lowest
+row is marked *lowest computed*.
+
+- The card compares **only the multiplicities that were run**, on **one geometry**, at the block's
+  level of theory. It is not a ground-state determination, and it says so rather than implying a
+  molecular ground state that was never computed.
+- A state that failed or timed out keeps its row, labelled with the queue's status and its error, and
+  a *Not ranked* line names it. It is not dropped and no energy is invented for it.
+- Two states with the same energy are reported as a tie, not ordered.
+- The comparison lives on the queue record, so it appears when the run is opened from the console of
+  the queue that produced it. A `run.json` on its own is one state, and is shown as one state.
+
 ## Gates
 
 | Gate | Required | Passes when |

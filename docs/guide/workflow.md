@@ -266,18 +266,39 @@ report prints one table per ladder with each rung's energy and ΔE, alongside th
 ## Spin-state sweeps
 
 Multiplicity defines the electronic state, so a sweep is a set of separate runs over the same
-geometry rather than one job with a setting. Put it on the block:
+geometry rather than one job with a setting. It is opt-in on a calculation block: **Spin states** in
+the inspector, off by default. Switching it on writes
 
 ```json
 "spinSweep": { "enabled": true, "multiplicities": [1, 3, 5] }
 ```
 
-The block becomes `<nodeId>.m1`, `.m3`, `.m5`, each with its own input, multiplicity in the molecule
-block, run folder and provenance. When every state has finished, `queue.spins.<nodeId>` carries the
-table — multiplicity, final energy, ΔE in kcal/mol, ⟨S²⟩ — with the ground state identified.
+A project that never switches it on keeps `"spinSweep": null` and is byte-identical to one written
+before the control existed.
 
-- The ground state is the lowest **computed** state. A state that did not run stays in the table with
-  no energy and is named in the reason; it is never assumed to lie above the others.
+The inspector offers only the multiplicities the block's electron count allows — an even count gets
+odd multiplicities (`1, 3, 5…`), an odd count gets even ones (`2, 4, 6…`) — up to `SPIN_SWEEP_MAX`
+(6) states. A stored multiplicity that the electron count cannot have is shown struck through and
+named in the inspector rather than silently dropped; the planner will not run it. A sweep needs two
+distinct states, so the last two cannot be unticked; turn the switch off instead.
+
+The block then becomes `<nodeId>.m1`, `.m3`, `.m5`, each with its own input, multiplicity in the
+molecule block, run folder and provenance. The block's card says `spin states 1, 3, 5` in its footer,
+and each queue row names its state (`m3 · state 2/3`) as well as the task title
+(`Single-point energy — multiplicity 3`).
+
+When every state has finished, `queue.spins.<nodeId>` carries the table — multiplicity, final energy,
+ΔE in kcal/mol, ⟨S²⟩ — and the results panel of any state in the sweep renders it as **Spin-state
+comparison**, with the lowest row marked *lowest computed*. The workflow report prints the same table
+as one section per swept block.
+
+- The **lowest computed** state is the lowest energy among states that actually reported one. Nothing
+  is extrapolated to a multiplicity that did not run, and the table is not a ground-state
+  determination: every state ran at one geometry and one level of theory, so another geometry, another
+  level, or a state outside the sweep is outside the comparison. The card, the results panel and the
+  report all say so.
+- A state that failed, timed out or was cancelled keeps its row and is named with the queue's own
+  status (and its error). It is never dropped, and no energy is invented for it.
 - A degeneracy is reported as a degeneracy; the lowest multiplicity is not picked silently.
 - ⟨S²⟩ comes from the annihilation output Gaussian prints (`after`), falling back to the SCF line, and
   is `null` for a restricted reference — which has S² = 0 by construction but where nothing was read.

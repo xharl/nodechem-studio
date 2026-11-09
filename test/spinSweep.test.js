@@ -183,7 +183,10 @@ describe('the queue and the report', () => {
     }, {});
     const html = workflowReportHtml(model);
     expect(html).toContain('Spin-state sweep — a');
-    expect(html).toContain('ground');
+    // Issue 186 removed the misleading `ground` tag: a single-geometry sweep
+    // names the lowest energy it computed, not a molecular ground state.
+    expect(html).toContain('lowest computed');
+    expect(html).toContain('single-geometry comparison');
     expect(html).toContain('2.0123');
     expect(html).toContain('12.00');
   });

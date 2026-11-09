@@ -666,18 +666,38 @@ export function buildWorkflowReport(queue, records = {}, {
           cbs: cbsExtrapolate(entries),
         };
       }),
+    // Issue 186: one entry per spin-state sweep, with each state's own queue
+    // status so a state that failed is reported by name instead of vanishing.
+    // `expected` is the number of member tasks the plan queued for this block.
     spins: Object.entries(source.spins && typeof source.spins === 'object' ? source.spins : {})
-      .map(([id, sweep]) => ({
-        id,
-        groundMultiplicity: Number.isInteger(sweep?.groundMultiplicity) ? sweep.groundMultiplicity : null,
-        reason: text(sweep?.reason),
-        rows: (Array.isArray(sweep?.rows) ? sweep.rows : []).map((row) => ({
-          multiplicity: Number.isInteger(row?.multiplicity) ? row.multiplicity : null,
-          energyHartree: Number.isFinite(row?.energyHartree) ? row.energyHartree : null,
-          relativeKcalPerMol: Number.isFinite(row?.relativeKcalPerMol) ? row.relativeKcalPerMol : null,
-          spinSquared: Number.isFinite(row?.spinSquared) ? row.spinSquared : null,
-        })),
-      })),
+      .map(([id, sweep]) => {
+        const members = tasks.filter((task) => task?.spin?.id === id);
+        const rows = (Array.isArray(sweep?.rows) ? sweep.rows : []).map((row) => {
+          const nodeId = text(row?.nodeId);
+          const taskRow = nodeId ? rowByNodeId.get(nodeId) : null;
+          return {
+            nodeId,
+            multiplicity: Number.isInteger(row?.multiplicity) ? row.multiplicity : null,
+            energyHartree: Number.isFinite(row?.energyHartree) ? row.energyHartree : null,
+            relativeKcalPerMol: Number.isFinite(row?.relativeKcalPerMol) ? row.relativeKcalPerMol : null,
+            spinSquared: Number.isFinite(row?.spinSquared) ? row.spinSquared : null,
+            status: taskRow?.status || null,
+            error: taskRow?.error || null,
+            method: taskRow?.method || null,
+            basis: taskRow?.basis || null,
+          };
+        });
+        const levelRow = rows.find((row) => row.method || row.basis) || null;
+        return {
+          id,
+          available: sweep?.available === true,
+          groundMultiplicity: Number.isInteger(sweep?.groundMultiplicity) ? sweep.groundMultiplicity : null,
+          degenerate: sweep?.degenerate === true,
+          expected: members.length > 0 ? members.length : null,
+          level: levelRow ? { method: levelRow.method, basis: levelRow.basis } : null,
+          rows,
+        };
+      }),
     // ΔG‡ for a reaction path, only where the queue computed one and only with
     // the correction scheme attached.
     reactions: Object.entries(source.reactions && typeof source.reactions === 'object' ? source.reactions : {})
@@ -817,6 +837,7 @@ const REPORT_STYLE = 'body{font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-s
   + 'th{background:#f7f8fa;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#5b6472}'
   + '.num{text-align:right;font-variant-numeric:tabular-nums}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}'
   + '.gates-pass{color:#137a3a;font-weight:600}.gates-fail{color:#b42318;font-weight:600}.warn-text{color:#7a5b00;font-weight:600}'
+  + '.spin-lowest td{font-weight:600}'
   + '.fixture{background:#fff3cd;color:#7a5b00;border-radius:3px;padding:0 4px;font-size:10px;font-weight:600}'
   + '.imported{background:#e8eefc;color:#243b6b;border:1px solid #c3d2f0;border-radius:3px;padding:0 4px;font-size:10px;font-weight:600;white-space:nowrap}'
   + '.warn{background:#fff8e6;border-left:3px solid #e0a800;padding:8px 10px}'
@@ -1015,23 +1036,63 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
       + `<tbody>${rowsHtml}</tbody></table>`;
   }).join('');
 
-  // Spin-state sweeps: one table per swept block, ground state marked.
+  // Spin-state sweeps (issue 186): one table per swept block. The lowest row is
+  // the lowest energy that was actually computed — never called a molecular
+  // ground state, because the sweep is a set of runs on one geometry. A state
+  // that failed keeps its row, with its queue status and no invented energy.
   const spinBlocks = (Array.isArray(model.spins) ? model.spins : []).map((sweep) => {
-    const body = sweep.rows.map((row) => {
-      const ground = sweep.groundMultiplicity !== null && row.multiplicity === sweep.groundMultiplicity;
-      const label = row.multiplicity === null ? MISSING : String(row.multiplicity);
-      return '<tr' + (ground ? ' class="ground-state"' : '') + '>'
-        + `<td>${escapeHtml(label)}${ground ? ' <span class="tag">ground</span>' : ''}</td>`
+    const lowest = sweep.groundMultiplicity;
+    const rows = Array.isArray(sweep.rows) ? sweep.rows : [];
+    const labels = rows.map((row) => (row.multiplicity === null ? MISSING : `m${row.multiplicity}`));
+    const missing = rows.filter((row) => row.energyHartree === null);
+    // `available` is the queue's flag, but a record written before it existed
+    // still has a ground multiplicity only when an energy was actually ranked.
+    const ranked = lowest !== null && missing.length < rows.length;
+    const level = [sweep.level?.method, sweep.level?.basis].filter(Boolean).join('/');
+    const summary = `<p>${escapeHtml(String(rows.length))} state${rows.length === 1 ? '' : 's'} compared`
+      + `${labels.length ? ` (${escapeHtml(labels.join(', '))})` : ''}, all on the <strong>same starting geometry</strong>`
+      + `${level ? ` at ${escapeHtml(level)}` : ''}. `
+      + (ranked
+        ? `<strong>Lowest computed: m${escapeHtml(String(lowest))}.</strong> `
+        : '<strong>No state reported a final energy, so nothing is ranked.</strong> ')
+      + 'This is a single-geometry comparison: the states were not separately relaxed, and a multiplicity that '
+      + 'did not run, a different geometry or a different level of theory is outside what was computed.</p>'
+      + (sweep.degenerate
+        ? '<p class="warn">Two or more states reported the same energy: the order is a tie and no state was picked as the lowest.</p>'
+        : '');
+    const body = rows.map((row) => {
+      const isLowest = lowest !== null && row.energyHartree !== null && row.multiplicity === lowest;
+      const state = row.energyHartree === null
+        ? (row.status || 'no energy')
+        : (isLowest ? 'lowest computed' : (row.status || 'reported'));
+      return '<tr' + (isLowest ? ' class="spin-lowest"' : '') + '>'
+        + `<td>${escapeHtml(row.multiplicity === null ? MISSING : `m${row.multiplicity}`)}</td>`
+        + `<td>${escapeHtml(state)}</td>`
         + `<td class="num">${escapeHtml(value(row.energyHartree, 8))}</td>`
         + `<td class="num">${escapeHtml(value(row.relativeKcalPerMol, 2))}</td>`
         + `<td class="num">${row.spinSquared === null ? 'not reported' : escapeHtml(row.spinSquared.toFixed(4))}</td>`
         + '</tr>';
     }).join('');
+    const missingHtml = missing.length
+      ? `<p class="warn" data-field="spin-missing">Not ranked: ${escapeHtml(missing
+        .map((row) => {
+          const label = row.multiplicity === null ? 'a state' : `m${row.multiplicity}`;
+          const status = row.status || 'no energy reported';
+          return `${label} ${status}${row.error ? ` — ${row.error}` : ''}`;
+        })
+        .join('; '))}. The state is a row of this sweep; no energy is inferred for it.</p>`
+      : '';
+    const shortfall = sweep.expected !== null && sweep.expected !== undefined && rows.length < sweep.expected
+      ? `<p class="warn" data-field="spin-count">${rows.length} of ${sweep.expected} planned states reached the comparison; `
+        + 'the lowest is the lowest of those.</p>'
+      : '';
     return `<${sectionHeading}>Spin-state sweep — ${escapeHtml(sweep.id)}</${sectionHeading}>`
-      + `<p>${escapeHtml(sweep.reason || '')}</p>`
-      + '<table><thead><tr><th>Multiplicity</th><th class="num">E / Eh</th>'
+      + summary
+      + shortfall
+      + '<table><thead><tr><th>Multiplicity</th><th>State</th><th class="num">E / Eh</th>'
       + '<th class="num">ΔE / kcal mol⁻¹</th><th class="num">⟨S²⟩</th></tr></thead>'
-      + `<tbody>${body}</tbody></table>`;
+      + `<tbody>${body}</tbody></table>`
+      + missingHtml;
   }).join('');
 
   // Reaction energetics: ΔG‡ only where both runs carried a free energy, with
