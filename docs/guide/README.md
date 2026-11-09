@@ -40,6 +40,8 @@ If you are new, read these in order:
 
 Reference pages:
 
+- [Compute blocks](compute.md) — safe arithmetic over upstream results: the expression language, the
+  field vocabulary, CBS extrapolation, per-record values and the refusals that name a missing field.
 - [Troubleshooting](troubleshooting.md) — symptom, cause, action.
 - [FAQ](faq.md) — short answers to the questions testers ask first.
 - [Wavefunctions](wavefunction.md) — what a `.cube`, an `.fchk`, a `.molden`, a `.wfn` and a `.wfx`

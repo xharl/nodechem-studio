@@ -13,6 +13,7 @@ import { engineFor } from '../../src/shared/engines/index.js';
 import { ladderVerdict } from '../../src/shared/methodLadder.js';
 import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
 import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
+import { ComputeError, describeCompute, evaluateCompute } from '../../src/shared/compute.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 import { LIMITS } from '../../src/shared/projectSchema.js';
 import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
@@ -68,7 +69,7 @@ function timeoutSecondsFrom(value) {
   return Math.min(seconds, LIMITS.timeoutSeconds);
 }
 
-const TASK_TYPES = new Set(['input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note']);
+const TASK_TYPES = new Set(['input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'compute', 'note']);
 
 function queueIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -505,6 +506,34 @@ function outputRecord(raw) {
   };
 }
 
+/**
+ * Issue 175: the declaration a compute task carries, sanitised.
+ *
+ * `taskRecord` is the queue's trust boundary — every field on a task came from
+ * the renderer — so a compute declaration is reduced to the fields the
+ * evaluator reads, each bounded, and anything that is not an identifier or a
+ * safe block id is dropped rather than evaluated.
+ */
+function computeTaskPayload(raw) {
+  const declared = (Array.isArray(raw?.declared) ? raw.declared : [])
+    .filter((entry) => entry && typeof entry === 'object')
+    .slice(0, 24)
+    .map((entry) => ({
+      name: oneLine(entry.name, 64),
+      field: oneLine(entry.field, 64),
+      source: SAFE_ID.test(String(entry.source || '')) ? String(entry.source) : '',
+      scope: entry.scope === 'records' ? 'records' : 'record',
+    }))
+    .filter((entry) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.name) && entry.field);
+  return {
+    expression: oneLine(raw?.expression, 2000),
+    declared,
+    sources: (Array.isArray(raw?.sources) ? raw.sources.map(String) : [])
+      .filter((id) => SAFE_ID.test(id)).slice(0, 32),
+    ...(raw?.recordId && SAFE_ID.test(String(raw.recordId)) ? { recordId: String(raw.recordId) } : {}),
+  };
+}
+
 function taskRecord(raw, index) {
   const nodeId = String(raw?.nodeId || '');
   if (!SAFE_ID.test(nodeId)) throw new Error(`Task ${index + 1} has an invalid node id.`);
@@ -567,6 +596,9 @@ function taskRecord(raw, index) {
   const merge = type === 'merge'
     ? { policy: ['all', 'any'].includes(raw?.merge?.policy) ? raw.merge.policy : 'all' }
     : null;
+  // Issue 175: a compute block's expression and declared inputs.
+  const compute = type === 'compute' && raw?.compute && typeof raw.compute === 'object'
+    ? computeTaskPayload(raw.compute) : null;
   const rawReaction = raw?.reaction && typeof raw.reaction === 'object' ? raw.reaction : null;
   const reaction = rawReaction
     ? {
@@ -654,6 +686,7 @@ function taskRecord(raw, index) {
     condition,
     loop,
     merge,
+    compute,
     ladder,
     spin,
     reaction,
@@ -2238,6 +2271,11 @@ export class QueueManager {
       await this.runLoop(queue, task);
       return;
     }
+    if (task.type === 'compute') {
+      // Issue 175: arithmetic over the results of the blocks wired into this one.
+      await this.runCompute(queue, task);
+      return;
+    }
     if (task.type === 'note') {
       this.setTaskOutcome(task, 'skipped', 'notes are not executed');
     } else if (task.type === 'merge') {
@@ -2251,6 +2289,117 @@ export class QueueManager {
       return;
     } else {
       this.setTaskOutcome(task, 'blocked', 'this control block has no runtime');
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * One compute block (issue 175): arithmetic over upstream results.
+   *
+   * The plan cannot know these numbers — they do not exist until the upstream
+   * blocks have run — so the evaluation happens here, from the `run.json` of
+   * every block wired into this one, and the same `evaluateCompute()` the plan
+   * and the inspector use does the work. Nothing is re-derived here.
+   *
+   * A missing field is a refusal naming the field and the record, never a zero:
+   * the block fails with that sentence. A block whose upstream has produced no
+   * result at all is `blocked` (it is waiting, not wrong). A computed value is
+   * written to its own `run.json` as `kind: 'derived'` — it carries no `parsed`
+   * block, so no report column can present it as an engine result.
+   */
+  async runCompute(queue, task) {
+    const compute = task.compute && typeof task.compute === 'object' ? task.compute : {};
+    const declared = Array.isArray(compute.declared) ? compute.declared : [];
+    if (declared.length === 0) {
+      this.setTaskOutcome(task, 'failed', 'the compute block declares no inputs to read');
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+      return;
+    }
+    const recordId = task.recordId || null;
+    const sources = this.incomingSources(queue, task.nodeId);
+    // Group the upstream tasks by block, then read each one's run.json once.
+    const byBlock = new Map();
+    for (const source of sources) {
+      const segments = String(source.nodeId).split('~');
+      const blockId = segments[0];
+      let run = null;
+      if (source.runDir) {
+        try {
+          run = JSON.parse(await fsp.readFile(path.join(source.runDir, 'run.json'), 'utf8'));
+        } catch {
+          run = null; // an unreadable upstream record is "no result", not zero
+        }
+      }
+      const rows = byBlock.get(blockId) || [];
+      rows.push({ recordId: segments.length > 1 ? segments.slice(1).join('~') : null, run });
+      byBlock.set(blockId, rows);
+    }
+    const resolveSource = (blockId, forRecord) => {
+      const rows = (byBlock.get(blockId) || []).filter((row) => row.run);
+      if (rows.length === 0) return null;
+      const exact = forRecord ? rows.find((row) => row.recordId === forRecord) : null;
+      const chosen = exact || rows[0];
+      return { run: chosen.run, recordId: chosen.recordId || forRecord || null };
+    };
+    const allRecords = (blockId) => (byBlock.get(blockId) || []).filter((row) => row.run);
+
+    let evaluation;
+    try {
+      evaluation = evaluateCompute({ expression: compute.expression, inputs: declared }, {
+        recordId,
+        resolveSource,
+        allRecords,
+      });
+    } catch (error) {
+      if (!(error instanceof ComputeError)) throw error;
+      task.compute = { ...compute, status: 'refused', value: null, notes: [error.message], notComputed: error.message };
+      this.setTaskOutcome(task, 'failed', oneLine(error.message, 400));
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+      return;
+    }
+    task.compute = { ...compute, ...evaluation };
+    const dir = path.join(this.queueDir(queue.id), 'compute', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    try {
+      await fsp.mkdir(dir, { recursive: true });
+      await writeJsonAtomic(path.join(dir, 'run.json'), {
+        schemaVersion: 1,
+        kind: 'derived',
+        nodeId: task.nodeId,
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        provenance: { kind: 'derived', jobType: 'Compute', method: {}, basis: null },
+        // The whole point of the record: the expression, the numbers it read and
+        // the refusal, if there was one. `parsed` stays absent — this is not a
+        // calculation result.
+        compute: {
+          expression: evaluation.expression,
+          inputs: evaluation.inputs,
+          value: evaluation.value,
+          unit: evaluation.unit,
+          functionCalls: evaluation.functionCalls,
+          notes: evaluation.notes,
+          notComputed: evaluation.notComputed,
+          sources: compute.sources || [],
+          ...(recordId ? { recordId } : {}),
+        },
+      });
+      task.runDir = dir;
+      task.runId = task.nodeId;
+    } catch (error) {
+      task.compute = { ...task.compute, ...evaluation, notes: [...evaluation.notes, `the derived record could not be written: ${error.message}`] };
+    }
+    if (evaluation.status === 'computed') {
+      this.setTaskOutcome(task, 'completed', oneLine(describeCompute(evaluation), 400));
+    } else if (evaluation.status === 'pending') {
+      this.setTaskOutcome(task, 'blocked', oneLine(evaluation.notComputed, 400));
+    } else {
+      this.setTaskOutcome(task, 'failed', oneLine(evaluation.notComputed, 400));
     }
     await this.persist(queue);
     this.publish(queue);

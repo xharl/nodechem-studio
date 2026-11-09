@@ -21,12 +21,19 @@ import {
   datasetById,
   datasetsOf,
   edgesOfFlow,
+  orderingSourceIds,
   recordsForInput,
   flowById,
   nodesOfFlow,
   scopeFor,
   taskIdFor,
 } from './flows.js';
+import {
+  ComputeError,
+  computeInputsOf,
+  describeCompute,
+  evaluateCompute,
+} from './compute.js';
 
 export const safeBase = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
 
@@ -733,7 +740,7 @@ function fanMemberContext(project, fan, member) {
  * has no chosen member is still refused here, exactly as before: that is a
  * user decision, not a pending computation.
  */
-export function buildWorkflowPlan(project, { flowId = null } = {}) {
+export function buildWorkflowPlan(project, { flowId = null, results = null } = {}) {
   const flow = flowId ? flowById(project, flowId) : activeFlow(project);
   const flowKey = flow?.id || 'main';
   const nodes = nodesOfFlow(flow).length > 0 || flow?.nodes
@@ -829,6 +836,36 @@ export function buildWorkflowPlan(project, { flowId = null } = {}) {
           pushTask(conformerSearchTask(project, node, record), recordId);
           ids.push(taskId);
         }
+      }
+      idsFor.set(node.id, ids);
+      continue;
+    }
+
+    if (node.type === 'compute') {
+      // Issue 175: a compute block is arithmetic over the results of the blocks
+      // wired into it. The plan evaluates it when it can — the caller may pass
+      // run records (`results`, keyed by task id) — and otherwise plans it as a
+      // task that is waiting, never as a value of zero. One task per record of
+      // the scope, so a dataset family gets one derived value per record.
+      const context = computeContext(project, node, { results, edges: projectEdges });
+      const { sources, declared, definition } = context;
+      const ids = [];
+      for (const record of records) {
+        const recordId = record?.id || null;
+        const taskId = taskIdFor(node.id, recordId);
+        let evaluation;
+        try {
+          evaluation = evaluateCompute(definition, {
+            recordId,
+            resolveSource: context.resolveSource,
+            allRecords: context.allRecords,
+          });
+        } catch (error) {
+          if (!(error instanceof ComputeError)) throw error;
+          throw new ComputeError(`"${node.title}" cannot be evaluated: ${error.message}`, { code: error.code });
+        }
+        pushTask(computeTask(node, { taskId, record, recordId, evaluation, sources, declared }), recordId);
+        ids.push(taskId);
       }
       idsFor.set(node.id, ids);
       continue;
@@ -1227,6 +1264,121 @@ function calculationTask(project, node, {
     ...(record?.series ? { series: record.series } : {}),
     ...(record?.derivative ? { derivative: record.derivative } : {}),
     ...(record?.complex ? { complex: record.complex } : {}),
+  };
+}
+
+/**
+ * Where a compute block's numbers come from (issue 175).
+ *
+ * One resolver, used by the plan, the queue's planner path and the inspector's
+ * preview, so the three cannot disagree about which record a field was read
+ * from. `results` is optional: a map (or plain object) of run records keyed by
+ * task id (`sp~mol-1`) or block id. Without it — a fresh project, or the
+ * renderer before a run — the project nodes' attached `parsed` results are the
+ * only source, which is exactly what the inspector previews from.
+ *
+ * Throws `ComputeError` for a structural mistake: no inputs, no upstream block,
+ * an input naming a block that is not wired in, or one of several upstream
+ * blocks left unnamed.
+ */
+export function computeContext(project, node, { results = null, edges = null } = {}) {
+  const nodeEdges = edges || edgesOfFlow(activeFlow(project));
+  const sources = orderingSourceIds(nodeEdges, node.id);
+  const definition = node.compute && typeof node.compute === 'object'
+    ? node.compute : { expression: '', inputs: [] };
+  const declared = computeInputsOf(definition);
+  if (declared.length === 0) {
+    throw new ComputeError(`"${node.title}" declares no inputs; a compute block reads at least one field`
+      + ' from an upstream block.');
+  }
+  if (sources.length === 0) {
+    throw new ComputeError(`"${node.title}" has no upstream block; wire the blocks whose results it computes from.`);
+  }
+  for (const input of declared) {
+    if (input.source && !sources.includes(input.source)) {
+      throw new ComputeError(`"${node.title}" input "${input.name}" reads "${input.source}", which is not wired`
+        + ` into this block (upstream: ${sources.join(', ')}).`);
+    }
+    if (!input.source && sources.length > 1) {
+      throw new ComputeError(`"${node.title}" input "${input.name}" names no upstream block, and`
+        + ` ${sources.length} feed this one (${sources.join(', ')}); name one.`);
+    }
+  }
+  const lookup = (key) => {
+    if (!results) return null;
+    if (typeof results.get === 'function') return results.get(key) ?? null;
+    return results[key] ?? null;
+  };
+  const resultKeys = () => (typeof results?.keys === 'function'
+    ? [...results.keys()] : Object.keys(results || {}));
+  const fallbackSource = sources.length === 1 ? sources[0] : '';
+  // A result is looked up by the upstream *task* first (`sp~mol-1`), then by the
+  // block itself, then in the project node's attached parse — which is where
+  // the renderer keeps a finished block's canonical result.
+  const resolveSource = (blockId, recordId = null) => {
+    const id = blockId || fallbackSource;
+    if (!id) return null;
+    for (const key of [recordId ? taskIdFor(id, recordId) : null, id].filter(Boolean)) {
+      const run = lookup(key);
+      if (run) return { run, recordId: recordId || null };
+    }
+    const source = nodeById(project, id);
+    if (source?.parsed) return { run: source.parsed, recordId: recordId || null };
+    return null;
+  };
+  const allRecords = (blockId) => {
+    const id = blockId || fallbackSource;
+    if (!id) return [];
+    const rows = [];
+    const prefix = `${id}~`;
+    for (const key of resultKeys()) {
+      const name = String(key);
+      if (name === id) rows.push({ recordId: null, run: lookup(key) });
+      else if (name.startsWith(prefix)) rows.push({ recordId: name.slice(prefix.length), run: lookup(key) });
+    }
+    const source = nodeById(project, id);
+    if (rows.length === 0 && source?.parsed) rows.push({ recordId: null, run: source.parsed });
+    return rows;
+  };
+  return { sources, declared, definition, resolveSource, allRecords };
+}
+
+/**
+ * One compute block's task (issue 175).
+ *
+ * The payload is the evaluator's result verbatim — `expression`, the resolved
+ * `inputs` (record, field, value, unit), `value`, `unit`, `functionCalls`,
+ * `notes` — plus the declaration and the upstream blocks, so the card, the
+ * queue and the report all read one shape and none of them re-evaluates. A
+ * derived value is never written into an energy column: it has no `parsed`
+ * block and `executable` is false, so nothing downstream can mistake it for a
+ * number an engine printed.
+ */
+function computeTask(node, { taskId, record = null, recordId = null, evaluation, sources, declared }) {
+  return {
+    nodeId: taskId,
+    type: 'compute',
+    title: record ? `${node.title} — ${record.label || record.id}` : node.title,
+    kind: node.kind || 'Compute',
+    executable: false,
+    compute: {
+      ...evaluation,
+      declared,
+      sources,
+      ...(recordId ? { recordId } : {}),
+      summary: describeCompute(evaluation),
+    },
+    ...(record ? {
+      record: {
+        id: record.id,
+        label: record.label || record.id,
+        charge: record.charge,
+        multiplicity: record.multiplicity,
+        ...(record.series ? { series: record.series } : {}),
+        ...(record.derivative ? { derivative: record.derivative } : {}),
+        ...(record.complex ? { complex: record.complex } : {}),
+      },
+    } : {}),
   };
 }
 

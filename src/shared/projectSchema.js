@@ -73,6 +73,15 @@ import {
   runValidityChecks,
   summarizeValidity,
 } from './validityChecks.js';
+import {
+  COMPUTE_EXPRESSION_MAX,
+  COMPUTE_FIELD_KEYS,
+  COMPUTE_INPUTS_MAX,
+  ComputeError,
+  computeInputsOf,
+  identifiersOf,
+  parseExpression,
+} from './compute.js';
 
 const XTB_METHOD_IDS = XTB_METHODS.map((method) => method.id);
 
@@ -98,7 +107,7 @@ export const LIMITS = Object.freeze({
 });
 
 export const NODE_TYPES = Object.freeze([
-  'input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note',
+  'input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'compute', 'note',
 ]);
 
 /** States a project file may carry. Queue states are reserved for GN-003. */
@@ -200,6 +209,7 @@ const TYPE_KINDS = {
   loop: 'Loop',
   merge: 'Merge',
   output: 'Output',
+  compute: 'Compute',
   note: 'Note',
 };
 
@@ -211,6 +221,7 @@ const TYPE_LABELS = {
   loop: 'Retry loop',
   merge: 'Join branches',
   output: 'Project output',
+  compute: 'Compute',
   note: 'Note',
 };
 
@@ -224,6 +235,7 @@ const NODE_TYPE_KEYS = {
   loop: new Set(['loop']),
   merge: new Set(['merge']),
   output: new Set(['output']),
+  compute: new Set(['compute']),
   note: new Set(['note']),
 };
 const SETTINGS_KEYS = new Set([
@@ -1743,6 +1755,66 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
       ...common,
       settings: normalizeConformerSettings(c, raw.settings, `${path}.settings`, legacy),
       output: normalizeConformerOutput(c, raw.output, `${path}.output`, legacy),
+    };
+  }
+
+  if (type === 'compute') {
+    // Issue 175: a compute block is arithmetic over other blocks' results. Its
+    // expression is parsed at save time, so a project that cannot be evaluated
+    // is refused here rather than at the end of a queue.
+    const source = requiredObject(c, raw.compute, `${path}.compute`, legacy, {});
+    warnUnknown(c, source, new Set(['expression', 'inputs', 'notes']), `${path}.compute`);
+    const expression = readString(c, source.expression, `${path}.compute.expression`,
+      { legacy, fallback: '', max: COMPUTE_EXPRESSION_MAX });
+    const rawInputs = Array.isArray(source.inputs) ? source.inputs : [];
+    if (rawInputs.length > COMPUTE_INPUTS_MAX) {
+      c.error(`${path}.compute.inputs`, `must contain at most ${COMPUTE_INPUTS_MAX} inputs.`);
+    }
+    const inputs = rawInputs.slice(0, COMPUTE_INPUTS_MAX).map((entry, position) => {
+      const inputPath = `${path}.compute.inputs[${position}]`;
+      const input = isPlainObject(entry) ? entry : {};
+      if (!isPlainObject(entry)) c.error(inputPath, 'must be an object.');
+      warnUnknown(c, input, new Set(['name', 'field', 'source', 'scope']), inputPath);
+      const field = readString(c, input.field, `${inputPath}.field`, { legacy, fallback: '', max: 64 });
+      if (field && !COMPUTE_FIELD_KEYS.includes(field)) {
+        c.error(`${inputPath}.field`, `must be one of ${COMPUTE_FIELD_KEYS.join(', ')}.`);
+      }
+      const sourceId = readString(c, input.source, `${inputPath}.source`, { legacy, fallback: '', max: 64 });
+      if (sourceId && !GRAPH_ID_RE.test(sourceId)) {
+        c.error(`${inputPath}.source`, 'must be a block id: letters, digits, dot, underscore or dash.');
+      }
+      return {
+        name: readString(c, input.name, `${inputPath}.name`, { legacy, fallback: '', max: 64, required: true }),
+        field,
+        source: sourceId,
+        // Absent means "this record": the default a single-value protocol wants.
+        ...(input.scope === 'records' ? { scope: 'records' } : {}),
+      };
+    });
+    try {
+      const declared = computeInputsOf({ expression, inputs });
+      if (expression) {
+        const names = identifiersOf(parseExpression(expression));
+        const known = new Set(declared.map((input) => input.name));
+        for (const name of names) {
+          if (!known.has(name)) {
+            c.error(`${path}.compute.expression`, `uses "${name}", which is not a declared input.`);
+          }
+        }
+      }
+    } catch (error) {
+      if (!(error instanceof ComputeError)) throw error;
+      c.error(`${path}.compute.expression`, error.message);
+    }
+    if (!expression) {
+      c.warn(`${path}.compute.expression`, 'is empty; the block cannot be evaluated.');
+    }
+    return {
+      ...common,
+      compute: {
+        expression,
+        inputs,
+      },
     };
   }
 
