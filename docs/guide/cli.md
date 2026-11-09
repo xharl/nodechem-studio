@@ -37,7 +37,7 @@ ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem> [--out
 ncs smiles <file|string> [--name <label>] [--out <file.json>] [--json]
 ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
 ncs cache <file.ncsr> --inspect [--json]
-ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cube> [--grid <angstrom>] [--padding <angstrom>] [--json]
+ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cube> [--units bohr|angstrom] [--grid <angstrom>] [--padding <angstrom>] [--json]
 ```
 
 - `validate` prints the schema errors, warnings and the pre-run validity findings as JSON. Every
@@ -83,7 +83,10 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   around the molecule (default 3). It prints the orbital energy, the grid actually used (the
   four-million-point cap may coarsen it) and ∫|ψ|² over the box, which is close to 1 but is not
   claimed to be; `--json` carries the same numbers and `--out` is the file to write. A folder with
-  two wavefunction candidates is refused rather than guessed. See
+  two wavefunction candidates is refused rather than guessed. `--units bohr|angstrom` picks what the
+  header declares — Å with negative grid counts, the default and what this command has always
+  written, or bohr with positive counts, the form `cubegen` itself writes — and only the header
+  changes; the values are the ones evaluated either way. See
   [Wavefunctions](wavefunction.md#making-a-cube-without-gaussian).
 - `qcschema export` writes one MolSSI `qcschema_output` (`AtomicResult`) from a finished run, in
   atomic units, validated against the vendored published schema; `qcschema import` reads one back

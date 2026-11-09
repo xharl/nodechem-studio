@@ -16,7 +16,10 @@
  *   number (the message carries the line number);
  * - a data block shorter than `nx·ny·nz` (truncated) or longer than it
  *   (a second dataset appended, which this reader does not model);
- * - `NVAL > 1`, i.e. a cube that stores several values per grid point.
+ * - `NVAL > 1`, i.e. a cube that stores several values per grid point;
+ * - a file whose grid counts declare units other than the ones the caller
+ *   asked for (`parseCube(text, { units: 'angstrom' })`), because the sign is
+ *   one character wide and losing it is silent.
  *
  * What it does not refuse: a ghost atom (nuclear charge 0) is kept as an atom
  * with no element and reported as a warning, because Gaussian writes ghosts
@@ -153,19 +156,25 @@ function summarise(values, dims) {
  * whose title was edited.
  *
  * @param {string} text
- * @param {{ maxChars?: number, valuesOrder?: 'auto'|'fortran'|'c-order' }} [options]
+ * @param {{ maxChars?: number, valuesOrder?: 'auto'|'fortran'|'c-order', units?: 'auto'|'bohr'|'angstrom' }} [options]
  *   `maxChars` exists so the bound can be tested without building a 64 MB
- *   string; callers should not pass it.
+ *   string; callers should not pass it. `units` states what the caller expects
+ *   the file to declare (`'auto'`, the default, accepts either): a file that
+ *   disagrees is refused here rather than read with every distance off by the
+ *   bohr-to-Å factor.
  * @returns {object} cube in Å, values in Fortran order (x fastest)
  */
-export function parseCube(text, { maxChars = MAX_CUBE_CHARS, valuesOrder = 'auto' } = {}) {
+export function parseCube(text, { maxChars = MAX_CUBE_CHARS, valuesOrder = 'auto', units = 'auto' } = {}) {
   const lines = cubeLines(text, maxChars);
   const layout = cubeLayoutOf(lines);
   const order = valuesOrder === 'auto' ? cubeValuesOrderOf(lines, layout) : valuesOrder;
   if (order !== 'fortran' && order !== 'c-order') {
     throw new CubeFormatError(`unknown values order "${valuesOrder}"; use "auto", "fortran" or "c-order".`);
   }
-  return parseCubeLines(lines, layout, order);
+  if (units !== 'auto' && units !== 'bohr' && units !== 'angstrom') {
+    throw new CubeFormatError(`unknown units "${units}"; use "auto", "bohr" or "angstrom".`);
+  }
+  return parseCubeLines(lines, layout, order, units);
 }
 
 /**
@@ -217,7 +226,7 @@ function cubeLines(text, maxChars) {
   return lines;
 }
 
-function parseCubeLines(lines, layout, valuesOrder) {
+function parseCubeLines(lines, layout, valuesOrder, expectedUnits = 'auto') {
   const legacy = layout === 'legacy';
   const title = [lines[0].trim(), lines[1].trim()];
 
@@ -356,6 +365,18 @@ function parseCubeLines(lines, layout, valuesOrder) {
   // that set only the first one negative are read the same way; a disagreement
   // is reported instead of being resolved silently.
   const nativeBohr = signs[0] > 0;
+  const declaredUnits = nativeBohr ? 'bohr' : 'angstrom';
+  if (expectedUnits !== 'auto' && expectedUnits !== declaredUnits) {
+    // The defect this guard exists for: a file whose counts lost (or gained) a
+    // minus sign reads without complaint and puts every distance off by the
+    // bohr-to-Å factor, which a picture of the slice does not reveal.
+    throw new CubeFormatError(
+      `The cube declares its distances in ${declaredUnits} (${nativeBohr ? 'positive' : 'negative'} grid counts on line 4) `
+      + `but it was read as ${expectedUnits}. Reading it as ${expectedUnits} would move every atom, the origin and `
+      + `the grid step by the ${declaredUnits}-to-${expectedUnits} factor. `
+      + `Read it with units "${declaredUnits}", or rewrite its header in ${expectedUnits}.`,
+    );
+  }
   if (!signs.every((sign) => sign === signs[0])) {
     warnings.push('The three grid dimensions disagree about their sign; the first one decides the units (negative means Å), as the format specifies.');
   }

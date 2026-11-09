@@ -102,7 +102,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
   ncs cache <file.ncsr> --inspect [--json]
   ncs cube <run-dir|wavefunction> --orbital homo|lumo|n=<i> --out <file.cube>
-      [--grid <angstrom>] [--padding <angstrom>] [--json]
+      [--units bohr|angstrom] [--grid <angstrom>] [--padding <angstrom>] [--json]
 
 Exit codes: 0 success, 2 invalid project, 3 gate failure, 4 engine failure,
 5 partial queue (some records failed) or merge conflict.
@@ -1739,6 +1739,19 @@ async function commandCube({ positional, flags }) {
   if (flags.orbital === undefined || flags.orbital === true) cubeUsage('--orbital is required: homo, lumo or n=<i>.');
   if (!flags.out || flags.out === true) cubeUsage('--out is required: the cube file to write.');
 
+  // The units of the header, not of the data: a negative grid count declares Å
+  // and a positive one bohr. `angstrom` is what this command has always
+  // written, so it stays the default and an existing output file does not
+  // change; `--units bohr` is the form cubegen itself writes.
+  let units = 'angstrom';
+  if (flags.units !== undefined) {
+    const requested = typeof flags.units === 'string' ? flags.units.trim().toLowerCase() : '';
+    if (requested !== 'angstrom' && requested !== 'bohr') {
+      cubeUsage(`--units takes angstrom or bohr, not ${typeof flags.units === 'string' ? `"${flags.units}"` : 'a bare flag'}.`);
+    }
+    units = requested;
+  }
+
   const spacing = flags.grid === undefined ? 0.2 : positiveFlag(flags.grid, '--grid');
   let padding = 3;
   if (flags.padding !== undefined) {
@@ -1784,7 +1797,7 @@ async function commandCube({ positional, flags }) {
       title: `${label} from ${path.basename(file)}`,
       comment: 'NodeChem Studio orbital cube; values in a.u.; outer loop X, middle loop Y, inner loop Z',
       atoms: parsed.atoms,
-      units: 'angstrom',
+      units,
     });
     await fs.mkdir(path.dirname(out), { recursive: true });
     await fs.writeFile(out, text, 'utf8');
@@ -1813,6 +1826,11 @@ async function commandCube({ positional, flags }) {
         note: integralNote,
       },
       wavefunction: { kind, format: kind, basisFunctions: parsed.numberOfBasisFunctions ?? null },
+      units: {
+        header: units,
+        gridCounts: units === 'angstrom' ? 'negative, which declares Å' : 'positive, which declares bohr',
+        note: 'Only the header distances change with this flag; the values are written as evaluated.',
+      },
       out,
       bytes: Buffer.byteLength(text),
     };
@@ -1828,6 +1846,7 @@ async function commandCube({ positional, flags }) {
       : `energy: ${orbital.energyHartree.toFixed(6)} Eh\n`);
     process.stdout.write(`grid: ${grid.step.toFixed(3)} Å, ${grid.counts.join('×')} = ${grid.points} points${grid.capped ? ` (${grid.note})` : ''}\n`);
     process.stdout.write(`integral: ∫|ψ|²dV = ${integral.toFixed(6)} over ${boxAngstrom3.toFixed(3)} Å³ — ${integralNote}\n`);
+    process.stdout.write(`units: ${units} header (${payload.units.gridCounts})\n`);
     process.stdout.write(`wrote: ${out} (${payload.bytes} bytes)\n`);
     process.exit(EXIT.ok);
   } catch (error) {
