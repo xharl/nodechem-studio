@@ -223,6 +223,33 @@ The member a run used is recorded in `run.json` as `conformer { nodeId, title, g
 relativeKcal, population, protomer, spreadKcal }`. A result can therefore never be read as if it had
 come from the imported geometry.
 
+## UFF: the in-app force field (engine only)
+
+UFF (Rappé et al., *J. Am. Chem. Soc.* 1992, 114, 10024) is the plan for generating an ensemble
+with no external binary, because one documented parameter set covers every element it types. The
+force field itself now lives in `src/shared/uff.js`: atom typing, bond stretch, angle bend,
+torsion, inversion and Lennard-Jones energies in kcal/mol, an analytic gradient in kcal/mol/Å
+checked against central finite differences (worst relative error below 1e-5 on water, hydrogen
+peroxide, formamide, butane and benzene), and a minimiser that reports `converged: false` with its
+reason instead of presenting a partial relaxation as a minimum.
+
+It is an engine, not a generator: the block still offers `crest` and `import` only, and no
+conformer in the table above came from UFF.
+
+What a UFF result is, stated here rather than in a footnote:
+
+- **kcal/mol, not Hartree.** A UFF energy is a force-field energy. It is not a molecular total
+  energy and it cannot be compared with a CREST/GFN2 or Gaussian energy — not by difference, not by
+  ranking. Anything built on it must record `energyUnit: kcal/mol` and `method: UFF`.
+- **Electrostatics are off.** The nonbonded term is Lennard-Jones only, so polar molecules,
+  zwitterions and salts are under-ranked. A search without electrostatics is weaker and says so.
+- **It is not MMFF94 and not GFN-FF/GFN2.** UFF geometries differ from GFN2/MMFF94 minima by
+  0.1–0.5 Å in the usual case. Reproducibility is the deliverable, not agreement.
+- **Typing is by element and bond order only.** An element outside H, C, N, O, F, P, S, Cl, Br, I
+  is refused by name. A conjugated single bond (amide, ester, aniline) is typed from its single
+  bonds and relaxes pyramidal, with a warning naming the atom. The group-5 inversion barrier (P) is
+  not implemented, and neither are the 3-/4-membered-ring angle corrections.
+
 ## Limits
 
 - CREST has not been exercised against a real binary in this container; the wrapper, the argument
