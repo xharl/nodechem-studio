@@ -12,7 +12,7 @@
       "bin/ncs.js (ncs record import)"
     ],
     "supersedes": 1,
-    "migration": "v1 is unchanged in the tree and still exported with --schema-version 1. A run record keeps schemaVersion 1 and validates here; an imported record declares schemaVersion 2 and kind \"imported\", which v1 refuses. Nothing is rewritten, and no old document is re-versioned."
+    "migration": "v1 is still exported with --schema-version 1 and only ever gains optional properties: a run record keeps schemaVersion 1 and validates here, an imported record declares schemaVersion 2 and kind \"imported\", which v1 refuses. Nothing is rewritten, and no old document is re-versioned."
   },
   "oneOf": [
     {
@@ -185,6 +185,14 @@
             }
           ],
           "description": "Present only when the run was built on one member of a conformer ensemble."
+        },
+        "record": {
+          "$ref": "#/$defs/recordIdentity",
+          "description": "Issue 193: the dataset record this run ran. Absent (not null) for a single-structure block, and never filled in with a synthetic id."
+        },
+        "series": {
+          "$ref": "#/$defs/seriesDerivation",
+          "description": "Issue 193: the repeat unit a generated member was expanded from. Absent unless the record came from a series block."
         },
         "provenance": {
           "$ref": "#/$defs/provenance"
@@ -492,6 +500,90 @@
             "number",
             "null"
           ]
+        }
+      }
+    },
+    "recordIdentity": {
+      "type": "object",
+      "description": "Issue 193: the record a run executed, copied from the queued task. datasetId is copied from the input block that handed the record out and is omitted when no block names it.",
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "datasetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "seriesDerivation": {
+      "type": "object",
+      "description": "Issue 193: how a generated member was derived. n is the member number (1-based) and count the number of members in the block; linkage is the rule the builder actually applied, with 1-based atom indices.",
+      "required": [
+        "parentId",
+        "n",
+        "count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "parentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "linkage": {
+          "type": "object",
+          "required": [
+            "donor",
+            "acceptor",
+            "bondLengthAngstrom",
+            "leaving"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "donor": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "acceptor": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "bondLengthAngstrom": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "leaving": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
         }
       }
     },

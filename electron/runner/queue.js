@@ -413,6 +413,42 @@ function scopeRecord(raw) {
   };
 }
 
+/**
+ * Issue 193: the series derivation a generated member carries.
+ *
+ * The task is the single source for `run.json`, so this travels from the plan
+ * through `queue.json` into the run record. Bounded like every other value a
+ * hand-written queue payload could carry; a member without a parent, a number
+ * and a count is not a derivation and is dropped rather than half-stored.
+ */
+function seriesTaskRecord(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const parentId = oneLine(raw.parentId, 64);
+  const n = Number(raw.n);
+  const count = Number(raw.count);
+  if (!parentId || !Number.isInteger(n) || !Number.isInteger(count)) return null;
+  const linkage = raw.linkage && typeof raw.linkage === 'object' ? raw.linkage : null;
+  return {
+    parentId,
+    parentLabel: oneLine(raw.parentLabel, 200) || '',
+    n,
+    count,
+    of: oneLine(raw.of, 32) || '',
+    terminal: oneLine(raw.terminal, 32) || '',
+    linkage: linkage
+      ? {
+        donor: Number.isInteger(Number(linkage.donor)) ? Number(linkage.donor) : null,
+        acceptor: Number.isInteger(Number(linkage.acceptor)) ? Number(linkage.acceptor) : null,
+        bondLengthAngstrom: Number.isFinite(Number(linkage.bondLengthAngstrom))
+          ? Number(linkage.bondLengthAngstrom) : null,
+        leaving: Array.isArray(linkage.leaving)
+          ? linkage.leaving.map((value) => Number(value)).filter((value) => Number.isInteger(value)).slice(0, 64)
+          : [],
+      }
+      : null,
+  };
+}
+
 const OUTPUT_KIND_SET = new Set(['html', 'csv', 'json', 'zip']);
 const OUTPUT_PATH_SAFE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 
@@ -594,6 +630,9 @@ function taskRecord(raw, index) {
     conformer,
     pendingInput,
     fanOut,
+    // Issue 193: the series derivation, so the run record can say "the 4-mer of
+    // that unit" without re-deriving it from a task id or a file name.
+    series: seriesTaskRecord(raw?.series),
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -1602,6 +1641,27 @@ export class QueueManager {
     this.publish(queue);
   }
 
+  /**
+   * The dataset a task's record came from (issue 193).
+   *
+   * A calculation task names the record it runs (`recordId`) but not the
+   * dataset: the plan puts the dataset on the input block that produced the
+   * record, and lists every record id it handed out. The lookup is by record id
+   * over those blocks — a copy of what the plan declared, never a guess from the
+   * task id. A record no input block names keeps no datasetId.
+   */
+  recordDatasetIdFor(queue, task) {
+    const recordId = task?.recordId;
+    if (!recordId) return null;
+    if (task.input?.datasetId) return task.input.datasetId;
+    for (const entry of queue.tasks) {
+      const input = entry.input;
+      if (!input?.datasetId || !Array.isArray(input.records)) continue;
+      if (input.records.some((record) => record.id === recordId)) return input.datasetId;
+    }
+    return null;
+  }
+
   async runTask(queue, task) {
     let checkpointHandoff = null;
     if (task.checkpointFrom && !task.checkpointFrom.geometryOnly) {
@@ -1692,6 +1752,9 @@ export class QueueManager {
           parsed: upstreamTask.parsedSummary || null,
         } : null,
       };
+      // Issue 193: the dataset this record came from, read from the input block
+      // that handed the record out. Null when no input block names it.
+      const datasetId = this.recordDatasetIdFor(queue, task);
       const response = await this.runManager.start({
         title: task.title,
         engine: task.engine,
@@ -1710,6 +1773,17 @@ export class QueueManager {
         // Issue #30: the conformer this run is built on travels into run.json,
         // so a result can never be read as if it came from the imported geometry.
         ...(task.conformer ? { conformer: task.conformer } : {}),
+        // Issue 193: which record this task ran, and the series unit it came
+        // from. Copied from the task and its input block; a single-structure
+        // block sends neither, so its run.json gains neither key.
+        ...(task.record ? {
+          record: {
+            id: task.record.id,
+            label: task.record.label || task.record.id,
+            ...(datasetId ? { datasetId } : {}),
+          },
+        } : {}),
+        ...(task.series ? { series: task.series } : {}),
       });
       task.runId = response.runId;
       task.runDir = response.runDir;

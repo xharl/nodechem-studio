@@ -13,6 +13,7 @@ import { methodBlockFor } from '../../src/shared/gaussianInput.js';
 import { ecpFromInput } from '../../src/shared/ecp.js';
 import { normaliseAppInfo, provenanceKindFor } from '../../src/shared/provenance.js';
 import { engineFor, DEFAULT_ENGINE_ID } from '../../src/shared/engines/index.js';
+import { withRunProvenance } from './runProvenance.js';
 import { xtbSolvationFromArgv, parseXtbGeometry } from '../../src/shared/engines/xtb.js';
 import { normalizeValidityContext, runValidityChecks } from '../../src/shared/validityChecks.js';
 import { cacheFromParsed, writeCache } from '../../src/shared/cache.js';
@@ -157,7 +158,7 @@ export class RunManager {
         : methodBlockFor(settings))
       : null;
 
-    const record = {
+    const record = withRunProvenance({
       // The published contract this record conforms to (schemas/run-record.v1.schema.json).
       // Additive: records written before it are still read without the field.
       schemaVersion: 1,
@@ -200,7 +201,13 @@ export class RunManager {
       parsed: null,
       gates: null,
       error: stageError,
-    };
+    },
+    // Issue 193: `record` and `series` appear only when the task carried them.
+    // A single-structure block adds neither key, so its run.json is unchanged.
+    {
+      record: payload.record,
+      series: payload.series,
+    });
     await writeJson(path.join(runDir, 'run.json'), record);
     await writeJson(path.join(runDir, 'request.json'), {
       ...record,

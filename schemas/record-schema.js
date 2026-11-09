@@ -13,9 +13,13 @@
  * Why v2 rather than an extra field in v1: v1's envelope is closed and carries
  * no `kind`, and its `provenance.kind` enum is closed too, so there is no
  * extension point a second record shape could use. v2 is a tagged union whose
- * run branch is v1 verbatim: every v1 document validates unchanged, and the v1
- * file is never edited, so a document written for v1 still validates against
- * the version it was written for.
+ * run branch is v1 verbatim: the two property maps are the same object, so a
+ * document written for one validates against the other.
+ *
+ * v1 gains only *optional* properties (issue 193 added `record` and `series`),
+ * never a new required field and never a changed type, so every document
+ * written before that change still validates against the version it was
+ * written for.
  *
  * Why not a JSON Schema library: the app has no runtime dependencies, and the
  * test that validates real records must exercise the same code the CLI runs.
