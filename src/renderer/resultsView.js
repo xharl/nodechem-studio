@@ -1602,6 +1602,89 @@ function sensitivityCard(record) {
   return card('Method sensitivity', blocks.join(''));
 }
 
+/**
+ * Issue 186: the spin-state comparison for the sweep this run belongs to.
+ *
+ * The verdict is the queue's: the lowest entry is the lowest energy among states
+ * that actually reported one. `states` supplies each member task's queue status,
+ * so a failed or timed-out state is listed with that word instead of being
+ * dropped. The header says what the comparison does not cover — the states that
+ * did not run, another geometry, another level of theory — because a
+ * single-geometry sweep is not a ground-state determination.
+ */
+function spinSweepCard(sweep, states = null) {
+  if (!isObject(sweep)) return '';
+  const rows = Array.isArray(sweep.rows) ? sweep.rows : [];
+  if (rows.length === 0) return '';
+  const lowest = Number.isInteger(sweep.groundMultiplicity) ? sweep.groundMultiplicity : null;
+  const statusByMultiplicity = new Map((Array.isArray(states) ? states : [])
+    .filter((state) => Number.isInteger(state?.multiplicity))
+    .map((state) => [state.multiplicity, state]));
+  const labels = rows.map((row) => (Number.isInteger(row?.multiplicity) ? `m${row.multiplicity}` : '?'));
+  const available = lowest !== null && rows.some((row) => finite(row?.energyHartree) !== null);
+  const lowestLabel = available
+    ? `<strong>m${esc(String(lowest))}</strong> is the lowest computed state`
+    : 'No state in this sweep reported a final energy';
+  const scope = `<p class="results-note" data-field="spin-scope">${lowestLabel} of the `
+    + `${labels.length} state${labels.length === 1 ? '' : 's'} compared (${esc(labels.join(', '))}). `
+    + 'Every state ran as its own calculation on the <em>same geometry</em>, at the level of theory of this block. '
+    + 'This is not a ground-state determination: a multiplicity that was not run, another geometry, or another '
+    + 'level of theory is outside the comparison.</p>';
+
+  const tableRows = rows.map((row) => {
+    const multiplicity = Number.isInteger(row?.multiplicity) ? row.multiplicity : null;
+    const energy = finite(row?.energyHartree);
+    const relative = finite(row?.relativeKcalPerMol);
+    const spinSquared = finite(row?.spinSquared);
+    const isLowest = available && energy !== null && multiplicity === lowest;
+    const state = multiplicity === null ? null : statusByMultiplicity.get(multiplicity) || null;
+    const status = energy === null
+      ? (text(state?.status) || 'no energy')
+      : (isLowest ? 'lowest computed' : (text(state?.status) || 'reported'));
+    return '<tr' + (isLowest ? ' class="spin-lowest"' : '') + '>'
+      + `<td>${multiplicity === null ? MISSING_TEXT : `m${esc(String(multiplicity))}`}</td>`
+      + `<td>${esc(status)}</td>`
+      + `<td class="num">${energy === null ? MISSING_TEXT : esc(energy.toFixed(8))}</td>`
+      + `<td class="num">${relative === null ? MISSING_TEXT : esc(relative.toFixed(2))}</td>`
+      + `<td class="num">${spinSquared === null ? MISSING_TEXT : esc(spinSquared.toFixed(4))}</td>`
+      + '</tr>';
+  }).join('');
+
+  const table = '<table class="results-table" data-field="spin-states"><thead><tr>'
+    + '<th>Multiplicity</th><th>State</th><th class="num">E / Eh</th>'
+    + '<th class="num">ΔE / kcal mol⁻¹</th><th class="num">⟨S²⟩</th></tr></thead>'
+    + `<tbody>${tableRows}</tbody></table>`;
+
+  // A state that produced no energy is named with what the queue recorded — it
+  // is listed in the table above and again here, so it cannot be read as absent.
+  const missing = rows
+    .filter((row) => finite(row?.energyHartree) === null)
+    .map((row) => {
+      const state = Number.isInteger(row?.multiplicity) ? statusByMultiplicity.get(row.multiplicity) : null;
+      const status = text(state?.status) || 'no energy reported';
+      const error = text(state?.error);
+      const label = Number.isInteger(row?.multiplicity) ? `m${row.multiplicity}` : 'a state';
+      return `${label} ${status}${error ? ` — ${error}` : ''}`;
+    });
+  const missingHtml = missing.length
+    ? `<p class="results-missing" data-field="spin-missing">Not ranked: ${esc(missing.join('; '))}. `
+      + 'The state is still a row of this sweep; no energy was invented for it.</p>'
+    : '';
+  const tieHtml = sweep.degenerate === true
+    ? '<p class="results-note" data-field="spin-degenerate">Two or more states reported the same energy: '
+      + 'the comparison is a tie and no state was picked as the lowest.</p>'
+    : '';
+  // A state the plan queued but which produced no entry at all is a gap in the
+  // comparison, not a state that passed.
+  const expected = Array.isArray(states) && states.length > 0 ? states.length : rows.length;
+  const countHtml = expected > rows.length
+    ? `<p class="results-note results-missing" data-field="spin-count">${rows.length} of ${expected} planned states `
+      + 'reached the comparison; the lowest is the lowest of those.</p>'
+    : '';
+
+  return card('Spin-state comparison', scope + table + tieHtml + countHtml + missingHtml, 'is-wide');
+}
+
 function gatesCard(gates) {
   const overall = gateResult(gates?.overall);
   const list = Array.isArray(gates?.gates) ? gates.gates : [];
@@ -1836,6 +1919,7 @@ export function resultsPanelHtml(record, options = {}) {
       runCard(record, parsed, status, engineLabel),
       programCard(parsed, flags),
       energyCard(parsed, flags),
+      spinSweepCard(options.spinSweep, options.spinStates),
       saptCard(parsed, flags),
       thermochemistryCard(parsed, flags),
       methodsCard(record),
@@ -1919,17 +2003,25 @@ export function installResultsView({
   // print k when a run has no verdict or no declared molecularity; this only
   // supplies what the queue already knows.
   let queueReactions = {};
+  // Issue 186: the sweep comparison lives on the queue record, keyed by the
+  // block id. The member task's `spin.id` links this run back to it.
+  let queueSpins = {};
+  let queueTasks = [];
   let queueTasksByRunId = new Map();
   const rememberQueue = (queue) => {
     if (!queue || typeof queue !== 'object') return;
     queueReactions = queue.reactions && typeof queue.reactions === 'object' ? queue.reactions : {};
-    queueTasksByRunId = new Map((Array.isArray(queue.tasks) ? queue.tasks : [])
+    queueSpins = queue.spins && typeof queue.spins === 'object' ? queue.spins : {};
+    queueTasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+    queueTasksByRunId = new Map(queueTasks
       .filter((task) => task?.runId)
       .map((task) => [String(task.runId), task]));
   };
   const reactionOptions = (record) => {
     const task = queueTasksByRunId.get(String(record?.id ?? ''));
     if (!task) return {};
+    const sweepId = isObject(task.spin) && typeof task.spin.id === 'string' ? task.spin.id : null;
+    const sweep = sweepId ? queueSpins[sweepId] : null;
     const base = {
       // issue 146: the queue knows which block produced this run, so the emission
       // label and the NTO/Pop chain reach the cards from the workflow — not
@@ -1937,8 +2029,18 @@ export function installResultsView({
       ...(isObject(task.settings) ? { settings: task.settings } : {}),
       ...(isObject(task.emission) ? { emission: task.emission } : {}),
       ...(isObject(task.nto) ? { nto: task.nto } : {}),
+      // Issue 186: the whole sweep, so this state's panel shows where it sits
+      // among the states that ran, with each member task's own status.
+      ...(isObject(sweep) ? { spinSweep: sweep } : {}),
+      ...(isObject(sweep)
+        ? {
+          spinStates: queueTasks
+            .filter((entry) => isObject(entry?.spin) && entry.spin.id === sweepId)
+            .map((entry) => ({ multiplicity: entry.spin.multiplicity, status: entry.status, error: entry.error })),
+        }
+        : {}),
     };
-    const reaction = task ? queueReactions[task.nodeId] : null;
+    const reaction = queueReactions[task.nodeId] || null;
     if (!reaction) return base;
     return {
       ...base,
@@ -2462,6 +2564,8 @@ const RESULTS_VIEW_CSS = `
 }
 .results-table td { padding: 2px 4px; border-bottom: 1px solid var(--tone-blue-69a); vertical-align: top; overflow-wrap: anywhere; }
 .results-table tbody tr:last-child td { border-bottom: 0; }
+/* Issue 186: the lowest computed state of a spin sweep, not a ground state. */
+.results-table tr.spin-lowest td { font-weight: 600; }
 .results-gate-table td { font-family: var(--font-ui); }
 .results-gate-table td:nth-child(2) { width: 64px; }
 .results-gate-table td:nth-child(3) { color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--text-size-xs); }
