@@ -41,8 +41,12 @@ describe('Psi4 engine registry', () => {
     expect(PSI4_CAPABILITIES.inputExtension).toBe('.dat');
     expect(PSI4_CAPABILITIES.capturesStdout).toBe(true);
     expect(PSI4_CAPABILITIES.restartArtifact).toBeNull();
-    expect(PSI4_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Freq', 'Opt Freq']);
+    // Issue 166: TD-DFT is a job type now, so it must not be listed as missing.
+    expect(PSI4_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Freq', 'Opt Freq', 'TD-DFT']);
     expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).toMatch(/implicit solvation/);
+    expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).not.toMatch(/TD-DFT excited states/);
+    // Excited-state optimisation still is, and is named.
+    expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).toMatch(/excited-state optimisation/);
   });
 });
 

@@ -1,0 +1,14 @@
+molecule ethylene {
+0 1
+C 0.000000 0.000000 0.669500
+C 0.000000 0.000000 -0.669500
+H 0.000000 0.928900 1.232100
+H 0.000000 -0.928900 1.232100
+H 0.000000 0.928900 -1.232100
+H 0.000000 -0.928900 -1.232100
+}
+set basis 6-31g*
+set reference rhf
+set tdscf_states 5
+set tdscf_maxiter 200
+energy('td-b3lyp')

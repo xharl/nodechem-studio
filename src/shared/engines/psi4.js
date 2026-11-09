@@ -146,7 +146,7 @@ export const PSI4_BASES = Object.freeze([
   { key: 'aug-cc-pvdz', label: 'aug-cc-pVDZ', psi4: 'aug-cc-pvdz' },
 ]);
 
-export const PSI4_JOB_TYPES = Object.freeze(['SP', 'Opt', 'Freq', 'Opt Freq']);
+export const PSI4_JOB_TYPES = Object.freeze(['SP', 'Opt', 'Freq', 'Opt Freq', 'TD-DFT']);
 
 export const PSI4_UNSUPPORTED_JOB_TYPES = Object.freeze(['Opt=TS', 'IRC', 'Scan', 'NMR']);
 
@@ -177,7 +177,7 @@ export const PSI4_CAPABILITIES = Object.freeze({
     'implicit solvation (Psi4 core has no PCM/SMD; that needs PCMSolver)',
     'transition-state search',
     'IRC and relaxed scans',
-    'TD-DFT excited states through this builder',
+    'excited-state optimisation (Psi4 prints excitations but cannot relax on an excited surface here)',
     'NMR shieldings',
     'NBO populations (an external NBO program, not Psi4 core)',
     'separate dispersion corrections (choose a D3-carrying functional instead)',
@@ -187,6 +187,12 @@ export const PSI4_CAPABILITIES = Object.freeze({
 });
 
 /* ── Settings refusals ────────────────────────────────────── */
+
+/** The job type a settings object asks for, defaulted the way the builder does. */
+function jobTypeOf(settings = {}) {
+  return oneLine(settings.jobType, 'SP') || 'SP';
+}
+
 
 /** Method entry for a settings object, or throw naming the field. */
 export function psi4MethodFor(settings = {}) {
@@ -254,10 +260,14 @@ export function psi4SettingsOffenders(settings = {}) {
       message: 'Output verbosity is a Gaussian Print keyword; Psi4 prints its own fixed banner.',
     });
   }
-  if (settings.tddft === true || settings.excitedStates || text(settings.td)) {
+  // TD-DFT is a job type here, so the Gaussian-style "excited states" flag is not
+  // how it is requested. Asking for it on another job type is a refusal, not a
+  // silent extra: a Psi4 `energy('td-…')` runs a different calculation.
+  if ((settings.tddft === true || settings.excitedStates || text(settings.td)) && jobTypeOf(settings) !== 'TD-DFT') {
     offenders.push({
       field: 'tddft',
-      message: 'TD-DFT is not wired for Psi4 in this build; the input would run a different job.',
+      message: 'Excited states in Psi4 are a job type (TD-DFT), not a keyword on another job: '
+        + 'set the block to TD-DFT so the input runs the calculation you asked for.',
     });
   }
   if (text(settings.population)) {
@@ -300,6 +310,27 @@ export function psi4SettingsOffenders(settings = {}) {
 }
 
 export function assertPsi4Settings(settings = {}) {
+  const requestedJob = jobTypeOf(settings);
+  if (requestedJob === 'TD-DFT') {
+    // Psi4's TD-DFT module starts from a converged SCF reference; SAPT and the
+    // coupled-cluster methods have no excited-state path in this builder.
+    const methodKey = oneLine(settings.method, 'b3lyp').toLowerCase();
+    if (['sapt0', 'sapt', 'ccsd', 'ccsd(t)'].includes(methodKey)) {
+      throw new Error(`TD-DFT needs a single-reference SCF method; "${oneLine(settings.method)}" is not one. `
+        + 'Choose HF or a functional.');
+    }
+    const states = Number(settings.tdStates);
+    if (!Number.isInteger(states) || states < 1 || states > 50) {
+      throw new Error('TD-DFT needs the number of excited states: set States to a whole number '
+        + 'from 1 to 50. Psi4 allocates the request across irreducible representations.');
+    }
+    const root = Number(settings.tdRoot);
+    if (Number.isInteger(root) && root > 1) {
+      throw new Error('Root selects which excited state to follow, and this build cannot optimise on '
+        + 'an excited surface in Psi4 — a TD-DFT block is a single point. Set Root to 1 or 0, or run '
+        + 'the excited-state optimisation in Gaussian.');
+    }
+  }
   const offenders = psi4SettingsOffenders(settings);
   if (offenders.length > 0) {
     throw new Error(offenders[0].message);
@@ -422,7 +453,17 @@ export function buildPsi4Input({
   lines.push('');
 
   const fn = method.fn;
-  if (jobType === 'SP') lines.push(`energy('${fn}')`);
+  if (jobType === 'TD-DFT') {
+    // Psi4 splits a scalar request across the point group's irreducible
+    // representations, one state per irrep in point-group order, so the number
+    // written here is the number of states it will seek, not a promise that they
+    // are the n lowest. Measured on ethylene (D2h) with 5 states: five dark
+    // states and the bright B1u missing; with 2 per irrep it appears at 12.70 eV,
+    // f = 0.4183. The card and the docs state this rather than implying a
+    // selection the engine did not make.
+    lines.push(`set tdscf_states ${Number(settings.tdStates)}`);
+    lines.push(`energy('td-${fn}')`);
+  } else if (jobType === 'SP') lines.push(`energy('${fn}')`);
   else if (jobType === 'Opt') lines.push(`optimize('${fn}')`);
   else if (jobType === 'Freq') lines.push(`frequencies('${fn}')`);
   else {
@@ -438,7 +479,8 @@ export function buildPsi4Input({
     outputName,
     inputText: lines.join('\n'),
     argv: [safeName],
-    route: `psi4 ${method.label}/${basis.label}${jobType === 'SP' ? '' : ` ${jobType}`}`,
+    route: `psi4 ${method.label}/${basis.label}${jobType === 'SP' ? ''
+      : jobType === 'TD-DFT' ? ` TD-DFT (${Number(settings.tdStates)} states)` : ` ${jobType}`}`,
     // Recorded for the run record; a Psi4 block has no checkpoint to hand off.
     oldCheckpoint: oneLine(oldCheckpoint) || null,
   };
@@ -646,6 +688,111 @@ function methodFromEcho(text) {
  * Psi4. `Psi4 encountered an error` is an error termination even though Psi4
  * still prints the tail of the log after it.
  */
+/**
+ * The TDSCF excitation table.
+ *
+ * Psi4 prints one row per state, sorted by energy:
+ *
+ *      #   Sym: GS->ES (Trans)        au              eV              au          au (length) …
+ *      1     Ag->B1g (1 B1g)     0.31247         8.50279        -78.27484        0.0000 …
+ *
+ * and, above it, how the request was split across the point group's
+ * irreducible representations ("==> Requested Excitations <=="). Both are read:
+ * the split is the reason a request for n states can come back without the
+ * bright one, and the card has to be able to say so.
+ */
+function parsePsi4Excitations(body, lines) {
+  const split = [];
+  let insideSplit = false;
+  for (const line of lines) {
+    if (/==>\s*Requested Excitations\s*<==/.test(line)) { insideSplit = true; continue; }
+    if (insideSplit) {
+      const match = /^\s*(\d+)\s+(singlet|triplet|doublet|quartet)\s+states?\s+with\s+(\S+)\s+symmetry\s*$/.exec(line);
+      if (match) {
+        split.push({ spin: match[2], irrep: match[3], count: Number(match[1]) });
+        continue;
+      }
+      if (split.length > 0) insideSplit = false;
+    }
+  }
+
+  const states = [];
+  // Row shape, with the arrow spelling `GS->ES` and the multiplier/irrep in
+  // parentheses; the anchors keep the header and the dashed rule out.
+  const row = /^\s*(\d+)\s+(\S+)->(\S+)\s+\((\d+)\s+(\S+)\)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/;
+  // The composition block under each state: `1b3u  ->  1b2g   -0.996016 (99.205%)`,
+  // with de-excitations printed as `<-`. Kept with their sign: a coefficient is a
+  // number, and a state whose leading term is negative is a π→π* with a phase,
+  // not a mistake to normalise away.
+  const transition = /^\s*(\S+)\s+(->|<-)\s+(\S+)\s+(-?[\d.]+)\s+\(\s*([\d.]+)%\)\s*$/;
+  // Psi4 prints the table twice over: a summary table, then one block per state
+  // ("Excited State 1 (1 B1g):") carrying its composition. The composition is the
+  // more useful record, so a block header re-points at the state it describes
+  // instead of letting its transitions attach to whatever row came last.
+  const header = /^\s*Excited State\s+(\d+)\s+\((\d+)\s+(\S+)\):/;
+  let current = null;
+  for (const line of lines) {
+    const head = header.exec(line);
+    if (head) {
+      current = states.find((state) => state.index === Number(head[1])) ?? null;
+      continue;
+    }
+    const mix = transition.exec(line);
+    if (mix && current) {
+      // Kept in the order Psi4 printed it: the arrow's direction is the
+      // `direction` field, so nothing is silently re-oriented.
+      current.transitions.push({
+        from: mix[1],
+        to: mix[3],
+        direction: mix[2] === '->' ? 'excitation' : 'de-excitation',
+        coefficient: toNumber(mix[4]),
+        percent: toNumber(mix[5]),
+      });
+      continue;
+    }
+    const match = row.exec(line);
+    if (!match) continue;
+    const energyEv = toNumber(match[7]);
+    current = {
+      index: Number(match[1]),
+      from: match[2],
+      to: match[3],
+      multiplicity: Number(match[4]),
+      irrep: match[5],
+      // The results card labels a state `spin-symmetry`, the way a Gaussian row
+      // does; the multiplicity Psi4 printed is the honest source for the word.
+      spin: ['Singlet', 'Doublet', 'Triplet', 'Quartet'][Number(match[4]) - 1] ?? null,
+      symmetry: match[5],
+      transitions: [],
+      energyHartree: toNumber(match[6]),
+      energyEv,
+      // Printed by Psi4 as eV/au; the wavelength is derived from that printed
+      // energy rather than from a second, differently-rounded number.
+      wavelengthNm: energyEv && energyEv > 0 ? 1239.841984 / energyEv : null,
+      totalEnergyHartree: toNumber(match[8]),
+      // The scalar the rest of the app reads is the length-form strength, which
+      // is the number Gaussian prints as `f=`; the velocity form keeps its own
+      // field rather than being folded in or dropped.
+      oscillatorStrength: toNumber(match[9]),
+      oscillatorStrengthVelocity: toNumber(match[10]),
+      rotatoryStrength: toNumber(match[11]),
+      rotatoryStrengthVelocity: toNumber(match[12]),
+    };
+    states.push(current);
+  }
+  if (states.length === 0) return null;
+  return {
+    count: states.length,
+    requested: split.reduce((sum, entry) => sum + entry.count, 0) || null,
+    perIrrep: split,
+    states,
+    source: 'tdscf',
+    // The table is a documented Psi4 layout and these fixtures are real runs, so
+    // unlike the Gaussian Opt-TD parser this one is verified.
+    verified: true,
+  };
+}
+
 export function parsePsi4Output(text, { truncated = false, argv = null, route = null } = {}) {
   // Psi4 on Windows writes CRLF, and several blocks here are matched with
   // whole-text regular expressions that assume `\n`. Parsing a real Windows log
@@ -792,6 +939,7 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
       cycles: optimization.cycles,
       attempted: optimization.attempted,
     },
+    excitedStates: parsePsi4Excitations(body, lines),
     frequencies: {
       count: frequencies.values.length,
       imaginaryCount: imaginary.length,

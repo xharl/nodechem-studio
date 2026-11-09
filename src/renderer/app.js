@@ -1919,6 +1919,25 @@ function calcInspector(node) {
       : '',
   ].join(''));
 
+  // Issue 166: Psi4's TD-DFT is a job type of its own, and its state count is
+  // not a plain "n lowest" — Psi4 splits the request across the point group's
+  // irreducible representations, one state per irrep in order, so a count below
+  // the irrep count can come back without the bright state. The field says so
+  // where it is set, with the numbers measured on ethylene.
+  const psi4TdGroup = isPsi4 && s.jobType === 'TD-DFT'
+    ? group('Excited states (TD-DFT)', `${Number(s.tdStates) || 0} states`, true, [
+      inputField('States', 'tdStates', s.tdStates ?? 0, { type: 'number', min: 1, max: 50 }),
+      '<div class="field full"><span class="inspector-note">Writes <code>set tdscf_states N</code> and '
+        + '<code>energy(&#39;td-&lt;method&gt;&#39;)</code>. Psi4 splits N across the point group&rsquo;s irreducible '
+        + 'representations in order, so raise it above the irrep count when the bright state is missing: '
+        + 'on D<sub>2h</sub> ethylene, 5 states returned five symmetry-dark ones, 16 returned '
+        + 'B<sub>1u</sub> at 8.24 eV with f = 0.35.</span></div>',
+      '<div class="field full"><span class="inspector-note">No excited-state optimisation: this build cannot '
+        + 'relax an excited surface in Psi4, so the builder refuses a Root above 1. Run that in Gaussian, '
+        + 'or use the emission block after an external ES optimisation.</span></div>',
+    ].join(''))
+    : '';
+
   // Issue #60: TD-DFT is a route keyword on a wavefunction job. The group is
   // always present for Gaussian so the setting is discoverable; the note says
   // why a Freq/TS/IRC/Scan block cannot carry it.
@@ -2112,6 +2131,7 @@ function calcInspector(node) {
     ${qstEditor}
     ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : compositeJob ? compositeNote : methodGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : excitedGroup}
+    ${psi4TdGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : ramanGroup}
     ${isXtb || isPsi4 || compositeJob ? '' : vcdGroup}
     ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : gaussianSolvationGroup}

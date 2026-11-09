@@ -14,14 +14,12 @@ Thumbs.db
 # a symlink, so both spellings are ignored.
 node_modules
 
-# Real Gaussian outputs used as test fixtures (see test/fixtures/real/README.md)
-!test/fixtures/real/*.log
-!test/fixtures/real/*.out
-
-# Real Psi4 outputs (see test/fixtures/psi4-energy/README.md): the blanket *.log
-# rule above would drop them from a commit without a word, which is how a fixture
-# test passed locally and failed in CI.
-!test/fixtures/psi4-energy/*.log
+# Real engine outputs used as test fixtures (see the README beside each folder).
+# The blanket *.log rule above drops them from a commit without a word, which is
+# how a fixture test passes locally and fails in CI with ENOENT — so the negation
+# covers every fixture folder rather than the one that existed when it was written.
+!test/fixtures/**/*.log
+!test/fixtures/**/*.out
 
 # Dry-run output written by `ncs run` in the working directory
 ncs-runs/
