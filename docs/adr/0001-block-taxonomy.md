@@ -80,12 +80,14 @@ the queue and fan-out implement — this ADR makes it explicit rather than emerg
 
 If this rule drifts, CREST and RDKit become ambiguous again.
 
-### 2.5 Program roles are unchanged and orthogonal
+### 2.5 Program roles are orthogonal to blocks
 
 - **Engine** — fills the calculation contract: `buildInput`, `parse`,
   `classify`, `checkpointArtifact`, `makeFixture`. Gaussian, ORCA, Psi4, xTB.
 - **Generator** — produces structures: argv or in-process call, parser,
   provenance, coverage refusal, version. CREST, UFF, Open Babel, RDKit.
+- **Scorer** — returns energy (and optionally forces, charges) for a given
+  geometry: AIMNet2, MACE-OFF23, in-app UFF/MMFF94. See §2.10.
 - **Converter** — translates files; never a block, invoked by import/export.
 - **Analysis helper** — pure functions over an existing geometry.
 
@@ -143,6 +145,52 @@ forcing a no-op block into every graph.
 Out of scope for v1, and refused rather than approximated: protonation-state
 enumeration and tautomer enumeration — those produce sets and therefore belong
 to `generate`.
+
+### 2.10 ML potentials are scorers, not engines
+
+A machine-learned interatomic potential returns energy, forces and charges for a
+geometry. It has no route, no termination record and no canonical log, so it
+cannot satisfy the engine contract — the same test that keeps Open Babel and
+RDKit out of `ENGINES`. A **scorer** is the fifth program role, and it is
+consumed in three places:
+
+| Consumer | Use |
+|---|---|
+| `generate` | `rankBy: "ml:<model>"` — curate a searched or imported ensemble instead of ranking by MMFF94 |
+| `calculate` | method provider for a single point; the block stays `calculate`, the provider is a scorer, never an engine |
+| `prepare` | `relax` with an ML potential (forces + BFGS) |
+
+Rules for a scorer:
+
+- **Units are explicit.** Models emit eV. Store the eV → kcal/mol and eV →
+  hartree conversions alongside the record and never mix them silently with
+  MMFF94 kcal/mol.
+- **Provenance is mandatory:** model name, version, weights digest, dtype,
+  device, cutoff, total charge, and spin where the model is spin-polarised.
+- **Domain guard by name, before spawn:** element whitelist taken from the
+  model card, supported charge range, size warning. Refuse rather than
+  extrapolate — the MMFF94 coverage doctrine applied to a model that
+  extrapolates even less gracefully.
+- **Never presented as QM.** A scorer is a ranking and refinement layer. It does
+  not reproduce DLFF03, which remains proprietary and unpublished.
+
+Deployment follows the Open Babel/RDKit precedent: a Python sidecar, spawned per
+job, typed argv in and JSON out, with a **separate venv** from the RDKit
+generator because torch is large and stays optional in the default install.
+
+Licensing decides the default:
+
+| Model | Licence | Notes |
+|---|---|---|
+| AIMNet2 | MIT (code and weights) | 14 elements (H, B, C, N, O, F, Si, P, S, Cl, As, Se, Br, I); supports net charge; default candidate |
+| MACE-OFF23 | code MIT, **weights under an Academic Software License** | 10 elements, neutral organic chemistry; academic use only, cannot be bundled in an Apache-2.0 distribution |
+| ANI-2x | MIT | H, C, N, O, F, S, Cl only — too narrow to be the default |
+
+A scorer ships only with the benchmark that measures the effect it exists for:
+whether it **reorders** conformers relative to MMFF94. At least ten molecules, a
+reference level of theory (ωB97X-D/def2-TZVP, or GFN2 for screening), rank
+correlation and MAE on relative energies, and how often the lowest-energy pick
+changes.
 
 ---
 
@@ -219,6 +267,8 @@ One table replaces the scattered checks:
 - Force-field steps stop looking like QM jobs.
 - An imported Spartan ensemble becomes an artifact with its own provenance node.
 - New blocks have a contract to satisfy, not a precedent to copy.
+- ML potentials get a defined home instead of being forced into the engine
+  registry as fake engines with empty routes.
 
 **Costs**
 
@@ -227,6 +277,8 @@ One table replaces the scattered checks:
   `node.compute`/`task.conformers` property renames.
 - The report, cluster export and recent-projects code all key on type strings.
 - Any test that pins a type string moves with it.
+- A scorer adds an optional torch sidecar (hundreds of MB) and a benchmark
+  dataset; neither belongs in the default install or the default test run.
 
 **Risks**
 
@@ -243,7 +295,9 @@ One table replaces the scattered checks:
 3. **Import as `input(ensemble)`** — input run-time task, ensemble record,
    `generate.source`, ranking moved behind the new boundary.
 4. **`prepare`** — `embed3d` and `relax` only.
-5. **Declarative validation table** — one module, one test per rule.
+5. **Scorer role** — AIMNet2 sidecar, domain guard, unit conversion, provenance,
+   and the reordering benchmark; `generate.rankBy` and `calculate` provider.
+6. **Declarative validation table** — one module, one test per rule.
 
 ---
 
@@ -258,3 +312,5 @@ One table replaces the scattered checks:
   The contract fits; the schema is not in v1.
 - **`analyse` DP4**: evaluation belongs in `analyse`, but the QM shifts it needs
   are `calculate`. Confirm the block reads records only.
+- **Default scorer**: the licence favours AIMNet2; the reordering benchmark
+  decides accuracy. Do not pick on reputation.
