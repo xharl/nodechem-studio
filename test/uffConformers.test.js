@@ -288,6 +288,35 @@ describe('UFF conformer search (issue 144)', () => {
       .toMatch(/did not reach the UFF force tolerance/);
   });
 
+  it('returns the RANKED members, so the unit travels with the number (issue 144)', () => {
+    const ensemble = generateUffEnsemble({
+      atoms: [
+        { element: 'C', x: 0, y: 0, z: 0 },
+        { element: 'C', x: 1.52, y: 0, z: 0 },
+        { element: 'O', x: 2.1, y: 1.35, z: 0 },
+        { element: 'H', x: -0.4, y: 1.0, z: 0 },
+        { element: 'H', x: 2.4, y: 2.1, z: 0 },
+      ],
+      bonds: [[0, 1], [1, 2]],
+    }, {});
+    expect(ensemble.error).toBeNull();
+    const [member] = ensemble.members;
+    // The four fields that keep a force-field energy from being read as a QM
+    // total. Returning the raw trials dropped all of them.
+    expect(member.energyUnit).toBe('kcal/mol');
+    expect(member.energyMethod).toBe('UFF');
+    expect(member.energyEh).toBeNull();
+    expect(typeof member.energyKcal).toBe('number');
+    // ...and the ensemble's own bookkeeping: an id and a rank, which the fan-out
+    // and the report both need to name a member.
+    expect(member.id).toBeTruthy();
+    expect(member.rank).toBe(1);
+    // The trial that produced it is still named.
+    expect(member.trialIndex).toBe(0);
+    // The members and the summary must agree about who is in the ensemble.
+    expect(ensemble.members.map((entry) => entry.id)).toEqual(ensemble.summary.members.map((entry) => entry.id));
+  });
+
   it('states the search, the grid and the limit in the ensemble copy', () => {
     const { atoms, bonds } = pentane();
     const found = generateUffEnsemble({ atoms, bonds });

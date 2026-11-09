@@ -528,10 +528,30 @@ export function generateUffEnsemble({
       ...found.warnings.map(({ id, status, message }) => ({ id, status, message })),
     ];
   }
+  // The ensemble's members are the RANKED ones: they carry `id`, `rank`, the
+  // relative energy and the declared unit, and `energyEh: null` on purpose —
+  // a UFF energy has no Hartree value, so no caller can compare it with an SCF
+  // total. Returning the raw trial list here instead would drop every one of
+  // those fields while looking like an ensemble. Each ranked member keeps the
+  // trial bookkeeping (index, iteration count, how the minimisation ended) so a
+  // caller can still say which trial produced it.
+  const trialByAtoms = new Map(found.members.map((member) => [member.atoms, member]));
+  const members = summary.members.map((member) => {
+    const trial = trialByAtoms.get(member.atoms);
+    return trial
+      ? {
+        ...member,
+        trialIndex: trial.trialIndex,
+        trialIterations: trial.iterations,
+        trialConverged: trial.converged,
+        trialMinimisation: trial.minimisation,
+      }
+      : member;
+  });
   return {
     error: null,
     summary,
-    members: found.members,
+    members,
     search: found.search,
     warnings: found.warnings,
     ensembleText: frames.map((frame) => xyzText(frame.atoms, frame.comment)).join(''),
