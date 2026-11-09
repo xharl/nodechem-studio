@@ -449,6 +449,83 @@ The viewport is lazy. It creates no WebGL2 context until a mesh exists, and when
 it prints `surface view unavailable: no WebGL2 context` and keeps the triangle counts, the isovalue
 and the grid on screen. A blank canvas would claim the orbital has no surface, which is false.
 
+## The electrostatic potential on a surface (issue 164)
+
+An isosurface gains most of its chemistry when it is coloured by the electrostatic potential
+`V(r) = Σ_A Z_A/|r−R_A| − ∫ρ(r′)/|r−r′|d³r′`, in Hartree (a.u. of potential). `src/shared/esp.js`
+does that from the checkpoint's **`Total SCF Density`** block, which `fchk.js` now reads: the lower
+triangle in `NBasis(NBasis+1)/2` values, kept as a `Float64Array`. `Total SCD Density` is accepted as
+the same block under its other spelling, and a block whose length does not match the basis (truncated,
+or a transposed write) is **refused by the field's own name**, never read short.
+
+### The method, and why it is not grid integration
+
+The electron term is summed **analytically over the basis**: each product of two Cartesian Gaussians
+is expanded in Hermite Gaussians (McMurchie–Davidson), each Hermite function is integrated against
+`1/|r−r′|` in closed form, and the result is a short sum of monomials times Boys functions `F_n`.
+The module header states it, and so does every result (`method`), every caption and every card row.
+
+Direct numerical integration of a sampled density was **measured** first, on the committed Psi4
+fixture, and it does not work at any grid this app can afford:
+
+| Grid | `Σ ρᵢh³` | Consequence |
+| --- | --- | --- |
+| 0.4 bohr | **17.7 e** for a 10-electron molecule | the 1s cores are counted almost twice |
+| finer | does not converge | a grid point on a nucleus samples `ρ ∝ h⁻³` |
+
+The resulting potential was wrong by more than 1 Hartree on average and by tens of Hartree near
+oxygen, so grid integration was rejected with a number rather than an opinion. The analytic route also
+runs in about a second on a 14,616-point grid, which quadrature could not.
+
+### The oracle, and the tolerance
+
+`test/fixtures/esp/` carries Psi4 1.11's own `esp` cube for the same water calculation, on the same
+grid as its HOMO cube and its density cube (29×21×24, 0.4 bohr). Measured on the 14,616 shared
+points:
+
+| | Value |
+| --- | --- |
+| Worst \|ΔV\| | **1.66e-3 Eh** (1.04 kcal/mol) at (0.00, ±1.69, −1.15) Å, 2.0 Å from the nearest nucleus |
+| Mean \|ΔV\| | 4.4e-4 Eh |
+| Near a nucleus (< 0.5 Å) | worst 1.1e-3 Eh, where `V ≈ 151 Eh` |
+
+The worst point is *not* at a nucleus: the deviation is roughly constant in absolute terms (the ratio
+`V_app/V_psi4` is 1.0000 ± 0.0003), so it shows up where `V` is small. A constant factor would show as
+a constant *relative* error instead, and it does not.
+
+The same folder carries a **helium control** — one s function, three primitives — whose potential is
+known in closed form. Against that exact answer, on 4,906 grid points:
+
+| | Worst deviation |
+| --- | --- |
+| This implementation | **3.7e-10 Eh** |
+| Psi4's `esp` cube | **5.6e-3 Eh** |
+
+So the residual on water is the oracle's: its cube carries a quadrature error of a few 1e-3 Eh, while
+the analytic sum here is exact to the last digits for an s-only basis (and, by construction, for
+s/p/d/f). The test therefore states the tolerance as **2e-3 Eh** and asserts both numbers — ours and
+Psi4's — so the justification cannot drift away from the measurement.
+
+### The legend, and what it refuses
+
+The coloured figure (`figures/surface.js`, `espSurfaceFigure`) uses a diverging ramp with a discrete
+bar, ticks in **kcal/mol**, and a caption that states all four things a colour needs:
+
+- the range, in **kcal/mol** and in **hartree**;
+- whether it is scaled to the surface's own extremes (default, symmetric about zero) or clipped —
+  `potentialRange(values, { limitHartree })` marks a clipped scale as clipped;
+- the **grid** the potential was computed on (or, in the viewport, that it was sampled at the N
+  surface centroids);
+- the **method**, in the same words as the card.
+
+A checkpoint **without** a density block prints `no density in this file` in the numbers row and draws
+no coloured field and no colour bar. There is no grey legend standing in for an unknown potential,
+because a grey field reads as "zero potential", which is a different and false claim.
+
+The WebGL viewport is not colour-mapped yet: it prints the potential's range and where it was sampled
+in its numbers row, and the coloured picture is the vector figure in the report. That distinction is
+deliberate — a colour bar beside an uncoloured surface would be worse than no colour bar.
+
 ## What the readers refuse
 
 The readers are bounded, and they say what they refused instead of returning a partial answer.
@@ -600,16 +677,18 @@ ignored Psi4's value order.
 The ingest half of issue #59 is implemented. The visual half is not, and this page would rather say
 so than show a picture that implies otherwise:
 
-- **Isosurfaces in the report.** The app draws them (`## A picture of the field` above); the report
-  renders figures from data, and a surface in the report is a later workstream.
-- **ESP colour-mapped surfaces and colour bars.** Requires a molecular surface and a colour scale,
-  neither of which exists yet.
+- **Isosurfaces in the report from the CLI.** `ncs report --figures=surfaces` meshes the cubes and
+  draws them, and draws the ESP-coloured form when a caller supplies the potential on the mesh; the
+  CLI does not yet attach the checkpoint that would supply it.
+- **ESP colour-mapped surfaces in the 3D viewport.** The potential is computed and its range is
+  printed (`## The electrostatic potential on a surface`), and the report's vector figure is
+  colour-mapped; the WebGL surface still shades by phase, so it gets numbers rather than a bar.
 - **QTAIM/AIM critical points, bond paths and basin charges.** A separate analysis with its own
   numerical requirements.
 - **NCI/RDG surfaces, ELF/LOL, deformation density.** Also separate analyses, not another cube read.
-- **Cube *density* and ESP cubes from the CLI.** `ncs cube` writes one orbital; the density
-  (`Σ occᵢ|ψᵢ|²`) and an ESP cube need a different evaluator or the density matrix, which `fchk.js`
-  does not parse yet.
+- **Cube *density* and ESP cubes from the CLI.** `ncs cube` writes one orbital. `fchk.js` now reads
+  the density matrix and `esp.js` computes the potential from it, but neither `ncs cube` nor
+  `ncs report` writes a density or ESP cube yet — the report's ESP figure is supplied by the caller.
 - **Reading a cube whose values are in an unstated order.** Only Psi4's own title triggers the
   reorder; a cube re-saved with another tool's title is read x-fastest, as the format says, and the
   reader does not guess further.

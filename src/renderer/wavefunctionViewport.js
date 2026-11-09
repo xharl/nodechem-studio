@@ -27,6 +27,11 @@
 import { parseCube, writeCube } from '../shared/cubeFile.js';
 import { extractSurface } from '../shared/marchingCubes.js';
 import {
+  electrostaticPotential,
+  espCardRows,
+  potentialRange,
+} from '../shared/esp.js';
+import {
   fieldFromCube,
   fieldOfValues,
   gridFor,
@@ -501,6 +506,49 @@ export function mountWavefunctionViewport({
     }
   };
 
+  /**
+   * The electrostatic potential at the surface, for the numbers row (issue 164).
+   *
+   * The potential is evaluated *at the surface centroids*, not on the field's
+   * grid: the range the row prints is the range of the values a coloured surface
+   * would actually take, and saying so is the point. A checkpoint that carries
+   * no density block gets the exact words "no density in this file" — there is no
+   * grey legend standing in for an unknown field.
+   */
+  const espRowsFor = (mesh) => {
+    const parsed = record?.parsed;
+    if (!parsed || !Array.isArray(parsed.shellTypes) || !Number.isInteger(parsed.numberOfBasisFunctions)) {
+      return [];
+    }
+    const centroids = [];
+    for (const part of [mesh?.positive, mesh?.negative]) {
+      const count = Math.floor((part?.positions?.length ?? 0) / 9);
+      for (let triangle = 0; triangle < count; triangle += 1) {
+        centroids.push([0, 1, 2].map((axis) => (
+          (part.positions[triangle * 9 + axis]
+            + part.positions[triangle * 9 + 3 + axis]
+            + part.positions[triangle * 9 + 6 + axis]) / 3
+        )));
+      }
+    }
+    if (!centroids.length) return [];
+    try {
+      const potential = electrostaticPotential({ fchk: parsed, points: centroids });
+      if (!potential.ok) {
+        return espCardRows({ fchk: parsed, esp: potential, sampledAt: `${centroids.length} surface centroids` });
+      }
+      const finite = potential.values.filter((value) => Number.isFinite(value));
+      if (!finite.length) return [['ESP colour range', 'not computable: no finite value on this surface']];
+      return espCardRows({
+        fchk: parsed,
+        esp: { ok: true, range: potentialRange(finite, { subject: 'surface' }) },
+        sampledAt: `${centroids.length} surface centroids, analytic basis sum`,
+      });
+    } catch (error) {
+      return [['ESP colour range', `not computable: ${String(error?.message ?? error)}`]];
+    }
+  };
+
   const describeSurface = (field) => {
     if (!state.surface) return;
     state.surface.setCubeAvailable?.(Boolean(field));
@@ -512,7 +560,12 @@ export function mountWavefunctionViewport({
       grid: state.grid ? `${state.grid.counts.join('×')} at ${Number(state.grid.step).toFixed(3)} Å` : null,
     });
     const total = (mesh.positive?.triangleCount ?? 0) + (mesh.negative?.triangleCount ?? 0);
-    setNumbers([...(state.numberRows ?? []), ['isovalue', `${state.isovalue.toPrecision(3)}`], ['triangles', String(total)]]);
+    setNumbers([
+      ...(state.numberRows ?? []),
+      ...espRowsFor(mesh),
+      ['isovalue', `${state.isovalue.toPrecision(3)}`],
+      ['triangles', String(total)],
+    ]);
     setStatus(state.surface.message || `surface at ±${state.isovalue.toPrecision(3)} a.u. · drag to orbit, wheel to zoom`);
   };
 

@@ -21,7 +21,7 @@ import { broadenSticks, fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd, spectru
 import { orbitalLevelsFigure } from './levels.js';
 import { convergenceFigure } from './convergence.js';
 import { contourFigure, sliceOf } from './contour.js';
-import { surfaceFigure } from './surface.js';
+import { espSurfaceFigure, surfaceFigure } from './surface.js';
 
 const IR_FWHM = 12;
 
@@ -162,12 +162,27 @@ export function taskFigures(record, { volume = null, surfaces = null, level = 'b
   if (overlay.reason) figures.push({ key: 'uvvis-overlay', figure: null, reason: overlay.reason });
 
   if (surfaces && Array.isArray(surfaces.meshes) && surfaces.meshes.length > 0) {
-    const drawn = surfaceFigure({
-      meshes: surfaces.meshes, iso: surfaces.iso ?? null, field: 'ψ isosurface', units: 'au',
-    });
+    // issue 164: when the caller supplies the potential on the same mesh, the
+    // surface is drawn coloured by it, with its range in kcal/mol and a.u. and
+    // the grid it was sampled on. Without one the phase-coloured figure is
+    // drawn instead — never an unlabelled colour field.
+    const esp = surfaces.esp && surfaces.esp.ok ? surfaces.esp : null;
+    const drawn = esp
+      ? espSurfaceFigure({
+        meshes: surfaces.meshes,
+        values: esp.values,
+        range: esp.range,
+        iso: surfaces.iso ?? null,
+        grid: esp.grid?.note ?? null,
+        method: esp.method ?? null,
+      })
+      : surfaceFigure({
+        meshes: surfaces.meshes, iso: surfaces.iso ?? null, field: 'ψ isosurface', units: 'au',
+      });
+    const key = esp ? 'esp-surface' : 'surface';
     figures.push(drawn
-      ? { key: 'surface', figure: drawn }
-      : { key: 'surface', figure: null, reason: 'the isosurface has too many triangles to draw as vector output' });
+      ? { key, figure: drawn }
+      : { key, figure: null, reason: 'the isosurface has too many triangles to draw as vector output' });
   } else if (level === 'surfaces') {
     figures.push({ key: 'surface', figure: null, reason: 'no cube file in the run folder' });
   }
