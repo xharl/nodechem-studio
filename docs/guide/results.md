@@ -419,9 +419,17 @@ eigenvalues, the gauge Gaussian used (GIAO), and a simulated spectrum.
 
 Gaussian reports **absolute** isotropic shieldings in ppm. A chemical shift is
 `σ_reference − σ_isotropic`, and the reference must be computed at the same level of theory — there is
-no universal TMS number. The card therefore starts in absolute mode; entering a reference in the
-**σ_ref** field converts the table and the figure to shifts, and the caption prints the reference it
-used. Without one, the figure says *absolute shielding*, because it is not a spectrum in ppm shift.
+no universal TMS number. The card therefore starts in absolute mode. Entering a reference in the
+**σ_ref** field *and* its provenance in the field beside it converts the table and the figure to
+shifts; the caption and every row's **Source** column print the reference and where it came from.
+Without a provenance the shift column stays empty and the card prints the refusal — a σ_ref with no
+stated method, basis or citation is a borrowed number, not a reference. Without any reference the
+figure says *absolute shielding*, because it is not a spectrum in ppm shift.
+
+Each row's **Source** column states the origin of the number: `this run · Gaussian 09 D.01 · GIAO`
+for a shielding, and `reference: σ_ref = 31.9 ppm at B3LYP/sto-3g — TMS, …` once a shift exists. The
+provenance may name the calculation that produced σ_ref (method, basis, solvent) or the experiment
+that states it; either way it is printed, never implied.
 
 Broadening is a Lorentzian with a FWHM you set in the card (default 0.10 ppm) and the caption always
 states it, along with the number of nuclei in the trace. VCD/ROA rotational strengths and
@@ -441,11 +449,14 @@ Two modes, both explicit:
 - **linear** — `δ = a·σ + b`, with `a` and `b` fitted at the level they are stored with. The fit is
   not extrapolated to another level.
 
-`shiftFor({ level, nucleus, sigma, references })` returns `{ delta, mode, citation, reason }`, so a
-shift cannot be obtained without the mode and the citation that produced it. An entry without a
-citation is refused **by name** when the dataset loads; so is an entry missing its level, its
-retrieved date or a finite coefficient, and so is an entry whose nucleus this app does not read — only
-¹H, ¹³C, ¹⁵N, ¹⁹F, ³¹P and ²⁹Si are supported.
+`shiftFor({ level, nucleus, sigma, reference, references })` returns
+`{ delta, mode, citation, reason, source }`, so a shift cannot be obtained without the mode and the
+citation that produced it: `source` is the line the table prints, and it is null exactly when `delta`
+is. `reference` is the caller's own value, `{ ppm, provenance, level? }`; a stated level must match
+the run's level or the shift is refused (`the reference is at …, the run is at …`), and a σ_ref with
+no provenance is refused by name. An entry without a citation is refused **by name** when the dataset
+loads; so is an entry missing its level, its retrieved date or a finite coefficient, and so is an
+entry whose nucleus this app does not read — only ¹H, ¹³C, ¹⁵N, ¹⁹F, ³¹P and ²⁹Si are supported.
 
 The shipped dataset is **empty on purpose**. A reference shielding is a run at a level, not a
 constant: computing σ(TMS) for every supported functional and basis is a campaign of its own, and
@@ -479,8 +490,13 @@ table is never presented as a whole molecule's coupling network.
 Units and sign travel with the result: `units: 'Hz'` and a `convention` string that states the sign is
 as printed by Gaussian and never normalised, so a table cannot show the numbers without them.
 
-The coupling table and the dataset-backed reference picker are read by these two modules; the results
-panel does not draw them yet, so a shift today still comes from a σ_ref typed by hand.
+The **NMR** card draws the pairs in a **Spin–spin couplings** table with the nuclei named by element and
+Gaussian's 1-based index (`C2–C1`), J in Hz and the reduced K exactly as printed, and states how many
+of the possible pairs were printed. A run whose route did not ask for `NMR=(GIAO,SpinSpin)` says so —
+an absence, not a zero matrix. The same pairs, matrices and indexing note are written to
+`run.json` (`parsed.nmr.couplings`, plain arrays with `null` for an unprinted pair) and printed in the
+workflow report's **NMR** section, together with the level of theory and the reference the record
+carries, if any. A record without a reference prints *no reference was recorded* and leaves δ empty.
 
 ## Raman activities
 

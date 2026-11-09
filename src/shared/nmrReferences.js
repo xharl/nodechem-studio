@@ -9,7 +9,11 @@
  * Two modes, both explicit:
  *
  * - `single`: δ = σ_ref − σ, with σ_ref the reference nucleus (TMS, CFCl₃,
- *   H₃PO₄, …) computed at the same method and basis as the sample.
+ *   H₃PO₄, …) computed at the same method and basis as the sample. A `single`
+ *   reference may also be passed in by the caller as an explicit
+ *   `{ ppm, provenance }` value — the σ_ref a user states for this run. The
+ *   provenance is mandatory: a σ_ref with no stated calculation or citation is
+ *   a borrowed number, and `shiftFor` refuses it by name.
  * - `linear`: δ = a·σ + b, with `a`, `b` fitted at the level they are stored
  *   with. The fit is only valid for that level; nothing is extrapolated.
  *
@@ -178,19 +182,70 @@ export function lookupReference({ level, nucleus, references = SHIPPED_REFERENCE
 }
 
 /**
+ * Check one caller-supplied reference value: `{ ppm, provenance, level?,
+ * citation? }`. The provenance is what makes the number usable — which
+ * calculation produced it (method/basis/solvent) or which publication states
+ * it. Returns `{ ok, error, ppm, provenance, level, citation }`; `error` names
+ * the missing part so the card can print the refusal.
+ */
+export function explicitReference(reference) {
+  if (!reference || typeof reference !== 'object' || Array.isArray(reference)) {
+    return { ok: false, error: 'the reference is not an object' };
+  }
+  const ppm = measurement(reference.ppm);
+  if (ppm === null) {
+    return { ok: false, error: 'the reference has no finite σ_ref' };
+  }
+  const provenance = typeof reference.provenance === 'string' ? reference.provenance.trim() : '';
+  if (!provenance) {
+    return {
+      ok: false,
+      error: 'the reference has no stated provenance — σ_ref must name the calculation '
+        + '(method, basis, solvent) or the cited experiment that produced it',
+    };
+  }
+  const citation = typeof reference.citation === 'string' && reference.citation.trim()
+    ? reference.citation.trim()
+    : null;
+  return { ok: true, error: null, ppm, provenance, level: levelLabel(reference.level), citation };
+}
+
+/** How one reference is named in a shift's `source`, for the table column. */
+export function referenceSource(entry) {
+  const level = levelLabel(entry?.level);
+  const at = level ? ` at ${level}` : '';
+  if (entry?.mode === 'linear') {
+    return `reference: δ = ${entry.a}·σ + ${entry.b}${at} — ${entry.citation}`;
+  }
+  return `reference: σ_ref = ${entry.sigmaRef} ppm${at} — ${entry.citation}`;
+}
+
+/**
  * δ for one shielding, with the provenance that produced it.
  *
- * Returns `{ delta, mode, citation, reason }`. `reason` is null only when a
- * shift was computed; otherwise `delta` is null and the reason names what is
- * missing — `no reference for <method>/<basis>` when the dataset has no entry
- * at that level, or the missing shielding. There is no path here that subtracts
- * a default reference.
+ * Returns `{ delta, mode, citation, reason, source }`. `reason` is null only
+ * when a shift was computed; otherwise `delta` is null and the reason names what
+ * is missing — `no reference for <method>/<basis>` when the dataset has no entry
+ * at that level, the missing shielding, or the missing provenance on an
+ * explicit reference. `source` is the line the table prints beside the number
+ * (`reference: σ_ref = … — …`); it is null exactly when `delta` is null.
+ *
+ * `reference` is the caller's own σ_ref, `{ ppm, provenance, level? }`, used for
+ * the `single` mode. When it names a level, that level must be the run's level:
+ * a reference computed elsewhere is refused rather than subtracted. There is no
+ * path here that subtracts a default reference.
  */
-export function shiftFor({ level, nucleus = null, sigma, references = SHIPPED_REFERENCES } = {}) {
+export function shiftFor({
+  level,
+  nucleus = null,
+  sigma,
+  reference = null,
+  references = SHIPPED_REFERENCES,
+} = {}) {
   const label = levelLabel(level);
   const nucleusLabel = String(nucleus ?? '').trim();
   if (!label) {
-    return { delta: null, mode: null, citation: null, reason: 'no level of theory given' };
+    return { delta: null, mode: null, citation: null, reason: 'no level of theory given', source: null };
   }
   const value = measurement(sigma);
   if (value === null) {
@@ -199,11 +254,38 @@ export function shiftFor({ level, nucleus = null, sigma, references = SHIPPED_RE
       mode: null,
       citation: null,
       reason: `no shielding for ${nucleusLabel || 'the nucleus'} at ${label}`,
+      source: null,
+    };
+  }
+  if (reference !== null && reference !== undefined) {
+    const stated = explicitReference(reference);
+    if (!stated.ok) {
+      return { delta: null, mode: null, citation: null, reason: stated.error, source: null };
+    }
+    if (stated.level && normalizeToken(stated.level) !== normalizeToken(label)) {
+      return {
+        delta: null,
+        mode: null,
+        citation: null,
+        reason: `the reference is at ${stated.level}, the run is at ${label}`,
+        source: null,
+      };
+    }
+    const at = stated.level ? ` at ${stated.level}` : '';
+    return {
+      delta: stated.ppm - value,
+      mode: 'single',
+      citation: stated.citation || stated.provenance,
+      reason: null,
+      source: `reference: σ_ref = ${stated.ppm} ppm${at} — ${stated.provenance}`,
+      level: label,
+      nucleus: nucleusLabel || null,
+      entry: stated,
     };
   }
   const entry = lookupReference({ level, nucleus, references });
   if (!entry) {
-    return { delta: null, mode: null, citation: null, reason: `no reference for ${label}` };
+    return { delta: null, mode: null, citation: null, reason: `no reference for ${label}`, source: null };
   }
   const delta = entry.mode === 'single'
     ? entry.sigmaRef - value
@@ -213,6 +295,7 @@ export function shiftFor({ level, nucleus = null, sigma, references = SHIPPED_RE
     mode: entry.mode,
     citation: entry.citation,
     reason: null,
+    source: referenceSource(entry),
     level: label,
     nucleus: entry.nucleus,
     entry,

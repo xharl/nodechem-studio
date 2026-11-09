@@ -531,6 +531,83 @@
             }
           }
         },
+        "nmr": {
+          "description": "Issue 147: GIAO shieldings, and, for NMR=(GIAO,SpinSpin), the printed spin-spin coupling tables. null when the route asked for no NMR. A pair the log did not print is null, never 0.",
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "properties": {
+            "gauge": { "type": ["string", "null"] },
+            "method": { "type": ["string", "null"] },
+            "count": { "type": "integer" },
+            "atoms": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "index": { "type": "integer" },
+                  "element": { "type": ["string", "null"] },
+                  "isotropic": { "type": "number" },
+                  "anisotropy": { "type": ["number", "null"] },
+                  "eigenvalues": {
+                    "type": ["array", "null"],
+                    "items": { "type": "number" }
+                  }
+                }
+              }
+            },
+            "reference": {
+              "description": "The reference the run recorded for its shifts: sigma_ref in ppm plus the provenance that produced it. Present only when a reference was recorded; its absence means delta is not reported.",
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "required": ["ppm", "provenance"],
+              "properties": {
+                "ppm": { "type": "number" },
+                "provenance": { "type": "string", "minLength": 1 },
+                "citation": { "type": "string" },
+                "level": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "method": { "type": "string" },
+                    "basis": { "type": "string" }
+                  }
+                }
+              }
+            },
+            "couplings": {
+              "type": ["object", "null"],
+              "additionalProperties": true,
+              "properties": {
+                "atoms": { "type": "integer" },
+                "units": { "type": "string" },
+                "kUnits": { "type": "string" },
+                "convention": { "type": "string" },
+                "indexing": { "type": "string" },
+                "verified": { "type": "boolean" },
+                "complete": { "type": "boolean" },
+                "problems": { "type": "array", "items": { "type": "string" } },
+                "printed": { "type": ["object", "null"], "additionalProperties": true },
+                "pairs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "i": { "type": "integer" },
+                      "j": { "type": "integer" },
+                      "hz": { "type": ["number", "null"] },
+                      "k": { "type": ["number", "null"] }
+                    }
+                  }
+                },
+                "matrix": { "type": ["array", "null"], "items": { "type": ["number", "null"] } },
+                "kMatrix": { "type": ["array", "null"], "items": { "type": ["number", "null"] } },
+                "matrixOrder": { "type": "string" }
+              }
+            }
+          }
+        },
         "extras": { "type": "object", "additionalProperties": true },
         "lineCount": { "type": "integer" }
       }

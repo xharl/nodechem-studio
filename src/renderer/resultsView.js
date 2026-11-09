@@ -27,7 +27,8 @@ import { pkaCycle, pkaCycleLine, redoxCycle, redoxCycleLine } from '../shared/pk
 import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
 import { mountSuperposition } from './superpositionCard.js';
 import { mountWavefunctionViewport } from './wavefunctionViewport.js';
-import { elementForNucleus, nmrPolyline, nmrShifts, nmrSpectrum, parseShieldings } from '../shared/nmr.js';
+import { elementForNucleus, nmrSpectrum } from '../shared/nmr.js';
+import { SHIPPED_REFERENCES, levelLabel, lookupReference, shiftFor } from '../shared/nmrReferences.js';
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
 import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
 import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
@@ -1429,46 +1430,196 @@ function solutionEnergeticsCard(record, parsed, flags, options = {}) {
 }
 
 /**
- * NMR shieldings. Gaussian reports absolute isotropic shieldings; a chemical
- * shift is `σ_reference − σ_isotropic` and needs a reference computed at the
- * same level, so the panel starts in absolute mode and only shows shifts once
- * the user supplies one. The gauge, the reference and the broadening are
- * printed with the numbers.
+ * NMR shieldings and spin-spin couplings.
+ *
+ * Gaussian reports absolute isotropic shieldings; a chemical shift is
+ * `σ_reference − σ_isotropic` and needs a reference computed at the same level.
+ * The panel therefore starts in absolute mode and only shows a shift once the
+ * user states a reference *and* where that reference came from — a σ_ref with
+ * no provenance is refused, because that is a borrowed number. Every row's
+ * `Source` column repeats the origin: this run for σ, the reference's
+ * provenance for δ. The gauge, the reference and the broadening are printed
+ * with the numbers.
+ *
+ * A `NMR=(GIAO,SpinSpin)` run also prints the K and J tables; they are drawn as
+ * a pair table with the nuclei named by element + Gaussian's 1-based index, in
+ * the units and sign convention the log states.
  */
-function nmrCard(parsed, flags) {
+function nmrCard(parsed, flags, record) {
   const nmr = parsed?.nmr;
-  if (!nmr || !Array.isArray(nmr.atoms) || nmr.atoms.length === 0) return '';
-  const elements = [...new Set(nmr.atoms.map((atom) => atom.element))];
+  if (!nmr) return '';
+  const atoms = Array.isArray(nmr.atoms) ? nmr.atoms : [];
+  const couplings = nmr.couplings && typeof nmr.couplings === 'object' ? nmr.couplings : null;
+  if (atoms.length === 0 && !couplings) return '';
+
+  const elements = [...new Set(atoms.map((atom) => atom.element))];
   const nuclei = elements
     .map((element) => ({ element, nucleus: element === 'H' ? '1H' : `13${element}`.replace('13', '13') }))
     .filter((entry) => elementForNucleus(entry.nucleus) === entry.element);
   const options = (nuclei.length ? nuclei : [{ element: elements[0], nucleus: elements[0] }])
     .map((entry) => `<option value="${esc(entry.nucleus)}">${esc(entry.nucleus)}</option>`).join('');
-  const initialNucleus = nuclei.length ? nuclei[0].nucleus : (elements.includes('H') ? '1H' : `${elements[0]}`);
+  const initialNucleus = nuclei.length ? nuclei[0].nucleus
+    : (elements.includes('H') ? '1H' : (elements[0] || '1H'));
 
-  const body = `<p class="results-note">Absolute isotropic shieldings from a ${esc(nmr.gauge || 'unknown')} calculation`
-    + `${nmr.method ? ` (${esc(nmr.method)})` : ''}, ${esc(nmr.count)} atoms. A chemical shift is `
-    + '<code>σ_reference − σ_isotropic</code> and the reference must come from the same level of theory; '
-    + 'enter it below to convert. Without one, the figure plots absolute shielding — it is not a spectrum in ppm shift.</p>'
-    + '<div class="nmr-controls">'
-    + `<label>Nucleus <select data-nmr-nucleus>${options}</select></label>`
-    + '<label>σ<sub>ref</sub> / ppm <input type="number" step="0.01" data-nmr-reference placeholder="not set"></label>'
-    + '<label>FWHM / ppm <input type="number" step="0.01" min="0.001" data-nmr-fwhm value="0.10"></label>'
-    + '</div>'
-    + `<div data-field="nmr-figure">${nmrSectionHtml(nmr, { nucleus: initialNucleus })}</div>`
-    + caveatHtml(flags, 'These shieldings');
+  const level = nmrLevel(record);
+  const levelText = level ? levelLabel(level) : null;
+  const programLabel = nmrProgramLabel(parsed);
+  const datasetEntry = level ? lookupReference({ level, nucleus: initialNucleus }) : null;
+  const referenceNote = datasetEntry
+    ? `A cited reference ships for ${esc(levelText)}: `
+      + (datasetEntry.mode === 'linear'
+        ? `δ = ${esc(String(datasetEntry.a))}·σ + ${esc(String(datasetEntry.b))}`
+        : `σ<sub>ref</sub> = ${esc(String(datasetEntry.sigmaRef))} ppm`)
+      + ` — ${esc(datasetEntry.citation)}. Enter it below with that citation as its provenance; `
+      + 'nothing is applied silently.'
+    : `No reference ships with the app${levelText ? ` for ${esc(levelText)}` : ''}, `
+      + 'so nothing is applied silently.';
+
+  const shieldingNote = atoms.length === 0 ? ''
+    : `<p class="results-note">Absolute isotropic shieldings from a ${esc(nmr.gauge || 'unknown')} calculation`
+      + `${nmr.method ? ` (${esc(nmr.method)})` : ''}, ${esc(nmr.count)} atoms. A chemical shift is `
+      + '<code>σ_reference − σ_isotropic</code> and the reference must come from the same level of theory. '
+      + 'State σ<sub>ref</sub> and its provenance below: the provenance says which calculation produced it '
+      + '(method, basis, solvent) or which cited experiment states it, and without one the shift column '
+      + `stays empty. ${referenceNote}</p>`;
+
+  const controls = atoms.length === 0 ? ''
+    : '<div class="nmr-controls">'
+      + `<label>Nucleus <select data-nmr-nucleus>${options}</select></label>`
+      + '<label>σ<sub>ref</sub> / ppm <input type="number" step="0.01" data-nmr-reference placeholder="not set"></label>'
+      + '<label>Reference provenance <input type="text" data-nmr-provenance placeholder="method/basis/solvent, or the citation"></label>'
+      + '<label>FWHM / ppm <input type="number" step="0.01" min="0.001" data-nmr-fwhm value="0.10"></label>'
+      + '</div>';
+
+  const body = shieldingNote
+    + controls
+    + (atoms.length === 0
+      ? ''
+      : `<div data-field="nmr-figure">${nmrSectionHtml(nmr, {
+        nucleus: initialNucleus,
+        level,
+        programLabel,
+        origin: nmrOrigin(record),
+      })}</div>`)
+    + couplingSectionHtml(nmr)
+    + caveatHtml(flags, 'These numbers');
   return card('NMR', body, 'is-wide');
 }
 
-/** The figure and peak table for one nucleus, recomputed when a control changes. */
-function nmrSectionHtml(nmr, { nucleus = '1H', referencePpm = null, fwhmPpm = 0.1 } = {}) {
+/** The run's level of theory from the record's provenance, or null. */
+function nmrLevel(record) {
+  const method = isObject(record?.provenance?.method) ? record.provenance.method : null;
+  const functional = text(method?.functional);
+  const basis = text(method?.basis);
+  return functional && basis ? { method: functional, basis } : null;
+}
+
+/** `Gaussian 09 D.01`, the program that printed the shieldings. */
+function nmrProgramLabel(parsed) {
+  const program = isObject(parsed?.program) ? parsed.program : null;
+  const name = text(program?.name);
+  if (!name) return null;
+  const version = text(program?.version);
+  const revision = text(program?.revision);
+  return [name, version, revision].filter(Boolean).join(' ');
+}
+
+/**
+ * Where the shieldings were read from: this run's output, an imported log, or a
+ * fixture. The Source column repeats it, so a number never appears without a
+ * statement of which file produced it.
+ */
+function nmrOrigin(record) {
+  const outputSource = text(record?.provenance?.output?.source);
+  const kind = text(record?.provenance?.kind);
+  if (outputSource === 'cluster-import') return 'imported log';
+  if (kind === 'fixture') return 'fixture log';
+  return 'this run';
+}
+
+/**
+ * The coupling table: every pair the log printed, with Gaussian's 1-based atom
+ * numbers named as element + index. The units and the sign convention are the
+ * table's, and a pair that was not printed is never rendered as 0.
+ */
+function couplingSectionHtml(nmr) {
+  const couplings = nmr?.couplings;
+  if (!Object.prototype.hasOwnProperty.call(nmr || {}, 'couplings')) {
+    return '<p class="results-note" data-field="nmr-couplings-absent">This record carries no coupling '
+      + 'block — it was written before couplings were parsed — so couplings are not reported.</p>';
+  }
+  if (!couplings) {
+    return '<p class="results-note" data-field="nmr-couplings-absent">No spin–spin coupling table was printed '
+      + 'for this run: the route did not ask for <code>NMR=(GIAO,SpinSpin)</code>, so couplings are '
+      + 'not reported — that is an absence, not a zero matrix.</p>';
+  }
+  const atoms = Array.isArray(nmr.atoms) ? nmr.atoms : [];
+  const elementOf = (index) => atoms.find((atom) => atom.index === index)?.element ?? null;
+  const name = (index) => `${elementOf(index) ?? '#'}${index}`;
+  const pairs = Array.isArray(couplings.pairs) ? couplings.pairs : [];
+  const possible = (Number(couplings.atoms) * (Number(couplings.atoms) - 1)) / 2;
+  const printed = pairs.length;
+  const coverage = couplings.complete === true
+    ? `All ${possible} pairs printed for ${couplings.atoms} nuclei.`
+    : `${printed} of ${possible} pairs printed; a pair the log did not print is absent, not 0.`;
+  const problems = Array.isArray(couplings.problems) ? couplings.problems.filter(Boolean) : [];
+  const verified = couplings.verified === true
+    ? 'The printed rows matched their column headers and every printed diagonal was 0.'
+    : `The table did not verify: ${problems.join('; ') || 'reason not recorded'}.`;
+
+  const rows = pairs.map((pair) => '<tr data-coupling="'
+      + `${esc(pair.i)},${esc(pair.j)}">`
+    + `<td>${esc(name(pair.i))}–${esc(name(pair.j))}</td>`
+    + `<td class="num">${Number.isFinite(pair.hz) ? esc(pair.hz.toFixed(6)) : MISSING_TEXT}</td>`
+    + `<td class="num">${Number.isFinite(pair.k) ? esc(pair.k.toFixed(6)) : MISSING_TEXT}</td>`
+    + '</tr>').join('');
+
+  return '<h4>Spin–spin couplings</h4>'
+    + '<p class="results-note" data-field="nmr-couplings-note">'
+    + 'J in <strong>Hz</strong>, sign as Gaussian prints it (the total of its FC, SD, PSO and DSO '
+    + 'contributions, never normalised). K is the reduced constant exactly as printed: Gaussian labels its '
+    + 'table “(Hz)” but it is not a frequency, and this app does not convert one into the other.</p>'
+    + `<p class="results-note" data-field="nmr-couplings-coverage">${esc(coverage)} ${esc(verified)}</p>`
+    + `<p class="results-note" data-field="nmr-couplings-indexing">${esc(couplings.indexing
+      || 'Gaussian numbers nuclei from 1 in input order; element + that number names them here.')}</p>`
+    + '<table class="results-table" data-field="nmr-couplings">'
+    + '<thead><tr><th>Pair</th><th>J / Hz</th><th>K (reduced)</th></tr></thead>'
+    + `<tbody>${rows}</tbody></table>`;
+}
+
+/**
+ * The figure and peak table for one nucleus, recomputed when a control changes.
+ * Every shift goes through `shiftFor`, so a row's `Source` names the reference
+ * and its provenance, and a row without a usable reference says why.
+ */
+export function nmrSectionHtml(nmr, {
+  nucleus = '1H',
+  referencePpm = null,
+  referenceProvenance = '',
+  fwhmPpm = 0.1,
+  level = null,
+  programLabel = null,
+  origin = 'this run',
+  references = SHIPPED_REFERENCES,
+} = {}) {
   const element = elementForNucleus(nucleus) || nucleus;
-  const rows = nmr.atoms.filter((atom) => atom.element === element).slice(0, 40);
+  const rows = (Array.isArray(nmr?.atoms) ? nmr.atoms : [])
+    .filter((atom) => atom.element === element).slice(0, 40);
   if (rows.length === 0) {
     return `<p class="results-missing">No ${esc(nucleus)} nucleus in this output.</p>`;
   }
-  const shifts = nmrShifts(rows, { referencePpm });
-  const spectrum = nmrSpectrum({ atoms: nmr.atoms, nucleus, referencePpm, fwhmPpm });
+  const stated = referencePpm === null || referencePpm === undefined || String(referencePpm).trim() === ''
+    ? null
+    : { ppm: referencePpm, provenance: referenceProvenance };
+  const probe = shiftFor({ level, nucleus, sigma: rows[0].isotropic, reference: stated, references });
+  const hasShift = probe.delta !== null;
+  // The figure only draws shifted ppm when a single reference is the reason the
+  // shifts exist; a linear fit has no one σ_ref to print, so the curve stays
+  // absolute and the table carries the shifts.
+  const figureReference = hasShift && probe.mode === 'single' && Number.isFinite(Number(probe.entry?.ppm ?? probe.entry?.sigmaRef))
+    ? Number(probe.entry?.ppm ?? probe.entry?.sigmaRef)
+    : null;
+  const spectrum = nmrSpectrum({ atoms: nmr.atoms, nucleus, referencePpm: figureReference, fwhmPpm });
   const figure = spectrum
     ? (() => {
       const drawn = fromNmr(spectrum);
@@ -1476,19 +1627,33 @@ function nmrSectionHtml(nmr, { nucleus = '1H', referencePpm = null, fwhmPpm = 0.
       return '<figure class="results-spectrum" data-field="nmr-spectrum">'
         + drawn.svg
         + `<figcaption>${esc(drawn.caption)} · ${esc(rows.length)} ${esc(element)} nuclei`
-        + `${spectrum.referencePpm === null ? ' · no reference set (absolute shielding)' : ` · reference σ_ref = ${esc(spectrum.referencePpm.toFixed(2))} ppm`}</figcaption>`
+        + (spectrum.referencePpm === null
+          ? (hasShift ? ` · ${esc(probe.source)} (curve in absolute ppm)` : ' · no reference set (absolute shielding)')
+          : ` · ${esc(probe.source || `reference σ_ref = ${spectrum.referencePpm.toFixed(2)} ppm`)}`)
+        + '</figcaption>'
         + '</figure>';
     })()
     : '';
-  const rowsHtml = shifts.map((atom) => '<tr>'
-    + `<td>${esc(atom.index)}</td>`
-    + `<td>${esc(atom.element)}</td>`
-    + `<td>${esc(atom.isotropic.toFixed(4))}</td>`
-    + `<td>${atom.shiftPpm === null ? MISSING_TEXT : esc(atom.shiftPpm.toFixed(4))}</td>`
-    + `<td>${esc(atom.anisotropy.toFixed(4))}</td>`
-    + '</tr>').join('');
-  const table = '<table class="results-table" data-field="nmr-shieldings">'
-    + '<thead><tr><th>Atom</th><th>Element</th><th>σ<sub>iso</sub> / ppm</th><th>Shift / ppm</th><th>Anisotropy / ppm</th></tr></thead>'
+  const thisRunSource = `${origin}${programLabel ? ` · ${programLabel}` : ''} · ${nmr.gauge || 'GIAO'}`;
+  const rowsHtml = rows.map((atom) => {
+    const result = shiftFor({ level, nucleus, sigma: atom.isotropic, reference: stated, references });
+    const source = result.delta !== null
+      ? result.source
+      : `${thisRunSource}; no shift — ${result.reason}`;
+    return '<tr>'
+      + `<td>${esc(atom.index)}</td>`
+      + `<td>${esc(atom.element)}</td>`
+      + `<td>${esc(atom.isotropic.toFixed(4))}</td>`
+      + `<td>${result.delta === null ? MISSING_TEXT : esc(result.delta.toFixed(4))}</td>`
+      + `<td class="results-source" data-field="nmr-source">${esc(source)}</td>`
+      + `<td>${esc(atom.anisotropy.toFixed(4))}</td>`
+      + '</tr>';
+  }).join('');
+  const reason = hasShift ? ''
+    : `<p class="results-note is-warn" data-field="nmr-reference-reason">δ not reported — ${esc(probe.reason)}.</p>`;
+  const table = `${reason}<table class="results-table" data-field="nmr-shieldings">`
+    + '<thead><tr><th>Atom</th><th>Element</th><th>σ<sub>iso</sub> / ppm</th><th>δ / ppm</th>'
+    + '<th>Source</th><th>Anisotropy / ppm</th></tr></thead>'
     + `<tbody>${rowsHtml}</tbody></table>`;
   return figure + table;
 }
@@ -2118,7 +2283,7 @@ export function resultsPanelHtml(record, options = {}) {
       reactionPathCard(record, parsed, flags, options),
       solutionEnergeticsCard(record, parsed, flags, options),
       trajectoryCard(parsed, flags),
-      nmrCard(parsed, flags),
+      nmrCard(parsed, flags, record),
       ramanCard(parsed, flags),
       vcdCard(parsed, flags),
       ecdCard(parsed, flags),
@@ -2290,7 +2455,11 @@ export function installResultsView({
     holder.innerHTML = nmrSectionHtml(nmr, {
       nucleus: value('[data-nmr-nucleus]') || '1H',
       referencePpm: reference === '' ? null : Number(reference),
+      referenceProvenance: value('[data-nmr-provenance]'),
       fwhmPpm: Number(value('[data-nmr-fwhm]')) > 0 ? Number(value('[data-nmr-fwhm]')) : 0.1,
+      level: nmrLevel(currentRecord),
+      programLabel: nmrProgramLabel(currentRecord?.parsed || {}),
+      origin: nmrOrigin(currentRecord),
     });
   };
   /**
@@ -2440,7 +2609,7 @@ export function installResultsView({
   container.addEventListener('input', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+    if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-provenance], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
     if (target.matches('[data-vcd-fwhm]')) rerenderVcd();
     if (target.matches('[data-ecd-convention], [data-ecd-fwhm]')) rerenderEcd();
@@ -2449,7 +2618,7 @@ export function installResultsView({
   container.addEventListener('change', (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
-    if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-fwhm]')) rerenderNmr();
+    if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-provenance], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
     if (target.matches('[data-vcd-fwhm]')) rerenderVcd();
     if (target.matches('[data-spectrum-overlay]') && target.files && target.files[0]) {
@@ -2754,6 +2923,7 @@ const RESULTS_VIEW_CSS = `
   font: 600 var(--text-size-2xl)/1.4 var(--font-ui); text-align: left; letter-spacing: .03em;
 }
 .results-table td { padding: 2px 4px; border-bottom: 1px solid var(--tone-blue-69a); vertical-align: top; overflow-wrap: anywhere; }
+.results-table td.results-source { color: var(--text-tertiary); }
 .results-table tbody tr:last-child td { border-bottom: 0; }
 /* Issue 186: the lowest computed state of a spin sweep, not a ground state. */
 .results-table tr.spin-lowest td { font-weight: 600; }

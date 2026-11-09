@@ -374,3 +374,53 @@ export function couplingAt(couplings, i, j) {
   const value = matrix[(row - 1) * atoms + (column - 1)];
   return Number.isFinite(value) ? value : null;
 }
+
+/**
+ * How the table's atom numbers line up with the record's atoms.
+ *
+ * Gaussian numbers nuclei from 1 in the order they appear in the input
+ * geometry (its `Input orientation`/`Standard orientation` tables). The run
+ * record's `finalGeometry.atoms[]` is 0-based, and each entry carries the same
+ * 1-based number in `center`, so table nucleus *n* is `atoms[n - 1]`.
+ */
+export const COUPLING_ATOM_INDEXING = 'Gaussian numbers nuclei from 1 in input order; the record geometry '
+  + 'atoms[] is 0-based and each entry\'s `center` is the same number, so nucleus n here is '
+  + 'geometry.atoms[n − 1]. Nucleus labels in the tables are element + that number.';
+
+/** `NaN` → `null`, so an unprinted pair stays absent across JSON. */
+const jsonNumber = (value) => (Number.isFinite(value) ? value : null);
+
+/**
+ * The JSON-safe form of a coupling result, for `run.json` and the report.
+ *
+ * A `Float64Array` serialises to an object keyed by index, so the record keeps
+ * plain arrays: `matrix` and `kMatrix` are row-major `atoms × atoms` with
+ * `null` where the log printed nothing. Nothing is zero-filled, and the
+ * indexing note travels with the numbers.
+ */
+export function couplingSummary(couplings) {
+  if (!couplings || !Number.isInteger(couplings.atoms) || couplings.atoms < 1) return null;
+  const flatten = (matrix) => (matrix instanceof Float64Array
+    ? Array.from(matrix, jsonNumber)
+    : null);
+  return {
+    atoms: couplings.atoms,
+    units: couplings.units,
+    kUnits: couplings.kUnits,
+    convention: couplings.convention,
+    indexing: COUPLING_ATOM_INDEXING,
+    verified: couplings.verified === true,
+    complete: couplings.complete === true,
+    problems: Array.isArray(couplings.problems) ? [...couplings.problems] : [],
+    printed: couplings.printed ?? null,
+    pairs: couplings.pairs.map((pair) => ({
+      i: pair.i,
+      j: pair.j,
+      hz: jsonNumber(pair.hz),
+      k: jsonNumber(pair.k),
+    })),
+    matrix: flatten(couplings.matrix),
+    kMatrix: flatten(couplings.kMatrix),
+    matrixOrder: 'row-major, atoms × atoms, J in Hz',
+  };
+}

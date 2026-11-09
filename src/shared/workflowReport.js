@@ -21,6 +21,7 @@ import { taskFigures } from './figures/report.js';
 import { nciFigure } from './figures/nci.js';
 import { nciAnalysis } from './nci.js';
 import { bcpTable, bcpTableHtml, qtaimAnalysis } from './qtaim.js';
+import { shiftFor } from './nmrReferences.js';
 
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
@@ -681,6 +682,24 @@ export function buildWorkflowReport(queue, records = {}, {
         epr: block,
       };
     }).filter(Boolean),
+    // Issue 147: one entry per run that recorded an NMR block — the GIAO
+    // shieldings and, for NMR=(GIAO,SpinSpin), the printed coupling tables. Read
+    // from `run.json`'s `parsed.nmr` so the report prints what the run recorded
+    // rather than recomputing a log it does not carry. `nmr.reference` is the
+    // reference the run recorded, if any: no shift is printed without one.
+    nmr: tasks.map((task) => {
+      const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+      const block = record && record.parsed && typeof record.parsed.nmr === 'object'
+        && record.parsed.nmr !== null ? record.parsed.nmr : null;
+      if (!block) return null;
+      return {
+        nodeId: text(task?.nodeId),
+        title: text(record.title) || text(task?.title) || text(task?.nodeId),
+        level: record?.provenance?.method ?? null,
+        program: record?.parsed?.program ?? null,
+        nmr: block,
+      };
+    }).filter(Boolean),
     // Issue 175: one entry per compute block, with the expression it evaluated,
     // the upstream values it read and — when a field was missing — the refusal
     // that names the field. A derived value is not a calculation result, so it
@@ -1275,6 +1294,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + conformerBlocks
     + spinBlocks
     + eprSectionHtml(model.epr, sectionHeading)
+    + nmrSectionHtml(model.nmr, sectionHeading)
     + reactionBlocks
     + derivedBlocks
     + importedBlocks
@@ -1282,6 +1302,98 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'
     + '<tbody>' + provenanceRows + '</tbody></table>';
+}
+
+/**
+ * The NMR section (issue 147). Absolute isotropic shieldings, the reference the
+ * run recorded with its provenance, and — for `NMR=(GIAO,SpinSpin)` — every
+ * coupling pair the log printed. Units are in the headers, the nuclei are named
+ * element + Gaussian's 1-based index, and a value the run did not record is
+ * `not reported`: δ without a reference, J for a pair that was never printed.
+ */
+function nmrSectionHtml(entries, headingTag = 'h2') {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const blocks = entries.map((entry) => {
+    const nmr = entry.nmr || {};
+    const atoms = Array.isArray(nmr.atoms) ? nmr.atoms : [];
+    const level = entry.level && text(entry.level.functional) && text(entry.level.basis)
+      ? { method: text(entry.level.functional), basis: text(entry.level.basis) }
+      : null;
+    const program = entry.program && typeof entry.program === 'object' ? entry.program : {};
+    const programText = [text(program.name), text(program.version), text(program.revision)]
+      .filter(Boolean).join(' ');
+    const reference = nmr.reference && typeof nmr.reference === 'object' ? nmr.reference : null;
+    const title = `<h4 data-field="nmr-entry">${escapeHtml(entry.title || entry.nodeId || MISSING)}</h4>`;
+    const thisRun = `this run${programText ? ` · ${programText}` : ''} · ${text(nmr.gauge) || 'GIAO'}`;
+
+    const shieldingRows = atoms.map((atom) => {
+      const result = shiftFor({ level, nucleus: atom.element, sigma: atom.isotropic, reference });
+      return '<tr>'
+        + `<td>${escapeHtml(String(atom.index ?? MISSING))}</td>`
+        + `<td>${escapeHtml(atom.element ?? MISSING)}</td>`
+        + `<td class="num">${escapeHtml(value(atom.isotropic, 4))}</td>`
+        + `<td class="num">${result.delta === null ? MISSING : escapeHtml(value(result.delta, 4))}</td>`
+        + `<td>${escapeHtml(result.delta === null ? `${thisRun}; no shift — ${result.reason}` : result.source)}</td>`
+        + '</tr>';
+    }).join('');
+    const shieldingTable = atoms.length === 0 ? ''
+      : '<table data-field="nmr-shieldings"><thead><tr><th>Atom</th><th>Element</th>'
+        + '<th class="num">σ<sub>iso</sub> / ppm</th><th class="num">δ / ppm</th><th>Source</th>'
+        + `</tr></thead><tbody>${shieldingRows}</tbody></table>`;
+
+    const referenceLine = reference
+      ? `<p class="note" data-field="nmr-reference">Reference: σ_ref = ${escapeHtml(String(reference.ppm))} ppm`
+        + `${text(reference.provenance) ? ` — ${escapeHtml(text(reference.provenance))}` : ' — provenance not reported'}.`
+        + ` δ = σ_ref − σ<sub>iso</sub>.</p>`
+      : `<p class="warn" data-field="nmr-reference">No reference was recorded with this run, so the `
+        + 'shieldings stay absolute and δ is not reported.</p>';
+
+    const hasCouplings = Object.prototype.hasOwnProperty.call(nmr, 'couplings');
+    const couplings = nmr.couplings && typeof nmr.couplings === 'object' ? nmr.couplings : null;
+    let couplingHtml = '';
+    if (!hasCouplings) {
+      couplingHtml = '<p class="meta" data-field="nmr-couplings-absent">This record carries no coupling '
+        + 'block, so couplings are not reported.</p>';
+    } else if (!couplings) {
+      couplingHtml = '<p class="meta" data-field="nmr-couplings-absent">No spin–spin coupling table was '
+        + 'printed: the route did not ask for NMR=(GIAO,SpinSpin). Couplings are not reported — an '
+        + 'absence, not a zero matrix.</p>';
+    } else {
+      const elementOf = (index) => atoms.find((atom) => atom.index === index)?.element ?? '#';
+      const pairs = Array.isArray(couplings.pairs) ? couplings.pairs : [];
+      const possible = (Number(couplings.atoms) * (Number(couplings.atoms) - 1)) / 2;
+      const coverage = couplings.complete === true
+        ? `All ${possible} pairs printed for ${escapeHtml(String(couplings.atoms))} nuclei.`
+        : `${pairs.length} of ${possible} pairs printed; an unprinted pair is absent, not 0.`;
+      const problems = Array.isArray(couplings.problems) ? couplings.problems.filter(Boolean) : [];
+      const verification = couplings.verified === true
+        ? 'The printed rows matched their column headers and every printed diagonal was 0.'
+        : `The table did not verify: ${escapeHtml(problems.join('; ') || 'reason not recorded')}.`;
+      const pairRows = pairs.map((pair) => '<tr>'
+        + `<td>${escapeHtml(elementOf(pair.i))}${escapeHtml(String(pair.i))}–`
+        + `${escapeHtml(elementOf(pair.j))}${escapeHtml(String(pair.j))}</td>`
+        + `<td class="num">${Number.isFinite(pair.hz) ? escapeHtml(value(pair.hz, 6)) : MISSING}</td>`
+        + `<td class="num">${Number.isFinite(pair.k) ? escapeHtml(value(pair.k, 6)) : MISSING}</td>`
+        + '</tr>').join('');
+      couplingHtml = `<p class="note" data-field="nmr-couplings-note">J in Hz, sign as Gaussian prints it `
+        + '(FC + SD + PSO + DSO totals, never normalised); K is the reduced constant exactly as printed — '
+        + 'Gaussian labels its table “(Hz)” but it is not a frequency and no K→J conversion is made.</p>'
+        + `<p class="meta" data-field="nmr-couplings-coverage">${coverage} ${verification}</p>`
+        + `<p class="meta" data-field="nmr-couplings-indexing">${escapeHtml(couplings.indexing || MISSING)}</p>`
+        + '<table data-field="nmr-couplings"><thead><tr><th>Pair</th><th class="num">J / Hz</th>'
+        + `<th class="num">K (reduced)</th></tr></thead><tbody>${pairRows}</tbody></table>`;
+    }
+
+    const head = `<p class="meta" data-field="nmr-level">${escapeHtml(text(nmr.gauge) || 'gauge not reported')}`
+      + ` · ${escapeHtml(level ? `${level.method}/${level.basis}` : MISSING)}`
+      + `${programText ? ` · ${escapeHtml(programText)}` : ''} · ${escapeHtml(String(atoms.length))} nuclei</p>`;
+    return title + head + referenceLine + shieldingTable + couplingHtml;
+  }).join('');
+  return `<${headingTag}>NMR</${headingTag}>`
+    + '<p class="note">Isotropic shieldings are absolute ppm as printed. A shift is only printed when '
+    + 'the record carries its reference and that reference states its provenance; a coupling pair is '
+    + 'only printed when the log printed it.</p>'
+    + blocks;
 }
 
 /**

@@ -13,7 +13,9 @@ import {
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { buildGaussianInput } from '../src/shared/gaussianInput.js';
 import { jobKeywordFor } from '../src/shared/tsForceConstants.js';
-import { resultsPanelHtml } from '../src/renderer/resultsView.js';
+import { nmrSectionHtml, resultsPanelHtml } from '../src/renderer/resultsView.js';
+import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
+import { validateRecord } from '../schemas/record-schema.js';
 
 const nmrText = readFileSync(
   fileURLToPath(new URL('./fixtures/real/g09-dvb-nmr.log', import.meta.url)),
@@ -263,5 +265,202 @@ describe('results panel', () => {
   it('renders nothing when the job has no shielding block', () => {
     const html = resultsPanelHtml(record(parseGaussianOutput(' Normal termination of Gaussian 16')));
     expect(html).not.toContain('data-field="nmr-shieldings"');
+  });
+});
+
+describe('couplings in the parsed run record', () => {
+  const nmr = parseGaussianOutput(nmrText).nmr;
+  const couplings = nmr.couplings;
+  const at = (i, j) => couplings.matrix[(i - 1) * couplings.atoms + (j - 1)];
+
+  it('rides in the NMR block as printed pairs and JSON-safe matrices', () => {
+    expect(couplings).not.toBeNull();
+    expect(couplings.atoms).toBe(20);
+    expect(couplings.pairs).toHaveLength(190);
+    expect(couplings.matrix).toBeInstanceOf(Array);
+    expect(couplings.matrix).toHaveLength(20 * 20);
+    expect(couplings.kMatrix).toHaveLength(20 * 20);
+    expect(couplings.matrix.every((value) => typeof value === 'number')).toBe(true);
+  });
+
+  it('pins the J values read out of the log, symmetrically', () => {
+    // Same printed rows the parser tests pin; here they come through run.json's
+    // shape (plain arrays) rather than the Float64Array.
+    expect(at(2, 1)).toBe(9.26067);
+    expect(at(3, 2)).toBe(-6.661);
+    expect(at(7, 3)).toBe(133.415);
+    expect(at(10, 9)).toBe(-0.116474);
+    for (let i = 1; i <= 20; i += 1) {
+      for (let j = 1; j <= 20; j += 1) {
+        expect(at(i, j)).toBe(at(j, i));
+      }
+    }
+  });
+
+  it('states the units, the sign convention and how the atom numbers map', () => {
+    expect(couplings.units).toBe('Hz');
+    expect(couplings.convention).toMatch(/sign as printed, never normalised/);
+    expect(couplings.indexing).toMatch(/numbers nuclei from 1 in input order/);
+    expect(couplings.indexing).toMatch(/atoms\[n − 1\]/);
+    expect(couplings.matrixOrder).toBe('row-major, atoms × atoms, J in Hz');
+  });
+
+  it('survives a JSON round trip and both record schemas', () => {
+    const base = JSON.parse(readFileSync(
+      fileURLToPath(new URL('./fixtures/run-record/gaussian-dry-run.json', import.meta.url)),
+      'utf8',
+    ));
+    base.parsed = { ...(base.parsed || {}), nmr };
+    const reopened = JSON.parse(JSON.stringify(base));
+    expect(validateRecord(reopened, { version: 1 }).errors).toEqual([]);
+    expect(validateRecord(reopened, { version: 2 }).errors).toEqual([]);
+    expect(reopened.parsed.nmr.couplings.pairs[0]).toEqual({ i: 2, j: 1, hz: 9.26067, k: 4.69245 });
+    expect(reopened.parsed.nmr.couplings.matrix).toHaveLength(400);
+  });
+
+  it('keeps a recorded reference in the record and validates it', () => {
+    const base = JSON.parse(readFileSync(
+      fileURLToPath(new URL('./fixtures/run-record/gaussian-dry-run.json', import.meta.url)),
+      'utf8',
+    ));
+    base.parsed = {
+      ...(base.parsed || {}),
+      nmr: {
+        ...nmr,
+        reference: {
+          ppm: 31.9,
+          provenance: 'TMS, B3LYP/sto-3g, gas phase — run in this project',
+          level: { method: 'B3LYP', basis: 'sto-3g' },
+        },
+      },
+    };
+    const reopened = JSON.parse(JSON.stringify(base));
+    expect(validateRecord(reopened, { version: 1 }).errors).toEqual([]);
+    expect(reopened.parsed.nmr.reference.provenance).toMatch(/TMS/);
+  });
+
+  it('reports a log without a coupling table as null, never a zero matrix', () => {
+    const lines = nmrText.split(/\r\n|\n|\r/);
+    const start = lines.findIndex((line) => /Total nuclear spin-spin coupling K \(Hz\)/.test(line));
+    const parsed = parseGaussianOutput(lines.slice(0, start).join('\n'));
+    expect(parsed.nmr).not.toBeNull();
+    expect(parsed.nmr.atoms).toHaveLength(20);
+    expect(parsed.nmr.couplings).toBeNull();
+    const html = resultsPanelHtml({
+      id: 'run-1',
+      status: 'completed',
+      engine: 'gaussian',
+      parsed,
+      gates: { overall: 'pass' },
+      provenance: { kind: 'calculation', method: { functional: 'B3LYP', basis: 'STO-3G' } },
+    });
+    expect(html).toContain('data-field="nmr-couplings-absent"');
+    expect(html).not.toContain('data-field="nmr-couplings"');
+  });
+});
+
+describe('NMR card: coupling table and the source column', () => {
+  const parsed = parseGaussianOutput(nmrText);
+  const record = {
+    id: '20261108-010000-nmr001',
+    status: 'completed',
+    engine: 'gaussian',
+    parsed,
+    gates: { overall: 'pass', validity: { overall: 'pass' } },
+    provenance: { kind: 'calculation', method: { functional: 'B3LYP', basis: 'STO-3G' } },
+  };
+
+  it('draws every printed pair with element+index names and the units', () => {
+    const html = resultsPanelHtml(record);
+    expect(html).toContain('data-field="nmr-couplings"');
+    expect(html).toContain('data-coupling="2,1"');
+    expect(html).toContain('C2–C1');
+    expect(html).toContain('9.260670');
+    expect(html).toContain('J / Hz');
+    expect(html).toContain('K (reduced)');
+    expect(html).toContain('All 190 pairs printed for 20 nuclei.');
+  });
+
+  it('prints a source for every shielding row and no shift without a reference', () => {
+    const html = resultsPanelHtml(record);
+    expect(html.match(/data-field="nmr-source"/g)).toHaveLength(10);
+    expect(html).toContain('no shift — no reference for B3LYP/STO-3G');
+    expect(html).toContain('data-field="nmr-reference-reason"');
+  });
+
+  it('computes a shift, by hand, once σ_ref and its provenance are stated', () => {
+    const section = nmrSectionHtml(parsed.nmr, {
+      nucleus: '13C',
+      referencePpm: 190.5,
+      referenceProvenance: 'TMS, B3LYP/sto-3g, gas phase — run in this project',
+      fwhmPpm: 1,
+      level: { method: 'B3LYP', basis: 'sto-3g' },
+      programLabel: 'Gaussian 09 D.01',
+    });
+    // σ_ref − σ_iso = 190.5 − 114.088 = 76.412 ppm for C1.
+    expect(section).toContain('76.4120');
+    expect(section).toContain('reference: σ_ref = 190.5 ppm — TMS, B3LYP/sto-3g, gas phase');
+    expect(section).toContain('data-field="nmr-source"');
+    expect(section).not.toContain('data-field="nmr-reference-reason"');
+  });
+
+  it('refuses a σ_ref with no provenance instead of printing a shift', () => {
+    const section = nmrSectionHtml(parsed.nmr, {
+      nucleus: '13C',
+      referencePpm: 190.5,
+      referenceProvenance: '   ',
+      level: { method: 'B3LYP', basis: 'sto-3g' },
+    });
+    expect(section).not.toContain('76.4120');
+    expect(section).toContain('no stated provenance');
+    expect(section).toContain('δ not reported');
+  });
+});
+
+describe('workflow report NMR section', () => {
+  const nmr = parseGaussianOutput(nmrText).nmr;
+  const withReference = {
+    ...nmr,
+    reference: {
+      ppm: 31.9,
+      provenance: 'TMS, B3LYP/sto-3g, gas phase — run in this project',
+      level: { method: 'B3LYP', basis: 'sto-3g' },
+    },
+    program: undefined,
+  };
+  const record = {
+    id: 'run-nmr',
+    title: 'DVB NMR',
+    status: 'completed',
+    provenance: { method: { functional: 'B3LYP', basis: 'sto-3g' } },
+    parsed: {
+      program: { name: 'Gaussian', version: '09', revision: 'D.01' },
+      nmr: withReference,
+    },
+  };
+  const queue = {
+    id: 'q-nmr',
+    projectName: 'NMR',
+    status: 'completed',
+    createdAt: '2026-11-09T01:00:00.000Z',
+    finishedAt: '2026-11-09T01:10:00.000Z',
+    tasks: [{ nodeId: 'nmr', title: 'DVB NMR', type: 'calc', status: 'passed', runId: 'run-nmr' }],
+  };
+
+  it('prints the coupling pairs, the units, the level and the reference provenance', () => {
+    const html = workflowReportHtml(buildWorkflowReport(queue, { 'run-nmr': record }));
+    expect(html).toContain('data-field="nmr-couplings"');
+    expect(html).toContain('C2–C1');
+    expect(html).toContain('J in Hz');
+    expect(html).toContain('B3LYP/sto-3g');
+    expect(html).toContain('Reference: σ_ref = 31.9 ppm — TMS, B3LYP/sto-3g, gas phase');
+  });
+
+  it('says δ is not reported when the record carries no reference', () => {
+    const html = workflowReportHtml(buildWorkflowReport(queue, {
+      'run-nmr': { ...record, parsed: { ...record.parsed, nmr: { ...nmr, program: undefined } } },
+    }));
+    expect(html).toContain('No reference was recorded with this run');
+    expect(html).toContain('no shift — no reference for B3LYP/sto-3g');
   });
 });
