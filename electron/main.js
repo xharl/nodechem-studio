@@ -21,7 +21,8 @@ import { BATCH_MAX_LOG_BYTES, summarizeLog } from '../src/shared/logImport.js';
 import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { methodsParagraphFor } from '../src/shared/methodsParagraph.js';
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
-import { convertParsed } from '../src/shared/converters/index.js';
+import { convertParsed, convertWavefunctionFile } from '../src/shared/converters/index.js';
+import { figureInputsFor, normaliseFigureLevel } from '../src/shared/report.js';
 import {
   PROJECT_EXTENSIONS,
   classifySavePath,
@@ -670,28 +671,54 @@ async function exportRunFormat(runId, formatId, spectrum) {
       error: { message: 'This run is a dry-run fixture: its output is synthetic, so it is not exported.' },
     };
   }
-  let logName = null;
-  try {
-    const entries = await fsp.readdir(runDir);
-    const candidates = entries.filter((name) => /\.(log|out)$/i.test(name));
-    if (candidates.length > 0) {
-      logName = candidates.sort((a, b) => a.localeCompare(b))[0];
-    }
-  } catch {
-    logName = null;
-  }
-  if (!logName) {
-    return { canceled: false, error: { message: 'This run has no saved output file to convert.' } };
-  }
-
   let converted;
   try {
-    const text = await fsp.readFile(path.join(runDir, logName), 'utf8');
-    converted = convertParsed(parseGaussianOutput(text), formatId, {
-      spectrum: spectrum || 'ir',
-      title: `${id}`,
-      date: new Date(),
-    });
+    if (String(formatId) === 'molden') {
+      // Molden is the one export that needs the basis, and the run record only
+      // carries a summary of the checkpoint — so the file itself is read. An
+      // attached artifact names it; otherwise the folder is searched, the same
+      // convention `ncs cube <run-dir>` uses.
+      const attached = (Array.isArray(record?.wavefunction?.artifacts) ? record.wavefunction.artifacts : [])
+        .map((entry) => String(entry?.file || '').trim())
+        .find((name) => /\.(fchk|fch)$/i.test(name));
+      let entries = [];
+      try {
+        entries = await fsp.readdir(runDir);
+      } catch {
+        entries = [];
+      }
+      const checkpoint = attached && entries.includes(attached) ? attached
+        : entries.filter((name) => /\.(fchk|fch)$/i.test(name)).sort((a, b) => a.localeCompare(b))[0];
+      if (!checkpoint) {
+        throw new Error(
+          'Molden needs the basis functions and MO coefficients, which the saved output does not carry. '
+          + 'This run folder holds no .fchk: run formchk on the job\'s .chk, copy the .fchk beside run.json, '
+          + 'and export again.',
+        );
+      }
+      const text = await fsp.readFile(path.join(runDir, checkpoint), 'utf8');
+      converted = convertWavefunctionFile(text, 'molden', { title: id, filename: checkpoint });
+    } else {
+      let logName = null;
+      try {
+        const entries = await fsp.readdir(runDir);
+        const candidates = entries.filter((name) => /\.(log|out)$/i.test(name));
+        if (candidates.length > 0) {
+          logName = candidates.sort((a, b) => a.localeCompare(b))[0];
+        }
+      } catch {
+        logName = null;
+      }
+      if (!logName) {
+        return { canceled: false, error: { message: 'This run has no saved output file to convert.' } };
+      }
+      const text = await fsp.readFile(path.join(runDir, logName), 'utf8');
+      converted = convertParsed(parseGaussianOutput(text), formatId, {
+        spectrum: spectrum || 'ir',
+        title: `${id}`,
+        date: new Date(),
+      });
+    }
   } catch (error) {
     return { canceled: false, error: { message: error.message } };
   }
@@ -766,9 +793,17 @@ async function importLogDirectory() {
  * `report.html` plus the `report.json` model beside it. The per-task run
  * records are read from their run folders, so the report reflects what was
  * actually written to disk rather than live renderer state.
+ *
+ * `figureLevel` is the window's choice of figure set (`basic`, `surfaces`,
+ * `none`), mapped to the same three names `ncs report --figures` accepts. The
+ * level reaches `buildWorkflowReport` as `figureLevel`; `basic` passes no extra
+ * inputs, which is byte-for-byte the report the window wrote before the choice
+ * existed. A window report is therefore the document a user already has unless
+ * they ask for more.
  */
-async function exportWorkflowReport(queueId) {
+async function exportWorkflowReport(queueId, figureLevel = 'basic') {
   const id = String(queueId || '');
+  const level = normaliseFigureLevel(figureLevel);
   if (!id) return { canceled: false, error: { message: 'No workflow queue is available yet.' } };
   let queue;
   try {
@@ -791,9 +826,19 @@ async function exportWorkflowReport(queueId) {
     }
   }
 
+  // `surfaces` meshes the cube files each run folder holds; `none` reads
+  // nothing; `basic` is the report's own figures, as it has always been.
+  let figures = { level, volumes: null, surfaces: null };
+  if (level === 'surfaces') {
+    figures = await figureInputsFor(queue, level);
+  }
+
   const model = buildWorkflowReport(queue, records, {
     generatedAt: new Date().toISOString(),
     appVersion: currentAppInfo().version,
+    figureLevel: figures.level,
+    volumes: figures.volumes,
+    surfaces: figures.surfaces,
   });
 
   const result = await dialog.showSaveDialog(mainWindow, {
@@ -821,6 +866,7 @@ async function exportWorkflowReport(queueId) {
       jsonPath,
       taskCount: model.counts.total,
       verdict: model.verdict,
+      figures: figures.level,
     };
   } catch (error) {
     return { canceled: false, error: { message: error.message } };
@@ -1143,12 +1189,16 @@ app.whenReady().then(async () => {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Save export',
       defaultPath: path.join(app.getPath('documents'), suggested),
-      filters: [
-        { name: 'SVG figure', extensions: ['svg'] },
-        { name: 'Comma-separated values', extensions: ['csv'] },
-        { name: 'Text', extensions: ['txt', 'md'] },
-        { name: 'All files', extensions: ['*'] },
-      ],
+      filters: suggested.endsWith('.cube')
+        // A cube written from the wavefunction card: name the format, so the
+        // dialog does not open on "SVG figure" for a text volume.
+        ? [{ name: 'Gaussian cube', extensions: ['cube'] }, { name: 'All files', extensions: ['*'] }]
+        : [
+          { name: 'SVG figure', extensions: ['svg'] },
+          { name: 'Comma-separated values', extensions: ['csv'] },
+          { name: 'Text', extensions: ['txt', 'md'] },
+          { name: 'All files', extensions: ['*'] },
+        ],
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     await fsp.writeFile(result.filePath, textValue, 'utf8');
@@ -1169,7 +1219,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('queue:list', () => queueManager.list());
   ipcMain.handle('queue:get', (_event, queueId) => queueManager.get(queueId));
   ipcMain.handle('logs:import-directory', () => importLogDirectory());
-  ipcMain.handle('queue:report', (_event, queueId) => exportWorkflowReport(queueId));
+  ipcMain.handle('queue:report', (_event, queueId, figureLevel) => exportWorkflowReport(queueId, figureLevel));
 
   createWindow();
 

@@ -24,7 +24,7 @@
  * without a second layout system.
  */
 
-import { parseCube } from '../shared/cubeFile.js';
+import { parseCube, writeCube } from '../shared/cubeFile.js';
 import { extractSurface } from '../shared/marchingCubes.js';
 import {
   fieldFromCube,
@@ -36,7 +36,33 @@ import {
 import { createSliceView } from './sliceView.js';
 import { createSurfaceViewer } from './surfaceViewer.js';
 
+/**
+ * The cube text for an evaluated field: the writer gets the field's own grid.
+ *
+ * Exported because it is the whole contract of `Write cube…` — the field's
+ * dims, per-axis step, origin and values go out and `parseCube` must read the
+ * same three back. The button only adds the dialog, so the round trip can be
+ * checked without a canvas (issue 187).
+ *
+ * A field evaluated from a basis carries no atoms of its own (the grid does),
+ * so the caller passes the record's geometry; a field read from a cube already
+ * carries them.
+ */
+export function cubeTextForField(field, { atoms = null, title = '', comment = '' } = {}) {
+  if (!field || !Array.isArray(field.dims) || !field.values) {
+    throw new Error('there is no evaluated field to write; evaluate an orbital or a density, or open a cube, first.');
+  }
+  const list = Array.isArray(atoms) && atoms.length > 0 ? atoms : (field.atoms ?? []);
+  return writeCube(field, {
+    title: title || field.label || 'NodeChem field',
+    comment: comment || 'NodeChem Studio cube from the wavefunction view; values in a.u.; outer loop X, middle loop Y, inner loop Z',
+    atoms: list,
+    units: 'angstrom',
+  });
+}
+
 const SPACINGS = [0.2, 0.3, 0.5];
+
 /**
  * CODATA 2018 hartree → eV, repeated here rather than imported from
  * `shared/wavefunction.js`: that module hashes its input with `node:crypto`,
@@ -405,6 +431,61 @@ export function mountWavefunctionViewport({
     return Number((magnitude * 0.02).toPrecision(2));
   };
 
+  /** `record-field.cube`: safe, lowercase, and the same name twice overwrites nothing by surprise. */
+  const cubeFileName = (field) => {
+    const slug = (text) => String(text || '').toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+    return `${slug(record?.id || 'wavefunction') || 'wavefunction'}-${slug(field?.label || 'field') || 'field'}.cube`;
+  };
+
+  /**
+   * `Write cube…`: the field's own grid goes to the writer, then to the main
+   * process's save dialog (or the browser's download in the preview). The
+   * status line reports the dims and spacing that were written, so the number in
+   * the card and the number in the file are visibly the same.
+   */
+  const saveFieldAsCube = async () => {
+    const field = state.field;
+    if (!field) {
+      setStatus('nothing to write: there is no evaluated field.', 'warn');
+      return;
+    }
+    let text;
+    try {
+      text = cubeTextForField(field, {
+        atoms: state.atoms ?? field.atoms ?? [],
+        title: `${field.label}${record?.id ? ` — ${record.id}` : ''}`,
+      });
+    } catch (error) {
+      setStatus(`cannot write a cube: ${String(error?.message ?? error)}`, 'warn');
+      return;
+    }
+    const name = cubeFileName(field);
+    try {
+      if (desktop?.saveText) {
+        const result = await desktop.saveText({ text, suggestedName: name });
+        if (result?.canceled) {
+          setStatus('cube not written: the save dialog was cancelled.');
+          return;
+        }
+        setStatus(`cube written: ${result?.path ?? name} · ${field.dims.join('×')} at ${Number(field.step).toFixed(3)} Å`);
+        return;
+      }
+      // Browser preview: hand the text to the download machinery instead of
+      // pretending it was saved.
+      const blob = new Blob([text], { type: 'chemical/x-gaussian-cube' });
+      const url = URL.createObjectURL(blob);
+      const anchor = doc.createElement('a');
+      anchor.href = url;
+      anchor.download = name;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setStatus(`cube downloaded: ${name} · ${field.dims.join('×')} at ${Number(field.step).toFixed(3)} Å`);
+    } catch (error) {
+      setStatus(`cannot write a cube: ${String(error?.message ?? error)}`, 'warn');
+    }
+  };
+
   /** Mesh the current field at ±iso. Fast enough to run when a slider moves. */
   const meshOf = (field, iso) => {
     if (!field || !(Math.abs(iso) > 0)) return { positive: null, negative: null };
@@ -422,6 +503,7 @@ export function mountWavefunctionViewport({
 
   const describeSurface = (field) => {
     if (!state.surface) return;
+    state.surface.setCubeAvailable?.(Boolean(field));
     if (!field) return;
     setStatus('meshing…');
     const mesh = meshOf(field, state.isovalue);
@@ -447,6 +529,7 @@ export function mountWavefunctionViewport({
             state.isovalue = iso;
             if (state.field) describeSurface(state.field);
           },
+          onWriteCube: saveFieldAsCube,
         });
       }
       if (state.field) describeSurface(state.field);

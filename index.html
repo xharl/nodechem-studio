@@ -266,6 +266,7 @@
             <option value="jcamp:ir">JCAMP (IR)</option>
             <option value="jcamp:raman">JCAMP (Raman)</option>
             <option value="jcamp:uv">JCAMP (UV/Vis)</option>
+            <option value="molden">Molden (wavefunction)</option>
           </select>
         </div>
       </details>
@@ -294,6 +295,11 @@
           <button class="btn primary small" id="run-workflow" data-action="run-workflow">Run workflow</button>
           <button class="btn small" id="pause-workflow" data-action="pause-workflow" disabled>Pause</button>
           <button class="btn small" id="resume-workflow" data-action="resume-workflow" disabled>Resume</button>
+          <select id="report-figures" class="btn small" aria-label="Figures to include in the workflow report" title="Which figures report.html carries — the same three sets ncs report --figures accepts. basic is the report's own figure set; surfaces also meshes the .cube files in each run folder; none omits the figure section.">
+            <option value="basic" selected>basic</option>
+            <option value="surfaces">surfaces</option>
+            <option value="none">none</option>
+          </select>
           <button class="btn small" id="report-workflow" data-action="export-workflow-report" disabled title="Write report.html for the finished queue">Report…</button>
           <button class="btn small danger" id="cancel-workflow" data-action="cancel-workflow" disabled>Cancel all</button>
         </div>

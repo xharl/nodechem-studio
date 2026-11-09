@@ -387,6 +387,10 @@ What the card offers:
 - **View**: a plane slice (xy, xz or yz, an offset slider, iso lines drawn on top, a legend that
   states the field, the plane and the value range) or an isosurface (orbit, zoom, a ± lobe toggle,
   and PNG / binary STL export).
+- **Write cube…**: beside Save PNG/STL on the isosurface. It writes the field that is on screen —
+  its own dims, origin and per-axis step — as a Gaussian cube, so a surface made in the window can
+  go to another program without `cubegen` or `ncs cube`. The status line prints the dims and
+  spacing written, and the app's own reader loads the file back to the same grid and value range.
 - **Grid**: 0.2, 0.3 or 0.5 Å. The chosen spacing is printed under the picture, and so is the
   coarsening when the 4-million-point cap forced one.
 - **Open .cube…**: a cube from any program goes through the same slice and surface code. The values

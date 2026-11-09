@@ -57,7 +57,7 @@ import { detectWavefunctionFormat } from '../src/shared/wavefunction.js';
 import { parseMolden } from '../src/shared/molden.js';
 import { parseWfn } from '../src/shared/wfn.js';
 import { parseWfx } from '../src/shared/wfx.js';
-import { extractSurface } from '../src/shared/marchingCubes.js';
+import { FIGURE_LEVELS, cubeVolumesFor, surfacesFor } from '../src/shared/report.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 import {
@@ -534,94 +534,6 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
   return models;
 }
 
-/**
- * Isosurfaces for the volumes, when `--figures=surfaces` was asked for.
- *
- * The isovalue is a stated fraction (10 %) of the field's largest absolute value
- * rather than a magic constant, and the two lobes are meshed separately at +iso
- * and −iso so their phases stay apart. A volume too dense to mesh within the cap
- * returns null and the figure says so.
- */
-async function surfacesFor(volumes) {
-  if (!volumes) return null;
-  const out = {};
-  for (const [nodeId, volume] of Object.entries(volumes)) {
-    if (!volume || !Array.isArray(volume.counts) || volume.axisAligned === false) continue;
-    const iso = Math.max(Math.abs(volume.min ?? 0), Math.abs(volume.max ?? 0)) * 0.1;
-    if (!(iso > 0)) continue;
-    const step = Array.isArray(volume.step) ? volume.step : [volume.step, volume.step, volume.step];
-    const field = {
-      dims: volume.counts,
-      origin: volume.origin,
-      step: volume.step,
-      axes: [[step[0], 0, 0], [0, step[1], 0], [0, 0, step[2]]],
-      values: volume.values,
-    };
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const positive = extractSurface(field, iso, { maxTriangles: 20000 });
-      // eslint-disable-next-line no-await-in-loop
-      const negative = extractSurface(field, -iso, { maxTriangles: 20000 });
-      out[nodeId] = {
-        iso,
-        meshes: [
-          { positions: positive.positions, normals: positive.normals, sign: 1 },
-          { positions: negative.positions, normals: negative.normals, sign: -1 },
-        ].filter((mesh) => mesh.positions.length > 0),
-      };
-    } catch {
-      // A field that cannot be meshed is reported by the figure, not thrown here.
-    }
-  }
-  return out;
-}
-
-/**
- * Parsed cube volumes for the tasks of a queue, keyed by node id.
- *
- * Only a cube file that sits in the task's own run folder is read: the report
- * may not reach outside the folder it is documenting, and a volume from
- * somewhere else would be a figure about a different file.
- */
-async function cubeVolumesFor(queue) {
-  const volumes = {};
-  for (const task of Array.isArray(queue.tasks) ? queue.tasks : []) {
-    if (!task?.runDir || !task.nodeId) continue;
-    let entries;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      entries = await fs.readdir(task.runDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    const cube = entries.find((entry) => entry.isFile() && /\.cube$/i.test(entry.name));
-    if (!cube) continue;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const text = await fs.readFile(path.join(task.runDir, cube.name), 'utf8');
-      const parsedCube = parseCube(text);
-      // The figure slices in index space and labels the axes in Å, which is only
-      // true when the cube's axes are axis-aligned: a rotated cube is reported
-      // rather than drawn as if it were an xy plane.
-      const axisAligned = parsedCube.axes.every((vector, index) => vector
-        .every((component, componentIndex) => (componentIndex === index ? true : Math.abs(component) < 1e-6)));
-      volumes[task.nodeId] = {
-        values: parsedCube.values,
-        origin: parsedCube.origin,
-        step: parsedCube.spacing,
-        counts: parsedCube.dims,
-        min: parsedCube.stats?.min ?? 0,
-        max: parsedCube.stats?.max ?? 0,
-        axisAligned,
-        source: cube.name,
-      };
-    } catch {
-      // An unreadable cube is not a figure; the report says the slice is absent.
-    }
-  }
-  return volumes;
-}
-
 /** Imported records written under `runs/` by `ncs record import`, newest first. */
 async function orphanImportedRecords(outDir, referenced = new Set()) {
   const runsDir = path.join(outDir, 'runs');
@@ -693,7 +605,7 @@ async function commandReport({ positional, flags }) {
   // whether its number is also shown in the energy columns, labelled.
   const includeImported = flags['include-imported'] === true || flags['include-imported'] === 'true';
   const figuresFlag = String(flags.figures || 'basic');
-  if (!['basic', 'surfaces', 'none'].includes(figuresFlag)) {
+  if (!FIGURE_LEVELS.includes(figuresFlag)) {
     throw new Error(`--figures must be basic, surfaces or none (got "${figuresFlag}")`);
   }
   const models = await collectReportModels(outDir, { flow: wantedFlow, includeImported, figures: figuresFlag });

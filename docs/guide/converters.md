@@ -24,6 +24,11 @@ ncs convert job.fchk --format molden --out job.molden
 Add `--json` for a machine-readable summary: format, output path, byte count and the notes the
 writer attached.
 
+From the window, **Export as…** in the run console's Tools offers the same formats, Molden included.
+A log carries no basis, so Molden needs the job's formatted checkpoint: run `formchk` on the `.chk`
+and copy the `.fchk` beside `run.json`, and the export reads it. Without one the export refuses
+with that instruction instead of writing a Molden file with no basis in it.
+
 ## What the engine boundary buys you
 
 The converters never look at a route, a program banner or a keyword. They consume the shapes the

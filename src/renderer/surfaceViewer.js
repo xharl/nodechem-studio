@@ -164,9 +164,17 @@ function el(doc, tag, className, text) {
  * Mount the surface viewport. Nothing GL-related happens until `setMeshes`.
  *
  * @param {HTMLElement} host
- * @param {{doc?: Document, onIsoChange?: (iso: number) => void, interval?: [number, number]}} [options]
+ * @param {{doc?: Document, onIsoChange?: (iso: number) => void, interval?: [number, number],
+ *   onWriteCube?: (() => void)|null}} [options]
+ *   `onWriteCube` adds the `Write cube…` action beside Save PNG/STL; the caller
+ *   owns the field and the writer, the viewer only owns the button.
  */
-export function createSurfaceViewer(host, { doc = globalThis.document, onIsoChange = null, interval = null } = {}) {
+export function createSurfaceViewer(host, {
+  doc = globalThis.document,
+  onIsoChange = null,
+  interval = null,
+  onWriteCube = null,
+} = {}) {
   if (!host || !doc) return null;
 
   const root = el(doc, 'div', 'surface-view');
@@ -218,6 +226,20 @@ export function createSurfaceViewer(host, { doc = globalThis.document, onIsoChan
   const stlButton = el(doc, 'button', 'button is-quiet', 'Save STL');
   stlButton.type = 'button';
   actions.append(pngButton, stlButton);
+
+  // The cube is the field the picture is made of, so its writer sits with the
+  // two picture exports. It starts disabled: a card with no evaluated field has
+  // nothing to write, and a button that opens a save dialog for nothing is a
+  // false promise. `setCubeAvailable(true)` is the caller saying it has one.
+  let writeButton = null;
+  if (typeof onWriteCube === 'function') {
+    writeButton = el(doc, 'button', 'button is-quiet', 'Write cube…');
+    writeButton.type = 'button';
+    writeButton.dataset.role = 'surface-write-cube';
+    writeButton.disabled = true;
+    writeButton.addEventListener('click', () => { onWriteCube(); });
+    actions.append(writeButton);
+  }
 
   root.append(controls, frame, numbers, actions);
   host.append(root);
@@ -530,6 +552,13 @@ export function createSurfaceViewer(host, { doc = globalThis.document, onIsoChan
       setNumbers();
       draw();
       return { triangles: (mesh.positive?.triangleCount ?? 0) + (mesh.negative?.triangleCount ?? 0) };
+    },
+    /**
+     * Say whether the caller has a field behind the mesh. `Write cube…` is
+     * enabled only then: the button writes the field, not the triangles.
+     */
+    setCubeAvailable(available) {
+      if (writeButton) writeButton.disabled = !available;
     },
     setIso(next) {
       const value = Math.abs(Number(next));
