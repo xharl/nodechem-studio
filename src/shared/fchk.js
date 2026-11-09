@@ -110,6 +110,19 @@ const FIELDS = Object.freeze([
     kind: 'realArray',
     triangular: true,
   },
+  // issue 168: the unrestricted alpha−beta density (Psi4 writes `Spin SCF
+  // Density`, Gaussian `Spin Density`), same triangular layout as the total.
+  // Absent for a closed-shell file, and absent is the honest answer there: the
+  // spin density of a closed-shell wavefunction is zero by construction, so no
+  // reader should treat a missing block as a block of zeros.
+  {
+    key: 'spinScfDensity',
+    label: 'Spin SCF Density',
+    aliases: ['Spin Density'],
+    type: 'R',
+    kind: 'realArray',
+    triangular: true,
+  },
   { key: 'mullikenCharges', label: 'Mulliken Charges', type: 'R', kind: 'realArray' },
   { key: 'espCharges', label: 'ESP Charges', type: 'R', kind: 'realArray' },
   { key: 'totalEnergyHartree', label: 'Total Energy', type: 'R', kind: 'real' },
@@ -354,13 +367,14 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
   // the basis. A block shorter than that is the shape a truncated write leaves
   // behind, and reading it as "the density" would produce a potential from a
   // matrix with rows missing — so it is refused by the name the file uses.
-  for (const key of ['totalScfDensity', 'totalScdDensity']) {
+  for (const key of ['totalScfDensity', 'totalScdDensity', 'spinScfDensity']) {
     const block = parsed[key];
     if (!block || !Number.isInteger(parsed.numberOfBasisFunctions)) continue;
     const nbf = parsed.numberOfBasisFunctions;
     const expected = (nbf * (nbf + 1)) / 2;
     if (block.length !== expected) {
-      const label = key === 'totalScfDensity' ? 'Total SCF Density' : 'Total SCD Density';
+      const label = key === 'totalScfDensity' ? 'Total SCF Density'
+        : key === 'totalScdDensity' ? 'Total SCD Density' : 'Spin SCF Density';
       throw new FchkFormatError(
         `Field "${label}" holds ${block.length} values but a ${nbf}-function basis needs `
         + `${nbf}×(${nbf}+1)/2 = ${expected}; the triangular block is truncated or the wrong length, `

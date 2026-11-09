@@ -153,6 +153,46 @@ function el(doc, tag, className, text) {
  * count yields zero occupations, so a density built from it integrates to zero
  * and says so, rather than pretending the MOs are filled.
  */
+/**
+ * The alpha and beta MO sets with occupations +1 and −1, which is all the
+ * density evaluator needs to draw an alpha − beta field (issue 168).
+ *
+ * `evaluateDensity` computes Σ_i occ_i |ψ_i|², so the unrestricted spin density
+ * is that sum with the occupied alpha orbitals at +1 and the occupied beta
+ * orbitals at −1 — no second evaluator, and the surface this produces is on the
+ * same grid, through the same worker, as the total density beside it.
+ *
+ * `null` when the record cannot support it: no beta coefficient block, no
+ * alpha/beta electron counts, or a closed-shell wavefunction (n_alpha = n_beta,
+ * whose spin density is zero by construction and which the card reports as
+ * "no unpaired electrons" instead of drawing an empty surface).
+ */
+export function spinDensitySets(parsed) {
+  const functions = Number(parsed?.numberOfBasisFunctions);
+  if (!Number.isInteger(functions) || functions <= 0) return null;
+  const alpha = parsed?.alphaMOCoefficients;
+  const beta = parsed?.betaMOCoefficients;
+  if (!Array.isArray(alpha) || !Array.isArray(beta)) return null;
+  const nAlpha = Number.isInteger(parsed?.numberOfAlphaElectrons) ? parsed.numberOfAlphaElectrons : null;
+  const nBeta = Number.isInteger(parsed?.numberOfBetaElectrons) ? parsed.numberOfBetaElectrons : null;
+  if (nAlpha === null || nBeta === null || nAlpha === nBeta) return null;
+  const slice = (matrix) => {
+    const count = Math.floor(matrix.length / functions);
+    return Array.from({ length: count }, (_, index) => matrix.slice(index * functions, (index + 1) * functions));
+  };
+  const alphaMOs = slice(alpha);
+  const betaMOs = slice(beta);
+  const occupiedAlpha = Math.min(nAlpha, alphaMOs.length);
+  const occupiedBeta = Math.min(nBeta, betaMOs.length);
+  const coefficientsByMo = [...alphaMOs.slice(0, occupiedAlpha), ...betaMOs.slice(0, occupiedBeta)];
+  if (coefficientsByMo.length === 0) return null;
+  return {
+    coefficientsByMo,
+    occupations: [...Array(occupiedAlpha).fill(1), ...Array(occupiedBeta).fill(-1)],
+    unpaired: nAlpha - nBeta,
+  };
+}
+
 export function orbitalList(parsed) {
   if (!parsed || typeof parsed !== 'object') return [];
   const functions = Number(parsed.numberOfBasisFunctions);
@@ -667,7 +707,20 @@ export function mountWavefunctionViewport({
     let coefficientsByMo = null;
     let occupations = null;
     let label = '';
-    if (selection === 'density') {
+    const isSpin = selection === 'spin-density';
+    if (isSpin) {
+      // Issue 168: alpha − beta, through the same density evaluator with +1/−1
+      // occupations. A closed-shell record has no such field, and says so.
+      const spin = spinDensitySets(record?.parsed);
+      if (!spin) {
+        setStatus('this record has no spin density: it carries no beta MOs, or a closed-shell '
+          + 'wavefunction whose alpha and beta densities are identical.', 'warn');
+        return;
+      }
+      coefficientsByMo = spin.coefficientsByMo;
+      occupations = spin.occupations;
+      label = 'spin density (alpha − beta)';
+    } else if (selection === 'density') {
       coefficientsByMo = list.map((orbital) => orbital.coefficients);
       occupations = list.map((orbital) => orbital.occupation);
       if (!coefficientsByMo.length) {
@@ -698,7 +751,7 @@ export function mountWavefunctionViewport({
     try {
       const result = await evaluator.run({
         type: 'evaluate',
-        kind: selection === 'density' ? 'density' : 'orbital',
+        kind: selection === 'density' || isSpin ? 'density' : 'orbital',
         shells: parsed.shells,
         coefficients,
         coefficientsByMo,
@@ -718,18 +771,21 @@ export function mountWavefunctionViewport({
       if (state.disposed) return;
 
       state.field = fieldOfValues({
-        kind: selection === 'density' ? 'density' : 'orbital',
+        kind: isSpin ? 'spin-density' : selection === 'density' ? 'density' : 'orbital',
         label,
         grid: { ...gridResult, atoms },
         values: result.values,
+        // A spin density is signed (it has a beta lobe) and in the same atomic
+        // units as ρ, so the isosurface colours and the cube writer treat it as
+        // one field, not a special case.
         signed: selection !== 'density',
-        unit: selection === 'density' ? 'e/bohr^3' : 'a.u.',
+        unit: selection === 'density' || isSpin ? 'e/bohr^3' : 'a.u.',
       });
       state.fieldSource = 'basis';
       state.atoms = atoms;
       state.sourceNote = result.mode === 'worker' ? '' : 'evaluated on the main thread';
       if (!keepGrid) state.isovalue = defaultIsovalue(state.field);
-      const integral = selection === 'density'
+      const integral = selection === 'density' || isSpin
         ? integrateField(state.field)
         : integrateField(state.field, { square: true });
       state.numberRows = [
@@ -739,7 +795,9 @@ export function mountWavefunctionViewport({
         ['evaluated in', `${(result.ms / 1000).toFixed(2)} s (${result.mode})`],
         selection === 'density'
           ? ['∫ρ dV', `${integral.toFixed(3)} e`]
-          : ['∫|ψ|²dV', `${integral.toFixed(3)} (bohr³)`],
+          : isSpin
+            ? ['∫ρ_spin dV', `${integral.toFixed(3)} e (n_α − n_β = ${spinDensitySets(record?.parsed)?.unpaired ?? '?'})`]
+            : ['∫|ψ|²dV', `${integral.toFixed(3)} (bohr³)`],
         // QTAIM and NCI (issue 59): the total density's topology, not the
         // selected orbital's — so these rows are the same whichever MO is on
         // screen, and are computed once per checkpoint.
@@ -770,6 +828,14 @@ export function mountWavefunctionViewport({
       const density = el(doc, 'option', null, 'Electron density (all occupied MOs)');
       density.value = 'density';
       fieldSelect.append(density);
+      // Issue 168: only for a record that actually carries an unrestricted
+      // alpha−beta set; a closed-shell checkpoint gets no such option rather
+      // than an option that would draw a flat zero.
+      if (spinDensitySets(record?.parsed)) {
+        const spin = el(doc, 'option', null, 'Spin density (alpha − beta)');
+        spin.value = 'spin-density';
+        fieldSelect.append(spin);
+      }
     } else {
       const option = el(doc, 'option', null, 'no orbitals in this record');
       option.value = '';

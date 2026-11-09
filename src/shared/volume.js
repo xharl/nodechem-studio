@@ -605,25 +605,47 @@ function shellsFromFlatArrays(checkpoint) {
   const pureD = checkpoint.pureDShells === 1;
   const pureF = checkpoint.pureFShells === 1;
 
-  const shells = [];
-  let offset = 0;
-  for (let index = 0; index < types.length; index += 1) {
-    let type = Number(types[index]);
-    if (type === 2 && pureD) type = -2;
-    if (type === 3 && pureF) type = -3;
-    const count = Number(counts[index]);
-    const primitives = [];
-    for (let at = 0; at < count; at += 1) {
-      primitives.push({
-        exponent: Number(exponents[offset + at]),
-        s: Number(contraction[offset + at]),
-        p: type === -1 ? Number(spContraction?.[offset + at]) : null,
-      });
+  const build = (dAsPure, fAsPure) => {
+    const shells = [];
+    let offset = 0;
+    for (let index = 0; index < types.length; index += 1) {
+      let type = Number(types[index]);
+      if (type === 2 && dAsPure) type = -2;
+      if (type === 3 && fAsPure) type = -3;
+      const count = Number(counts[index]);
+      const primitives = [];
+      for (let at = 0; at < count; at += 1) {
+        primitives.push({
+          exponent: Number(exponents[offset + at]),
+          s: Number(contraction[offset + at]),
+          p: type === -1 ? Number(spContraction?.[offset + at]) : null,
+        });
+      }
+      offset += count;
+      shells.push(normaliseShell({ atom: Number(map[index]), type, primitives }, index));
     }
-    offset += count;
-    shells.push(normaliseShell({ atom: Number(map[index]), type, primitives }, index));
+    return shells;
+  };
+  const shellList = build(pureD, pureF);
+
+  // Issue 168: the two writers that emit these flat arrays do not agree on the
+  // sign of "Pure/Cartesian d shells". Psi4 1.11 writes `0` for a pure d shell
+  // (cc-pVDZ, 5 functions) and `1` for a Cartesian one (6-31G*, 6 functions);
+  // Gaussian's formatted checkpoint writes the opposite. A wrong guess silently
+  // shifts every function after the first d shell, so the file's own
+  // `Number of basis functions` decides: the reading whose function count
+  // matches the stated count wins, and a file where neither matches still falls
+  // through to the count check in `shellsFromCheckpoint`, which refuses it.
+  const statedCount = Number.isInteger(checkpoint.numberOfBasisFunctions) ? checkpoint.numberOfBasisFunctions : null;
+  if (statedCount !== null) {
+    const total = shellList.reduce((sum, shell) => sum + shell.functions, 0);
+    if (total !== statedCount) {
+      const flipped = build(!pureD, !pureF);
+      const flippedTotal = flipped.reduce((sum, shell) => sum + shell.functions, 0);
+      if (flippedTotal === statedCount) return flipped;
+    }
   }
-  return shells;
+  return shellList;
 }
 
 /* ── orbitals ─────────────────────────────────────────────── */

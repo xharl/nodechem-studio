@@ -351,6 +351,67 @@ A barrier taken from a ΔE rather than a ΔG is labelled **electronic-energy est
 
 Missing reference, missing solvent, a solvent mismatch, or a species without a frequency job gives `not reported` with the missing block named — never a pKa or an E° from an electronic energy alone.
 
+## Spin density and EPR
+
+An open-shell calculation produces a **Spin density / EPR** card with three
+things, and it says which of them a particular engine can actually deliver.
+
+**Spin populations.** Mulliken and Löwdin populations per atom, in electrons
+(α − β), computed from the unrestricted `Spin SCF Density` block of the run's
+checkpoint — `D^s = D^α − D^β`. The card names the scheme and the block, and
+prints the sum with the number it must equal (`n_α − n_β`, 1 for a doublet). That
+sum is the internal check: if it is not n_α − n_β, the density was read wrong and
+no population on the card is trustworthy. On CH3· (UB3LYP/6-31G*) the carbon
+carries +1.1552 e and each hydrogen −0.0518 e (Mulliken; Löwdin +1.0814 e and
+−0.0272 e), summing to 1.000000.
+
+The same α − β density is available as a **field** (`epr.spinDensityOnGrid`), on
+the same grid contract an orbital or an ESP uses, so it can be written as a cube
+and drawn as a two-lobe surface. It is a pointwise evaluation of the density, not
+a quadrature, and it is signed.
+
+**Fermi-contact hyperfine coupling.** For each nucleus with a spin,
+
+```
+A_iso = (2 μ0 / 3) · g_e μ_B g_N μ_N · ρ_spin(R_nucleus) / h
+```
+
+reported in MHz and in gauss (`B = h ν / (g_e μ_B)`), with the isotope named — a
+¹³C coupling is reported for a carbon nucleus because ¹³C is the isotope with
+I = ½, and the card says *not the natural isotope*. Nuclei with no tabulated
+g-factor in this build are listed as **no nuclear data**, never as zero.
+
+This is a **density-only estimate**, and the card says so in full: it is the spin
+density the calculation produced at the nucleus, so it omits core polarisation
+beyond what that density already carries, spin-orbit contributions to the
+coupling, and relativistic / finite-nuclear-size corrections. The size of that
+approximation is visible in the one comparison everyone knows: for the hydrogen
+atom, the non-relativistic formula with the exact constants gives 1422.8 MHz
+where the measured 21 cm line is 1420.4058 MHz — 0.17 %, which is the omitted
+relativistic correction. For CH3·, UB3LYP/6-31G* gives −70.80 MHz (−25.26 G) for
+the protons against a measured 23.04 G. Read the table as *where the spin sits and
+what its order of magnitude is*, not as a spectrum to be assigned line by line.
+
+**The g-tensor is refused, by name.** Psi4 has no g-tensor property in the module
+set this app writes (it needs a spin-orbit treatment of the wavefunction), and
+ORCA — which does compute one — is not installed. The card prints that refusal:
+no value, no `≈ 2.0023`, no empty cell. `PSI4_CAPABILITIES.epr.gTensor` is `false`
+with the reason, so a settings dialog cannot offer it either.
+
+**A closed-shell molecule prints `no unpaired electrons`** — not an empty table.
+The words are the answer: a closed-shell wavefunction has no spin density, and a
+zero-filled population table would claim a calculation that never happened.
+
+**How the numbers reach `run.json`.** A Psi4 open-shell single point is written
+with `E, wfn = energy('…', return_wfn=True)` and a `fchk(wfn, '…fchk')` line, so
+the checkpoint lives beside the log; the runner reads it, the EPR block is
+computed from it, and the whole block — populations, couplings, method statement,
+caveat and the g-tensor refusal — is carried in `parsed.epr`. It is passed into
+the canonical result whole rather than field by field, because a population
+without its scheme and caveat is a number with its provenance removed. An
+open-shell run with no checkpoint reports **not available** with the reason; it
+does not show empty tables.
+
 ## NMR: shieldings, shifts and couplings
 
 An `NMR` job produces an **NMR** card with every atom's isotropic shielding, anisotropy and tensor
