@@ -22,6 +22,7 @@ import { attachRaman, parseRamanActivities } from './raman.js';
 import { attachVcd, parseVcdStrengths } from './vcd.js';
 import { parseOrbitals } from './orbitals.js';
 import { parseRotatoryStrengths } from './ecd.js';
+import { parseExcitedStateOptimization } from './excitedStates.js';
 import { parseTrajectory } from './trajectory.js';
 import { summarizeValidity } from './validityChecks.js';
 import { COMPOSITE_METHODS, compositeMethodFor, HARTREE_TO_KCAL_PER_MOL } from './routePresets.js';
@@ -1557,6 +1558,10 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     spinSquared,
     wavefunctionStability,
     excitedStates,
+    // #146: the per-step ladder of an Opt TD job. It is parsed from the same
+    // text and carries `verified: false` until a real Opt TD log is committed;
+    // the results card repeats that.
+    excitedStateOptimization: parseExcitedStateOptimization(text, { truncated: truncated === true }),
     reactionPath,
     scan,
     nmr,

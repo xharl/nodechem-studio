@@ -90,6 +90,9 @@ export function calcInspectorFieldIds(engineId, settings = {}) {
         'method.verbosity',
         'method.tdStates',
         'method.tdTriplets',
+        'method.tdRoot',
+        'method.ntoTransition',
+        'method.nto',
       );
     }
   }

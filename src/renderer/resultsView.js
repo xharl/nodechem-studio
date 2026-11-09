@@ -35,6 +35,7 @@ import {
 import { importSpectrumText, sameAxisUnits } from '../shared/spectrumImport.js';
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 import { IMPORTED_BADGE_TEXT, importedBadgeHtml, importedSummary } from '../shared/importedRecord.js';
+import { UNVERIFIED_ESOPT_NOTE, excitedStateGate } from '../shared/excitedStates.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -641,6 +642,155 @@ function emissionLine(record, parsed) {
     + `${Number.isFinite(nm) ? `${esc(nm.toFixed(2))} nm` : ''}. `
     + 'This is a vertical energy at the excited minimum, not the adiabatic 0–0 energy, which '
     + 'also needs the zero-point energy of both surfaces.</p>';
+}
+
+/**
+ * Vertical emission (issue 146).
+ *
+ * The emission block is an SP TD job whose whole purpose is the energy at the
+ * geometry it receives. The card prints the three quantities the log carries
+ * for the emitting state — λ_em, E and f — and names what it does **not**
+ * report. The label is only printed as belonging to an optimised excited state
+ * when the graph supports it; otherwise the card says which geometry it used.
+ */
+function emissionCard(parsed, flags, emission) {
+  if (!isObject(emission) || emission.block !== 'emission') return '';
+  const states = Array.isArray(parsed?.excitedStates?.states)
+    ? parsed.excitedStates.states.filter(isObject)
+    : [];
+  const emitting = states.find((state) => Number(state.index) === 1) || null;
+  const wavelength = finite(emitting?.wavelengthNm);
+  const energy = finite(emitting?.energyEv);
+  const strength = finite(emitting?.oscillatorStrength);
+  const reason = states.length === 0
+    ? 'the output carries no excited-state table'
+    : 'the Excited State 1 row of the table is incomplete';
+  const orMissing = (value, digits, unit) => (value === null
+    ? `${missingHtml()} <span class="results-missing">(${esc(reason)})</span>`
+    : `${esc(value.toFixed(digits))} ${esc(unit)}`);
+  const rows = [
+    ['Excited state', '1 (the emitting state)', 'emission-root'],
+    ['λ_em', orMissing(wavelength, 2, 'nm'), 'emission-wavelength'],
+    ['E', orMissing(energy, 4, 'eV'), 'emission-energy'],
+    ['f', orMissing(strength, 4, ''), 'emission-oscillator-strength'],
+  ];
+  const origin = emission.geometryHandoff === 'checkpoint'
+    ? `Geometry handed over from <code>${esc(emission.sourceNodeId || 'an unnamed block')}</code> over a checkpoint edge.`
+    : (emission.sourceNodeId
+      ? `No checkpoint edge supplies the geometry: the run used the block's own input geometry, and `
+        + `<code>${esc(emission.sourceNodeId)}</code> only ordered it. `
+      : 'No upstream block is connected, so the geometry provenance is not recorded. ');
+  const supported = emission.sourceIsExcitedStateOptimization === true
+    ? ''
+    : 'The graph does not connect this block to an excited-state optimisation, so the vertical-emission '
+      + 'reading is not supported by the workflow it was run in. ';
+  return card('Vertical emission', `<p class="results-note" data-field="emission-quantity">`
+    + 'The values below are the <strong>vertical emission from the optimised excited state</strong> — '
+    + `${emitting ? `Excited State ${esc(emitting.index)}, the state the block pins with <code>Root=1</code>` : 'the emitting state (<code>Root=1</code>)'} `
+    + 'at one geometry.</p>'
+    + kv(rows)
+    + `<p class="results-note">${origin}${supported}`
+    + 'A vertical energy at the excited-state geometry is <em>not</em> the adiabatic 0–0 energy: the latter '
+    + 'also needs the zero-point energy of both surfaces, which this workflow does not compute.</p>'
+    + '<p class="results-note" data-field="emission-not-reported"><strong>Not reported:</strong> fluorescence '
+    + 'lifetime, fluorescence quantum yield, and a Stokes shift against an experimental band maximum. '
+    + 'Gaussian 16 does not print the first two for this workflow, and the third needs a measured spectrum '
+    + 'this run does not contain.</p>'
+    + caveatHtml(flags, 'These emission values'), 'is-wide');
+}
+
+/**
+ * NTO analysis (issue 146). The two-job chain is written honestly; the printed table
+ * is **not** parsed, because no real NTO log exists in this repository and
+ * guessing the layout is exactly what the project forbids. The card says so
+ * rather than showing a half-read orbital pair.
+ */
+function ntoCard(flags, nto) {
+  if (!isObject(nto)) return '';
+  const transition = finite(nto.transition);
+  const states = finite(nto.states);
+  const chain = [
+    ['1. TD job (writes the checkpoint)', `#p &lt;method&gt;/&lt;basis&gt; SP TD=(NStates=${states === null ? 'n' : esc(states)}) `
+      + `Density=(Check,Transition=${transition === null ? 'k' : esc(transition)})`, 'nto-first-route'],
+    ['2. NTO job (this block)', '#p &lt;method&gt;/&lt;basis&gt; Guess=Only Pop=NTO', 'nto-second-route'],
+  ];
+  const rows = chain.map(([label, route, field]) => [label,
+    `<code data-field="${field}">${route}</code>`]);
+  return card('Natural transition orbitals', kv(rows)
+    + `<p class="results-missing" data-field="nto-table">The printed NTO table is not parsed by this build: `
+    + 'no real NTO log exists in this repository, so the eigenvalue/occupation layout has not been verified. '
+    + `The NTO pair${transition === null ? '' : ` for transition ${esc(transition)}`} is therefore `
+    + '<strong>not reported</strong>.</p>'
+    + caveatHtml(flags, 'This NTO request'), 'is-wide');
+}
+
+/**
+ * Excited-state optimisation (issue 146).
+ *
+ * `parsed.excitedStateOptimization` comes from `parseExcitedStateOptimization`,
+ * which has never seen a real Opt TD log (none exists in the repository). The
+ * card repeats that sentence next to the convergence verdict and never turns a
+ * missing marker into a pass: `converged` is true / false / unknown exactly as
+ * the parser reports it.
+ */
+function excitedStateOptimizationCard(parsed, flags, settings) {
+  const report = isObject(parsed?.excitedStateOptimization) ? parsed.excitedStateOptimization : null;
+  const jobType = String(settings?.jobType || '');
+  const states = Number(settings?.tdStates ?? 0);
+  const requestedRoot = Number(settings?.tdRoot ?? 0);
+  const isEsOpt = /^Opt/.test(jobType) && states > 0;
+  if (!isEsOpt && !(report && report.applicable === true)) return '';
+  const unverified = `<p class="results-caveat" data-field="esopt-unverified">${esc(UNVERIFIED_ESOPT_NOTE)}. `
+    + 'The parser is written from the Gaussian output documentation and the real TD single-point table in the '
+    + 'test corpus; no real <code>Opt TD</code> log has been checked against it, so treat the convergence '
+    + 'verdict as unverified.</p>';
+  if (!report || report.applicable !== true) {
+    return card('Excited-state optimisation',
+      `<p class="results-missing" data-field="esopt-report">Whether root ${esc(requestedRoot > 0 ? requestedRoot : 'n')} `
+      + 'converged is not reported: the output carries no excited-state optimisation ladder.</p>'
+      + unverified, 'is-wide');
+  }
+  const gate = excitedStateGate(report, { requestedRoot: requestedRoot > 0 ? requestedRoot : null });
+  const root = report.root === null ? null : finite(report.root);
+  const convergedText = report.converged === true ? 'yes — Optimization completed'
+    : report.converged === false ? 'no — the optimisation stopped before its criteria'
+      : 'unknown';
+  const rows = [
+    ['Root followed', root === null ? missingHtml() : esc(root), 'esopt-root'],
+    ['Converged', esc(convergedText), 'esopt-converged'],
+    ['Why', esc(report.convergedReason || MISSING_TEXT), 'esopt-converged-reason'],
+    ['Steps read', `${esc(report.steps.length)}${report.steps.length === 0 ? ` — ${missingHtml()}` : ''}`, 'esopt-steps'],
+    ['excited-state gate', `<span class="results-gate is-${esc(gateResult(gate.result))}">${esc(gateResult(gate.result))}</span>`, 'esopt-gate'],
+    ['Gate detail', esc(gate.detail), 'esopt-gate-detail'],
+  ];
+  const stepRows = report.steps.map((step) => '<tr>'
+    + `<td>${esc(step.index)}</td>`
+    + `<td>${esc(step.tableIndex)}</td>`
+    + `<td>${step.energyEv === null ? missingHtml() : esc(step.energyEv.toFixed(4))}</td>`
+    + `<td>${step.energyHartree === null ? `${missingHtml()} <span class="results-missing">(the log prints the TD total energy only for the state being optimised)</span>` : esc(step.energyHartree)}</td>`
+    + `<td>${step.geometry === null ? `${missingHtml()} <span class="results-missing">(per-step geometry is not parsed)</span>` : esc(step.geometry)}</td>`
+    + '</tr>').join('');
+  const stepsTable = report.steps.length === 0 ? ''
+    : '<table class="results-table" data-field="esopt-steps"><thead><tr><th>#</th><th>Step</th><th>E (eV)</th>'
+      + '<th>E (Eh)</th><th>Geometry</th></tr></thead><tbody>' + stepRows + '</tbody></table>';
+  const finalStates = Array.isArray(report.finalTable?.states) ? report.finalTable.states : [];
+  const finalRows = finalStates.slice(0, 20).map((state) => (
+    `<tr${Number(state.index) === root ? ' class="is-root" data-root-row="true"' : ''}>`
+    + `<td>${esc(state.index)}</td>`
+    + `<td>${state.energyEv === null ? missingHtml() : esc(state.energyEv.toFixed(4))}</td>`
+    + `<td>${state.wavelengthNm === null ? missingHtml() : esc(state.wavelengthNm.toFixed(2))}</td>`
+    + `<td>${state.oscillatorStrength === null ? missingHtml() : esc(state.oscillatorStrength.toFixed(4))}</td>`
+    + '</tr>')).join('');
+  const finalTable = finalStates.length === 0 ? ''
+    : '<table class="results-table" data-field="esopt-final-table"><thead><tr><th>#</th><th>eV</th><th>nm</th>'
+      + '<th>f</th></tr></thead><tbody>' + finalRows + '</tbody></table>';
+  const meaning = '<p class="results-note">“Converged” here means Gaussian printed '
+    + '<code>Optimization completed</code>: its optimisation criteria were met on the potential-energy surface '
+    + 'of the root it followed. It does <em>not</em> mean the geometry is a minimum of that surface — proving '
+    + 'that needs a frequency job on the excited-state surface, which this block did not run — and it does '
+    + 'not mean the 0–0 energy is known.</p>';
+  return card('Excited-state optimisation', kv(rows) + stepsTable + finalTable + meaning + unverified
+    + caveatHtml(flags, 'This convergence verdict'), 'is-wide');
 }
 
 function orbitalsCard(parsed, flags) {
@@ -1492,6 +1642,14 @@ export function resultsPanelHtml(record, options = {}) {
   const status = statusOf(record);
   const imported = importedSummary(record);
   const engineId = engineOf(record, parsed);
+  // issue 146: the task settings and the workflow-derived emission/NTO context reach
+  // the cards through `options` (the queue knows the task) or through a record
+  // that already carries them. Nothing here is guessed from the log.
+  const task = isObject(record.task) ? record.task : {};
+  const jobSettings = isObject(options.settings) ? options.settings : (isObject(task.settings) ? task.settings : {});
+  const emission = isObject(options.emission) ? options.emission
+    : (isObject(task.emission) ? task.emission : (isObject(record.emission) ? record.emission : null));
+  const nto = isObject(options.nto) ? options.nto : (isObject(task.nto) ? task.nto : (isObject(record.nto) ? record.nto : null));
   const engineLabel = imported
     ? imported.program
     : engineId
@@ -1544,6 +1702,9 @@ export function resultsPanelHtml(record, options = {}) {
       methodsCard(record),
       frequenciesCard(parsed, flags),
       excitedStatesCard(parsed, flags, record),
+      emissionCard(parsed, flags, emission),
+      ntoCard(flags, nto),
+      excitedStateOptimizationCard(parsed, flags, jobSettings),
       orbitalsCard(parsed, flags),
       reactionPathCard(record, parsed, flags, options),
       solutionEnergeticsCard(record, parsed, flags, options),
@@ -1629,9 +1790,19 @@ export function installResultsView({
   };
   const reactionOptions = (record) => {
     const task = queueTasksByRunId.get(String(record?.id ?? ''));
+    if (!task) return {};
+    const base = {
+      // issue 146: the queue knows which block produced this run, so the emission
+      // label and the NTO/Pop chain reach the cards from the workflow — not
+      // from a guess about the excitation table.
+      ...(isObject(task.settings) ? { settings: task.settings } : {}),
+      ...(isObject(task.emission) ? { emission: task.emission } : {}),
+      ...(isObject(task.nto) ? { nto: task.nto } : {}),
+    };
     const reaction = task ? queueReactions[task.nodeId] : null;
-    if (!reaction) return {};
+    if (!reaction) return base;
     return {
+      ...base,
       reaction,
       molecularity: Number.isFinite(task?.molecularity) ? task.molecularity : null,
       molecularityBasis: task?.molecularityBasis || null,
@@ -1917,6 +2088,31 @@ export function installResultsView({
     }
   };
 
+  /**
+   * Issue 154: a click on a queue/history row must land on the Results
+   * section, not just build the panel behind the Queue pane. The console and
+   * its tabs are the app shell's, but this module already holds the console
+   * element, so the switch happens here on the same attributes `app.js` uses.
+   * The Results tab is enabled in the same gesture: a user who has just
+   * finished a run should not have to click a row *and then* find the tab.
+   */
+  const revealResultsSection = () => {
+    if (consoleEl) consoleEl.dataset.pane = 'results';
+    for (const tab of doc.querySelectorAll('#run-tabs [data-run-tab]')) {
+      const active = tab.dataset.runTab === 'results';
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', String(active));
+    }
+    const resultsTab = doc.querySelector('#run-tabs [data-run-tab="results"]');
+    if (resultsTab) {
+      resultsTab.classList.remove('is-disabled');
+      resultsTab.setAttribute('aria-disabled', 'false');
+      resultsTab.title = 'Parsed results of the last run';
+    }
+    const dot = doc.getElementById('run-tab-results-dot');
+    if (dot) dot.hidden = false;
+  };
+
   const openRun = async (runId, element) => {
     if (!text(runId)) return;
     const record = await findRun(desktop, runId);
@@ -1926,6 +2122,8 @@ export function installResultsView({
     } else {
       showUnavailable(runId);
     }
+    // Both branches have replaced the results panel, so both belong on screen.
+    revealResultsSection();
   };
 
   const onClick = (event) => {

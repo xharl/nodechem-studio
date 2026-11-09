@@ -310,6 +310,9 @@ export function validityUpstreamFor(project, node) {
       method: source.settings?.method,
       basis: source.settings?.basis,
       dispersion: source.settings?.dispersion,
+      // Issue #146: Pop=NTO must see whether its checkpoint source ran TD.
+      tdStates: source.settings?.tdStates,
+      tdRoot: source.settings?.tdRoot,
     },
     parsed: null,
   };
@@ -331,6 +334,13 @@ export function checkpointNameFor(project, node, taskId = node?.id) {
  * minimum. Only the workflow knows which one it computed, so the label is
  * derived here from the block that supplied the geometry and travels with the
  * task.
+ *
+ * Issue #146 adds an explicit **emission block** (`settings.emission === true`):
+ * an SP job whose whole purpose is the vertical emission energy. It is labelled
+ * whether the geometry arrives over a checkpoint edge or over a normal ordering
+ * edge, and it records which of the two it was — the card must be able to say
+ * that a normal edge supplied no optimised geometry, so the label is not
+ * silently attached to a project geometry.
  */
 export function emissionContextFor(project, node, settingsOverride = null) {
   const settings = settingsOverride || node?.settings || {};
@@ -339,6 +349,22 @@ export function emissionContextFor(project, node, settingsOverride = null) {
   if (jobType === 'NMR' || jobType === 'IRC' || jobType === 'Scan') return null;
   if (!Number.isFinite(states) || states <= 0) return null;
   const source = checkpointSourceNode(project, node);
+  if (settings.emission === true) {
+    // The declared emission block: Root is fixed at 1, and the geometry source
+    // is recorded, never assumed. A checkpoint edge hands over the geometry; a
+    // normal edge orders the run but carries the project/dataset geometry.
+    const origin = source || dependencySourceWithTd(project, node);
+    return {
+      block: 'emission',
+      sourceNodeId: origin?.id || null,
+      root: 1,
+      quantity: 'vertical emission from the optimised excited state',
+      geometryHandoff: source ? 'checkpoint' : 'block-input',
+      sourceIsExcitedStateOptimization: Boolean(origin
+        && /^Opt/.test(String(origin.settings?.jobType || ''))
+        && Number(origin.settings?.tdStates || 0) > 0),
+    };
+  }
   if (!source) return null;
   const upstream = source.settings || {};
   const upstreamStates = Number(upstream.tdStates || 0);
@@ -349,6 +375,21 @@ export function emissionContextFor(project, node, settingsOverride = null) {
     root: Number(upstream.tdRoot || 0) || null,
     quantity: 'vertical emission from the excited-state minimum',
   };
+}
+
+/**
+ * The nearest upstream block connected by a normal ordering edge that carries
+ * its own TD record. Used only to name the provenance of an emission block's
+ * geometry; it never claims a geometry hand-off the runner does not perform.
+ */
+function dependencySourceWithTd(project, node) {
+  const edges = Array.isArray(project?.edges) ? project.edges : [];
+  const candidates = edges.filter((edge) => edge.to === node.id && edge.type !== 'checkpoint');
+  for (const edge of candidates) {
+    const source = nodeById(project, edge.from);
+    if (source && Number(source.settings?.tdStates || 0) > 0) return source;
+  }
+  return null;
 }
 
 /**
@@ -426,6 +467,14 @@ export function validityForNode(project, node, conformerMember = null, record = 
       method: node.settings.method,
       basis: node.settings.basis,
       dispersion: node.settings.dispersion,
+      // Issue #146: the root/NTO validity check reads these; omitting them
+      // would make the run record's validity context claim a different block.
+      tdStates: node.settings.tdStates,
+      tdTriplets: node.settings.tdTriplets,
+      tdRoot: node.settings.tdRoot,
+      emission: node.settings.emission,
+      nto: node.settings.nto,
+      ntoTransition: node.settings.ntoTransition,
       disabledChecks: Array.isArray(node.settings.disabledChecks) ? node.settings.disabledChecks : [],
     },
     molecule,
@@ -458,6 +507,20 @@ export function buildRunInput(project, node, {
   const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node);
   if (issues.errors.length > 0) throw new Error(issues.errors[0]);
   const settings = settingsOverride || settingsForNode(project, node);
+  // #146: Pop=NTO is the second job of a two-job chain. It has nothing to print
+  // without a checkpoint from a TD job, so both halves are refused here with
+  // the missing edge named — the schema reports the same errors before a run.
+  if (settings.nto === true) {
+    const ntoSource = checkpointSourceNode(project, node);
+    if (!ntoSource) {
+      throw new Error('Pop=NTO reads its transition density from a checkpoint, but this block has no checkpoint '
+        + 'edge. Connect the SP TD block that writes Density=(Check,Transition=k) with a checkpoint edge.');
+    }
+    if (!(Number(ntoSource.settings?.tdStates || 0) > 0)) {
+      throw new Error(`Pop=NTO needs a TD record in its checkpoint source, but "${ntoSource.title || ntoSource.id}" `
+        + 'runs no excited states (tdStates is 0). Put TD on that block, or point the checkpoint edge at the TD job.');
+    }
+  }
   // A spin-state sweep varies the multiplicity per task, and the multiplicity
   // is printed in the molecule block; an override has to reach it.
   const baseMolecule = moleculeForNode(project, node, conformerMember, record, { ignoreConformer });
@@ -1063,6 +1126,20 @@ function calculationTask(project, node, {
   }
   const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember, record, checkpointTaskId, ignoreConformer });
   const emissionFor = emissionContextFor(project, node, settingsOverride);
+  const taskSettings = settingsOverride || settingsForNode(project, node);
+  // NTO (#146): the second job of the chain. The transition it analyses lives
+  // on the TD block that wrote the checkpoint, so it is read from there — never
+  // guessed from the NTO block's own settings.
+  const ntoSource = taskSettings.nto === true ? checkpointSourceNode(project, node) : null;
+  const ntoFor = taskSettings.nto === true
+    ? {
+      sourceNodeId: ntoSource?.id || null,
+      transition: Number(ntoSource?.settings?.ntoTransition) > 0
+        ? Number(ntoSource.settings.ntoTransition) : null,
+      states: Number(ntoSource?.settings?.tdStates) > 0
+        ? Number(ntoSource.settings.tdStates) : null,
+    }
+    : null;
   return {
     nodeId: taskId,
     type: 'calc',
@@ -1080,11 +1157,12 @@ function calculationTask(project, node, {
     validity: validityForNode(project, node, conformerMember, record, { ignoreConformer }),
     checkpointName: checkpointNameFor(project, node, taskId),
     checkpointFrom: checkpointSourceFor(project, node, checkpointTaskId),
-    // Emission (#75): a TD block whose geometry came from a block that relaxed
-    // an excited state reports vertical emission, not a ground-state vertical
-    // excitation. The label travels with the task so no result is mislabelled
-    // after the fact.
-    emission: emissionContextFor(project, node, settingsOverride),
+    // Emission (#75, #146): a TD block whose geometry came from a block that
+    // relaxed an excited state reports vertical emission, not a ground-state
+    // vertical excitation. The label travels with the task so no result is
+    // mislabelled after the fact. `emissionFor` is computed once, above, and
+    // null means this block is not an emission job.
+    emission: emissionFor,
     // An IRC block can name the block that supplies the reactant free energy;
     // without it no ΔG‡ is computed for this path.
     ...(String((settingsOverride || settingsForNode(project, node)).jobType || '') === 'IRC'
@@ -1099,6 +1177,7 @@ function calculationTask(project, node, {
     ...(spin ? { spin } : {}),
     ...(fanOut ? { fanOut } : {}),
     ...(emissionFor ? { emission: emissionFor } : {}),
+    ...(ntoFor ? { nto: ntoFor } : {}),
     ...(built.conformer ? { conformer: built.conformer } : {}),
     ...(record ? { record: { id: record.id, label: record.label || record.id, charge: record.charge, multiplicity: record.multiplicity } } : {}),
   };

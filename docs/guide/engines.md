@@ -51,7 +51,8 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
   one: the two agree only in a complete basis. Raman and VCD combine into one keyword,
   `Freq=(Raman,VCD)`. ROA is a Gaussian 16 B.01+ feature and is not read here — this repository has
   no real ROA log to write a parser against, and it does not guess layouts.
-- **Validity checks** — the six pre/post-run checks in [Results](results.md#validity-checks).
+- **Validity checks** — the pre- and post-run checks in [Results](results.md#validity-checks), including
+  `excited-state-root` (a root the TD job computes, and a `Pop=NTO` source with a TD record).
 - **Effective core potentials.** A basis with an ECP (def2 or SDD for any element above krypton)
   written for a heavy atom becomes a `GenECP` route with the basis and pseudopotential blocks
   appended after the molecule. This build ships def2-SVP for Ag, Pd, I, Pt and Au, and SDD (Basis Set
@@ -153,6 +154,42 @@ time, so `run.json` records the grid that was actually written.
 
 A `Freq` block whose checkpoint hand-off comes from an optimisation left at the default convergence
 gets a validation warning naming the upstream block.
+
+### Optimising an excited state
+
+An `Opt` or `Opt Freq` block can follow one excited state instead of the ground state. Set
+**States** (`tdStates`) and **Root** (`tdRoot`) in the inspector's *Excited states (TD)* group; the
+route carries both:
+
+```
+#p B3LYP/def2TZVP Opt TD=(NStates=3,Root=1)
+```
+
+`Root` is the state Gaussian relaxes. It is never inferred and never clamped: **States 3 / Root 0**
+is a validation **error**, because that route optimises the ground state while the block reads as an
+excited-state optimisation, and **Root 4 / States 3** is an error too, because the TD job never
+computes state 4. The message names both fields. The same two refusals are repeated by the input
+builder, so a route is never written from a block that skipped project validation.
+
+**What "Optimization completed" means.** Gaussian's own optimisation criteria were met on the
+potential-energy surface of the root it followed. The convergence report reads the per-step
+`Excited State N:` records and the final table, and its `excited-state` gate passes only when
+`Optimization completed` is present **and** the final table carries the requested root. A truncated
+log, a missing marker, or a table without that root is reported as **unknown** — never as a pass and
+never as a failure.
+
+**What it does not mean.** The geometry is not proven to be a minimum of the excited-state surface:
+that needs a frequency job on that surface, which this block does not run. It also does not give the
+adiabatic **0–0** energy — the difference between the S1 and S0 minima plus both zero-point energies
+— and it says nothing about fluorescence lifetime, quantum yield or a measured Stokes shift. The
+vertical emission energy at that geometry is a separate single-point block; see
+[Results](results.md#emission).
+
+**No real log for this job type has been seen by this build.** There is no `Opt TD` log in the
+repository's test corpus (no fixture contains both `Excited State` and `Optimization completed`), so
+the report is parsed from the documented Gaussian layout, carries `verified: false`, and the results
+card says *this build has not seen a real log for this job type*. A per-step geometry is
+deliberately not returned: reporting `null` is honest where a guessed atom list would not be.
 
 ### Constrained optimisation and relaxed scans
 

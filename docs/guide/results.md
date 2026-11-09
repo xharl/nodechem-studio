@@ -144,7 +144,7 @@ those numbers are ingredients, not the composite answer.
 
 ## Validity checks
 
-Ten checks, implemented as pure functions in `src/shared/validityChecks.js`. They run before a job
+Eleven checks, implemented as pure functions in `src/shared/validityChecks.js`. They run before a job
 (project **Validate** and run start) and after it (`run.json` → `gates.validity`).
 
 | Check | What it verifies | Phase | A failure is |
@@ -156,6 +156,7 @@ Ten checks, implemented as pure functions in `src/shared/validityChecks.js`. The
 | `method-basis-compatibility` | Heavy elements in a basis with no ECP; semi-empirical methods given a basis; composite methods given a separate method/basis; empirical dispersion added twice | pre, post | error for the ECP gap and composite conflicts, warnings otherwise |
 | `counterpoise-bsse` | `Counterpoise=N` has fragment labels 1..N on every atom, and the output carries a counterpoise summary; BSSE is reported separately from the interaction energy | pre, post | error for a fragment mismatch or a missing summary on a completed job |
 | `opt-convergence` | A frequency job only claims a minimum when its optimisation reported completion | pre, post | reported as a failure; does not block the run |
+| `excited-state-root` | An `Opt` with TD states names `tdRoot` inside the states it computed; a `Pop=NTO` block reads a checkpoint from a block that has a TD record | pre | error — blocks the run (the project still opens, so the field can be fixed) |
 
 Findings carry `{ id, status, message, evidence, severity }`. A check never passes on a missing
 value: no geometry, no SCF method or no parsed record yields `unknown`, which is reported as such.
@@ -381,28 +382,84 @@ Three things the card refuses to smooth over:
 ROA is not read: it needs Gaussian 16 B.01+ and no real ROA log exists in the corpus, so no parser is
 claimed for it.
 
-## Emission and ECD
+## Emission
 
-**Emission.** Start from the **Emission from S1 (Opt then TD)** template: the first block emits
-`TD=(NStates=1,Root=1) Opt`, which relaxes the S1 surface, and the second runs TD at that minimum on a
-checkpoint edge. The results panel labels the lowest excitation of the second block as the **vertical
-emission from the excited-state minimum** and prints the block it came from. It is not the adiabatic
-0–0 energy: that also needs the zero-point energy of both surfaces, which this workflow never computes.
+**Emission from S1 (template).** Start from the **Emission from S1 (Opt then TD)** template: the
+first block emits `TD=(NStates=1,Root=1) Opt`, which relaxes the S1 surface, and the second runs TD at
+that minimum on a checkpoint edge. The results panel labels the lowest excitation of the second block
+as the **vertical emission from the excited-state minimum** and prints the block it came from. It is
+not the adiabatic 0–0 energy: that also needs the zero-point energy of both surfaces, which this
+workflow never computes.
 
 The label is derived from the workflow, not from the log — the same excitation table means absorption
 at the ground-state minimum and emission at the excited minimum, and only the graph knows which one
 was run.
 
-**ECD.** A TD job prints rotatory strengths in two conventions, `R(velocity)` and `R(length)`. They
-agree only in a complete basis, so the ECD card asks which one to plot and prints the choice, the
-printed unit (10⁻⁴⁰ erg·esu·cm/Gauss) and the broadening. The curve is signed: a positive band and a
-negative band are the two signs of the Cotton effect. No Δε is computed — that needs a band shape and
-an instrument calibration the log does not carry.
+**Emission (vertical) block.** Add **Emission (vertical)** from the palette. It is a single-point
+block pinned to the emitting state:
+
+```
+#p <method>/<basis> SP TD=(NStates=n,Root=1)
+```
+
+and its **Vertical emission** card prints three numbers from the log's `Excited State 1` row:
+
+- `λ_em` (nm),
+- `E` (eV),
+- `f` (oscillator strength).
+
+The card labels them **vertical emission from the optimised excited state**. A value the log does not
+carry is printed as *not reported* with the reason (for example "the output carries no excited-state
+table"), never filled in.
+
+**What the card does not report.** Fluorescence lifetime, fluorescence quantum yield, and a Stokes
+shift against an experimental band maximum. Gaussian 16 does not print the first two for this
+workflow, and the third needs a measured spectrum the run does not contain. The card also says the
+number is a vertical energy at one geometry, **not** the adiabatic 0–0 energy.
+
+**Which geometry it used.** A **checkpoint** edge hands the optimised geometry over (`Geom=Check`)
+and the card says so. A **normal ordering edge** does not: in this app an ordinary edge orders the
+run but the block still uses its own input (project, dataset or conformer) geometry. The card records
+that and prints *No checkpoint edge supplies the geometry* rather than calling a project geometry an
+optimised excited state. If the block is not connected to an excited-state optimisation at all, the
+card says the vertical-emission reading is not supported by the graph it ran in.
+
+## Natural transition orbitals
+
+`Pop=NTO` is the second job of a two-job chain. Gaussian needs the transition density from a TD job
+in a checkpoint, so the app writes:
+
+```
+#p <method>/<basis> SP TD=(NStates=n) Density=(Check,Transition=k)     ← writes the checkpoint
+#p <method>/<basis> Guess=Only Pop=NTO                                  ← reads it, over a checkpoint edge
+```
+
+`Transition=k` is set by **NTO transition** (`ntoTransition`) on the TD block; **NTO analysis**
+(`nto`) ticks the second block, which is created from the palette as *NTO analysis*.
+
+The refusals are errors, not warnings:
+
+- `Pop=NTO` with no checkpoint edge names the missing edge.
+- `Pop=NTO` whose checkpoint source has no TD record (`tdStates` 0) is refused with the source block
+  named.
+- The NTO block may not carry TD itself, and `Transition=k` may not exceed the number of states the
+  TD job computed.
+
+**The printed NTO table is not parsed.** No real NTO log exists in this repository, so the orbital
+eigenvalue/occupation layout has not been verified. The results card shows the two-job route and
+states that the NTO pair is *not reported*; it does not guess a table format. The chain and its
+refusals are usable today; the table appears when a real log can be committed as a fixture.
+
+## ECD
+
+A TD job prints rotatory strengths in two conventions, `R(velocity)` and `R(length)`. They agree only
+in a complete basis, so the ECD card asks which one to plot and prints the choice, the printed unit
+(10⁻⁴⁰ erg·esu·cm/Gauss) and the broadening. The curve is signed: a positive band and a negative band
+are the two signs of the Cotton effect. No Δε is computed — that needs a band shape and an instrument
+calibration the log does not carry.
 
 If every printed rotatory strength is zero, the card says the molecule is **achiral** rather than
 showing a flat line with no explanation.
-
-Natural transition orbitals are not implemented; they need the wavefunction analysis tracked in #59.
 
 ## Reaction paths and scans
 

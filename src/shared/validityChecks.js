@@ -143,6 +143,15 @@ export const VALIDITY_CHECKS = Object.freeze([
     description: 'A setting that belongs to the other engine is refused on this block instead of being silently ignored.',
   },
   {
+    id: 'excited-state-root',
+    title: 'Excited-state root and NTO chain',
+    phases: Object.freeze(['pre']),
+    blocking: true,
+    engines: Object.freeze(['gaussian']),
+    description: 'An Opt with TD excited states must name the root it follows and a root inside the states it computed; '
+      + 'a Pop=NTO block must read a checkpoint from a block that has a TD record.',
+  },
+  {
     id: 'method-basis-compatibility',
     title: 'Method / basis compatibility',
     phases: Object.freeze(['pre', 'post']),
@@ -1116,6 +1125,94 @@ function checkOrbitalDescriptors({ settings }) {
   return { id, status: CHECK_STATUS.PASS, detail: 'The block requests Pop=Full, so HOMO/LUMO energies will be printed.' };
 }
 
+/**
+ * Issue #146: the excited-state root and the two-job NTO chain.
+ *
+ * A blocking pre-run check, because each failure changes what Gaussian
+ * computes while the block still reads as something else:
+ *
+ * - `Opt`/`Opt Freq` with `tdStates > 0` and no `tdRoot` relaxes the ground
+ *   state, not the excited state the user configured;
+ * - `tdRoot > tdStates` names a state the TD job never computes (the input
+ *   builder used to clamp it silently);
+ * - `tdRoot` without any states selects nothing;
+ * - a `Pop=NTO` block with no checkpoint edge has no transition density to
+ *   read, and one whose source has no TD record has nothing to print.
+ *
+ * These are findings, not schema errors, so a project that already has such a
+ * block still opens and the user can fix the field; the run is what is blocked.
+ */
+function checkExcitedStateSettings({ settings, upstream }) {
+  const id = 'excited-state-root';
+  const source = settings && typeof settings === 'object' ? settings : {};
+  const jobType = String(source.jobType || 'Opt');
+  const states = Number(source.tdStates ?? 0);
+  const root = Number(source.tdRoot ?? 0);
+  const transition = Number(source.ntoTransition ?? 0);
+  const problems = [];
+
+  if (states > 0 && (jobType === 'Opt' || jobType === 'Opt Freq') && !(root > 0)) {
+    problems.push(`tdStates is ${states} but tdRoot is not set: an Opt job with TD excited states follows the root `
+      + 'named by tdRoot, and without one Gaussian optimises the ground state instead of the excited state this '
+      + `block describes. Set tdRoot to the state to follow (1-${Math.min(200, Math.floor(states))}).`);
+  }
+  if (root > 0 && !(states > 0)) {
+    problems.push(`tdRoot is ${root} but tdStates is 0: there is no TD calculation for the root to select. `
+      + 'Set tdStates to the number of excited states, or clear tdRoot.');
+  }
+  if (root > states && states > 0) {
+    problems.push(`tdRoot is ${root} but tdStates is ${states}: root cannot name a state the TD job does not compute. `
+      + 'Raise tdStates or lower tdRoot.');
+  }
+  if (transition > 0 && !(states > 0)) {
+    problems.push(`Density=(Check,Transition=${transition}) needs TD excited states on the same block; set tdStates, `
+      + 'or clear the NTO transition.');
+  }
+  if (transition > states && states > 0) {
+    problems.push(`ntoTransition is ${transition} but tdStates is ${states}: Transition= can only name one of the `
+      + 'transitions this TD job computed.');
+  }
+  if (source.emission === true) {
+    if (jobType !== 'SP') {
+      problems.push(`An emission block is a single point at the excited-state geometry, but this block is ${jobType}.`);
+    }
+    if (!(states > 0)) {
+      problems.push('An emission block needs tdStates of at least 1: it runs TD=(NStates=n,Root=1) at the geometry '
+        + 'it receives.');
+    }
+    if (root > 1) {
+      problems.push(`An emission block reports the emitting state, TD=(NStates=n,Root=1), but tdRoot is ${root}.`);
+    }
+  }
+  if (source.nto === true) {
+    if (jobType !== 'SP') {
+      problems.push(`Pop=NTO reads a transition density with Guess=Only, which is a single-point job; this block is ${jobType}.`);
+    }
+    if (states > 0) {
+      problems.push('An NTO block does not run TD itself: it reads the checkpoint a TD block wrote.');
+    }
+    if (!upstream) {
+      problems.push('Pop=NTO needs the checkpoint edge from the SP TD block that writes Density=(Check,Transition=k); '
+        + 'this block has none, so there is no transition density to read.');
+    } else if (!(Number(upstream.settings?.tdStates ?? 0) > 0)) {
+      problems.push(`Pop=NTO reads a transition density, but its checkpoint source "${upstream.title || upstream.id}" `
+        + 'has no TD record (tdStates is 0).');
+    }
+  }
+
+  if (problems.length > 0) {
+    return { id, status: CHECK_STATUS.FAIL, message: problems.join(' ') };
+  }
+  const active = states > 0 || root > 0 || transition > 0 || source.emission === true || source.nto === true;
+  return {
+    id,
+    status: CHECK_STATUS.PASS,
+    message: active
+      ? 'The excited-state settings name a root the TD job computes, and any Pop=NTO block reads a TD checkpoint.'
+      : 'No excited-state settings are in use on this block.',
+  };
+}
+
 const CHECK_FUNCTIONS = Object.freeze({
   'orbital-descriptors': checkOrbitalDescriptors,
   'charge-multiplicity': checkChargeMultiplicity,
@@ -1123,6 +1220,7 @@ const CHECK_FUNCTIONS = Object.freeze({
   'geometry-sanity': checkGeometrySanity,
   'imaginary-frequencies': checkImaginaryFrequencies,
   'engine-settings': checkEngineSettings,
+  'excited-state-root': checkExcitedStateSettings,
   'method-basis-compatibility': checkMethodBasisCompatibility,
   'counterpoise-bsse': checkCounterpoise,
   'opt-convergence': checkOptimizationConvergence,
@@ -1224,6 +1322,9 @@ export function normalizeValidityContext(raw = {}) {
       method: oneLine(upstreamRaw.settings?.method, '').slice(0, 64),
       basis: oneLine(upstreamRaw.settings?.basis, '').slice(0, 64),
       dispersion: oneLine(upstreamRaw.settings?.dispersion, '').slice(0, 16),
+      // Issue #146: Pop=NTO judges whether its source ran TD.
+      ...(integerOrNull(upstreamRaw.settings?.tdStates) !== null
+        ? { tdStates: integerOrNull(upstreamRaw.settings.tdStates) } : {}),
     },
     parsed: upstreamRaw.parsed && typeof upstreamRaw.parsed === 'object' ? {
       complete: upstreamRaw.parsed.complete !== false,
@@ -1257,6 +1358,16 @@ export function normalizeValidityContext(raw = {}) {
       ...(integerOrNull(settingsRaw.counterpoise) !== null
         ? { counterpoise: integerOrNull(settingsRaw.counterpoise) }
         : {}),
+      // Issue #146: the root selection and the NTO chain. Absent stays absent
+      // (0 is a real "not stated"), so an old payload reads as it did before.
+      ...(integerOrNull(settingsRaw.tdStates) !== null
+        ? { tdStates: integerOrNull(settingsRaw.tdStates) } : {}),
+      ...(integerOrNull(settingsRaw.tdRoot) !== null
+        ? { tdRoot: integerOrNull(settingsRaw.tdRoot) } : {}),
+      ...(integerOrNull(settingsRaw.ntoTransition) !== null
+        ? { ntoTransition: integerOrNull(settingsRaw.ntoTransition) } : {}),
+      ...(settingsRaw.emission === true ? { emission: true } : {}),
+      ...(settingsRaw.nto === true ? { nto: true } : {}),
       counterpoiseChargeStates: Array.isArray(settingsRaw.counterpoiseChargeStates)
         ? settingsRaw.counterpoiseChargeStates.slice(0, 10).map((state) => ({
           charge: integerOrNull(state?.charge),
