@@ -32,9 +32,16 @@ import {
   flowById,
   flowsOf,
   hydrateProject,
+  recordsForInput,
   recordsOf,
   setFlowGraph,
 } from '../shared/flows.js';
+import {
+  SERIES_LINKAGE_ORDER,
+  SERIES_MAX_MEMBERS,
+  SERIES_TERMINAL_RULE,
+  atomDistance,
+} from '../shared/series.js';
 import { parseDataset } from '../shared/datasetImport.js';
 import {
   duplicateFlowGraph,
@@ -423,6 +430,21 @@ function datasetForInputNode(node) {
   return node?.type === 'input' ? datasetById(state.project, node.input?.datasetId) : null;
 }
 
+/**
+ * Issue 169: what a series block would expand into right now, or the refusal.
+ * The inspector shows the members the plan will queue, computed by the same
+ * function the plan uses — never a second, optimistic count.
+ */
+function seriesPreview(node, dataset) {
+  if (!node?.input?.series) return { records: [], error: '' };
+  if (!dataset) return { records: [], error: 'No dataset is bound, so there is no unit to repeat.' };
+  try {
+    return { records: recordsForInput(node, dataset), error: '' };
+  } catch (error) {
+    return { records: [], error: error.message };
+  }
+}
+
 function inputRecordCounts(node) {
   const dataset = datasetForInputNode(node);
   if (!dataset) return { total: 0, enabled: 0 };
@@ -457,6 +479,12 @@ function nodeDetail(node) {
   if (node.type === 'input') {
     const dataset = datasetForInputNode(node);
     if (!dataset) return 'no dataset bound · import a file';
+    if (node.input?.series) {
+      const series = node.input.series;
+      const preview = seriesPreview(node, dataset);
+      if (preview.error) return 'series refused · open the block';
+      return `${node.input.recordId || 'unit'} · n = ${series.from}…${series.to} · ${preview.records.length} members`;
+    }
     const counts = inputRecordCounts(node);
     return `${dataset.title} · ${counts.enabled} of ${counts.total} enabled`;
   }
@@ -506,6 +534,14 @@ function nodeFoot(node) {
   if (node.type === 'input') {
     const dataset = datasetForInputNode(node);
     const counts = inputRecordCounts(node);
+    if (node.input?.series) {
+      const linkage = node.input.series.linkage || {};
+      const members = seriesPreview(node, dataset).records.length;
+      return {
+        left: `n = ${node.input.series.from}…${node.input.series.to} · ${members} member${members === 1 ? '' : 's'}`,
+        right: `${linkage.donor ?? '?'}→${linkage.acceptor ?? '?'} · ${Number(linkage.bondLengthAngstrom ?? 0).toFixed(2)} Å`,
+      };
+    }
     return {
       left: dataset ? `${counts.enabled}/${counts.total} enabled` : 'not bound',
       right: dataset?.source?.format ? String(dataset.source.format).toUpperCase() : 'no dataset',
@@ -527,7 +563,7 @@ function kindCode(node) {
   if (node.type === 'conformers') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
-  if (node.type === 'input') return 'IN';
+  if (node.type === 'input') return node.input?.series ? 'n×' : 'IN';
   if (node.type === 'output') return 'OUT';
   if (node.type === 'note') return '✎';
   return node.kind;
@@ -538,7 +574,7 @@ function kindLabel(node) {
   if (node.type === 'conformers') return 'Structure';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
-  if (node.type === 'input') return 'Data';
+  if (node.type === 'input') return node.input?.series ? 'Series' : 'Data';
   if (node.type === 'output') return 'Data';
   if (node.type === 'note') return 'Note';
   return 'Calculation';
@@ -2420,6 +2456,175 @@ async function importDatasetFile(file) {
   }
 }
 
+/**
+ * Issue 169: switch a structure block between a plain dataset and a series.
+ *
+ * The starting point is visible, never silent: the record's first two atoms as
+ * donor and acceptor, a 1.5 Å junction bond, no leaving groups. All of them are
+ * fields in the inspector and the preview shows immediately whether that
+ * linkage builds — the atoms that actually leave are a chemistry decision the
+ * app cannot make for the user.
+ */
+function enableSeries() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input') return;
+  if (!node.input) node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
+  const dataset = datasetForInputNode(node);
+  const unit = dataset ? recordsOf(dataset).find((record) => record.enabled !== false) || null : null;
+  if (!unit) {
+    toast('Bind a dataset with at least one enabled record before making it a series.');
+    return;
+  }
+  const atomCount = Array.isArray(unit.coords) ? unit.coords.length : 0;
+  node.input.recordId = unit.id;
+  node.input.series = {
+    from: 1,
+    to: 3,
+    linkage: {
+      donor: 1,
+      acceptor: atomCount >= 2 ? 2 : 1,
+      bondLengthAngstrom: 1.5,
+      leaving: [],
+    },
+  };
+  node.kind = 'series';
+  renderGraph();
+  renderInspector();
+  toast(`Series from "${unit.label || unit.id}" · name the donor, acceptor and leaving atoms.`);
+}
+
+/** Back to a plain dataset block: the series definition is dropped, nothing else. */
+function disableSeries() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input') return;
+  if (node.input) {
+    delete node.input.series;
+    delete node.input.recordId;
+  }
+  node.kind = 'Input';
+  renderGraph();
+  renderInspector();
+}
+
+/**
+ * One series field, with the type the schema expects: counts and indices are
+ * integers, the bond length is a number, and the leaving list is written as
+ * `9, 10` (the way the user reads the geometry).
+ */
+function updateSeriesField(node, field, rawValue) {
+  const series = node.input?.series;
+  if (!series) return;
+  const linkage = series.linkage || (series.linkage = {});
+  const value = String(rawValue ?? '').trim();
+  if (field === 'recordId') {
+    node.input.recordId = value;
+    return;
+  }
+  if (field === 'leaving') {
+    linkage.leaving = value === ''
+      ? []
+      : value.split(/[\s,;]+/).filter(Boolean)
+        .map((part) => Number(part))
+        .filter((index) => Number.isInteger(index) && index >= 1);
+    return;
+  }
+  if (field === 'from' || field === 'to' || field === 'donor' || field === 'acceptor') {
+    if (field === 'from' || field === 'to') series[field] = value === '' ? 0 : Number(value);
+    else linkage[field] = value === '' ? 0 : Number(value);
+    return;
+  }
+  if (field === 'bondLengthAngstrom') {
+    linkage.bondLengthAngstrom = value === '' ? 0 : Number(value);
+  }
+}
+
+function seriesLinkageDistance(node, dataset) {
+  const series = node?.input?.series;
+  const unit = series && dataset
+    ? recordsOf(dataset).find((record) => record.id === String(node.input.recordId || ''))
+      || (recordsOf(dataset).length === 1 ? recordsOf(dataset)[0] : null)
+    : null;
+  if (!unit || !Array.isArray(unit.coords)) return null;
+  const donor = unit.coords[Number(series.linkage?.donor) - 1];
+  const acceptor = unit.coords[Number(series.linkage?.acceptor) - 1];
+  if (!donor || !acceptor) return null;
+  return atomDistance(donor, acceptor);
+}
+
+/**
+ * Issue 169: the series half of the input inspector.
+ *
+ * The numbers are the ones the plan will use: the member list is the expansion
+ * itself, and a refusal is shown verbatim instead of a plausible-looking
+ * preview. The geometry note is not decoration — it is the honest status of
+ * what the app produces.
+ */
+function seriesCard(node, dataset) {
+  const series = node.input?.series;
+  if (!series) {
+    return `<div class="field full">
+      <button type="button" class="btn small" data-action="series-enable"${dataset ? '' : ' disabled'}>Repeat this record as a series…</button>
+      <p class="field-hint">A series block takes one record as the repeat unit, joins copy i to copy i+1 with one bond, and yields n = 1 … N records. Every downstream block runs once per member, unchanged.</p>
+    </div>`;
+  }
+  const linkage = series.linkage || {};
+  const preview = seriesPreview(node, dataset);
+  const distance = seriesLinkageDistance(node, dataset);
+  const unitOptions = recordsOf(dataset)
+    .filter((record) => record.enabled !== false)
+    .map((record) => `<option value="${esc(record.id)}"${String(record.id) === String(node.input.recordId || '') ? ' selected' : ''}>${esc(record.label || record.id)} · ${(record.coords || []).length} atoms</option>`)
+    .join('');
+  const rows = preview.records.map((record) => `
+    <tr>
+      <td><span class="record-label">${esc(record.label)}</span><span class="record-id">${esc(record.id)}</span></td>
+      <td class="mono">${esc(formulaOf(record.coords))}</td>
+      <td class="num">${record.coords.length}</td>
+      <td class="num">${record.bonds?.length ?? 0}</td>
+    </tr>`).join('');
+  return `
+    <div class="field full"><label>Repeat unit</label>
+      <select class="select" data-series-field="recordId" aria-label="Repeat unit">${unitOptions || '<option value="">— no enabled record —</option>'}</select>
+    </div>
+    <div class="field"><label>from n</label>
+      <input class="input" type="number" min="1" step="1" value="${esc(series.from)}" data-series-field="from" aria-label="from n">
+    </div>
+    <div class="field"><label>to n</label>
+      <input class="input" type="number" min="1" step="1" max="${SERIES_MAX_MEMBERS}" value="${esc(series.to)}" data-series-field="to" aria-label="to n">
+    </div>
+    <div class="field"><label>Donor atom</label>
+      <input class="input" type="number" min="1" step="1" value="${esc(linkage.donor ?? 1)}" data-series-field="donor" aria-label="Donor atom">
+    </div>
+    <div class="field"><label>Acceptor atom</label>
+      <input class="input" type="number" min="1" step="1" value="${esc(linkage.acceptor ?? 2)}" data-series-field="acceptor" aria-label="Acceptor atom">
+    </div>
+    <div class="field"><label>Junction bond (Å)</label>
+      <input class="input" type="number" min="0.5" max="4" step="0.01" value="${esc(linkage.bondLengthAngstrom ?? 1.5)}" data-series-field="bondLengthAngstrom" aria-label="Junction bond length in Angstrom">
+    </div>
+    <div class="field"><label>Leaving atoms</label>
+      <input class="input" type="text" value="${esc((linkage.leaving || []).join(', '))}" data-series-field="leaving" aria-label="Leaving atoms" placeholder="9, 10">
+    </div>
+    <div class="field full"><label>Members</label>
+      ${preview.error
+    ? `<div class="callout red"><strong>Refused.</strong> ${esc(preview.error)}</div>`
+    : (rows
+      ? `<div class="dataset-table-wrap"><table class="dataset-table">
+           <thead><tr><th>Member</th><th>Formula</th><th>Atoms</th><th>Bonds</th></tr></thead>
+           <tbody>${rows}</tbody>
+         </table></div>`
+      : '<p class="field-hint">No member can be built from this unit yet.</p>')}
+    </div>
+    <div class="field full">
+      <div class="callout"><strong>Starting point, not a minimum.</strong>
+        Each copy is the unit's own coordinates moved along the donor → acceptor axis, so every bond inside a copy is the unit's and the new junction bond is exactly ${esc(Number(linkage.bondLengthAngstrom ?? 0).toFixed(2))} Å${distance === null ? '' : ` (the unit's donor → acceptor distance is ${distance.toFixed(2)} Å)`}.
+        ${esc(SERIES_TERMINAL_RULE)}
+        Optimise a member before reading any energy from it.</div>
+      <p class="field-hint">One single bond (order ${SERIES_LINKAGE_ORDER}) joins acceptor(i) to donor(i+1). Atoms are 1-based, as written in the unit's geometry. Up to ${SERIES_MAX_MEMBERS} members.</p>
+      <button type="button" class="btn small" data-action="series-disable">Use the dataset without a series</button>
+    </div>`;
+}
+
 function inputInspector(node) {
   const datasets = Array.isArray(state.project.datasets) ? state.project.datasets : [];
   const dataset = datasetForInputNode(node);
@@ -2449,13 +2654,17 @@ function inputInspector(node) {
        </div>` : '<div class="callout red"><strong>No records.</strong> This dataset has no geometry to run.</div>'}`
     : '<div class="callout"><strong>No dataset bound.</strong> Import an SDF, XYZ, CSV or JSON file of geometries, or paste its text below.</div>';
 
+  const seriesRefused = Boolean(node.input?.series && seriesPreview(node, dataset).error);
+
   return `${inspectorHead(
     'Data · input',
     node.title,
-    dataset ? `${esc(dataset.title)} · ${counts.total} record${counts.total === 1 ? '' : 's'}` : 'no dataset bound',
+    node.input?.series
+      ? `${node.input.recordId || 'unit'} · n = ${node.input.series.from}…${node.input.series.to}${seriesRefused ? ' · refused' : ''}`
+      : (dataset ? `${esc(dataset.title)} · ${counts.total} record${counts.total === 1 ? '' : 's'}` : 'no dataset bound'),
   )}
   <div class="inspector-scroll">
-    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">Runs once per enabled record</span></div>
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${node.input?.series ? 'Runs once per series member' : 'Runs once per enabled record'}</span></div>
     ${group('Dataset', dataset ? `${counts.total}` : 'none', true, [
       `<div class="field full"><label>Dataset</label><select class="select" data-input-field="datasetId">${options}</select></div>`,
       datasetCard,
@@ -2470,6 +2679,7 @@ function inputInspector(node) {
         <button type="button" class="btn small" data-action="import-dataset-paste">Import pasted text</button>
       </details>`,
     ].join(''))}
+    ${group('Homologous series', node.input?.series ? `n = ${node.input.series.from}…${node.input.series.to}` : 'off', Boolean(node.input?.series), seriesCard(node, dataset))}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
       <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
@@ -4011,6 +4221,11 @@ function validateGraph() {
         errors.push(`${node.title}: dataset "${node.input.datasetId}" is not in this project.`);
       } else if (enabledRecords(dataset).length === 0) {
         errors.push(`${node.title}: dataset "${dataset.title}" has no enabled records.`);
+      } else if (node.input.series) {
+        // Issue 169: the same expansion the plan runs, so Validate reports the
+        // refusal with the atom indices instead of a count.
+        const preview = seriesPreview(node, dataset);
+        if (preview.error) errors.push(`${node.title}: ${preview.error}`);
       }
     }
     if (node.type === 'output') {
@@ -5971,6 +6186,9 @@ function handleAction(action, element) {
       });
       break;
     }
+    // Issue 169: the two switches of a structure block, series or plain dataset.
+    case 'series-enable': enableSeries(); break;
+    case 'series-disable': disableSeries(); break;
     case 'validate': validateGraph(); break;
     case 'zoom-in': setZoom(state.zoom + 0.05); break;
     case 'zoom-out': setZoom(state.zoom - 0.05); break;
@@ -6190,6 +6408,15 @@ function onDocumentChange(event) {
     if (!node || node.type !== 'input') return;
     if (!node.input) node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
     node.input[target.dataset.inputField] = target.value;
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.seriesField) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'input' || !node.input?.series) return;
+    updateSeriesField(node, target.dataset.seriesField, target.value);
     renderGraph();
     renderInspector();
     return;
