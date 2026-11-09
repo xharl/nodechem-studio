@@ -357,6 +357,9 @@ export function rankEnsemble({
       rmsdToPreviousKept: null,
       protomer: frame.protomer || '',
       atoms: frame.atoms,
+      // ADR 0001 §2.10: a scorer's own numbers ride with the member, never
+      // silently converted into the QM field.
+      ...(frame.scorer ? { scorer: frame.scorer } : {}),
       kept: false,
       dropped: null,
     };
@@ -493,6 +496,7 @@ export function ensembleSummary(result, {
   energyMethod = '',
   group = '',
   search = null,
+  scorer = null,
 } = {}) {
   const selected = result.retained?.find((member) => member.id === result.selectedId) || null;
   const unit = normalizeEnergyUnit(result.energyUnit) || normalizeEnergyUnit(energyUnit) || DEFAULT_ENERGY_UNIT;
@@ -529,6 +533,9 @@ export function ensembleSummary(result, {
     // member: two ensembles that belong together say so, and a member never
     // belongs to a second group.
     group: normalizeConformerGroup(group),
+    // ADR 0001 §2.10: the model, its weights digest and the explicit units.
+    // Absent for every ensemble a scorer did not rank.
+    ...(scorer ? { scorer } : {}),
     count: result.retained?.length ?? 0,
     total: result.members?.length ?? 0,
     spreadKcal: result.spreadKcal ?? null,
@@ -551,6 +558,7 @@ export function ensembleSummary(result, {
       population: selected.population ?? null,
       protomer: selected.protomer || '',
       atoms: selected.atoms,
+      ...(selected.scorer ? { scorer: selected.scorer } : {}),
     } : null,
     members: (result.members || []).map((member) => ({
       id: member.id,
@@ -564,6 +572,7 @@ export function ensembleSummary(result, {
       protomer: member.protomer,
       kept: member.kept,
       dropped: member.dropped,
+      ...(member.scorer ? { scorer: member.scorer } : {}),
       // Kept members carry their geometry so choosing one is an offline
       // decision: the project stays self-contained after the queue folder moves.
       ...(member.kept && Array.isArray(member.atoms) ? { atoms: member.atoms } : {}),

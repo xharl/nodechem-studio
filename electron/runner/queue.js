@@ -21,6 +21,7 @@ import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js
 import { sha256File } from './hashing.js';
 import { CrestRunner } from './crestRunner.js';
 import { ObabelRunner } from './obabelRunner.js';
+import { ScorerRunner } from './scorerRunner.js';
 import {
   ensembleSummary,
   fixtureConformerFrames,
@@ -40,6 +41,12 @@ import {
 } from '../../src/shared/obabelConformers.js';
 import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 import { optimizeUff } from '../../src/shared/uff.js';
+import {
+  framesForScorerRanking,
+  normalizeScorerResult,
+  scorerDomainFindings,
+  scorerModel,
+} from '../../src/shared/scorer.js';
 
 // `~` joins a block id to the conformer member it was expanded for (#80); it
 // is not a path separator and is legal inside a file name on every target OS.
@@ -404,6 +411,7 @@ function conformerTaskRecord(raw, nodeId) {
     generate: {
       source,
       generator,
+      rankBy: typeof conf.rankBy === 'string' ? conf.rankBy : '',
       method: source === 'imported' ? '' : (conf.method === 'gfnff' ? 'gfnff' : 'gfn2'),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
@@ -1178,6 +1186,9 @@ export class QueueManager {
       && task.generate?.generator === 'obabel'
       && !task.generate?.member)
       || (task.type === 'prepare' && task.prepare?.converter === 'openbabel'));
+    // ADR 0001 §2.10: a scorer is optional, but a block that asks for one
+    // cannot run without its sidecar.
+    const needsScorer = tasks.some((task) => task.type === 'generate' && task.generate?.rankBy);
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1196,6 +1207,12 @@ export class QueueManager {
         if (!obabelExecutable) throw new Error('Choose the Open Babel executable before running an Open Babel search, embed3d or relax (or change the block to CREST, UFF, or a different prepare converter).');
         const stat = await fsp.stat(obabelExecutable).catch(() => null);
         if (!stat?.isFile()) throw new Error(`Open Babel executable not found: ${obabelExecutable}`);
+      }
+      if (needsScorer) {
+        const scorerExecutable = String(options.scorerExecutable || '').trim();
+        if (!scorerExecutable) throw new Error('Choose the ML scorer sidecar before running a block with rankBy set.');
+        const stat = await fsp.stat(scorerExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`ML scorer sidecar not found: ${scorerExecutable}`);
       }
     }
 
@@ -1221,6 +1238,7 @@ export class QueueManager {
         executables: dryRun ? null : executables,
         crestExecutable: dryRun ? null : crestExecutable,
         obabelExecutable: dryRun ? null : obabelExecutable,
+        scorerExecutable: dryRun ? null : String(options.scorerExecutable || '').trim(),
         scratchDir,
         // A relative conformer `importPath` resolves against this folder, so it
         // travels with the queue and a replay resolves it the same way.
@@ -1692,6 +1710,9 @@ export class QueueManager {
       // Its caveats (perceived bonds, truncated grid, unconverged trials) must
       // travel with the summary, not only into the run log.
       let searchWarnings = [];
+      // ADR 0001 §2.10: the scorer, when the block asked for one.
+      let scorerProvenance = null;
+      const scorerWarnings = [];
       // Issue #130: a CREST search writes Hartree energies; a UFF/Open Babel
       // search writes kcal/mol. ADR 0001 moves the imported file's unit,
       // method and provenance to the input block, which is read below.
@@ -1926,6 +1947,50 @@ export class QueueManager {
       if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
       const merged = withEnergies(parsed.frames, energies);
       if (merged.error) throw new Error(merged.error);
+      // ADR 0001 §2.10: rank a searched or imported ensemble by a scorer when
+      // the block asks for one. Domain guard first, by name; then the sidecar;
+      // then the explicit eV conversions, never silently mixed with MMFF94.
+      if (conf.rankBy) {
+        const domain = scorerDomainFindings({
+          spec: conf.rankBy,
+          atoms: merged.frames[0]?.atoms || [],
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+        });
+        if (domain.errors.length > 0) throw new Error(domain.errors.join(' '));
+        scorerWarnings.push(...domain.warnings);
+        const model = scorerModel(conf.rankBy);
+        const framesWithIds = merged.frames.map((frame, index) => ({ ...frame, id: `c${index + 1}` }));
+        const raw = await new ScorerRunner().score({
+          executable: queue.options.scorerExecutable,
+          model: model.id,
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+          frames: framesWithIds,
+          cwd: dir,
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const scored = normalizeScorerResult(raw, {
+          spec: conf.rankBy,
+          frameIds: framesWithIds.map((frame) => frame.id),
+        });
+        if (scored.error) throw new Error(scored.error);
+        merged.frames = framesForScorerRanking(framesWithIds, scored);
+        energyUnit = 'hartree';
+        energyMethod = scored.provenance.label;
+        origin = {
+          program: scored.provenance.label,
+          version: scored.provenance.version,
+          method: `ML potential · ${scored.provenance.dtype} · ${scored.provenance.device}`,
+          sourceSha256: origin?.sourceSha256 || '',
+        };
+        scorerProvenance = {
+          ...scored.provenance,
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+        };
+      }
       const ranked = rankEnsemble({
         frames: merged.frames,
         energyWindowKcal: conf.energyWindowKcal,
@@ -1954,9 +2019,11 @@ export class QueueManager {
         // recording the block's `method` beside its ensemble would be a false
         // provenance claim. ADR 0001: an imported ensemble keeps the method its
         // producing input declared.
-        method: conf.source === 'imported'
-          ? (origin?.method || energyMethod || '')
-          : (conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method),
+        method: scorerProvenance
+          ? scorerProvenance.label
+          : (conf.source === 'imported'
+            ? (origin?.method || energyMethod || '')
+            : (conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method)),
         origin: recordedOrigin,
         energyUnit,
         energyMethod,
@@ -1966,7 +2033,14 @@ export class QueueManager {
         // Issue 144: absent for every other route, so their summary is
         // unchanged. Carries the grid, the dedupe threshold and the trials.
         search,
+        ...(scorerProvenance ? { scorer: scorerProvenance } : {}),
       });
+      if (scorerWarnings.length > 0) {
+        summary.warnings = [
+          ...summary.warnings,
+          ...scorerWarnings.map((message) => ({ id: 'scorer-domain', status: 'warn', message })),
+        ];
+      }
       if (search && searchWarnings.length > 0) {
         summary.warnings = [
           ...summary.warnings,

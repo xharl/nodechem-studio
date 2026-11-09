@@ -76,6 +76,7 @@ import {
   outputOf,
   outputPathError,
 } from './outputFields.js';
+import { SCORER_MODELS } from '../shared/scorer.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
   DEFAULT_ENSEMBLE_INPUT,
@@ -3071,6 +3072,10 @@ function conformersInspector(node) {
         <option value="search"${sourceKind === 'search' ? ' selected' : ''}>Search with a generator</option>
         <option value="imported"${sourceKind === 'imported' ? ' selected' : ''}>Rank a wired ensemble input</option>
       </select></div>`,
+      `<div class="field full"><label>Rank by</label><select class="select" data-conformer-field="rankBy">
+        <option value=""${!s.rankBy ? ' selected' : ''}>Energy from the source (xTB / MMFF94 / file)</option>
+        ${Object.values(SCORER_MODELS).map((model) => `<option value="ml:${esc(model.id)}"${s.rankBy === `ml:${model.id}` ? ' selected' : ''}>${esc(model.label)} (ML scorer)</option>`).join('')}
+      </select>${s.rankBy ? '<p class="field-hint">ML ranking needs the scorer sidecar configured in the run console. Its eV energies are converted explicitly; they are never presented as QM.</p>' : ''}</div>`,
       ...(sourceKind === 'imported' ? [
         upstream
           ? `<div class="field full"><div class="card">
@@ -9185,6 +9190,11 @@ function applyConformerField(target) {
     if (key === 'generator' && node.output && node.output.generator !== target.value) {
       // A CREST table is not what UFF would produce, and a UFF run is not the
       // CREST search that was chosen: switching the generator voids the choice.
+      node.output = null;
+      node.state = 'ready';
+    }
+    if (key === 'rankBy' && node.output) {
+      // A table ranked by one method cannot stand after choosing another.
       node.output = null;
       node.state = 'ready';
     }

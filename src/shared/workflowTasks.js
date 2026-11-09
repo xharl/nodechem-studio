@@ -115,6 +115,7 @@ export function conformerSettingsFor(node) {
   return {
     source: source.source === 'imported' ? 'imported' : 'search',
     generator: String(pick('generator') || 'crest'),
+    rankBy: typeof source.rankBy === 'string' ? source.rankBy : '',
     method: String(pick('method') || 'gfn2'),
     energyWindowKcal: Number(pick('energyWindowKcal')),
     rmsdThreshold: Number(pick('rmsdThreshold')),

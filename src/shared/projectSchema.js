@@ -40,6 +40,8 @@ import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, c
 import { COMPLEX_MAX_MEMBERS, COMPLEX_PLACEMENT_MODES } from './complex.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
+import { validateBlockContracts } from './blockContracts.js';
+import { SCORER_SPECS } from './scorer.js';
 import {
   DEFAULT_PREPARE_SETTINGS,
   PREPARE_CONVERTERS,
@@ -636,8 +638,8 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     return { ...DEFAULT_CONFORMER_SETTINGS, charge: 0, multiplicity: 1 };
   }
   warnUnknown(c, provided, new Set([
-    // ADR 0001: how the candidates arrive.
-    'source', 'generator', 'method', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
+    // ADR 0001: how the candidates arrive, and how they are ranked.
+    'source', 'generator', 'method', 'rankBy', 'energyWindowKcal', 'rmsdThreshold', 'maxConformers',
     'temperature', 'spreadThresholdKcal', 'selectedConformerId',
     'fanOut', 'charge', 'multiplicity',
     // Issue #132: a study id shared by blocks that belong together.
@@ -665,6 +667,9 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   if (sourceKind === 'imported' && provided.generator !== undefined && provided.generator !== '') {
     c.warn(`${path}.generator`, 'is not used when the source is an imported ensemble; the input block owns the file.');
   }
+  const rankBy = readEnum(c, source.rankBy ?? '', ['', ...SCORER_SPECS], `${path}.rankBy`, {
+    legacy, fallback: '',
+  });
   const selected = readString(c, source.selectedConformerId, `${path}.selectedConformerId`, { legacy, fallback: '', max: 24 });
   if (selected && !/^c\d+$/.test(selected)) {
     c.error(`${path}.selectedConformerId`, 'must be a conformer id such as "c1", or empty for automatic selection.');
@@ -672,6 +677,7 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   return {
     source: sourceKind,
     generator,
+    rankBy,
     method: sourceKind === 'imported'
       ? ''
       : readEnum(c, source.method, CONFORMER_METHODS, `${path}.method`, {
@@ -950,6 +956,25 @@ function normalizeConformerSearch(c, raw, path) {
  * like any other project data: ids are bounded, member rows are capped, and the
  * selected geometry is the only coordinates kept (one geometry, not N).
  */
+function normalizeScorerProvenance(c, raw, path) {
+  if (!isPlainObject(raw)) return null;
+  return {
+    id: readString(c, raw.id, `${path}.id`, { legacy: true, fallback: '', max: 24 }),
+    model: readString(c, raw.model, `${path}.model`, { legacy: true, fallback: '', max: 32 }),
+    label: readString(c, raw.label, `${path}.label`, { legacy: true, fallback: '', max: 40 }),
+    energyEv: readNumber(c, raw.energyEv, `${path}.energyEv`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    energyKcal: readNumber(c, raw.energyKcal, `${path}.energyKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    energyHartree: readNumber(c, raw.energyHartree, `${path}.energyHartree`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    version: readString(c, raw.version, `${path}.version`, { legacy: true, fallback: '', max: 40 }),
+    weightsSha256: readString(c, raw.weightsSha256, `${path}.weightsSha256`, { legacy: true, fallback: '', max: 64 }),
+    dtype: readString(c, raw.dtype, `${path}.dtype`, { legacy: true, fallback: '', max: 16 }),
+    device: readString(c, raw.device, `${path}.device`, { legacy: true, fallback: '', max: 32 }),
+    cutoffAngstrom: readNumber(c, raw.cutoffAngstrom, `${path}.cutoffAngstrom`, { legacy: true, fallback: 0, min: 0, max: 100 }),
+    energyKind: readString(c, raw.energyKind, `${path}.energyKind`, { legacy: true, fallback: '', max: 80 }),
+    comparableWithQuantumChemistry: false,
+  };
+}
+
 function normalizeConformerOutput(c, raw, path, legacy) {
   if (raw === undefined || raw === null) return null;
   if (!isPlainObject(raw)) {
@@ -988,6 +1013,7 @@ function normalizeConformerOutput(c, raw, path, legacy) {
         kept: Boolean(member.kept),
         dropped: ['energy', 'rmsd', 'count'].includes(member.dropped) ? member.dropped : null,
         atoms: member.kept ? normalizeConformerAtoms(c, member.atoms, `${memberPath}.atoms`, legacy) : [],
+        ...(isPlainObject(member.scorer) ? { scorer: normalizeScorerProvenance(c, member.scorer, `${memberPath}.scorer`) } : {}),
       };
     }).filter(Boolean)
     : [];
@@ -1018,6 +1044,7 @@ function normalizeConformerOutput(c, raw, path, legacy) {
     energyUnit: ensembleUnit,
     energyMethod: readString(c, raw.energyMethod, `${path}.energyMethod`, { legacy: true, fallback: '', max: 40 }),
     mixedEnergies: Boolean(raw.mixedEnergies),
+    ...(isPlainObject(raw.scorer) ? { scorer: normalizeScorerProvenance(c, raw.scorer, `${path}.scorer`) } : {}),
     // Issue #129: where the ensemble came from. Empty fields mean "not
     // recorded", which is not the same claim as "computed here".
     origin: normalizeConformerOrigin(c, raw.origin, `${path}.origin`, true),
@@ -2496,6 +2523,11 @@ function normalizeReports(c, raw, legacy, flows) {
 function validateFlow(c, flow, index, datasets, legacy, { molecule = null, projectEngine = 'gaussian' } = {}) {
   const path = `flows[${index}]`;
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
+  // ADR 0001 §4: the shape of every block, in one table. Field-level checks
+  // below still own the details; this layer owns what a block may read/write.
+  const contracts = validateBlockContracts(flow);
+  contracts.errors.forEach((entry) => c.error(entry.path, entry.message));
+  contracts.warnings.forEach((entry) => c.warn(entry.path, entry.message));
 
   flow.nodes.forEach((node, nodeIndex) => {
     const nodePath = `${path}.nodes[${nodeIndex}]`;
