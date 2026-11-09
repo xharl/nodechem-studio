@@ -1,0 +1,9 @@
+molecule {
+0 1
+O 0.000000 0.000000 0.1173
+H 0.000000 0.7572 -0.4692
+H 0.000000 -0.7572 -0.4692
+}
+set basis def2-svp
+set scf_type df
+frequency("b3lyp")

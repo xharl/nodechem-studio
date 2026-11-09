@@ -40,7 +40,34 @@ not a claim that the parser handles the case:
 - Files larger than the 32 MiB parse limit; completeness is covered by the
   synthetic truncation test instead.
 
-Adding a case is cheap: drop the log in `test/fixtures/real/`, add its row to
-this table and its numbers to `test/realCorpus.test.js`.
+Adding a case is cheap: drop the log in a `test/fixtures/real/<engine>-<version>-<molecule>-<job>/`
+folder with a `PROVENANCE.md` beside it, add its row to this table and its numbers to
+`test/realCorpus.test.js`.
+
+## One captured log per parser branch (issue 176)
+
+The rule is mechanical, not a habit. Each parser exports the list of branches it can take —
+`PSI4_PARSE_BRANCHES`, `GAUSSIAN_PARSE_BRANCHES`, `XTB_PARSE_BRANCHES`, `ORCA_PARSE_BRANCHES` — and
+every entry names the printed line the branch keys on, the releases that print it, and a `taken()`
+predicate that reads the field the parse itself resolved. `test/fixtureCoverage.test.js` parses every
+log in this corpus and fails when a declared branch is reached by none of them, printing a
+branch → fixture table so the gap is visible in the run output.
+
+Two fixtures are worth naming because they are the ones the old suite could not have caught:
+
+| Fixture | Why |
+| --- | --- |
+| `psi4-1.11-water-mp2/mp2.log` | Psi4 1.11 prints `DF-MP2 Energies` and then `DF-SCS-MP2 Energies`; both rows say `Total Energy`, 3.8 mEh apart. The `mp2` branch must take the first. `scs-mp2-only` is the refusal branch for a log that only has the second. |
+| `psi4-1.11-water-scf/scf-head-trimmed.out` | a real 1.11 run cut right after `@DF-RHF Final Energy:`; the only way the `scf-final` fallback is reached in the wild. |
+
+Three branches are declared `blocked:` in their parsers — an ORCA optimisation log (no ORCA licence
+here; cclib's is 514 kB), a Gaussian composite-method log and a Gaussian `Counterpoise` log (no
+Gaussian licence here, and none in the public corpora used) — and one is `derived:` (the SCS-only
+refusal, built by mangling the MP2 log inside the test). They print as named GAPs; none is a pass.
+
+`XTB_SUPPORTED_VERSIONS`, `PSI4_SUPPORTED_VERSIONS`, `GAUSSIAN_SUPPORTED_VERSIONS` and
+`ORCA_SUPPORTED_VERSIONS` sit next to the regexes they describe. The coverage test refuses a folder
+fixture whose `PROVENANCE.md` names a release missing from that list, so a new engine release has to
+be read rather than discovered from a wrong number.
 
 Back to the documentation index.
