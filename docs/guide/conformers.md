@@ -23,6 +23,14 @@ calculation: it has no route, no gates and no termination record, and it is deli
 engine. A calculation block downstream of it runs the selected member's geometry instead of the
 project geometry.
 
+## Preparing one structure first
+
+A **Prepare structure** block is the 1→1 stage: `relax` minimises one structure with the in-app UFF
+engine (or Open Babel MMFF94), and `embed3d` turns a SMILES into one 3D structure with
+`obabel --gen3d`. It never enumerates protonation states, tautomers or conformers — those are sets, and
+sets belong to Generate. A Calculate block wired from Prepare runs on its written `prepared.xyz`, not
+on the geometry the workflow was planned with.
+
 ## Sources
 
 A Generate block either searches (`settings.source = "search"`) or ranks an ensemble that an

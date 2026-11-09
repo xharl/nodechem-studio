@@ -38,7 +38,8 @@ import {
   obabelForceFieldKeyword,
   obabelSearchSummary,
 } from '../../src/shared/obabelConformers.js';
-import { generateUffEnsemble, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
+import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
+import { optimizeUff } from '../../src/shared/uff.js';
 
 // `~` joins a block id to the conformer member it was expanded for (#80); it
 // is not a path separator and is legal inside a file name on every target OS.
@@ -445,6 +446,96 @@ function conformerTaskRecord(raw, nodeId) {
 }
 
 /**
+ * ADR 0001 §2.9: the trust boundary for a prepare task.
+ *
+ * One structure in, one out, no engine. The input text is required and bounded
+ * like every other task's; the SMILES is bounded and only read by embed3d.
+ */
+function prepareTaskRecord(raw, nodeId) {
+  const prep = raw?.prepare && typeof raw.prepare === 'object' ? raw.prepare : {};
+  const kind = prep.kind === 'embed3d' ? 'embed3d' : 'relax';
+  const converter = kind === 'embed3d' ? 'openbabel' : (prep.converter === 'openbabel' ? 'openbabel' : 'uff');
+  const inputName = String(raw?.inputName || '');
+  const inputText = String(raw?.inputText || '');
+  if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
+    throw new Error(`Prepare task "${nodeId}" must have a safe .xyz input name.`);
+  }
+  if (!inputText.trim()) throw new Error(`Prepare task "${nodeId}" has no structure to prepare.`);
+  if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
+    throw new Error(`Prepare task "${nodeId}" input is larger than 2 MiB.`);
+  }
+  const number = (value, fallback, min, max) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+  };
+  const smiles = oneLine(prep.smiles, 1000);
+  if (kind === 'embed3d' && !smiles) {
+    throw new Error(`Prepare task "${nodeId}" is embed3d but names no SMILES.`);
+  }
+  return {
+    nodeId,
+    type: 'prepare',
+    title: oneLine(raw?.title, 120) || nodeId,
+    kind: oneLine(raw?.kind, 32) || 'Prepare',
+    executable: true,
+    engine: null,
+    argv: null,
+    route: null,
+    status: 'pending',
+    attempts: 0,
+    runId: null,
+    runDir: null,
+    inputName,
+    outputName: 'prepare.json',
+    settings: null,
+    gates: {},
+    validity: null,
+    checkpointName: '',
+    checkpointFrom: null,
+    condition: null,
+    loop: null,
+    merge: null,
+    ladder: null,
+    spin: null,
+    reaction: null,
+    conformer: null,
+    fanOut: null,
+    timeoutSeconds: timeoutSecondsFrom(raw?.settings?.timeoutSeconds),
+    loopAttempts: 0,
+    conditionResult: null,
+    summary: null,
+    history: [],
+    gateVerdict: null,
+    parsedSummary: null,
+    error: null,
+    reason: null,
+    previousError: null,
+    startedAt: null,
+    finishedAt: null,
+    inputText,
+    prepared: null,
+    prepare: {
+      kind,
+      converter,
+      forceField: prep.forceField === 'MMFF94' ? 'MMFF94' : 'UFF',
+      smiles,
+      charge: Math.round(number(prep.charge, 0, -10, 10)),
+      multiplicity: Math.round(number(prep.multiplicity, 1, 1, 10)),
+      ...(Array.isArray(prep.bonds)
+        ? {
+          bonds: prep.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
+            a: Number(bond?.a),
+            b: Number(bond?.b),
+            order: [1, 1.5, 2, 3].includes(Number(bond?.order)) ? Number(bond.order) : 1,
+          })).filter((bond) => Number.isInteger(bond.a) && Number.isInteger(bond.b)
+            && bond.a > 0 && bond.b > 0 && bond.a !== bond.b),
+        }
+        : {}),
+    },
+  };
+}
+
+/**
  * RFC 0001: the flow and record a task belongs to, plus the dataset payload an
  * input block carries. Kept in one place so the conformer path cannot forget it.
  */
@@ -637,6 +728,9 @@ function taskRecord(raw, index) {
   if (TASK_TYPES.has(raw?.type) && raw.type === 'generate') {
     return { ...conformerTaskRecord(raw, nodeId), ...scopeRecord(raw) };
   }
+  if (raw?.type === 'prepare') {
+    return { ...prepareTaskRecord(raw, nodeId), ...scopeRecord(raw) };
+  }
   const engineId = String(raw?.engine || 'gaussian');
   const engine = engineFor(engineId);
   const argv = Array.isArray(raw?.argv) ? raw.argv.map(String) : null;
@@ -729,6 +823,9 @@ function taskRecord(raw, index) {
   // ensemble did not exist when the workflow was queued. Carry the reason so the
   // scheduler can fail the task with it instead of building an input from the
   // project geometry (the silent substitution the conformer stage exists to stop).
+  const rawPrepareFrom = raw?.prepareFrom && typeof raw.prepareFrom === 'object' ? raw.prepareFrom : null;
+  const prepareFrom = rawPrepareFrom && SAFE_ID.test(String(rawPrepareFrom.nodeId || ''))
+    ? { nodeId: String(rawPrepareFrom.nodeId) } : null;
   const rawPending = raw?.pendingInput && typeof raw.pendingInput === 'object' ? raw.pendingInput : null;
   const pendingInput = rawPending
     ? {
@@ -782,6 +879,7 @@ function taskRecord(raw, index) {
     condition,
     loop,
     merge,
+    prepareFrom,
     analyse,
     ladder,
     spin,
@@ -1076,9 +1174,10 @@ export class QueueManager {
       && !task.generate?.member);
     // The Open Babel route is external too, so it needs its own binary; a
     // fanned-out member carries its ensemble already and needs nothing.
-    const needsObabel = tasks.some((task) => task.type === 'generate'
+    const needsObabel = tasks.some((task) => (task.type === 'generate'
       && task.generate?.generator === 'obabel'
-      && !task.generate?.member);
+      && !task.generate?.member)
+      || (task.type === 'prepare' && task.prepare?.converter === 'openbabel'));
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1094,7 +1193,7 @@ export class QueueManager {
         if (!stat?.isFile()) throw new Error(`CREST executable not found: ${crestExecutable}`);
       }
       if (needsObabel) {
-        if (!obabelExecutable) throw new Error('Choose the Open Babel executable before running an Open Babel conformer search (or change the block to CREST, UFF or an import).');
+        if (!obabelExecutable) throw new Error('Choose the Open Babel executable before running an Open Babel search, embed3d or relax (or change the block to CREST, UFF, or a different prepare converter).');
         const stat = await fsp.stat(obabelExecutable).catch(() => null);
         if (!stat?.isFile()) throw new Error(`Open Babel executable not found: ${obabelExecutable}`);
       }
@@ -1146,7 +1245,7 @@ export class QueueManager {
     await fsp.mkdir(path.join(this.queueDir(id), 'inputs'), { recursive: true });
     for (const task of tasks) {
       if (!task.executable) continue;
-      const inputPath = task.type === 'generate'
+      const inputPath = (task.type === 'generate' || task.type === 'prepare')
         ? this.conformerInputPath(id, task.nodeId)
         : this.inputPath(id, task.nodeId);
       // ADR 0001: an imported generate task reads its upstream input's record
@@ -1329,6 +1428,7 @@ export class QueueManager {
       return;
     }
     if (task.type === 'generate') return this.runConformers(queue, task);
+    if (task.type === 'prepare') return this.runPrepare(queue, task);
     return this.runTask(queue, task);
   }
 
@@ -2091,6 +2191,36 @@ export class QueueManager {
 
     try {
       let inputText = await fsp.readFile(this.inputPath(queue.id, task.nodeId), 'utf8');
+      // ADR 0001 §2.9: a calculate block downstream of prepare runs on the
+      // prepared structure, read from the prepare task's own run folder.
+      if (task.prepareFrom) {
+        const prepareTask = queue.tasks.find((entry) => entry.nodeId === task.prepareFrom.nodeId);
+        if (!prepareTask || prepareTask.status !== 'completed' || !prepareTask.runDir) {
+          task.status = 'failed';
+          task.error = `Prepare source "${prepareTask?.title || task.prepareFrom.nodeId}" has not produced a structure.`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
+        const preparedText = await fsp.readFile(path.join(prepareTask.runDir, 'prepared.xyz'), 'utf8');
+        const prepared = parseMultiXyz(preparedText);
+        if (prepared.errors.length > 0 || prepared.frames.length !== 1) {
+          task.status = 'failed';
+          task.error = `Prepare source "${prepareTask.title || prepareTask.nodeId}" did not write one readable structure.`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
+        inputText = applyGeometryHandoff(inputText, prepared.frames[0].atoms);
+        task.geometryHandoff = {
+          from: prepareTask.nodeId,
+          fromEngine: 'prepare',
+          toEngine: task.engine,
+          atoms: prepared.frames[0].atoms.length,
+        };
+      }
       const upstreamTask = task.checkpointFrom
         ? queue.tasks.find((entry) => entry.nodeId === task.checkpointFrom.nodeId) || null
         : null;
@@ -2565,6 +2695,133 @@ export class QueueManager {
       return;
     } else {
       this.setTaskOutcome(task, 'blocked', 'this control block has no runtime');
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * ADR 0001 §2.9: prepare one structure.
+   *
+   * `embed3d` runs the Open Babel converter; `relax` minimises with the in-app
+   * UFF engine or asks Open Babel for an MMFF94 relaxation. Either way the block
+   * writes `prepared.xyz` and a `prepare.json` record, and a downstream
+   * calculate reads that geometry — never the structure it was planned with.
+   */
+  async runPrepare(queue, task) {
+    const dir = path.join(this.queueDir(queue.id), 'prepare', task.nodeId);
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+    try {
+      const conf = task.prepare || {};
+      const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+      const parsed = parseMultiXyz(inputText);
+      if (parsed.errors.length > 0 || parsed.frames.length !== 1) {
+        throw new Error(parsed.errors[0]?.message || 'The prepare input must be one structure.');
+      }
+      let atoms = parsed.frames[0].atoms;
+      let summary;
+      if (conf.kind === 'embed3d') {
+        const outName = 'prepared.xyz';
+        const result = await new ObabelRunner().convert({
+          executable: queue.options.obabelExecutable,
+          argv: ['-:' + String(conf.smiles || ''), '-O', outName, '--gen3d'],
+          cwd: dir,
+          outputName: 'obabel.log',
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        if (result.timedOut || result.cancelled) throw new Error('The Open Babel 3D embedding was stopped.');
+        if (Number(result.exitCode) !== 0) throw new Error(`Open Babel exited with code ${result.exitCode}; see obabel.log.`);
+        const prepared = parseMultiXyz(await fsp.readFile(path.join(dir, outName), 'utf8'));
+        if (prepared.errors.length > 0 || prepared.frames.length !== 1) {
+          throw new Error('Open Babel wrote no readable 3D structure.');
+        }
+        atoms = prepared.frames[0].atoms;
+        summary = {
+          kind: 'embed3d',
+          converter: 'openbabel',
+          forceField: 'MMFF94',
+          energyKcal: null,
+          converged: true,
+          reason: 'converter-completed',
+          iterations: 0,
+          atomCount: atoms.length,
+          origin: { program: 'Open Babel', version: result.version || '', method: '--gen3d' },
+        };
+      } else if (conf.converter === 'openbabel') {
+        const outName = 'prepared.xyz';
+        // Open Babel reads a file in its own working directory; the staged task
+        // input lives under queue/inputs, so it is copied beside the run.
+        await fsp.writeFile(path.join(dir, 'input.xyz'), inputText, 'utf8');
+        const result = await new ObabelRunner().convert({
+          executable: queue.options.obabelExecutable,
+          argv: ['input.xyz', '-O', outName, '--minimize', '--ff', conf.forceField === 'UFF' ? 'UFF' : 'MMFF94', '--steps', '500'],
+          cwd: dir,
+          outputName: 'obabel.log',
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        if (result.timedOut || result.cancelled) throw new Error('The Open Babel relaxation was stopped.');
+        if (Number(result.exitCode) !== 0) throw new Error(`Open Babel exited with code ${result.exitCode}; see obabel.log.`);
+        const prepared = parseMultiXyz(await fsp.readFile(path.join(dir, outName), 'utf8'));
+        if (prepared.errors.length > 0 || prepared.frames.length !== 1) {
+          throw new Error('Open Babel wrote no readable relaxed structure.');
+        }
+        atoms = prepared.frames[0].atoms;
+        summary = {
+          kind: 'relax',
+          converter: 'openbabel',
+          forceField: conf.forceField === 'UFF' ? 'UFF' : 'MMFF94',
+          energyKcal: null,
+          converged: false,
+          reason: 'converter-did-not-report-convergence',
+          iterations: 500,
+          atomCount: atoms.length,
+          origin: { program: 'Open Babel', version: result.version || '', method: '--minimize' },
+        };
+      } else {
+        const bonds = Array.isArray(conf.bonds) && conf.bonds.length > 0 ? conf.bonds : perceiveBonds(atoms);
+        const relaxed = optimizeUff({ atoms, bonds }, { maxIterations: 500 });
+        atoms = relaxed.atoms;
+        summary = {
+          kind: 'relax',
+          converter: 'uff',
+          forceField: 'UFF',
+          energyKcal: relaxed.energyKcal,
+          converged: relaxed.converged,
+          reason: relaxed.reason || '',
+          iterations: relaxed.iterations,
+          atomCount: atoms.length,
+          origin: { program: 'NodeChem Studio', version: '', method: 'UFF' },
+        };
+      }
+      summary.generatedAt = new Date().toISOString();
+      await fsp.writeFile(path.join(dir, 'prepared.xyz'), xyzText(atoms, `${task.title} · ${summary.kind}`), 'utf8');
+      await writeJsonAtomic(path.join(dir, 'prepare.json'), summary);
+      task.status = 'completed';
+      task.prepared = summary;
+      task.outputName = 'prepared.xyz';
+      task.finishedAt = new Date().toISOString();
+      task.summary = `${summary.kind === 'embed3d' ? '3D embedded' : 'relaxed'} · ${summary.converter}`
+        + `${Number.isFinite(summary.energyKcal) ? ` · ${summary.energyKcal.toFixed(3)} kcal/mol` : ''}`
+        + (summary.kind === 'relax' && !summary.converged ? ' · not converged' : '');
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Prepared structure: ${task.summary}.` });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Prepare failed: ${task.error}` });
     }
     await this.persist(queue);
     this.publish(queue);

@@ -41,6 +41,13 @@ import { COMPLEX_MAX_MEMBERS, COMPLEX_PLACEMENT_MODES } from './complex.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import {
+  DEFAULT_PREPARE_SETTINGS,
+  PREPARE_CONVERTERS,
+  PREPARE_FORCE_FIELDS,
+  PREPARE_KINDS,
+  converterFor,
+} from './prepare.js';
+import {
   CONFORMER_ENERGY_UNITS,
   CONFORMER_GENERATORS,
   CONFORMER_GROUP_MAX,
@@ -123,7 +130,7 @@ export const LIMITS = Object.freeze({
 });
 
 export const NODE_TYPES = Object.freeze([
-  'input', 'calculate', 'generate', 'condition', 'loop', 'merge', 'output', 'analyse', 'note',
+  'input', 'prepare', 'generate', 'calculate', 'condition', 'loop', 'merge', 'output', 'analyse', 'note',
 ]);
 
 /** States a project file may carry. Queue states are reserved for GN-003. */
@@ -225,6 +232,7 @@ const JOB_KINDS = {
 
 const TYPE_KINDS = {
   input: 'Input',
+  prepare: 'Prepare',
   generate: 'Generate',
   condition: 'If',
   loop: 'Loop',
@@ -236,6 +244,7 @@ const TYPE_KINDS = {
 
 const TYPE_LABELS = {
   input: 'Dataset input',
+  prepare: 'Prepare structure',
   calculate: 'Calculate',
   generate: 'Generate',
   condition: 'Condition',
@@ -250,6 +259,7 @@ const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'name', 'molecule', 'defaults',
 const NODE_COMMON_KEYS = new Set(['id', 'type', 'kind', 'title', 'state', 'x', 'y']);
 const NODE_TYPE_KEYS = {
   input: new Set(['input', 'output']),
+  prepare: new Set(['settings', 'output']),
   calculate: new Set(['settings', 'output', 'checkpointFrom']),
   generate: new Set(['settings', 'output']),
   condition: new Set(['condition']),
@@ -715,6 +725,66 @@ function normalizeConformerSettings(c, raw, path, legacy) {
         legacy, fallback: OBABEL_DEFAULT_FF,
       }),
     }),
+  };
+}
+
+/**
+ * ADR 0001 §2.9: `prepare` settings — one structure in, one out, no route.
+ */
+function normalizePrepareSettings(c, raw, path, legacy) {
+  const provided = raw === undefined || raw === null ? {} : raw;
+  if (!isPlainObject(provided)) {
+    c.error(path, 'must be an object.');
+    return { ...DEFAULT_PREPARE_SETTINGS };
+  }
+  warnUnknown(c, provided, new Set(['kind', 'converter', 'forceField', 'smiles', 'charge', 'multiplicity']), path);
+  const kind = readEnum(c, provided.kind, PREPARE_KINDS, `${path}.kind`, {
+    legacy, fallback: DEFAULT_PREPARE_SETTINGS.kind,
+  });
+  const requestedConverter = readEnum(c, provided.converter, PREPARE_CONVERTERS, `${path}.converter`, {
+    legacy, fallback: DEFAULT_PREPARE_SETTINGS.converter,
+  });
+  const converter = converterFor(kind, requestedConverter);
+  if (kind === 'embed3d' && requestedConverter === 'uff') {
+    c.error(`${path}.converter`, 'must be "openbabel": 3D embedding needs the Open Babel converter.');
+  }
+  const forceField = readEnum(c, provided.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, {
+    legacy, fallback: kind === 'embed3d' ? 'MMFF94' : 'UFF',
+  });
+  const smiles = readString(c, provided.smiles, `${path}.smiles`, { legacy, fallback: '', max: 1000 });
+  if (kind === 'embed3d' && !smiles.trim()) {
+    c.error(`${path}.smiles`, 'is required for an embed3d block; name the SMILES to turn into a structure.');
+  }
+  return {
+    kind,
+    converter,
+    forceField,
+    smiles,
+    charge: readInteger(c, provided.charge ?? 0, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
+    multiplicity: readInteger(c, provided.multiplicity ?? 1, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
+  };
+}
+
+function normalizePrepareOutput(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return null;
+  const source = requiredObject(c, raw, path, legacy, {});
+  warnUnknown(c, source, new Set([
+    'kind', 'converter', 'forceField', 'energyKcal', 'converged', 'reason', 'iterations',
+    'atomCount', 'generatedAt', 'origin',
+  ]), path);
+  return {
+    kind: readEnum(c, source.kind, PREPARE_KINDS, `${path}.kind`, { legacy, fallback: 'relax' }),
+    converter: readEnum(c, source.converter, PREPARE_CONVERTERS, `${path}.converter`, { legacy, fallback: 'uff' }),
+    forceField: readEnum(c, source.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, { legacy, fallback: 'UFF' }),
+    energyKcal: readNumber(c, source.energyKcal, `${path}.energyKcal`, {
+      legacy, fallback: null, min: -1e9, max: 1e9,
+    }),
+    converged: readBoolean(c, source.converged, `${path}.converged`, { legacy, fallback: false }),
+    reason: readString(c, source.reason, `${path}.reason`, { legacy, fallback: '', max: 80 }),
+    iterations: readInteger(c, source.iterations, `${path}.iterations`, { legacy, fallback: 0, min: 0, max: 100000 }),
+    atomCount: readInteger(c, source.atomCount, `${path}.atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+    generatedAt: readString(c, source.generatedAt, `${path}.generatedAt`, { legacy, fallback: '', max: 40 }),
+    origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
   };
 }
 
@@ -1978,6 +2048,18 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     };
   }
 
+  if (type === 'prepare') {
+    const settings = normalizePrepareSettings(c, raw.settings, `${path}.settings`, legacy);
+    return {
+      ...common,
+      kind: settings.kind === 'embed3d' ? '3D embed' : 'Relax',
+      settings,
+      ...(raw.output === undefined ? {} : {
+        output: normalizePrepareOutput(c, raw.output, `${path}.output`, legacy),
+      }),
+    };
+  }
+
   if (type === 'generate') {
     return {
       ...common,
@@ -2458,6 +2540,17 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
           const key = node.input.complex ? 'complex' : node.input.edits ? 'edits' : 'series';
           c.error(`${nodePath}.input.${key}`, error.message);
         }
+      }
+    }
+    // ADR 0001 §2.9: prepare is 1→1. It may read the project molecule
+    // implicitly, or one structure through a dependency edge — never several.
+    if (node.type === 'prepare') {
+      const structureInputs = flow.edges
+        .filter((edge) => edge.to === node.id && edge.type === 'dependency')
+        .map((edge) => byId.get(edge.from))
+        .filter((upstream) => upstream && !['note', 'merge', 'condition', 'loop', 'output', 'analyse'].includes(upstream.type));
+      if (structureInputs.length > 1) {
+        c.error(`${nodePath}.settings`, 'prepare takes one structure in; wire exactly one upstream structure, or none to use the project molecule.');
       }
     }
     // ADR 0001: a generate block that ranks an imported ensemble must have

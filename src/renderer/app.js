@@ -709,6 +709,7 @@ function nodeFoot(node) {
 function kindCode(node) {
   if (node.type === 'condition') return 'IF';
   if (node.type === 'analyse') return 'fx';
+  if (node.type === 'prepare') return 'PR';
   if (node.type === 'generate') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
@@ -721,6 +722,7 @@ function kindCode(node) {
 function kindLabel(node) {
   if (node.type === 'condition') return 'Control';
   if (node.type === 'analyse') return 'Analyse';
+  if (node.type === 'prepare') return 'Prepare';
   if (node.type === 'generate') return 'Generate';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
@@ -2931,6 +2933,61 @@ function loopInspector(node) {
   </div>`;
 }
 
+function prepareInspector(node) {
+  const s = node.settings || {};
+  const output = node.output && typeof node.output === 'object' ? node.output : null;
+  const kind = s.kind === 'embed3d' ? 'embed3d' : 'relax';
+  const converter = kind === 'embed3d' ? 'openbabel' : (s.converter === 'openbabel' ? 'openbabel' : 'uff');
+  const detail = output
+    ? `${output.kind === 'embed3d' ? '3D embedded' : 'relaxed'} · ${output.converter}`
+      + `${Number.isFinite(output.energyKcal) ? ` · ${output.energyKcal.toFixed(3)} kcal/mol` : ''}`
+      + `${output.kind === 'relax' && !output.converged ? ' · not converged' : ''}`
+    : (kind === 'embed3d' ? 'SMILES → one 3D structure' : 'one structure → one relaxed structure');
+  return `${inspectorHead('Structure · prepare', node.title, detail)}
+  <div class="inspector-scroll">
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">1 structure in, 1 out · no enumeration</span></div>
+    ${group('Method', kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : 'UFF, in-app'), true, [
+      `<div class="field"><label>Kind</label><select class="select" data-prepare-field="kind">
+        <option value="relax"${kind === 'relax' ? ' selected' : ''}>Relax one structure</option>
+        <option value="embed3d"${kind === 'embed3d' ? ' selected' : ''}>Embed SMILES in 3D</option>
+      </select></div>`,
+      `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
+        <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
+        <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel (external)</option>
+      </select></div>`,
+      ...(kind === 'embed3d' ? [
+        `<div class="field full"><label>SMILES</label><input class="input" data-prepare-field="smiles" value="${esc(s.smiles || '')}" placeholder="CCO" spellcheck="false" autocomplete="off"></div>`,
+      ] : [
+        `<div class="field"><label>Force field</label><select class="select" data-prepare-field="forceField">
+          <option value="UFF"${s.forceField !== 'MMFF94' ? ' selected' : ''}>UFF</option>
+          <option value="MMFF94"${s.forceField === 'MMFF94' ? ' selected' : ''}>MMFF94</option>
+        </select></div>`,
+      ]),
+      `<div class="field"><label>Charge</label><input class="input" type="number" min="-10" max="10" data-prepare-field="charge" value="${esc(s.charge ?? 0)}"></div>`,
+      `<div class="field"><label>Multiplicity</label><input class="input" type="number" min="1" max="10" data-prepare-field="multiplicity" value="${esc(s.multiplicity ?? 1)}"></div>`,
+      `<div class="field full"><span class="inspector-note">Deterministic, 1→1: protonation-state and tautomer enumeration belong to Generate. A calculate block wired from this one runs on <code>prepared.xyz</code>.</span></div>`,
+    ].join(''))}
+    ${group('Result', output ? `${output.atomCount} atoms` : 'not prepared yet', Boolean(output), [
+      output
+        ? `<div class="field full"><div class="card">
+            <div class="kv"><span>Outcome</span><code>${esc(output.kind)} · ${esc(output.converter)} · ${esc(output.forceField)}</code></div>
+            <div class="kv"><span>Energy</span><code>${Number.isFinite(output.energyKcal) ? `${output.energyKcal.toFixed(3)} kcal/mol` : 'not reported'}</code></div>
+            <div class="kv"><span>Converged</span><code>${output.converged ? 'yes' : `no${output.reason ? ` · ${esc(output.reason)}` : ''}`}</code></div>
+            <div class="kv"><span>Iterations</span><code>${esc(output.iterations)}</code></div>
+          </div></div>`
+        : '<div class="field full"><span class="inspector-note">Run the block to write <code>prepared.xyz</code>. A downstream calculate reads that file, not the geometry this block was planned with.</span></div>',
+    ].join(''))}
+    <div class="inspector-actions-row">
+      <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
+      <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
+    </div>
+  </div>
+  <div class="inspector-footer">
+    <button type="button" class="btn primary" data-action="run-workflow">Run workflow</button>
+    <button type="button" class="btn" data-action="validate">Validate</button>
+  </div>`;
+}
+
 function conformersInspector(node) {
   const s = node.settings || {};
   const output = node.output && typeof node.output === 'object' ? node.output : null;
@@ -4050,6 +4107,7 @@ function renderInspector() {
     const node = nodeById(state.selected.id);
     if (!node) { el.innerHTML = renderProjectInspector(); return; }
     if (node.type === 'calculate') { el.innerHTML = calcInspector(node); mountStructureViewer(el, node); return; }
+    if (node.type === 'prepare') { el.innerHTML = prepareInspector(node); return; }
     if (node.type === 'generate') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
     if (node.type === 'condition') { el.innerHTML = conditionInspector(node); return; }
     if (node.type === 'analyse') { el.innerHTML = computeInspector(node); return; }
@@ -4076,7 +4134,8 @@ const BLOCKS = [
     { type: 'nto', icon: 'NTO', title: 'NTO analysis', note: 'second job of the Pop=NTO chain' },
   ] },
   { group: 'Structure', items: [
-    { type: 'generate', icon: 'CF', title: 'Generate structures', note: 'conformer search or import; rank + prune' },
+    { type: 'prepare', icon: 'PR', title: 'Prepare structure', note: 'embed 3D or MM-relax one structure' },
+    { type: 'generate', icon: 'CF', title: 'Generate structures', note: 'conformer search or rank a wired input' },
   ] },
   { group: 'Control flow', items: [
     { type: 'condition', icon: 'IF', title: 'Condition', note: 'TRUE / FALSE branches' },
@@ -4162,6 +4221,19 @@ function addBlock(type) {
     node = {
       id, type: 'loop', kind: 'Loop', title: 'Retry loop', state: 'ready', ...position,
       loop: { maxAttempts: 3, mode: 'retry', target: '', until: 'condition is false' },
+    };
+  } else if (type === 'prepare') {
+    node = {
+      id, type: 'prepare', kind: 'Relax', title: 'Prepare structure', state: 'ready', ...position,
+      settings: {
+        kind: 'relax',
+        converter: 'uff',
+        forceField: 'UFF',
+        smiles: '',
+        charge: state.project.molecule.charge,
+        multiplicity: state.project.molecule.multiplicity,
+      },
+      output: null,
     };
   } else if (type === 'generate') {
     node = {
@@ -7010,6 +7082,16 @@ async function attachQueueParsed(queue) {
 function attachQueueEnsembles(queue) {
   let changed = false;
   for (const task of queue?.tasks || []) {
+    // ADR 0001 §2.9: a prepare block's summary is the only result it has.
+    if (task?.type === 'prepare' && task.status === 'completed' && task.prepared) {
+      const prepareNode = nodeById(task.nodeId);
+      if (prepareNode && prepareNode.type === 'prepare') {
+        prepareNode.output = task.prepared;
+        prepareNode.state = task.prepared.converged === false ? 'review' : 'passed';
+        changed = true;
+      }
+      continue;
+    }
     // ADR 0001: an ensemble input's run records how many frames were read and
     // the digest of the exact file. The frames stay in the run folder.
     if (task?.type === 'input' && task.input?.kind === 'ensemble'
@@ -8648,6 +8730,10 @@ function onDocumentChange(event) {
     applyTimeout(target.value);
     return;
   }
+  if (target.dataset.prepareField) {
+    applyPrepareField(target);
+    return;
+  }
   if (target.dataset.ensembleField) {
     applyEnsembleInputField(target);
     return;
@@ -9005,6 +9091,39 @@ function onDocumentChange(event) {
  * same way.
  */
 /**
+ * ADR 0001 §2.9: one writer for a prepare block. The kind decides which
+ * converter is legal, exactly as the schema does; switching kind clears the
+ * prepared record because it no longer describes the same operation.
+ */
+function applyPrepareField(target) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'prepare') return;
+  const key = target.dataset.prepareField;
+  if (['charge', 'multiplicity'].includes(key)) {
+    const bounds = key === 'charge' ? [-10, 10] : [1, 10];
+    const value = Number(target.value);
+    if (!Number.isFinite(value)) return;
+    node.settings[key] = clamp(value, bounds[0], bounds[1]);
+  } else if (key === 'kind') {
+    node.settings.kind = target.value === 'embed3d' ? 'embed3d' : 'relax';
+    node.settings.converter = node.settings.kind === 'embed3d' ? 'openbabel' : 'uff';
+    node.kind = node.settings.kind === 'embed3d' ? '3D embed' : 'Relax';
+    node.output = null;
+    node.state = 'ready';
+  } else if (key === 'converter' || key === 'forceField' || key === 'smiles') {
+    node.settings[key] = String(target.value || '');
+    node.output = null;
+    node.state = 'ready';
+  } else {
+    return;
+  }
+  refreshDirty();
+  renderGraph();
+  renderInspector();
+}
+
+/**
  * ADR 0001: one writer for an ensemble input's fields. The path and the energy
  * declaration live on `input`; the provenance is nested, so it needs its own
  * branch like the conformer block's origin.
@@ -9077,6 +9196,10 @@ function applyConformerField(target) {
 
 function onDocumentInput(event) {
   const target = event.target;
+  if (target.dataset.prepareField) {
+    applyPrepareField(target);
+    return;
+  }
   if (target.dataset.ensembleField) {
     applyEnsembleInputField(target);
     return;

@@ -112,6 +112,7 @@ Type-specific payloads:
 | `type` | Payload |
 | --- | --- |
 | `calculate` | `settings` (route), `output` (`{ file, size }` or null), `checkpointFrom` (node id or null) |
+| `prepare` | `settings { kind, converter, forceField, smiles, charge, multiplicity }`, `output` (one-structure summary or null) — ADR 0001, one structure in and out |
 | `generate` | `settings` (own key space, below), `output` (ensemble summary or null) |
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
@@ -215,6 +216,20 @@ The coordinates are stored on the block, not referenced, so a saved project and
 `Opt=QST3` two (product, initial TS guess); the block's `molecule` is the reactant. The structures
 must have the same atoms in the same order as the block geometry — a mismatch is a validation error
 naming the first differing index, and nothing is reordered automatically.
+
+`prepare.settings` is deliberately tiny — no route, no method, no gates:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `kind` | `relax` or `embed3d` | default `relax` |
+| `converter` | `uff` or `openbabel` | `relax` only; `embed3d` is always `openbabel` |
+| `forceField` | `UFF` or `MMFF94` | the MM force field the converter uses |
+| `smiles` | string | required for `embed3d`; ignored by `relax` |
+| `charge`, `multiplicity` | integer | the structure's chemistry, not a method |
+
+A prepare block takes one structure in (the project molecule, or one upstream structure) and writes
+one `prepared.xyz`; a calculate block wired from it runs on that geometry. It never enumerates:
+protonation-state and tautomer enumeration belongs to `generate`.
 
 `generate.settings` is a separate key space — route keys cannot leak into a conformer search:
 `source` (`search` or `imported`, default `search`), `generator` (`crest`, `uff` or `obabel`,

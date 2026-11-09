@@ -970,6 +970,47 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       continue;
     }
 
+    if (node.type === 'prepare') {
+      // ADR 0001 §2.9: one structure in, one out. A prepare block follows the
+      // same record scope as its input, so a dataset family gets one prepared
+      // structure per record — never an enumeration of its own.
+      const ids = [];
+      for (const record of records) {
+        const recordId = record?.id || null;
+        const taskId = taskIdFor(node.id, recordId);
+        const chemistry = moleculeForNode(project, node, null, record);
+        const settings = node.settings || {};
+        ids.push(taskId);
+        pushTask({
+          nodeId: taskId,
+          type: 'prepare',
+          title: record?.id ? `${node.title} — ${record.label || record.id}` : node.title,
+          kind: node.kind || 'Prepare',
+          executable: true,
+          engine: null,
+          inputName: `${safeBase(taskId)}.xyz`,
+          outputName: 'prepare.json',
+          inputText: xyzText(chemistry.coords, `${node.title} · prepare`),
+          settings: null,
+          gates: null,
+          validity: null,
+          checkpointFrom: null,
+          prepare: {
+            kind: settings.kind === 'embed3d' ? 'embed3d' : 'relax',
+            converter: settings.kind === 'embed3d' ? 'openbabel' : (settings.converter === 'openbabel' ? 'openbabel' : 'uff'),
+            forceField: settings.forceField === 'MMFF94' ? 'MMFF94' : 'UFF',
+            smiles: String(settings.smiles || ''),
+            charge: chemistry.charge ?? 0,
+            multiplicity: chemistry.multiplicity ?? 1,
+            bonds: Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length
+              ? project.molecule.bonds.map((bond) => ({ a: bond.a, b: bond.b, order: bond.order })) : null,
+          },
+        }, recordId);
+      }
+      idsFor.set(node.id, ids);
+      continue;
+    }
+
     if (node.type === 'generate') {
       const fanOut = fanForNode.get(node.id) || null;
       const ids = [];
@@ -1255,6 +1296,18 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       + ` so it could only use one member of "${ensemble?.title || 'the ensemble'}".`
       + ' Wire it to the conformer block directly so it runs once per member,'
       + ' or collect the branches with a merge block if one run is what you want.');
+  }
+
+  // ADR 0001 §2.9: a calculate block wired from a prepare block runs on the
+  // prepared geometry, read at run time. The plan names the source; the queue
+  // applies the coordinates, exactly as it does for a cross-engine checkpoint.
+  for (const task of tasks) {
+    if (task.type !== 'calculate') continue;
+    const blockId = String(task.nodeId).split('~')[0];
+    const edge = projectEdges.find((candidate) => candidate.to === blockId
+      && candidate.type === 'dependency'
+      && nodes.find((entry) => entry.id === candidate.from)?.type === 'prepare');
+    if (edge) task.prepareFrom = { nodeId: edge.from };
   }
 
   // A downstream task reads the checkpoint of the *primary* rung; record that
