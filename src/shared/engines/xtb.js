@@ -19,6 +19,16 @@ import { canonicalResult, TERMINATION } from './canonical.js';
 
 export const XTB_ENGINE_ID = 'xtb';
 
+/**
+ * xTB releases whose output lines this parser was written against.
+ *
+ * Issue 176: `test/fixtureCoverage.test.js` refuses a fixture whose
+ * PROVENANCE.md names a release missing here. `6.8` is the version the module
+ * was written against (see the header); `6.6` is the release the committed
+ * Opt Freq capture came from, so both shapes are pinned by a real log.
+ */
+export const XTB_SUPPORTED_VERSIONS = Object.freeze(['6.6', '6.8']);
+
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.xyz$/i;
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
 
@@ -399,6 +409,54 @@ function methodIdFor(label) {
   const match = /gfn([012])/.exec(token);
   return match ? `gfn${match[1]}` : null;
 }
+
+/**
+ * Branches of the xTB parser, read by `test/fixtureCoverage.test.js` (issue 176).
+ *
+ * `line` names the printed line the branch keys on and `taken` reads a field the
+ * parse already resolved, so the coverage table and the code cannot drift apart.
+ */
+export const XTB_PARSE_BRANCHES = Object.freeze([
+  {
+    id: 'scc',
+    line: '`:: total energy            -5.07... Eh ::` in the SCC summary',
+    versions: ['6.6', '6.8'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'scc',
+  },
+  {
+    id: 'force-field',
+    line: 'the GFN-FF summary (`:  Hamiltonian  GFN-FF  :`) with no SCC loop',
+    versions: ['6.6', '6.8'],
+    fixture: 'blocked: a 6.6.1 `--gfnff` log prints no `Hamiltonian` row, so this branch is chosen from argv and a log-only coverage pass cannot reach it',
+    taken: (parsed) => parsed.finalEnergy?.source === 'force-field',
+  },
+  {
+    id: 'opt-converged',
+    line: '`*** GEOMETRY OPTIMIZATION CONVERGED AFTER 4 ITERATIONS ***`',
+    versions: ['6.6', '6.8'],
+    taken: (parsed) => parsed.optimization?.completed === true,
+  },
+  {
+    id: 'frequencies',
+    line: '`projected vibrational frequencies (cm⁻¹)` rows and `# frequencies  N` in the summary',
+    versions: ['6.6', '6.8'],
+    taken: (parsed) => (parsed.frequencies?.count ?? 0) > 0,
+  },
+  {
+    id: 'thermochemistry',
+    line: '`| TOTAL FREE ENERGY          -5.06... Eh   |` and `:: zero point energy ... ::`',
+    versions: ['6.6', '6.8'],
+    taken: (parsed) => parsed.thermochemistry?.freeEnergyHartree !== null
+      && parsed.thermochemistry?.freeEnergyHartree !== undefined,
+  },
+  {
+    id: 'opt-freq',
+    line: '`--ohess`: a converged optimisation followed by a Hessian in one log',
+    versions: ['6.6'],
+    taken: (parsed) => parsed.optimization?.completed === true
+      && (parsed.frequencies?.count ?? 0) > 0,
+  },
+]);
 
 /**
  * Parse one xTB output text.

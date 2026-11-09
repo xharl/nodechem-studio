@@ -29,6 +29,19 @@ import { COMPOSITE_METHODS, compositeMethodFor, HARTREE_TO_KCAL_PER_MOL } from '
 
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
 
+/**
+ * Gaussian releases this parser was written against, named by the major version
+ * the banner prints (`Gaussian 16, Revision A.03`).
+ *
+ * Issue 176: `test/fixtureCoverage.test.js` refuses a fixture whose
+ * PROVENANCE.md names a major version missing here, so a new Gaussian release
+ * has to be read before its logs are trusted. Revisions are recorded per
+ * fixture, not here: A.03 and C.01 print the same record shapes, and the two
+ * places they differ (`Rot. str. --` with no representation label, the
+ * `Freq=(VCD)` block) are documented on the patterns themselves.
+ */
+export const GAUSSIAN_SUPPORTED_VERSIONS = Object.freeze(['09', '16']);
+
 const SYMBOLS_BY_NUMBER = new Map([...ELEMENTS].map(([symbol, number]) => [number, symbol]));
 
 // The documented Gaussian banner, e.g. "Gaussian 16, Revision C.01". The
@@ -1332,6 +1345,100 @@ const THERMOCHEMISTRY_KEYS = [
 function hasThermochemistry(thermochemistry) {
   return THERMOCHEMISTRY_KEYS.some((key) => thermochemistry[key] !== null);
 }
+
+/**
+ * Branches of the Gaussian reader that decide what a log means.
+ *
+ * Issue 176: `test/fixtureCoverage.test.js` reads this list, parses every file
+ * in `test/fixtures/real/**` and fails when a branch here is reached by no
+ * captured log. `line` names the printed line the branch keys on; `taken` reads
+ * a field the parse already resolved, so no parallel bookkeeping exists. An
+ * entry with `fixture: '<why not>'` is reported by the test as a named gap.
+ */
+export const GAUSSIAN_PARSE_BRANCHES = Object.freeze([
+  {
+    id: 'scf',
+    line: '`SCF Done:  E(RB3LYP) =  ...  A.U. after  N cycles`',
+    versions: ['09', '16'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'scf',
+  },
+  {
+    id: 'post-hf',
+    line: '`E2(MP2)=`, `E(CISD)=`, `CCSD(T)=` correlated-energy lines',
+    versions: ['09', '16'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'post-hf',
+  },
+  {
+    id: 'composite',
+    line: 'the `G4(MP2)`, `CBS-QB3`-style composite summary block',
+    versions: ['09', '16'],
+    fixture: 'blocked: no composite-method log captured — no Gaussian licence here, and the public corpora in this corpus have none; the reader is exercised by hand-written unit tests',
+    taken: (parsed) => String(parsed.finalEnergy?.source || '').startsWith('composite:'),
+  },
+  {
+    id: 'counterpoise',
+    line: '`Counterpoise: corrected energy =`',
+    versions: ['09', '16'],
+    fixture: 'blocked: no Counterpoise log captured; the reader is exercised only by hand-written unit tests',
+    taken: (parsed) => parsed.finalEnergy?.source === 'counterpoise-corrected',
+  },
+  {
+    id: 'excited-state',
+    line: '`Excited State   1:      Singlet-A     7.5xxx eV  165.xx nm  f=0.xxxx`',
+    versions: ['09', '16'],
+    taken: (parsed) => (parsed.excitedStates?.count ?? 0) > 0,
+  },
+  {
+    id: 'frequency',
+    line: '`Harmonic frequencies (cm**-1), IR intensities ...` and its `Frequencies --` rows',
+    versions: ['09', '16'],
+    taken: (parsed) => (parsed.frequencies?.count ?? 0) > 0,
+  },
+  {
+    id: 'thermochemistry',
+    line: '`Sum of electronic and thermal Free Energies=` in the thermochemistry section',
+    versions: ['09', '16'],
+    taken: (parsed) => parsed.thermochemistry?.freeEnergyHartree !== null
+      && parsed.thermochemistry?.freeEnergyHartree !== undefined,
+  },
+  {
+    id: 'optimization',
+    line: '`Optimization completed.` / `Stationary point found.`',
+    versions: ['09', '16'],
+    taken: (parsed) => parsed.optimization?.completed === true
+      || Number.isFinite(parsed.optimization?.steps),
+  },
+  {
+    id: 'scan',
+    line: '`Summary of Optimized Potential Surface Scan`',
+    versions: ['09', '16'],
+    taken: (parsed) => parsed.scan !== null && parsed.scan !== undefined,
+  },
+  {
+    id: 'irc',
+    line: '`IRC-IRC-IRC-IRC` step table and its `Reaction path summary`',
+    versions: ['09', '16'],
+    taken: (parsed) => parsed.reactionPath !== null && parsed.reactionPath !== undefined,
+  },
+  {
+    id: 'nmr',
+    line: '`GIAO Magnetic shielding tensor (ppm)` / `Total nuclear spin-spin coupling J (Hz)`',
+    versions: ['09'],
+    taken: (parsed) => parsed.nmr !== null && parsed.nmr !== undefined,
+  },
+  {
+    id: 'raman',
+    line: '`Raman scattering activities (A**4/AMU)`',
+    versions: ['16'],
+    taken: (parsed) => parsed.raman !== null && Array.isArray(parsed.raman),
+  },
+  {
+    id: 'vcd',
+    line: '`Rot. str. --` inside a `Freq=(VCD)` block',
+    versions: ['16'],
+    taken: (parsed) => parsed.vcd !== null && Array.isArray(parsed.vcd),
+  },
+]);
 
 /**
  * Parse one output text.

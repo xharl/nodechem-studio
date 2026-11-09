@@ -29,6 +29,24 @@ import { canonicalResult, TERMINATION } from './canonical.js';
 
 export const PSI4_ENGINE_ID = 'psi4';
 
+/**
+ * Psi4 releases whose output lines this parser was written against.
+ *
+ * Issue 176: a comment saying "Psi4 changed its banner" does not fail a test, so
+ * every version-specific line below names its release here, and
+ * `test/fixtureCoverage.test.js` refuses a captured fixture whose PROVENANCE
+ * names a release missing from this list. Adding Psi4 1.12 means reading its
+ * banner and adding `'1.12'` — not discovering the change from a wrong number.
+ *
+ * - `1.1`–`1.4`  `MP2 Total Energy (a.u.) :`, `Total CCSD energy (file100) =`,
+ *                `#  #` frequency blocks, `Optimization is complete! (in N steps)`
+ * - `1.9`+       `* CCSD total energy =`, `Freq [cm^-1]` frequency table,
+ *                `Optimizer: Optimization complete!`
+ * - `1.11`       `==> DF-MP2 Energies <==` / `DF-SCS-MP2 Energies` banners,
+ *                `Freq [cm^-1]` rows with `1234.56i` imaginary markers
+ */
+export const PSI4_SUPPORTED_VERSIONS = Object.freeze(['1.1', '1.4', '1.9', '1.11']);
+
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.dat$/i;
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
@@ -842,6 +860,75 @@ function parsePsi4Excitations(body, lines) {
   };
 }
 
+/**
+ * The branches this parser can take when it decides what a Psi4 log says.
+ *
+ * Issue 176: `test/fixtureCoverage.test.js` reads this list — never a
+ * hand-maintained copy — parses every log in `test/fixtures/real/**` and fails
+ * when a branch here is reached by no fixture. Adding a branch without a
+ * captured log is therefore a red suite, not a habit.
+ *
+ * `line` names the output line the branch keys on; `versions` lists the
+ * releases that print it (see `PSI4_SUPPORTED_VERSIONS`); `taken` reads the
+ * resolution the parser itself recorded, so the entry cannot disagree with the
+ * code. `fixture` is only set for a branch no committed log can reach, and the
+ * coverage test prints it as a named gap instead of a pass.
+ */
+export const PSI4_PARSE_BRANCHES = Object.freeze([
+  {
+    id: 'mp2',
+    line: '`Total Energy =` inside a `==> DF-MP2 Energies <==` banner (1.11)',
+    also: ['`MP2 Total Energy (a.u.) :` (1.1–1.4)', '`* MP2 total energy =` (1.11 summary)'],
+    versions: ['1.1', '1.11'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'mp2',
+  },
+  {
+    id: 'ccsd',
+    line: '`Total CCSD energy (file100) =` (1.9 and earlier)',
+    also: ['`* CCSD total energy =` (1.11 summary)'],
+    versions: ['1.1', '1.9', '1.11'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'ccsd',
+  },
+  {
+    id: 'ccsd(t)',
+    line: '`* CCSD(T) total energy =`',
+    versions: ['1.11'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'ccsd(t)',
+  },
+  {
+    id: 'sapt',
+    line: 'the `SAPT Results` table (`Total SAPT0` row)',
+    versions: ['1.1'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'sapt-interaction-energy-not-a-total',
+  },
+  {
+    id: 'freq-reference',
+    line: '`Total E, Electronic energy at well bottom` in the thermochemistry block',
+    also: ['`Total Energy =` is a displaced geometry in a frequency job, so it is not the result'],
+    versions: ['1.1', '1.11'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'freq-reference',
+  },
+  {
+    id: 'total-energy',
+    line: 'a bare `Total Energy =` (no method prefix, no correlated total)',
+    versions: ['1.1', '1.4'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'total-energy',
+  },
+  {
+    id: 'scf-final',
+    line: '`@RHF Final Energy:` / `@DF-RKS Final Energy:`, used when the log stops before its `Total Energy =` row',
+    versions: ['1.1', '1.11'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'scf-final',
+  },
+  {
+    id: 'scs-mp2-only',
+    line: '`==> DF-SCS-MP2 Energies <==` with no `DF-MP2 Energies` banner and no `MP2 Total Energy (a.u.) :` line',
+    versions: ['1.11'],
+    fixture: 'derived: test/fixtureCoverage.test.js deletes the DF-MP2 banner from psi4-1.11-water-mp2/mp2.log; no real run prints SCS without MP2',
+    taken: (parsed) => parsed.finalEnergy?.source === 'scs-mp2-only',
+  },
+]);
+
 export function parsePsi4Output(text, { truncated = false, argv = null, route = null } = {}) {
   // Psi4 on Windows writes CRLF, and several blocks here are matched with
   // whole-text regular expressions that assume `\n`. Parsing a real Windows log
@@ -920,6 +1007,16 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   // 1.11's summary prints `* CCSD total energy =`.
   const ccsd = lastNumber(body, String.raw`(?:Total\s+CCSD\s+energy|\bCCSD\s+total\s+energy)(?:\s*\([^)]*\))?\s*=\s*(${NUMBER})`);
   const total = lastUnprefixedTotal(body);
+  // Issue 176 — the #159 guard. Psi4 1.11 prints an MP2 job's canonical total
+  // under `==> DF-MP2 Energies <==` and the spin-component-scaled one under
+  // `==> DF-SCS-MP2 Energies <==`, whose row also says `Total Energy`. If the
+  // canonical banner is absent (a changed banner, a trimmed log) the honest
+  // answer is "not parsed", never the SCS number and never the SCF total that
+  // happens to sit above it: both are different methods' energies. The parse
+  // reports the branch (`scs-mp2-only`) and names the missing line in
+  // `extras.finalEnergyError` instead of guessing.
+  const scsMp2Only = mp2 === null
+    && /={2,}>\s*(?:DF-)?SCS-MP2 Energies\s*<=/.test(body);
   // A frequency job prints `Total Energy =` once per displaced geometry, so the
   // last one is a displaced point, not the reference. The thermochemistry block
   // states the electronic energy at the well bottom; that is the number the job
@@ -945,6 +1042,10 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   } else if (mp2 !== null) {
     finalEnergy = mp2;
     finalSource = 'mp2';
+  } else if (scsMp2Only) {
+    // Refused, not guessed: see the comment where `scsMp2Only` is computed.
+    finalEnergy = null;
+    finalSource = 'scs-mp2-only';
   } else if (electronicAtBottom !== null) {
     finalEnergy = electronicAtBottom;
     finalSource = 'freq-reference';
@@ -1019,6 +1120,13 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
       geometryCount: geometries.length,
       sapt,
       errorDetail: errorMatch ? errorMatch[1].trim() : null,
+      // Issue 176: when the MP2 banner changed shape, say which line went
+      // missing instead of returning a number from the wrong banner.
+      finalEnergyError: scsMp2Only
+        ? 'no `Total Energy =` line under an `==> DF-MP2 Energies <==` banner and no '
+          + '`MP2 Total Energy (a.u.) :` line: this log prints only the `DF-SCS-MP2 Energies` '
+          + 'banner, whose total is a different method — refusing to report it as the MP2 result'
+        : null,
       hfEnergyHartree: lastNumber(body, String.raw`Total HF\s+(${NUMBER}) \[mEh\]`) === null
         ? null
         : lastNumber(body, String.raw`Total HF\s+(${NUMBER}) \[mEh\]`) / 1000,

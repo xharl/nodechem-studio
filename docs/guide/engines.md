@@ -412,16 +412,24 @@ The parser was written from the output shapes documented in the **ORCA 6.0 manua
 (`SCF CONVERGED AFTER … CYCLES`, `FINAL SINGLE POINT ENERGY`, the `HURRAY` convergence banner,
 `VIBRATIONAL FREQUENCIES`, `THERMOCHEMISTRY AT 298.15K`, `ORCA TERMINATED NORMALLY` and
 `ORCA finished by error termination in <module>`). **No live ORCA binary was run for this build.**
-Its tests use synthetic fixtures that reproduce those line shapes, so they prove the parser reads
-the documented format — not that a particular ORCA 5/6 revision prints it identically.
+
+Two real ORCA 5.0 logs now pin the line shapes that matter for a single point and a frequency job —
+`test/fixtures/real/orca-5.0-dvb-ir/` (5.0.1, `FINAL SINGLE POINT ENERGY`, `VIBRATIONAL
+FREQUENCIES`, `Total Enthalpy`, `Final Gibbs free energy`) and `test/fixtures/real/orca-5.0-water-mp2/`
+(5.0.0, energy and termination), both verbatim files from cclib's test data. What is still synthetic is
+the optimisation banner: `test/fixtureCoverage.test.js` prints that branch as a named gap because no
+captured ORCA optimisation log is committed (issue 176). So the single-point, SCF, frequency and
+thermochemistry readings are checked against real output; the optimisation verdict is checked against
+the 6.0 manual's documented shape only.
 
 The same limit applies to execution: the runner is tested against a stand-in driver script that
 prints those fixtures, exits 0 after an error banner, prints nothing, sleeps and gets cancelled. It
 proves the spawning, capture, termination and cancellation paths, and nothing about ORCA itself.
 
-The first real run should be a small single point. Check the parsed `FINAL SINGLE POINT ENERGY`, the
-SCF cycle count and the termination line against the log; if a revision prints a different shape,
-the parser reports the value as `unknown` rather than guessing. Please report the log.
+The first run on an installed ORCA should be a small single point. Check the parsed
+`FINAL SINGLE POINT ENERGY`, the SCF cycle count and the termination line against the log; if a
+revision prints a different shape, the parser reports the value as `unknown` rather than guessing.
+Please report the log.
 
 Two parser choices are deliberate:
 

@@ -1,8 +1,31 @@
 # Real engine output files
 
-## Gaussian
+Every file here is output a real program printed. Nothing in this directory is hand-written: a log
+that has to be trimmed is a new file with `-trimmed` in its name and a note saying what was removed.
 
-These files are verbatim excerpts from Gaussian 16 logs published in public
+## Layout (issue 176)
+
+New captures live in a folder named `<engine>-<version>-<molecule>-<job>` with a `PROVENANCE.md`
+beside the log naming the engine, version, command line, host, molecule, level of theory and the
+log's sha256. `test/fixtureCoverage.test.js` fails when a fixture folder has no `PROVENANCE.md`, when
+its version is missing from the parser's exported `<ENGINE>_SUPPORTED_VERSIONS`, or when a declared
+parser branch is reached by no log here.
+
+Older files sit flat in this directory and are described by the tables below; the same test fails if
+one of them is not named (literally, or by a glob row) in this README.
+
+| Folder | Engine | Version | Reaches (parser branches) |
+| --- | --- | --- | --- |
+| `psi4-1.11-water-mp2/` | Psi4 | 1.11 | `mp2` — the canonical total beside a 3.8 mEh-distant SCS total |
+| `psi4-1.11-water-ccsdt/` | Psi4 | 1.11 | `ccsd(t)` — with the CCSD total in the same log |
+| `psi4-1.11-water-freq/` | Psi4 | 1.11 | `freq-reference` — six displaced `Total Energy =` rows |
+| `psi4-1.11-water-scf/` | Psi4 | 1.11 | `scf-final` — real run cut after `@DF-RHF Final Energy:` |
+| `xtb-6.6.1-water-optfreq/` | xtb | 6.6.1 | `scc`, `opt-converged`, `frequencies`, `thermochemistry`, `opt-freq` |
+| `orca-5.0-dvb-ir/` | ORCA | 5.0.1 | `scf`, `frequencies`, `thermochemistry` |
+| `orca-5.0-water-mp2/` | ORCA | 5.0.0 | `final-single-point` |
+| `psi4-mp2-freeze-core/` | Psi4 | 1.11 | `mp2` — frozen-core vs all-electron pair (issue 174) |
+
+## Gaussian
 
 These files are verbatim excerpts from Gaussian 16 logs published in public
 repositories, kept small (the summary block plus its headers). They exist so the
@@ -112,6 +135,7 @@ block order a real run produces.
 | `psi4-sapt1.out` | `psi4/psi4`, `tests/sapt1/output.ref` | SAPT0/cc-pVDZ on a dimer | 1.1rc3.dev5 |
 | `psi4-io-error.out` | `ReactionMechanismGenerator/RMG-Py`, `arkane/data/psi4/IO_error.out` | ADC job that dies in PSIO | 1.4a1.dev75 |
 
-No Psi4 binary was run for this repository: these files are the corpus because
-they come from the program's own test suite. A later Psi4 release that changes a
-block shape should be added here as a new file rather than editing one.
+The flat files above come from Psi4's own test suite. The `psi4-1.11-*` folders were produced for
+this repository inside the official `psi4/psi4:1.11` image (see each folder's `PROVENANCE.md`). A
+later Psi4 release that changes a block shape should be added as a new folder rather than editing
+one.

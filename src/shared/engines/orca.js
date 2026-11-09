@@ -20,15 +20,26 @@
  * - `THERMOCHEMISTRY AT 298.15K`, `Zero point energy`, `Total Enthalpy`,
  *   `Final Gibbs free energy`
  *
- * No ORCA binary was available to this change, so the parser is exercised by
- * synthetic fixtures that reproduce those documented line shapes. It must not
- * be described as verified against a real ORCA installation.
+ * The single-point, SCF, frequency and thermochemistry shapes are now pinned by two real ORCA 5.0
+ * logs (`test/fixtures/real/orca-5.0-water-mp2/`, `.../orca-5.0-dvb-ir/`). The optimisation banner
+ * has no captured log (issue 176 prints it as a named gap), so it is still taken from the manual and
+ * must not be described as verified against a running ORCA.
  */
 
 import { isElementSymbol, atomicNumber } from '../elements.js';
 import { canonicalResult, TERMINATION } from './canonical.js';
 
 export const ORCA_ENGINE_ID = 'orca';
+
+/**
+ * ORCA releases whose output lines this parser was written against.
+ *
+ * Issue 176: `test/fixtureCoverage.test.js` refuses a fixture whose
+ * PROVENANCE.md names a release missing here. `5.0` is now pinned by two real
+ * cclib captures (`dvb_ir.out`, `water_mp2.out`); `6.0` is the manual the
+ * remaining line shapes were taken from and still has no captured log.
+ */
+export const ORCA_SUPPORTED_VERSIONS = Object.freeze(['5.0', '6.0']);
 
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.inp$/i;
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
@@ -520,6 +531,48 @@ function lastFrequencyBlock(lines) {
   }
   return values;
 }
+
+/**
+ * Branches of the ORCA parser, read by `test/fixtureCoverage.test.js` (issue 176).
+ *
+ * `line` names the printed line the branch keys on, `taken` reads a field the
+ * parse already resolved. An entry carrying `fixture` is reported as a named gap
+ * instead of a pass.
+ */
+export const ORCA_PARSE_BRANCHES = Object.freeze([
+  {
+    id: 'final-single-point',
+    line: '`FINAL SINGLE POINT ENERGY      -74.999373814715`',
+    versions: ['5.0'],
+    taken: (parsed) => parsed.finalEnergy?.source === 'final-single-point',
+  },
+  {
+    id: 'scf',
+    line: '`SCF CONVERGED AFTER  10 CYCLES` and its `Total Energy       :` row',
+    versions: ['5.0'],
+    taken: (parsed) => Number.isFinite(parsed.scf?.energyHartree),
+  },
+  {
+    id: 'frequencies',
+    line: '`VIBRATIONAL FREQUENCIES` with `  6:      1580.42 cm**-1` rows',
+    versions: ['5.0'],
+    taken: (parsed) => (parsed.frequencies?.count ?? 0) > 0,
+  },
+  {
+    id: 'thermochemistry',
+    line: '`THERMOCHEMISTRY AT 298.15K` and `Final Gibbs free energy         ...   -381.9 Eh`',
+    versions: ['5.0'],
+    taken: (parsed) => parsed.thermochemistry?.freeEnergyHartree !== null
+      && parsed.thermochemistry?.freeEnergyHartree !== undefined,
+  },
+  {
+    id: 'optimization',
+    line: '`THE OPTIMIZATION HAS CONVERGED` under the `HURRAY` banner',
+    versions: ['5.0'],
+    fixture: 'blocked: no ORCA optimisation log captured; cclib\'s dvb_gopt.out is 514 kB and was not committed',
+    taken: (parsed) => parsed.optimization?.completed === true,
+  },
+]);
 
 /**
  * Parse one ORCA 5/6 output text.
