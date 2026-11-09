@@ -9,8 +9,16 @@
  * - Every input this module writes is a fixed, reviewed script — the molecule
  *   block, a handful of `set` lines and one call. No setting is interpolated
  *   as a statement, so a project field can never become arbitrary Python.
- * - Anything Psi4 core does not implement (implicit solvation, NBO, GIAO NMR,
- *   TD-DFT through this builder) is refused by name instead of approximated.
+ * - Anything Psi4 core does not implement (NBO, GIAO NMR, TD-DFT through this
+ *   builder) is refused by name instead of approximated.
+ *
+ * Issue 167: implicit solvation is written, through Psi4's **DDX** addon rather
+ * than PCMSolver. The option block, the two-run deck and the log lines the
+ * parser reads were taken from Psi4 1.11 with pyddx 1.0.0 installed (see
+ * `test/fixtures/psi4-ddx/PROVENANCE.md`): `ddx true`, `ddx_model pcm`,
+ * `ddx_solvent water`, and the `DD Solvation Energy =` row Psi4 prints in its
+ * `=> Energetics <=` block. DDX-PCM is not PCMSolver's PCM and not SMD; the card
+ * and `docs/guide/engines.md` say so, and no ΔG is ever printed.
  *
  * Output shapes below were taken from real Psi4 output files kept in
  * `test/fixtures/real/psi4-*.out` (Psi4 1.1 – 1.4, from the Psi4 test suite,
@@ -171,6 +179,69 @@ export const PSI4_JOB_TYPES = Object.freeze(['SP', 'Opt', 'Freq', 'Opt Freq', 'T
 
 export const PSI4_UNSUPPORTED_JOB_TYPES = Object.freeze(['Opt=TS', 'IRC', 'Scan', 'NMR']);
 
+/**
+ * Implicit solvation through Psi4's **DDX** addon (issue 167).
+ *
+ * DDX is a continuum-solvation library Psi4 1.11 drives as an addon: it solves
+ * a polarizable-continuum (or conductor, or linearised-Poisson–Boltzmann) model
+ * on a surface of atomic spheres, through the `ddx` Python module (pyddx).
+ * Psi4 core carries the keywords; the module is a separate install, and the
+ * `psi4/psi4:1.11` image does **not** include it — measured, see
+ * `test/fixtures/psi4-ddx/water-pcm-no-pyddx.out`. The models are told apart by
+ * one keyword:
+ *
+ *     set ddx true
+ *     set ddx_model pcm|cosmo|lpb
+ *     set ddx_solvent water
+ *
+ * `PCM` and `COSMO` are what this builder writes. `LPB` is refused by name: it
+ * runs only with a positive `ddx_solvent_kappa` (Psi4 1.11 says so itself —
+ * `DDX_SOLVENT_KAPPA is required for LPB`), a Psi4 block has no ionic-strength
+ * field to carry one, and a made-up κ would be a physical claim this app cannot
+ * support. SMD and CPCM are not DDX models at all.
+ */
+export const PSI4_SOLVATION_MODELS = Object.freeze(['PCM', 'COSMO']);
+
+/**
+ * App solvent label → the name `ddx_solvent` takes. Every value was checked
+ * against `pyddx.data.solvent_epsilon` **and** by running Psi4 1.11 with it —
+ * Psi4 validates the name against that same table, so a name that is not in it
+ * aborts the run with `Unknown solvent <name>.` rather than defaulting.
+ *
+ * A label absent here is refused by name; it is never silently run in water.
+ * Labels match the ones the rest of the app uses (`Water`, `THF`, …) so a
+ * solvent chosen for an ORCA or xTB block means the same liquid here.
+ *
+ * `n,n-dimethylformamide` is deliberately absent: Psithon reads `set` values as
+ * Python, so the comma turns the name into a tuple (`SyntaxError`, measured),
+ * and a quoted value is a syntax error too. It is refused by name like any
+ * other solvent this table does not carry.
+ */
+export const PSI4_DDX_SOLVENTS = Object.freeze({
+  Water: 'water',
+  Dichloromethane: 'dichloromethane',
+  THF: 'tetrahydrofuran',
+  Toluene: 'toluene',
+  Acetonitrile: 'acetonitrile',
+  Methanol: 'methanol',
+  Ethanol: 'ethanol',
+  Chloroform: 'chloroform',
+  Acetone: 'acetone',
+  DMSO: 'dimethylsulfoxide',
+});
+
+/**
+ * The cavity. `uff` with its recommended 1.1 scaling is pyddx's own default for
+ * these radii, so writing both lines changes nothing about the calculation but
+ * makes the cavity reproducible from the deck alone — the log does not say
+ * which radius set built it. `bondi` is the other set DDX ships; a Psi4 block
+ * has no field to choose it, so it is not offered and not written.
+ */
+export const PSI4_DDX_RADII_SET = 'uff';
+export const PSI4_DDX_RADII_SCALING = 1.1;
+
+const MODEL_BY_KEY = new Map(PSI4_SOLVATION_MODELS.map((label) => [label.toLowerCase(), label]));
+
 const METHOD_BY_KEY = new Map(PSI4_METHODS.map((entry) => [entry.key, entry]));
 const BASIS_BY_KEY = new Map(PSI4_BASES.map((entry) => [entry.key, entry]));
 const BASIS_BY_PSI4 = new Map(PSI4_BASES.map((entry) => [entry.psi4.toLowerCase(), entry]));
@@ -191,11 +262,38 @@ export const PSI4_CAPABILITIES = Object.freeze({
   methods: PSI4_METHODS,
   basisSets: PSI4_BASES,
   dispersionSchemes: Object.freeze([]),
-  solvationModels: Object.freeze([]),
+  /**
+   * Issue 167. These are the models this builder writes, not everything Psi4's
+   * DDX library knows: `pcm` and `cosmo` are two `ddx_model` values away from
+   * the deck the builder emits, and `lpb` is not offered because it needs a
+   * Debye κ no Psi4 block here has a field for.
+   */
+  solvationModels: PSI4_SOLVATION_MODELS,
+  solvents: PSI4_DDX_SOLVENTS,
+  /**
+   * What a solvated Psi4 block actually is, in one machine-readable place so a
+   * card cannot describe it as something else: two single-point SCFs (gas phase,
+   * then in solvent) at the same level, solved by DDX on a UFF cavity.
+   */
+  solvation: Object.freeze({
+    provider: 'ddx',
+    models: PSI4_SOLVATION_MODELS,
+    radiiSet: PSI4_DDX_RADII_SET,
+    radiiScaling: PSI4_DDX_RADII_SCALING,
+    jobTypes: Object.freeze(['SP']),
+    gasPhasePair: true,
+    /** The addon the deck needs. Not part of Psi4 core, and not in the reference image. */
+    requires: 'the ddx Python module (pyddx) in the Psi4 environment; psi4/psi4:1.11 ships Psi4, not pyddx',
+    /** What the numbers under `solvation` in a parsed result are — and are not. */
+    quantity: 'electronic energy difference between the solvated and gas-phase single points, plus the DDX solute-solvent interaction; not a solvation free energy',
+  }),
   jobTypes: PSI4_JOB_TYPES,
   unsupportedJobTypes: PSI4_UNSUPPORTED_JOB_TYPES,
   unsupportedFeatures: Object.freeze([
-    'implicit solvation (Psi4 core has no PCM/SMD; that needs PCMSolver)',
+    'SMD and CPCM solvation (DDX writes pcm and cosmo; DDX-PCM is not SMD and there is no CPCM keyword)',
+    'LPB solvation (it runs only with a positive ddx_solvent_kappa, and a Psi4 block has no ionic-strength field)',
+    'solvation free energies (a DDX single point gives an electronic energy difference and the solute-solvent interaction, not a ΔG)',
+    'solvation on optimisations, frequencies, TD-DFT and correlated methods (the deck writes the gas-phase/solvated pair for a single-point SCF or DFT)',
     'transition-state search',
     'IRC and relaxed scans',
     'excited-state optimisation (Psi4 prints excitations but cannot relax on an excited surface here)',
@@ -269,6 +367,91 @@ export function psi4BasisFor(settings = {}) {
 }
 
 /**
+ * Does this block ask for a solvent?
+ *
+ * `solvation` is a boolean in the schema, so the guard has to test the value:
+ * `String(false)` is "false", which is truthy, and a solvent name is a field the
+ * schema always fills ('Water') whether or not solvation was asked for. Testing
+ * their text refused every Psi4 block, including the default ones. A legacy file
+ * that stored a model name ('PCM') still counts as a request (issue 167).
+ */
+function solvationRequested(settings = {}) {
+  const raw = settings.solvation;
+  return raw === true
+    || (typeof raw === 'string'
+      && raw.trim() !== ''
+      && !['false', '0', 'off', 'no'].includes(raw.trim().toLowerCase()));
+}
+
+/**
+ * The three settings a solvated deck writes, or `null` when the block asks for
+ * no solvent. Throws, naming the field, when the request cannot be honoured.
+ *
+ * Exported because the card and the provenance block need the same answer the
+ * builder writes; a second table somewhere else is how a capability list drifts
+ * away from the deck.
+ */
+export function psi4SolvationFor(settings = {}) {
+  if (!solvationRequested(settings)) return null;
+  const fail = (field, message) => {
+    const error = new Error(message);
+    error.field = field;
+    throw error;
+  };
+
+  const modelRaw = oneLine(settings.solvationModel, 'PCM').toUpperCase();
+  if (modelRaw === 'LPB') {
+    fail('solvationModel',
+      'Psi4\'s DDX runs LPB only with a positive `ddx_solvent_kappa`, and a Psi4 block '
+      + 'has no ionic-strength field to carry one; a made-up κ would be a physical claim '
+      + 'this app cannot support. Choose PCM or COSMO.');
+  }
+  if (modelRaw === 'SMD' || modelRaw === 'CPCM') {
+    fail('solvationModel',
+      `Psi4 has no ${modelRaw} solvation: its DDX addon writes \`pcm\` and \`cosmo\`, and `
+      + `${modelRaw === 'SMD' ? 'SMD needs a cavity and thermodynamic treatment this builder does not write'
+        : 'the conductor model DDX implements is COSMO'}. Choose ${modelRaw === 'SMD' ? 'PCM or COSMO' : 'COSMO'}.`);
+  }
+  const model = MODEL_BY_KEY.get(modelRaw.toLowerCase());
+  if (!model) {
+    fail('solvationModel',
+      `Psi4 solvation models: ${PSI4_SOLVATION_MODELS.join(', ')}. "${oneLine(settings.solvationModel)}" is not one of them.`);
+  }
+
+  const solventLabel = oneLine(settings.solvent, 'Water') || 'Water';
+  const solvent = PSI4_DDX_SOLVENTS[solventLabel];
+  if (!solvent) {
+    fail('solvent',
+      `Solvent "${solventLabel}" has no DDX name in this builder. Psi4's DDX takes `
+      + `${Object.keys(PSI4_DDX_SOLVENTS).join(', ')}; a name it does not know aborts the run `
+      + '(`Unknown solvent`), so it is refused here rather than run in water.');
+  }
+
+  const jobType = jobTypeOf(settings);
+  if (jobType !== 'SP') {
+    fail('jobType',
+      `A solvated Psi4 block is a gas-phase and a solvated single point at the same level, `
+      + `so it must be SP; "${jobType}" has no such pair in this builder.`);
+  }
+
+  const method = METHOD_BY_KEY.get(oneLine(settings.method, 'b3lyp').toLowerCase());
+  if (method && method.kind !== 'scf' && method.kind !== 'dft') {
+    fail('solvation',
+      `DDX couples to the SCF in Psi4 1.11, so an ${method.label} solvated energy would be `
+      + 'the correlation energy on a solvated reference with no solvent response of its own. '
+      + 'Run the solvated single point at HF or a functional.');
+  }
+
+  return {
+    model,
+    solvent,
+    solventLabel,
+    radiiSet: PSI4_DDX_RADII_SET,
+    radiiScaling: PSI4_DDX_RADII_SCALING,
+  };
+}
+
+/**
  * Settings a Psi4 block cannot honour, each with the reason.
  *
  * The list is deliberately about *this builder*: Psi4 can do more than the
@@ -279,21 +462,13 @@ export function psi4SettingsOffenders(settings = {}) {
   const offenders = [];
   const text = (value) => oneLine(value);
 
-  // `solvation` is a boolean in the schema, so the guard has to test the value:
-  // `String(false)` is "false", which is truthy, and a solvent name is a field
-  // the schema always fills ('Water') whether or not solvation was asked for.
-  // Testing their text refused every Psi4 block, including the default ones.
-  // A legacy file that stored a model name ('PCM') still counts as a request.
-  const solvationRaw = settings.solvation;
-  const solvationOn = solvationRaw === true
-    || (typeof solvationRaw === 'string'
-      && solvationRaw.trim() !== ''
-      && !['false', '0', 'off', 'no'].includes(solvationRaw.trim().toLowerCase()));
-  if (solvationOn) {
-    offenders.push({
-      field: 'solvation',
-      message: 'Psi4 core has no implicit solvation model; this builder cannot write PCM/SMD.',
-    });
+  // Issue 167: solvation is written now, so the offender is no longer the
+  // request itself but a model, solvent or job the deck cannot express. The
+  // message is the builder's own, so a preflight and a run refuse identically.
+  try {
+    psi4SolvationFor(settings);
+  } catch (error) {
+    offenders.push({ field: error?.field || 'solvation', message: String(error?.message ?? error) });
   }
   if (settings.raman === true) {
     offenders.push({
@@ -660,6 +835,19 @@ export function buildPsi4Input({
   lines.push('');
 
   const fn = method.fn;
+  // Issue 167: the solvation request, resolved through the same function the
+  // preflight uses, so the deck and the refusal can never disagree about which
+  // model or solvent is written.
+  const solvation = psi4SolvationFor(settings);
+  if (solvation && multiplicity > 1) {
+    // Issue 167 + 168: the EPR block reads one `Spin SCF Density` from one
+    // checkpoint, and a solvated block runs two SCFs. Picking either density
+    // would make the populations describe a different calculation than the one
+    // the card names, so the combination is refused instead.
+    throw new Error('A solvated Psi4 single point runs two SCFs, so it has no single spin density '
+      + 'for the open-shell checkpoint the EPR block reads; run the open-shell single point gas-phase, '
+      + 'or the solvated one closed-shell.');
+  }
   // Issue 168: an open-shell single point on a single-reference SCF/DFT method
   // also writes the checkpoint, because the spin populations and the
   // Fermi-contact couplings are read from `Spin SCF Density` in that file and
@@ -697,7 +885,30 @@ export function buildPsi4Input({
       lines.push(`energy('td-${fn}')`);
     }
   } else if (jobType === 'SP') {
-    if (writesSpinCheckpoint) {
+    if (solvation) {
+      // Issue 167. Two single points at one level, in one script, because the
+      // number a user needs is the *difference*: Psi4 prints the solvated total
+      // and the DDX solute-solvent interaction, but never the gas-phase energy
+      // the solvent is acting on. The first run is left `ddx false` explicitly
+      // rather than relying on DDX's default being off, and each energy is
+      // echoed with a marker the parser reads by name — a bare `@DF-RHF Final
+      // Energy:` appears twice in this log and position alone is not a label.
+      //
+      // Second-run state does not leak out of Psi4: the gas-phase energy below
+      // was reproduced to all twelve printed digits by a standalone gas-phase
+      // run of the same deck (test/fixtures/psi4-ddx).
+      lines.push('set ddx false');
+      lines.push(`E_gas = energy('${fn}')`);
+      lines.push('core.print_out("NCS gas-phase energy = %.15f\\n" % E_gas)');
+      lines.push('');
+      lines.push('set ddx true');
+      lines.push(`set ddx_model ${solvation.model.toLowerCase()}`);
+      lines.push(`set ddx_solvent ${solvation.solvent}`);
+      lines.push(`set ddx_radii_set ${solvation.radiiSet}`);
+      lines.push(`set ddx_radii_scaling ${solvation.radiiScaling}`);
+      lines.push(`E_solv = energy('${fn}')`);
+      lines.push('core.print_out("NCS solvated energy = %.15f\\n" % E_solv)');
+    } else if (writesSpinCheckpoint) {
       lines.push(`E, wfn = energy('${fn}', return_wfn=True)`);
       lines.push(`fchk(wfn, '${safeName.replace(/\.dat$/i, '')}.fchk')`);
     } else {
@@ -719,7 +930,8 @@ export function buildPsi4Input({
     inputText: lines.join('\n'),
     argv: [safeName],
     route: `psi4 ${method.label}/${basis.label}${freezeChoice === null ? ''
-      : freezeChoice ? ' (frozen core)' : ' (all-electron)'}${jobType === 'SP' ? ''
+      : freezeChoice ? ' (frozen core)' : ' (all-electron)'}${solvation
+      ? ` · ${solvation.model}/${solvation.solvent} (DDX)` : ''}${jobType === 'SP' ? ''
       : jobType === 'TD-DFT' ? ` TD-DFT (${Number(settings.tdStates)} states)` : ` ${jobType}`}`,
     // Recorded for the run record; a Psi4 block has no checkpoint to hand off.
     oldCheckpoint: oneLine(oldCheckpoint) || null,
@@ -744,7 +956,20 @@ export function psi4MethodBlock(settings = {}, { argv = null, jobType = null } =
     basis: basis ? basis.label : null,
     jobType: oneLine(jobType, '') || oneLine(settings.jobType, 'SP'),
     dispersion: null,
-    solvation: null,
+    // Issue 167: the model, the solvent and the cavity, in the words the deck
+    // uses, so two runs are only compared when these match. `null` is a vacuum
+    // run — including a block whose solvation request was refused, which never
+    // reaches a run record because the builder throws first.
+    solvation: (() => {
+      try {
+        const request = psi4SolvationFor(settings);
+        return request
+          ? `DDX ${request.model}/${request.solventLabel} (${request.radiiSet} radii x${request.radiiScaling})`
+          : null;
+      } catch {
+        return null;
+      }
+    })(),
     scf: oneLine(settings.scf) || null,
     // Provenance for the one setting that decides whether a correlated number is
     // comparable with the frozen-core literature at all.
@@ -908,6 +1133,78 @@ function saptResults(text) {
     totalHartree: totalMha === null ? null : totalMha / 1000,
     totalKcal: toNumber(total[2]),
     totalKj: totalMha === null ? null : (totalMha / 1000) * HARTREE_KJ,
+  };
+}
+
+/**
+ * Issue 167: the DDX solvation block, read from a log this builder produced.
+ *
+ * Psi4 1.11 + pyddx 1.0.0 print, after the SCF converges in solvent:
+ *
+ *     @DF-RHF Final Energy:   -75.99469281344876
+ *
+ *      => Energetics <=
+ *
+ *       Nuclear Repulsion Energy =              9.1895337585934787
+ *       One-Electron Energy =                -123.0280105669744302
+ *       Two-Electron Energy =                  37.8552986443188715
+ *       DD Solvation Energy =                 -0.0115146493866764
+ *       Total Energy =                        -75.9946928134487649
+ *
+ * `DD Solvation Energy` is the solute-solvent interaction at the converged
+ * (solvated) density. It is **not** the energy difference a user means by
+ * "how much did the solvent change this": that is the solvated total minus the
+ * gas-phase total, and Psi4 never prints the gas-phase one in a solvated run —
+ * it is a different calculation. The deck this builder writes therefore runs
+ * both and echoes each with a marker; a log without the markers reports the
+ * difference as `null` rather than deriving it from the interaction term, which
+ * is a different quantity (they differ by 0.8 mEh on water/6-31G*).
+ *
+ * Nothing here is called ΔG, and no field is initialised to zero: a number the
+ * log does not print is `null`.
+ */
+function solvationBlock(body) {
+  const ddxRan = /ddsolvation\.github\.io\/ddX/i.test(body) || /Cavity sphere setup/i.test(body);
+  const gasMarker = lastNumber(body, String.raw`NCS gas-phase energy\s*=\s*(${NUMBER})`);
+  const solvatedMarker = lastNumber(body, String.raw`NCS solvated energy\s*=\s*(${NUMBER})`);
+  const interaction = lastNumber(body, String.raw`DD Solvation Energy\s*=\s*(${NUMBER})`);
+  if (!ddxRan && gasMarker === null && solvatedMarker === null && interaction === null) return null;
+
+  // The input echo is the only place the log names the model, the solvent and
+  // the cavity: pyddx prints the dielectric constant and the sphere radii, but
+  // not the labels. Read as text, never reconstructed from ε.
+  const echoed = (option) => {
+    const match = new RegExp(String.raw`^\s*set\s+${option}\s+(\S+)\s*$`, 'im').exec(body);
+    return match ? match[1] : null;
+  };
+  const radiiScaling = echoed('ddx_radii_scaling');
+  const banner = /ddsolvation\.github\.io\/ddX/i.test(body);
+  const pyddxVersion = banner
+    ? (/ddsolvation\.github\.io\/ddX[\s\S]{0,240}?Version:\s*(\S+)/i.exec(body)?.[1] ?? null)
+    : null;
+
+  // A hand-written deck carries no markers. Then the last unprefixed total *is*
+  // the solvated energy (it is the one Psi4 printed last), and the gas-phase
+  // energy stays unknown rather than being guessed.
+  const solvatedHartree = solvatedMarker ?? (ddxRan ? lastUnprefixedTotal(body) : null);
+  const deltaHartree = gasMarker !== null && solvatedHartree !== null
+    ? solvatedHartree - gasMarker
+    : null;
+
+  return {
+    provider: 'ddx',
+    pyddxVersion,
+    model: echoed('ddx_model')?.toLowerCase() ?? null,
+    solvent: echoed('ddx_solvent')?.toLowerCase() ?? null,
+    radiiSet: echoed('ddx_radii_set')?.toLowerCase() ?? null,
+    radiiScaling: radiiScaling === null ? null : toNumber(radiiScaling),
+    dielectricConstant: lastNumber(body, String.raw`solvent_epsilon\s*=\s*(${NUMBER})`),
+    gasPhaseHartree: gasMarker,
+    solvatedHartree,
+    deltaHartree,
+    deltaKcal: deltaHartree === null ? null : deltaHartree * HARTREE_KCAL,
+    interactionHartree: interaction,
+    interactionKcal: interaction === null ? null : interaction * HARTREE_KCAL,
   };
 }
 
@@ -1241,7 +1538,11 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   // Psi4's own message is the most specific line: `Fatal Error: PSIO Error`
   // beats a bare `RuntimeError:` with an empty remainder.
   const errorMatch = /Fatal Error:\s*([^\r\n]+)/.exec(body)
-    || /RuntimeError:\s*([^\r\n]*)/.exec(body);
+    || /RuntimeError:\s*([^\r\n]*)/.exec(body)
+    // Issue 167: a missing DDX addon fails as a Python `ModuleNotFoundError`
+    // before Psi4's own error handler speaks — `Python module ddx not found.`
+    // is the whole diagnosis, and it is the one a solvated run needs.
+    || /ModuleNotFoundError:\s*([^\r\n]+)/.exec(body);
   const failedHard = /Psi4 encountered an error\. Buy a developer more coffee!/i.test(body);
   const succeeded = /Psi4 exiting successfully\. Buy a developer a beer!/i.test(body);
   const terminationCode = failedHard ? TERMINATION.ERROR
@@ -1277,6 +1578,8 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   const reference = new RegExp(String.raw`@(?:DF-)?((?:RO|U|R)(?:HF|KS))\s+Final Energy:`).exec(body)?.[1] || null;
 
   const sapt = saptResults(body);
+  // Issue 167: the DDX solvation block, when this log ran one.
+  const solvation = solvationBlock(body);
   // Three spellings of the same quantity across Psi4 versions: the old
   // `MP2 Total Energy (a.u.) :` line, the 1.11 `DF-MP2 Energies` banner, and —
   // for CCSD — `Total CCSD energy (file100) =`, which the older regex missed
@@ -1445,6 +1748,10 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
     // first-class field rather than something only `extras` knows about. It is
     // deliberately not copied into `finalEnergy`: that number is not a total.
     ...(sapt ? { sapt } : {}),
+    // Issue 167: what the solvent did, passed through whole — the model, the
+    // solvent, the cavity and all three energies. A consumer that shows the
+    // difference must also be able to show which model and cavity made it.
+    solvation,
     extras: {
       method: echo.method?.label ?? null,
       methodKey: echo.method?.key ?? null,

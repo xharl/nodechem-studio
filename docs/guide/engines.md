@@ -472,6 +472,25 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
   excited surface in this build — as is a Root above 1.
 - **SAPT0** on a dimer, with the interaction energy split into electrostatics, exchange, induction
   and dispersion.
+- **Implicit solvation** through Psi4's **DDX** addon (issue 167): `PCM` or `COSMO` in water,
+  dichloromethane, THF, toluene, acetonitrile, methanol, ethanol, chloroform, acetone or DMSO, on a
+  UFF cavity with the radii scaled ×1.1. A solvated block is **two single points at one level** in one
+  script — the builder writes `set ddx false` and `energy(...)`, then `set ddx true`, `ddx_model`,
+  `ddx_solvent` and the cavity, and runs `energy(...)` again. The result card reports the gas-phase
+  energy, the solvated energy, their difference **ΔE(solv)**, and separately Psi4's
+  `DD Solvation Energy` row — the DDX solute–solvent interaction at the solvated density. They are not
+  the same number: on water/6-31G\* they are −5.17 and −5.58 kcal/mol. Solvation is refused by name on
+  `Opt`, `Freq`, `Opt Freq`, `TD-DFT`, correlated methods and open-shell single points (a solvated
+  block runs two SCFs, so it has no single spin density for the EPR checkpoint).
+  **What it is not:** DDX-PCM is not PCMSolver's PCM and not SMD, and neither number is a solvation
+  free energy — a ΔG<sub>solv</sub> needs a cavity-formation and thermodynamic treatment this builder
+  does not write. Compare a ΔE(solv) with a ΔE(solv), never with a measured ΔG<sub>hyd</sub>.
+  **It needs `pyddx`:** DDX is an addon, not part of Psi4 core. `psi4/psi4:1.11` recognises
+  `ddx true` and then stops with `Python module ddx not found. Solve by installing it: conda install
+  -c conda-forge pyddx`; measured in `test/fixtures/psi4-ddx/water-pcm-no-pyddx.out`.
+  The inspector's **Model** menu is still the one shared with the other engines (`PCM`, `SMD`,
+  `CPCM`), so a Psi4 block chosen from it can be `PCM`; `SMD` and `CPCM` are refused by name and
+  `COSMO` is reachable from the block settings but not yet from that menu.
 - **Spin populations and Fermi-contact hyperfine couplings** for an open-shell single point (issue
   168). The builder writes `E, wfn = energy('…', return_wfn=True)` and `fchk(wfn, '<task>.fchk')`, so
   the run leaves a checkpoint beside its log; the parser reads that file's `Spin SCF Density` block and
@@ -493,7 +512,11 @@ interpolated as a statement. A title containing a quote lands in a `#` comment, 
 
 What a Psi4 block will **not** do in this build, each refused by name rather than dropped:
 
-- **Implicit solvation** — Psi4 core has no PCM/SMD; that needs PCMSolver and a separate setup.
+- **SMD, CPCM and LPB solvation** — the DDX addon writes `pcm` and `cosmo`; SMD and CPCM are not DDX
+  models at all, and LPB runs only with a positive `ddx_solvent_kappa` (an ionic strength), which a
+  Psi4 block has no field to carry. All three are refused by name with what to choose instead.
+- **Solvation free energies** — a solvated single point gives an electronic energy difference and the
+  DDX interaction term, not a ΔG. No field on the card or in `run.json` is labelled ΔG.
 - **TD-DFT excited states**, **NMR shieldings**, **NBO populations** and **transition-state
   searches** — not written by this builder yet.
 - **A separate dispersion correction** — Psi4 takes D3 through the functional name, so choose
@@ -537,6 +560,14 @@ Two things the parser does deliberately, because a Psi4 log can mislead:
 An error termination (`Psi4 encountered an error. Buy a developer more coffee!`) is recorded as
 failed, and so is a run that printed nothing at all — the record quotes stderr in that case.
 
+**Solvation needs the DDX addon.** Install `pyddx` into the same environment Psi4 runs from —
+`conda install -c conda-forge pyddx`, or `pip install pyddx` where a Fortran compiler and the
+BLAS/LAPACK headers are present. `psi4/psi4:1.11` does **not** ship it: the deck is accepted, the
+`DDX` keywords are recognised, and the run then stops with `Python module ddx not found`, which the
+record quotes as the error detail. The solvated fixtures in `test/fixtures/psi4-ddx/` were produced
+with pyddx 1.0.0 unpacked into that image; `PROVENANCE.md` beside them has the recipe and the sha256
+of every file.
+
 ### What this build proves about the Psi4 parser
 
 Two corpora, because the format changed:
@@ -548,6 +579,11 @@ Two corpora, because the format changed:
   image and kept in `test/fixtures/psi4-live/`: a single point, an optimisation, a frequency job, an
   open-shell UKS run and a SAPT0 dimer. The inputs beside them were written by this app's builder, so
   the pair also proves the generated script is one Psi4 accepts.
+- **Psi4 1.11 + DDX**, in `test/fixtures/psi4-ddx/`: water at RHF/6-31G\* gas phase and in DDX-PCM
+  water, both from this builder's decks, plus the same solvated deck run in an image **without**
+  pyddx — the failure the addon requirement is stated from. The committed decks are asserted
+  byte-identical to what the builder writes, so the energies pinned in `test/psi4Solvation.test.js`
+  cannot drift away from the code.
 
 A live run found a real difference the older logs could not: Psi4 1.9+ writes its log to
 `<task>.out` itself rather than to stdout, and the first version of the runner overwrote that file

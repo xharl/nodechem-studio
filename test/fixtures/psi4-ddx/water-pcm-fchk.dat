@@ -1,0 +1,29 @@
+# NodeChem Studio — generated Psi4 input
+# water DDX-PCM
+# Every line below is written by the app; edit and re-run at your own risk.
+
+memory 4096 mb
+
+molecule {
+0 1
+  O  0.000000  0.000000  0.117300
+  H  0.000000  0.757200  -0.469200
+  H  0.000000  -0.757200  -0.469200
+}
+
+set basis 6-31G*
+set reference rhf
+set scf_type df
+
+set ddx false
+E_gas = energy('scf')
+core.print_out("NCS gas-phase energy = %.15f\n" % E_gas)
+
+set ddx true
+set ddx_model pcm
+set ddx_solvent water
+set ddx_radii_set uff
+set ddx_radii_scaling 1.1
+E_solv, wfn = energy("scf", return_wfn=True)
+core.print_out("NCS solvated energy = %.15f\n" % E_solv)
+fchk(wfn, 'water-pcm.fchk')

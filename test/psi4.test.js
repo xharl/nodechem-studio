@@ -43,7 +43,11 @@ describe('Psi4 engine registry', () => {
     expect(PSI4_CAPABILITIES.restartArtifact).toBeNull();
     // Issue 166: TD-DFT is a job type now, so it must not be listed as missing.
     expect(PSI4_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Freq', 'Opt Freq', 'TD-DFT']);
-    expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).toMatch(/implicit solvation/);
+    // Issue 167: solvation is written (PCM/COSMO through DDX), so what is
+    // missing is SMD/CPCM and the free energy, and both are named.
+    expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).toMatch(/SMD and CPCM solvation/);
+    expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).toMatch(/solvation free energies/);
+    expect(PSI4_CAPABILITIES.solvationModels).toEqual(['PCM', 'COSMO']);
     expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).not.toMatch(/TD-DFT excited states/);
     // Excited-state optimisation still is, and is named.
     expect(PSI4_CAPABILITIES.unsupportedFeatures.join(' ')).toMatch(/excited-state optimisation/);
@@ -130,10 +134,10 @@ describe('Psi4 input builder', () => {
 
   it('names every setting it will not honour instead of dropping it', () => {
     const fields = psi4SettingsOffenders({
-      solvation: 'PCM', solvent: 'water', tddft: true, population: 'NBO', dispersion: 'GD3BJ',
+      solvation: true, solvent: 'Not A Solvent', tddft: true, population: 'NBO', dispersion: 'GD3BJ',
       grid: 'UltraFine', stableOpt: true, customKeywords: 'Int=UltraFine',
     }).map((entry) => entry.field);
-    expect(fields).toEqual(['solvation', 'tddft', 'population', 'dispersion', 'grid', 'stableOpt', 'customKeywords']);
+    expect(fields).toEqual(['solvent', 'tddft', 'population', 'dispersion', 'grid', 'stableOpt', 'customKeywords']);
   });
 
   it('accepts the schema defaults: solvation off and a solvent name are not a request', () => {
@@ -144,7 +148,10 @@ describe('Psi4 input builder', () => {
     expect(defaults.solvation).toBe(false);
     expect(psi4SettingsOffenders(defaults)).toEqual([]);
     expect(() => buildPsi4Input({ settings: defaults, molecule: molecule(), inputName: 'x.dat' })).not.toThrow();
-    expect(psi4SettingsOffenders({ solvation: true, solvent: 'Water' }).map((entry) => entry.field)).toEqual(['solvation']);
+    // Issue 167: a solvation request in water is honoured now; only a solvent
+    // the DDX table cannot name is an offender.
+    expect(psi4SettingsOffenders({ solvation: true, solvent: 'Water' })).toEqual([]);
+    expect(psi4SettingsOffenders({ solvation: true, solvent: 'Water', solvationModel: 'PCM' })).toEqual([]);
   });
 
   it('refuses the Gaussian-only switches it cannot write instead of dropping them', () => {
