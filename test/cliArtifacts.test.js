@@ -38,7 +38,7 @@ function project({ include = 'record', maxParallel = 2, reports = [] } = {}) {
     { id: 'm3', label: 'molecule 3', charge: 0, multiplicity: 1, coords: water, enabled: false },
   ];
   const result = validateProject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'CLI artifacts',
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -57,7 +57,7 @@ function project({ include = 'record', maxParallel = 2, reports = [] } = {}) {
       nodes: [
         { id: 'in1', type: 'input', kind: 'Input', title: 'Family', state: 'ready', x: 0, y: 0,
           input: { datasetId: 'family', recordFilter: { field: '', equals: '' } } },
-        { id: 'opt', type: 'calc', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 100,
+        { id: 'opt', type: 'calculate', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 100,
           settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null },
         { id: 'out1', type: 'output', kind: 'Output', title: 'Report', state: 'ready', x: 0, y: 200,
           output: { kind: 'html', path: 'reports/barrier.html', include, bundle: 'project.zip', manifest: true, notes: '' } },

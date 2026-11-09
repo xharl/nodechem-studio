@@ -333,7 +333,7 @@ function recordGroup(recordId, rows, info = null) {
 }
 
 /**
- * Issue 175: one compute task, as the report needs it.
+ * Issue 175: one analyse task, as the report needs it.
  *
  * The paragraph is the methods text for a derived record: it states the
  * expression, every upstream value the expression read, and the fact that the
@@ -341,8 +341,8 @@ function recordGroup(recordId, rows, info = null) {
  * A refusal is carried verbatim so the field and record it names survive.
  */
 function derivedModel(task) {
-  const compute = task.compute;
-  const inputs = (Array.isArray(compute.inputs) ? compute.inputs : []).map((input) => ({
+  const analyse = task.analyse;
+  const inputs = (Array.isArray(analyse.inputs) ? analyse.inputs : []).map((input) => ({
     recordId: text(input?.recordId),
     field: text(input?.field),
     value: num(input?.value),
@@ -352,14 +352,14 @@ function derivedModel(task) {
     nodeId: text(task.nodeId),
     title: text(task.title) || text(task.nodeId),
     recordId: text(task.recordId),
-    status: text(compute.status) || (task.status === 'completed' ? 'computed' : 'refused'),
-    expression: text(compute.expression),
-    value: num(compute.value),
-    unit: text(compute.unit),
+    status: text(analyse.status) || (task.status === 'completed' ? 'computed' : 'refused'),
+    expression: text(analyse.expression),
+    value: num(analyse.value),
+    unit: text(analyse.unit),
     inputs,
-    sources: Array.isArray(compute.sources) ? compute.sources.map(String) : [],
-    notes: (Array.isArray(compute.notes) ? compute.notes : []).map((note) => text(note)).filter(Boolean),
-    notComputed: text(compute.notComputed),
+    sources: Array.isArray(analyse.sources) ? analyse.sources.map(String) : [],
+    notes: (Array.isArray(analyse.notes) ? analyse.notes : []).map((note) => text(note)).filter(Boolean),
+    notComputed: text(analyse.notComputed),
     paragraph: '',
   };
   model.paragraph = derivedParagraph(model);
@@ -457,7 +457,7 @@ export function buildWorkflowReport(queue, records = {}, {
     if (task?.nodeId && record) recordByNodeId.set(task.nodeId, record);
   }
   const conformerTaskByNodeId = new Map(
-    tasks.filter((task) => task?.type === 'conformers' && task?.nodeId).map((task) => [task.nodeId, task]),
+    tasks.filter((task) => task?.type === 'generate' && task?.nodeId).map((task) => [task.nodeId, task]),
   );
 
   const counts = {
@@ -517,7 +517,7 @@ export function buildWorkflowReport(queue, records = {}, {
           ? (row.finalEnergyHartree - lowest) * HARTREE_KCAL
           : null,
       }));
-      const temperatureK = num(conformerTaskByNodeId.get(id)?.conformers?.temperature);
+      const temperatureK = num(conformerTaskByNodeId.get(id)?.generate?.temperature);
       let ensemble;
       if (!comparable) {
         ensemble = {
@@ -573,7 +573,7 @@ export function buildWorkflowReport(queue, records = {}, {
         // Issue #132: the study id the block carries, if the user set one. It
         // groups headings in the report and never changes a number: each
         // ensemble keeps its own table, its own ΔE and its own members.
-        group: text(conformerTaskByNodeId.get(id)?.conformers?.group) || null,
+        group: text(conformerTaskByNodeId.get(id)?.generate?.group) || null,
         // What a reader needs to read one ensemble on its own terms: the
         // protomer labels its members carry and the level the target-level
         // energies were run at. Absent values stay absent, never invented.
@@ -715,16 +715,16 @@ export function buildWorkflowReport(queue, records = {}, {
         result: block,
       };
     }).filter(Boolean),
-    // Issue 175: one entry per compute block, with the expression it evaluated,
+    // Issue 175: one entry per analyse block, with the expression it evaluated,
     // the upstream values it read and — when a field was missing — the refusal
     // that names the field. A derived value is not a calculation result, so it
     // is never put in an energy column; it is reported in its own section.
     derived: tasks
-      // Issue 165: a DP4+ block is a compute block, but its result is a
+      // Issue 165: a DP4+ block is an analyse block, but its result is a
       // probability table with no single value, and it is reported in its own
       // section below. Listing it here would print "derived quantity not
       // computed" over a comparison that did compute.
-      .filter((task) => task?.compute && typeof task.compute === 'object' && task.compute.mode !== 'dp4')
+      .filter((task) => task?.analyse && typeof task.analyse === 'object' && task.analyse.mode !== 'dp4')
       .map((task) => derivedModel(task)),
     // One entry per conformer block whose branches were fanned out, with the
     // target-level ΔE the run energies actually support.

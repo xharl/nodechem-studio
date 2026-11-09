@@ -1,7 +1,7 @@
 [
   {
     "nodeId": "sp2",
-    "type": "calc",
+    "type": "calculate",
     "title": "sp2",
     "kind": "SP",
     "executable": true,
@@ -122,7 +122,7 @@
   },
   {
     "nodeId": "sp4",
-    "type": "calc",
+    "type": "calculate",
     "title": "sp4",
     "kind": "SP",
     "executable": true,
@@ -243,11 +243,11 @@
   },
   {
     "nodeId": "cbs",
-    "type": "compute",
+    "type": "analyse",
     "title": "CBS limit",
     "kind": "Compute",
     "executable": false,
-    "compute": {
+    "analyse": {
       "expression": "fit_cubic_inverse(E4, 4, E2, 2)",
       "status": "pending",
       "inputs": [],

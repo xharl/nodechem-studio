@@ -1,12 +1,12 @@
 # NodeChem Studio project format
 
-Status: normative for `schemaVersion: 2`. This document is the contract between
+Status: normative for `schemaVersion: 3`. This document is the contract between
 the app and anything that reads or writes a project file.
 
-> **Proposed change:** [ADR 0001](adr/0001-block-taxonomy.md) specifies a block
-> taxonomy (input · prepare · generate · calculate · analyse · output) and
-> `schemaVersion: 3`. It is not implemented yet; this document stays normative
-> for version 2 until it is.
+> **ADR 0001 is in force:** [ADR 0001](adr/0001-block-taxonomy.md) defines the
+> block taxonomy (input · prepare · generate · calculate · analyse · output) and
+> `schemaVersion: 3`. Version 3 is a breaking vocabulary change with no
+> compatibility layer; `prepare` is specified but not yet implemented.
 
 ## 1. File identity
 
@@ -46,13 +46,11 @@ every error carries a JSON path (`nodes[3].settings.basis`).
 
 ## 3. Versioning
 
-- `schemaVersion` is currently `2`.
-- A file with no `schemaVersion`, or `0`, is treated as v0.1 and migrated by
-  filling documented defaults; the result reports `migrated: true`.
-- A **v1** file (a single top-level `nodes`/`edges` graph) migrates by wrapping
-  that graph in a flow called `main`. Nothing else changes: task ids, run
-  folder names and bundle names are identical, so a v1 project plans exactly as
-  it did before.
+- `schemaVersion` is currently `3`.
+- Version 3 is **breaking** (ADR 0001): the block types are `input`,
+  `generate`, `calculate`, `analyse`, `output`, plus the `condition`, `loop`,
+  `merge` and `note` axes. A version 1, 2 or unversioned file is **refused by
+  version**, not migrated; rebuild the project in this build.
 - A file with a version **above** the build's `SCHEMA_VERSION` is rejected with
   an "update NodeChem Studio" message. The app never guesses at a newer format.
 - Unknown keys are warnings, not errors, so a forward-compatible reader can
@@ -64,7 +62,7 @@ Top level, all six keys required after normalization:
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `schemaVersion` | integer | `1` |
+| `schemaVersion` | integer | `3` |
 | `name` | string | ≤ 200 chars, defaults to `Untitled project` |
 | `molecule` | object | see below; the geometry a flow without an `input` block runs on |
 | `defaults` | object | project-wide route defaults |
@@ -106,24 +104,24 @@ graph.
 `state` is one of `ready`, `running`, `passed`, `review`, `blocked`, `failed`, `skipped`,
 `cancelled`, `interrupted`, `timed out` — the last being a block the queue stopped at its wall-clock
 limit, which is **not** `failed`: the engine never gave a verdict, so its output is not parsed.
-A `calc` block may also carry `timeoutSeconds`, which overrides `runner.timeoutSeconds` for that
+A `calculate` block may also carry `timeoutSeconds`, which overrides `runner.timeoutSeconds` for that
 block alone; it is absent unless the block states one, so a project that never set a per-block limit
 serialises exactly as before.
 Type-specific payloads:
 
 | `type` | Payload |
 | --- | --- |
-| `calc` | `settings` (route), `output` (`{ file, size }` or null), `checkpointFrom` (node id or null) |
-| `conformers` | `settings` (own key space, below), `output` (ensemble summary or null) |
+| `calculate` | `settings` (route), `output` (`{ file, size }` or null), `checkpointFrom` (node id or null) |
+| `generate` | `settings` (own key space, below), `output` (ensemble summary or null) |
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
 | `merge` | `merge { policy, notes }` |
 | `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
-| `compute` | `compute { mode?, expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block. `mode` is `expression` (the default, and absent when never set) or `dp4`, the DP4+ probability comparison whose definition lives under `dp4` (issue 165) |
+| `analyse` | `analyse { mode?, expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block. `mode` is `expression` (the default, and absent when never set) or `dp4`, the DP4+ probability comparison whose definition lives under `dp4` (issue 165) |
 | `note` | `note { text }` |
 
-`calc.settings` accepts exactly these keys — anything else is dropped:
+`calculate.settings` accepts exactly these keys — anything else is dropped:
 
 `jobType`, `engine`, `method`, `basis`, `memory`, `memoryUnit`, `nproc`, `checkpoint`,
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
@@ -218,7 +216,7 @@ The coordinates are stored on the block, not referenced, so a saved project and
 must have the same atoms in the same order as the block geometry — a mismatch is a validation error
 naming the first differing index, and nothing is reordered automatically.
 
-`conformers.settings` is a separate key space — route keys cannot leak into a conformer search:
+`generate.settings` is a separate key space — route keys cannot leak into a conformer search:
 `generator` (`crest`, `import` or `uff`), `method` (`gfn2` or `gfnff`, CREST only),
 `energyWindowKcal`, `rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`,
 `selectedConformerId`, `importPath`, `charge`, `multiplicity`, `fanOut`, `group` (an optional study
@@ -233,16 +231,16 @@ that never chose the route serialises as before: `torsionStepDegrees` (15–360,
 `maxTrials` (1–2000, default 200). A `uff` ensemble always records `energyUnit: kcal/mol` and
 `energyMethod: UFF`; `method` is left empty because it names the CREST xTB method.
 
-`group` is the only cross-block key a conformer block has: two blocks with the same `group` say they
+`group` is the only cross-block key a `generate` block has: two blocks with the same `group` say they
 belong to the same study. It is not a protomer or tautomer judgement, and it never causes energies to
 be compared or averaged — a group is a heading, not a result.
 
-`conformers.output` is the ensemble summary written back after a search:
+`generate.output` is the ensemble summary written back after a search:
 
 | Key | Notes |
 | --- | --- |
 | `generator`, `method` | `crest`, `import`, `uff`, or `fixture` for a dry run |
-| `group` | the block's study id, copied from `conformers.settings.group`; empty means no group. Per block, never per member |
+| `group` | the block's study id, copied from `generate.settings.group`; empty means no group. Per block, never per member |
 | `origin { program, version, method, sourceSha256 }` | what produced the ensemble; `crest`/`fixture` for a search run here, the declared program plus the digest of the imported file otherwise. Empty `program` means **not recorded**, never "computed here" |
 | `energyUnit`, `energyMethod` | the unit and producing method of the ensemble's absolute energies (`hartree` by default) |
 | `mixedEnergies` | true when the members disagree on unit or method; such an ensemble has no populations and no spread |
@@ -254,13 +252,13 @@ be compared or averaged — a group is a heading, not a result.
 | `members[] { id, rank, energyEh, energyKcal, energyUnit, energyMethod, relativeKcal, population, rmsdToLowest, protomer, kept, dropped, atoms[] }` | ranked table; kept members carry their geometry so the choice is offline. `energyEh` is null on a `kcal/mol` member, and `energyKcal` is null on a Hartree one — the absolute energy is never moved into a field that names the other unit |
 | `pruned { energy, rmsd, count }`, `warnings[]`, `generatedAt` | what was dropped and why |
 
-A calculation block fed by a `conformers` block runs the selected member's geometry. When no member
+A `calculate` block fed by a `generate` block runs the selected member's geometry. When no member
 is selected — including every protomer case — the queue refuses to build its input rather than
 falling back to the imported structure.
 
 With `fanOut` on, the block expands into one task per **retained** member (`<nodeId>~<memberId>`), and
 the fan follows the branch: every calculation that inherits its geometry or checkpoint — directly
-wired or further downstream — expands the same way, so `conformers → opt → freq` plans `opt~c1`,
+wired or further downstream — expands the same way, so `generate → calculate → calculate` plans `opt~c1`,
 `opt~c2`, `freq~c1`, `freq~c2`. On a dependency edge the downstream input is built from that member's
 atoms; on a checkpoint edge `opt~c1` writes `opt_c1.chk` and `freq~c1` reads exactly that file.
 Downstream `run.json` records which member a run belongs to; dataset export carries `conformer_node`,
@@ -325,7 +323,7 @@ adds a third:
 | --- | --- |
 | no `input` block (every v1 project) | `opt` |
 | `input` then `opt` | `opt~m1`, `opt~m2` |
-| `input` then `conformers` (fan-out) then `opt` | `opt~m2~c1` |
+| `input` then `generate` (fan-out) then `calculate` | `opt~m2~c1` |
 
 A record's `charge` and `multiplicity` are used unless the block sets a value
 that differs from the schema default (0 / 1); the default is not treated as an
@@ -544,13 +542,14 @@ addressed by user-typed text.
 ### 7.3 Not in the project file
 
 Runs, queues, cluster exports and scratch data are **not** referenced by the
-project document beyond `calc.output` (the discovered output file name and
+project document beyond `calculate.output` (the discovered output file name and
 size). Moving a `.ncs` file does not move its run history, and deleting the
 app data directory does not damage a project.
 
 ## 8. Changing the format
 
 Any change that alters the meaning or shape of an existing field requires a
-`schemaVersion` bump and a documented migration. Additive fields that a v1
-reader would drop are also a bump, because a save by an older build would lose
-them. Update this document in the same commit as the schema change.
+`schemaVersion` bump and a documented migration or an explicit breaking-change
+note in an ADR. Additive fields that an older reader would drop are also a bump,
+because a save by an older build would lose them. Update this document in the
+same commit as the schema change.

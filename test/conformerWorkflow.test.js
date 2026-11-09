@@ -72,7 +72,7 @@ const xyzFrames = (comments) => comments
 /** A conformer block feeding one optimisation, through a dependency edge. */
 function conformerProject({ output = null, settings = {}, edgeType = 'dependency' } = {}) {
   const raw = {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name: 'Conformer workflow',
     molecule: {
       charge: 0,
@@ -84,11 +84,11 @@ function conformerProject({ output = null, settings = {}, edgeType = 'dependency
     defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
     nodes: [
       {
-        id: 'conf', type: 'conformers', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
+        id: 'conf', type: 'generate', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
         settings, output,
       },
       {
-        id: 'opt', type: 'calc', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
+        id: 'opt', type: 'calculate', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
         settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null,
       },
     ],
@@ -125,22 +125,22 @@ describe('conformer workflow wiring', () => {
     const project = conformerProject({ output: selection() });
     const plan = buildWorkflowPlan(project);
     const task = plan.tasks.find((entry) => entry.nodeId === 'conf');
-    expect(task.type).toBe('conformers');
+    expect(task.type).toBe('generate');
     expect(task.executable).toBe(true);
     expect(task.engine).toBeNull();
     expect(task.inputName).toBe('conf.xyz');
     expect(task.inputText.split('\n')[0]).toBe('3');
-    expect(task.conformers.argv).toEqual(['conf.xyz', '--gfn2', '--nci']);
-    expect(task.conformers.maxConformers).toBe(20);
+    expect(task.generate.argv).toEqual(['conf.xyz', '--gfn2', '--nci']);
+    expect(task.generate.maxConformers).toBe(20);
   });
 
   it('emits --uhf as 2S, not as the multiplicity', () => {
     const project = conformerProject({ settings: { multiplicity: 3, charge: -1 }, output: selection() });
     const plan = buildWorkflowPlan(project);
     const task = plan.tasks.find((entry) => entry.nodeId === 'conf');
-    expect(task.conformers.argv).toContain('--uhf');
-    expect(task.conformers.argv[task.conformers.argv.indexOf('--uhf') + 1]).toBe('2');
-    expect(task.conformers.argv[task.conformers.argv.indexOf('--chrg') + 1]).toBe('-1');
+    expect(task.generate.argv).toContain('--uhf');
+    expect(task.generate.argv[task.generate.argv.indexOf('--uhf') + 1]).toBe('2');
+    expect(task.generate.argv[task.generate.argv.indexOf('--chrg') + 1]).toBe('-1');
   });
 
   it('builds the downstream input from the selected conformer, not the imported geometry', () => {
@@ -210,7 +210,7 @@ describe('conformer fan-out (#80)', () => {
     // on the project geometry after both optimisations finish.
     const project = fanOutProject();
     project.nodes.push({
-      id: 'freq', type: 'calc', title: 'Frequency', state: 'ready', x: 400, y: 0,
+      id: 'freq', type: 'calculate', title: 'Frequency', state: 'ready', x: 400, y: 0,
       settings: defaultSettings({ jobType: 'Freq' }), output: null, checkpointFrom: null,
     });
     project.edges.push({ id: 'e2', from: 'opt', to: 'freq', type: 'dependency' });
@@ -256,9 +256,9 @@ describe('conformer fan-out (#80)', () => {
     expect(opt2.validity.conformer.memberId).toBe('c2');
     expect(opt1.validity.conformer.memberId).toBe('c1');
     const conf2 = plan.tasks.find((task) => task.nodeId === 'conf~c2');
-    expect(conf2.type).toBe('conformers');
-    expect(conf2.conformers.argv).toEqual([]);
-    expect(conf2.conformers.member).toMatchObject({ id: 'c2', parentId: 'conf', relativeKcal: 3.4 });
+    expect(conf2.type).toBe('generate');
+    expect(conf2.generate.argv).toEqual([]);
+    expect(conf2.generate.member).toMatchObject({ id: 'c2', parentId: 'conf', relativeKcal: 3.4 });
     expect(conf2.inputText.split('\n')[0]).toBe('3');
     expect(conf2.inputText).toMatch(/H\s+1\.900000/);
   });
@@ -284,7 +284,7 @@ describe('conformer fan-out (#80)', () => {
       nodes: [
         ...base.nodes,
         {
-          id: 'freq', type: 'calc', title: 'Frequency', state: 'ready', x: 400, y: 0,
+          id: 'freq', type: 'calculate', title: 'Frequency', state: 'ready', x: 400, y: 0,
           settings: defaultSettings({ jobType: 'Freq' }), output: null, checkpointFrom: 'opt',
         },
       ],
@@ -411,19 +411,19 @@ describe('conformer queue path', () => {
       return queue && queue.status !== 'running' ? queue : null;
     });
     expect(done.status).toBe('completed');
-    const conformers = done.tasks.filter((task) => task.type === 'conformers');
+    const conformers = done.tasks.filter((task) => task.type === 'generate');
     expect(conformers.map((task) => task.nodeId).sort()).toEqual(['conf~c1', 'conf~c2']);
     for (const task of conformers) {
       expect(task.status).toBe('completed');
       expect(task.ensemble.count).toBe(1);
-      expect(task.ensemble.selectedId).toBe(task.conformers.member.id);
+      expect(task.ensemble.selectedId).toBe(task.generate.member.id);
       // Each member has its own folder with its own geometry.
       const memberText = await fsp.readFile(path.join(task.runDir, 'member.xyz'), 'utf8');
       expect(memberText.split('\n')[0]).toBe('3');
-      expect(memberText).toMatch(task.conformers.member.id === 'c2' ? /H\s+1\.900000/ : /H\s+0\.960000/);
+      expect(memberText).toMatch(task.generate.member.id === 'c2' ? /H\s+1\.900000/ : /H\s+0\.960000/);
     }
 
-    const calcs = done.tasks.filter((task) => task.type === 'calc');
+    const calcs = done.tasks.filter((task) => task.type === 'calculate');
     expect(calcs).toHaveLength(2);
     const members = [];
     for (const task of calcs) {
@@ -441,7 +441,7 @@ describe('conformer queue path', () => {
     const { queueManager } = await stack();
     await expect(queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
       edges: [],
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     })).rejects.toThrow(/CREST executable/i);
@@ -457,7 +457,7 @@ describe('conformer queue path', () => {
 
     const started = await queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
       edges: [],
       options: { dryRun: false, executable: null, crestExecutable: crestPath, scratchDir: '' },
     });
@@ -495,7 +495,7 @@ describe('conformer queue path', () => {
     const plan = buildWorkflowPlan(project);
     const started = await queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
       edges: [],
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     });
@@ -530,7 +530,7 @@ describe('conformer queue path', () => {
     const plan = buildWorkflowPlan(project);
     const started = await queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
       edges: [],
       options: { dryRun: true, executable: null, crestExecutable: '', scratchDir: '' },
     });
@@ -564,7 +564,7 @@ describe('conformer queue path', () => {
     const plan = buildWorkflowPlan(project);
     const started = await queueManager.start({
       projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
       edges: [],
       options: {
         dryRun: true,

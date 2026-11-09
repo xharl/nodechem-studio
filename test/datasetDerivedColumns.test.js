@@ -23,8 +23,8 @@ const derivedRun = (overrides = {}) => ({
   kind: 'derived',
   title: 'CBS extrapolation',
   createdAt: '2026-11-09T02:00:00.000Z',
-  provenance: { kind: 'derived', jobType: 'Compute', method: {}, basis: null },
-  compute: {
+  provenance: { kind: 'derived', jobType: 'Analyse', method: {}, basis: null },
+  analyse: {
     expression: 'extrapolate_CBS(E1, 3, E2, 2)',
     inputs: [
       { recordId: 'water-avtz', field: 'finalEnergyHartree', value: -76.4000, unit: 'hartree' },

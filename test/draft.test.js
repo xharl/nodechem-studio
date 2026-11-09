@@ -10,12 +10,12 @@ import {
 
 /** A minimal project: the draft layer only checks shape, never chemistry. */
 const project = {
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'Diels-Alder TS',
   defaults: { method: 'B3LYP', basis: 'def2-SVP' },
   nodes: [
-    { id: 'r-opt', type: 'calc', title: 'Optimize', x: 40, y: 80 },
-    { id: 'r-freq', type: 'calc', title: 'Frequencies', x: 320, y: 80 },
+    { id: 'r-opt', type: 'calculate', title: 'Optimize', x: 40, y: 80 },
+    { id: 'r-freq', type: 'calculate', title: 'Frequencies', x: 320, y: 80 },
   ],
   edges: [{ from: 'r-opt', to: 'r-freq', type: 'dependency' }],
 };
@@ -110,7 +110,7 @@ describe('draftIsRestorable', () => {
       nodes: project.nodes,
       defaults: { basis: 'def2-SVP', method: 'B3LYP' },
       name: project.name,
-      schemaVersion: 1,
+      schemaVersion: 3,
     };
     expect(draftIsRestorable(draftOf({ project: reordered }), project)).toBe(false);
   });

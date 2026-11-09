@@ -1,6 +1,6 @@
 # ADR 0001 — Block taxonomy: six data stages, two axes, one contract per block
 
-- **Status:** Proposed — for review, not yet implemented
+- **Status:** Accepted — implementation in progress. Step 2 (the behaviour-neutral rename to schemaVersion 3) has landed; steps 3–6 remain.
 - **Date:** 2026-11-09
 - **Deciders:** Xavier (product), Hermes (implementation)
 - **Supersedes:** the ad-hoc block list in `src/shared/projectSchema.js` (`NODE_TYPES`)

@@ -28,7 +28,7 @@ function projectWithOutput({ records = 3, kind = 'html', include = 'records', ar
     enabled: index !== records - 1 || records < 3,
   }));
   const result = validateProject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'family artifacts',
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -47,7 +47,7 @@ function projectWithOutput({ records = 3, kind = 'html', include = 'records', ar
       nodes: [
         { id: 'in1', type: 'input', kind: 'Input', title: 'Family', state: 'ready', x: 0, y: 0,
           input: { datasetId: 'family', recordFilter: { field: '', equals: '' } } },
-        { id: 'opt', type: 'calc', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 100,
+        { id: 'opt', type: 'calculate', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 100,
           settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null },
         { id: 'out1', type: 'output', kind: 'Output', title: 'Report', state: 'ready', x: 0, y: 200,
           output: { kind, path: artifactPath, include, bundle: 'project.zip', manifest: true, notes: '' } },
@@ -176,7 +176,7 @@ describe('output blocks write artifacts and a hashed manifest', () => {
     const artifactFile = path.join(outRoot, 'reports', 'dataset.csv');
     const csv = await fsp.readFile(artifactFile, 'utf8');
     const records = await Promise.all(queue.tasks
-      .filter((task) => task.type === 'calc' && task.runDir)
+      .filter((task) => task.type === 'calculate' && task.runDir)
       .map(async (task) => JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'))));
     expect(csv).toBe(datasetCsv(runRows(records)));
     const manifest = JSON.parse(await fsp.readFile(path.join(outRoot, 'manifest.json'), 'utf8'));

@@ -382,7 +382,7 @@ describe('the badge on every surface', () => {
       {
         nodeId: 'sp',
         title: 'Converged single point (Spartan)',
-        type: 'calc',
+        type: 'calculate',
         kind: 'SP',
         status: 'completed',
         attempts: 1,
@@ -456,9 +456,9 @@ describe('a mixed series is labelled, never averaged', () => {
       createdAt: '2026-11-08T01:00:00.000Z',
       finishedAt: '2026-11-08T01:12:00.000Z',
       tasks: [
-        { nodeId: 'a', title: 'Opt', type: 'calc', kind: 'Opt', status: 'completed', recordId: 'r1', runId: 'run-opt' },
-        { nodeId: 'b', title: 'Spartan SP', type: 'calc', kind: 'SP', status: 'completed', recordId: 'r1', runId: 'spartan-x' },
-        { nodeId: 'c', title: 'Freq', type: 'calc', kind: 'Freq', status: 'completed', recordId: 'r2', runId: 'run-freq' },
+        { nodeId: 'a', title: 'Opt', type: 'calculate', kind: 'Opt', status: 'completed', recordId: 'r1', runId: 'run-opt' },
+        { nodeId: 'b', title: 'Spartan SP', type: 'calculate', kind: 'SP', status: 'completed', recordId: 'r1', runId: 'spartan-x' },
+        { nodeId: 'c', title: 'Freq', type: 'calculate', kind: 'Freq', status: 'completed', recordId: 'r2', runId: 'run-freq' },
       ],
     };
     const records = {
@@ -500,16 +500,16 @@ describe('a mixed series is labelled, never averaged', () => {
       finishedAt: '2026-11-08T01:12:00.000Z',
       tasks: [
         {
-          nodeId: 'c1', title: 'Member 1', type: 'calc', kind: 'SP', status: 'completed', runId: 'run-m1',
+          nodeId: 'c1', title: 'Member 1', type: 'calculate', kind: 'SP', status: 'completed', runId: 'run-m1',
           fanOut: { conformerId: 'conf', memberId: 'm1' },
           conformer: { nodeId: 'conf', title: 'Conformers', generator: 'crest', id: 'm1', relativeKcal: 0, population: 0.6, protomer: 'p1' },
         },
         {
-          nodeId: 'c2', title: 'Member 2 (imported)', type: 'calc', kind: 'SP', status: 'completed', runId: 'spartan-x',
+          nodeId: 'c2', title: 'Member 2 (imported)', type: 'calculate', kind: 'SP', status: 'completed', runId: 'spartan-x',
           fanOut: { conformerId: 'conf', memberId: 'm2' },
           conformer: { nodeId: 'conf', title: 'Conformers', generator: 'crest', id: 'm2', relativeKcal: 1.2, population: 0.4, protomer: 'p1' },
         },
-        { nodeId: 'conf', title: 'Conformers', type: 'conformers', status: 'completed', conformers: { temperature: 298.15 } },
+        { nodeId: 'conf', title: 'Conformers', type: 'generate', status: 'completed', generate: { temperature: 298.15 } },
       ],
     };
     const model = buildWorkflowReport(queue, {
@@ -579,7 +579,7 @@ describe('ncs report --include-imported', () => {
       createdAt: '2026-11-08T01:00:00.000Z',
       finishedAt: '2026-11-08T01:12:00.000Z',
       tasks: [{
-        nodeId: 'sp', title: 'Spartan single point', type: 'calc', kind: 'SP',
+        nodeId: 'sp', title: 'Spartan single point', type: 'calculate', kind: 'SP',
         status: 'completed', runId: 'spartan-x', runDir,
       }],
     };

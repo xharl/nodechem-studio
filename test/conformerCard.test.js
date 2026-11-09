@@ -160,7 +160,7 @@ describe('the card prints the unit and keeps the origin out of the numbers', () 
   });
 
   const nodeFor = (output) => ({
-    id: 'conf', type: 'conformers', kind: 'Conformers', title: 'Conformer ensemble',
+    id: 'conf', type: 'generate', kind: 'Conformers', title: 'Conformer ensemble',
     state: 'ready', x: 0, y: 0, settings: { generator: output.generator }, output,
   });
 

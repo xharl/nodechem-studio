@@ -80,7 +80,7 @@ function timeoutSecondsFrom(value) {
   return Math.min(seconds, LIMITS.timeoutSeconds);
 }
 
-const TASK_TYPES = new Set(['input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'compute', 'note']);
+const TASK_TYPES = new Set(['input', 'calculate', 'generate', 'condition', 'loop', 'merge', 'output', 'analyse', 'note']);
 
 function queueIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -282,14 +282,14 @@ function routeSettings(raw) {
 function conformerTaskRecord(raw, nodeId) {
   const inputName = String(raw?.inputName || '');
   if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
-    throw new Error(`Conformer task "${nodeId}" must have a safe .xyz input name.`);
+    throw new Error(`Generate task "${nodeId}" must have a safe .xyz input name.`);
   }
   const inputText = String(raw?.inputText || '');
-  if (!inputText.trim()) throw new Error(`Conformer task "${nodeId}" has no starting geometry.`);
+  if (!inputText.trim()) throw new Error(`Generate task "${nodeId}" has no starting geometry.`);
   if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
-    throw new Error(`Conformer task "${nodeId}" input is larger than 2 MiB.`);
+    throw new Error(`Generate task "${nodeId}" input is larger than 2 MiB.`);
   }
-  const conf = raw?.conformers && typeof raw.conformers === 'object' ? raw.conformers : {};
+  const conf = raw?.generate && typeof raw.generate === 'object' ? raw.generate : {};
   // Issue 144: three routes, three sources of geometry. Anything else is
   // treated as CREST, which is the historical default.
   const generator = conf.generator === 'import'
@@ -302,7 +302,7 @@ function conformerTaskRecord(raw, nodeId) {
   const rawMember = conf.member && typeof conf.member === 'object' ? conf.member : null;
   const memberId = rawMember ? String(rawMember.id || '') : '';
   if (rawMember && !/^c\d+$/.test(memberId)) {
-    throw new Error(`Conformer task "${nodeId}" names an invalid member id.`);
+    throw new Error(`Generate task "${nodeId}" names an invalid member id.`);
   }
   const member = rawMember ? {
     id: memberId,
@@ -333,7 +333,7 @@ function conformerTaskRecord(raw, nodeId) {
     temperature: Number.isFinite(Number(rawMember.temperature)) ? Number(rawMember.temperature) : null,
   } : null;
   if (generator === 'import' && !importPath && !member) {
-    throw new Error(`Conformer task "${nodeId}" has no ensemble file to import.`);
+    throw new Error(`Generate task "${nodeId}" has no ensemble file to import.`);
   }
   const number = (value, fallback, min, max) => {
     const parsed = Number(value);
@@ -350,9 +350,9 @@ function conformerTaskRecord(raw, nodeId) {
     : null;
   return {
     nodeId,
-    type: 'conformers',
+    type: 'generate',
     title: oneLine(raw?.title, 120) || nodeId,
-    kind: oneLine(raw?.kind, 32) || 'Conformers',
+    kind: oneLine(raw?.kind, 32) || 'Generate',
     executable: true,
     engine: null,
     argv: null,
@@ -392,7 +392,7 @@ function conformerTaskRecord(raw, nodeId) {
     ensemble: null,
     ensembleFile: null,
     inputText,
-    conformers: {
+    generate: {
       generator,
       method: conf.method === 'gfnff' ? 'gfnff' : 'gfn2',
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
@@ -543,14 +543,14 @@ function outputRecord(raw) {
 }
 
 /**
- * Issue 175: the declaration a compute task carries, sanitised.
+ * Issue 175: the declaration an analyse task carries, sanitised.
  *
  * `taskRecord` is the queue's trust boundary — every field on a task came from
- * the renderer — so a compute declaration is reduced to the fields the
+ * the renderer — so an analyse declaration is reduced to the fields the
  * evaluator reads, each bounded, and anything that is not an identifier or a
  * safe block id is dropped rather than evaluated.
  */
-function computeTaskPayload(raw) {
+function analyseTaskPayload(raw) {
   const declared = (Array.isArray(raw?.declared) ? raw.declared : [])
     .filter((entry) => entry && typeof entry === 'object')
     .slice(0, 24)
@@ -622,7 +622,7 @@ function taskRecord(raw, index) {
   const nodeId = String(raw?.nodeId || '');
   if (!SAFE_ID.test(nodeId)) throw new Error(`Task ${index + 1} has an invalid node id.`);
   const executable = Boolean(raw?.executable);
-  if (TASK_TYPES.has(raw?.type) && raw.type === 'conformers') {
+  if (TASK_TYPES.has(raw?.type) && raw.type === 'generate') {
     return { ...conformerTaskRecord(raw, nodeId), ...scopeRecord(raw) };
   }
   const engineId = String(raw?.engine || 'gaussian');
@@ -660,7 +660,7 @@ function taskRecord(raw, index) {
   if (checkpointName && !isSafeCheckpointName(engine, checkpointName)) {
     throw new Error(`Task "${nodeId}" has an unsafe checkpoint name.`);
   }
-  const type = TASK_TYPES.has(raw?.type) ? raw.type : (executable ? 'calc' : 'note');
+  const type = TASK_TYPES.has(raw?.type) ? raw.type : (executable ? 'calculate' : 'note');
   const condition = type === 'condition'
     ? {
       expression: oneLine(raw?.condition?.expression, 4000),
@@ -680,9 +680,9 @@ function taskRecord(raw, index) {
   const merge = type === 'merge'
     ? { policy: ['all', 'any'].includes(raw?.merge?.policy) ? raw.merge.policy : 'all' }
     : null;
-  // Issue 175: a compute block's expression and declared inputs.
-  const compute = type === 'compute' && raw?.compute && typeof raw.compute === 'object'
-    ? computeTaskPayload(raw.compute) : null;
+  // Issue 175: an analyse block's expression and declared inputs.
+  const analyse = type === 'analyse' && raw?.analyse && typeof raw.analyse === 'object'
+    ? analyseTaskPayload(raw.analyse) : null;
   const rawReaction = raw?.reaction && typeof raw.reaction === 'object' ? raw.reaction : null;
   const reaction = rawReaction
     ? {
@@ -749,7 +749,7 @@ function taskRecord(raw, index) {
     nodeId,
     type,
     title: oneLine(raw?.title, 120) || nodeId,
-    kind: oneLine(raw?.kind, 32) || 'Calc',
+    kind: oneLine(raw?.kind, 32) || 'Calculate',
     executable,
     engine: engine.id,
     argv,
@@ -770,7 +770,7 @@ function taskRecord(raw, index) {
     condition,
     loop,
     merge,
-    compute,
+    analyse,
     ladder,
     spin,
     reaction,
@@ -1054,19 +1054,19 @@ export class QueueManager {
     // start payload means the generous default, never "no limit".
     const timeoutSeconds = timeoutSecondsFrom(options.timeoutSeconds) ?? DEFAULT_TIMEOUT_SECONDS;
     const calcEngines = [...new Set(tasks
-      .filter((task) => task.executable && task.type === 'calc')
+      .filter((task) => task.executable && task.type === 'calculate')
       .map((task) => String(task.engine || 'gaussian')))];
     const needsCalcEngine = calcEngines.length > 0;
     // A fanned-out member task carries an ensemble that is already stored in the
     // project; no CREST binary is needed to materialise it (#80).
-    const needsCrest = tasks.some((task) => task.type === 'conformers'
-      && task.conformers?.generator === 'crest'
-      && !task.conformers?.member);
+    const needsCrest = tasks.some((task) => task.type === 'generate'
+      && task.generate?.generator === 'crest'
+      && !task.generate?.member);
     // The Open Babel route is external too, so it needs its own binary; a
     // fanned-out member carries its ensemble already and needs nothing.
-    const needsObabel = tasks.some((task) => task.type === 'conformers'
-      && task.conformers?.generator === 'obabel'
-      && !task.conformers?.member);
+    const needsObabel = tasks.some((task) => task.type === 'generate'
+      && task.generate?.generator === 'obabel'
+      && !task.generate?.member);
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1134,7 +1134,7 @@ export class QueueManager {
     await fsp.mkdir(path.join(this.queueDir(id), 'inputs'), { recursive: true });
     for (const task of tasks) {
       if (!task.executable) continue;
-      const inputPath = task.type === 'conformers'
+      const inputPath = task.type === 'generate'
         ? this.conformerInputPath(id, task.nodeId)
         : this.inputPath(id, task.nodeId);
       await fsp.writeFile(inputPath, task.inputText, 'utf8');
@@ -1312,7 +1312,7 @@ export class QueueManager {
       this.publish(queue);
       return;
     }
-    if (task.type === 'conformers') return this.runConformers(queue, task);
+    if (task.type === 'generate') return this.runConformers(queue, task);
     return this.runTask(queue, task);
   }
 
@@ -1366,7 +1366,7 @@ export class QueueManager {
       .map((edge) => queue.tasks.find((entry) => entry.nodeId === edge.from))
       .filter(Boolean);
     if (sources.length > 0) return sources.every((source) => terminal.has(String(source.status)));
-    const runs = queue.tasks.filter((entry) => entry.type === 'calc' || entry.type === 'conformers');
+    const runs = queue.tasks.filter((entry) => entry.type === 'calculate' || entry.type === 'generate');
     return runs.every((entry) => terminal.has(String(entry.status)));
   }
 
@@ -1533,7 +1533,7 @@ export class QueueManager {
       throw new Error(`The starting geometry for "${task.nodeId}" is larger than 2 MiB; a conformer search input is limited to 2 MiB.`);
     }
     await fsp.writeFile(path.join(dir, CONFORMER_STAGED_INPUT), inputText, 'utf8');
-    return conformerArgvFor(task.conformers.argv, CONFORMER_STAGED_INPUT);
+    return conformerArgvFor(task.generate.argv, CONFORMER_STAGED_INPUT);
   }
 
   /**
@@ -1545,7 +1545,7 @@ export class QueueManager {
    * block's output so the project can build downstream inputs offline.
    */
   async runConformers(queue, task) {
-    const conf = task.conformers;
+    const conf = task.generate;
     const dir = path.join(this.queueDir(queue.id), 'conformers', task.nodeId);
     await fsp.mkdir(dir, { recursive: true });
 
@@ -1909,8 +1909,8 @@ export class QueueManager {
       mixedEnergies: false,
       // Issue #132: the fanned-out branch repeats its parent's study id, so the
       // one-member summary in a branch folder does not lose the relationship.
-      group: isConformerGroupId(String(task.conformers?.group ?? ''))
-        ? String(task.conformers.group) : '',
+      group: isConformerGroupId(String(task.generate?.group ?? ''))
+        ? String(task.generate.group) : '',
       count: 1,
       total: 1,
       spreadKcal: Number.isFinite(member.spreadKcal) ? member.spreadKcal : null,
@@ -2272,7 +2272,7 @@ export class QueueManager {
    * its own flow — an empty artifact would hide the family that actually ran.
    */
   artifactEntries(queue, task) {
-    const collects = (entry) => entry && (entry.type === 'calc' || entry.type === 'conformers');
+    const collects = (entry) => entry && (entry.type === 'calculate' || entry.type === 'generate');
     const seen = new Set();
     const stack = queue.edges
       .filter((edge) => edge.to === task.nodeId && edge.type !== 'loop')
@@ -2519,9 +2519,9 @@ export class QueueManager {
       await this.runLoop(queue, task);
       return;
     }
-    if (task.type === 'compute') {
+    if (task.type === 'analyse') {
       // Issue 175: arithmetic over the results of the blocks wired into this one.
-      await this.runCompute(queue, task);
+      await this.runAnalyse(queue, task);
       return;
     }
     if (task.type === 'note') {
@@ -2544,7 +2544,7 @@ export class QueueManager {
   }
 
   /**
-   * One compute block (issue 175): arithmetic over upstream results.
+   * One analyse block (issue 175): arithmetic over upstream results.
    *
    * The plan cannot know these numbers — they do not exist until the upstream
    * blocks have run — so the evaluation happens here, from the `run.json` of
@@ -2557,18 +2557,18 @@ export class QueueManager {
    * written to its own `run.json` as `kind: 'derived'` — it carries no `parsed`
    * block, so no report column can present it as an engine result.
    */
-  async runCompute(queue, task) {
-    const compute = task.compute && typeof task.compute === 'object' ? task.compute : {};
-    // Issue 165: a DP4+ block is a compute block with a definition instead of
+  async runAnalyse(queue, task) {
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    // Issue 165: a DP4+ block is an analyse block with a definition instead of
     // an expression. It reads whole run records (candidates) rather than named
     // fields, so it has its own reader below but the same record contract.
-    if (compute.mode === 'dp4') {
+    if (analyse.mode === 'dp4') {
       await this.runDp4(queue, task);
       return;
     }
-    const declared = Array.isArray(compute.declared) ? compute.declared : [];
+    const declared = Array.isArray(analyse.declared) ? analyse.declared : [];
     if (declared.length === 0) {
-      this.setTaskOutcome(task, 'failed', 'the compute block declares no inputs to read');
+      this.setTaskOutcome(task, 'failed', 'the analyse block declares no inputs to read');
       await this.persist(queue);
       this.publish(queue);
       this.announce(queue, task);
@@ -2604,21 +2604,21 @@ export class QueueManager {
 
     let evaluation;
     try {
-      evaluation = evaluateCompute({ expression: compute.expression, inputs: declared }, {
+      evaluation = evaluateCompute({ expression: analyse.expression, inputs: declared }, {
         recordId,
         resolveSource,
         allRecords,
       });
     } catch (error) {
       if (!(error instanceof ComputeError)) throw error;
-      task.compute = { ...compute, status: 'refused', value: null, notes: [error.message], notComputed: error.message };
+      task.analyse = { ...analyse, status: 'refused', value: null, notes: [error.message], notComputed: error.message };
       this.setTaskOutcome(task, 'failed', oneLine(error.message, 400));
       await this.persist(queue);
       this.publish(queue);
       this.announce(queue, task);
       return;
     }
-    task.compute = { ...compute, ...evaluation };
+    task.analyse = { ...analyse, ...evaluation };
     const dir = path.join(this.queueDir(queue.id), 'compute', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
     try {
       await fsp.mkdir(dir, { recursive: true });
@@ -2628,11 +2628,11 @@ export class QueueManager {
         nodeId: task.nodeId,
         title: task.title,
         createdAt: new Date().toISOString(),
-        provenance: { kind: 'derived', jobType: 'Compute', method: {}, basis: null },
+        provenance: { kind: 'derived', jobType: 'Analyse', method: {}, basis: null },
         // The whole point of the record: the expression, the numbers it read and
         // the refusal, if there was one. `parsed` stays absent — this is not a
         // calculation result.
-        compute: {
+        analyse: {
           expression: evaluation.expression,
           inputs: evaluation.inputs,
           value: evaluation.value,
@@ -2640,14 +2640,14 @@ export class QueueManager {
           functionCalls: evaluation.functionCalls,
           notes: evaluation.notes,
           notComputed: evaluation.notComputed,
-          sources: compute.sources || [],
+          sources: analyse.sources || [],
           ...(recordId ? { recordId } : {}),
         },
       });
       task.runDir = dir;
       task.runId = task.nodeId;
     } catch (error) {
-      task.compute = { ...task.compute, ...evaluation, notes: [...evaluation.notes, `the derived record could not be written: ${error.message}`] };
+      task.analyse = { ...task.analyse, ...evaluation, notes: [...evaluation.notes, `the derived record could not be written: ${error.message}`] };
     }
     if (evaluation.status === 'computed') {
       this.setTaskOutcome(task, 'completed', oneLine(describeCompute(evaluation), 400));
@@ -2677,7 +2677,7 @@ export class QueueManager {
    * names the reason rather than no record at all.
    */
   async runDp4(queue, task) {
-    const compute = task.compute && typeof task.compute === 'object' ? task.compute : {};
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
     const sources = this.incomingSources(queue, task.nodeId);
     const rows = [];
     for (const source of sources) {
@@ -2698,14 +2698,14 @@ export class QueueManager {
         run,
       });
     }
-    const evaluation = evaluateDp4(compute.dp4, { rows });
+    const evaluation = evaluateDp4(analyse.dp4, { rows });
     const summary = dp4Summary(evaluation);
     task.dp4 = evaluation;
     // The task keeps the verdict and the refusal, not a second copy of the
-    // table: `dp4` is the result, `compute` is the block that produced it, and
+    // table: `dp4` is the result, `analyse` is the block that produced it, and
     // a queue snapshot should not carry 27 nuclei twice.
-    task.compute = {
-      ...compute,
+    task.analyse = {
+      ...analyse,
       status: evaluation.status,
       expression: evaluation.expression,
       available: evaluation.available,
@@ -2738,7 +2738,7 @@ export class QueueManager {
         // The block's own declaration: which mode, which variant, which level,
         // which measured shifts, and the one-line verdict or refusal. A reader
         // of the record can see the experiment without opening the project.
-        compute: {
+        analyse: {
           mode: 'dp4',
           expression: evaluation.expression,
           inputs: (evaluation.candidates || []).map((candidate) => ({
@@ -2752,7 +2752,7 @@ export class QueueManager {
           functionCalls: [],
           notes: evaluation.notes || [],
           notComputed: evaluation.notComputed,
-          sources: compute.sources || [],
+          sources: analyse.sources || [],
           ...(task.recordId ? { recordId: task.recordId } : {}),
         },
         // The whole result: probabilities, per-nucleus deviations, the fit each
@@ -2763,7 +2763,7 @@ export class QueueManager {
       task.runDir = dir;
       task.runId = task.nodeId;
     } catch (error) {
-      task.compute = { ...task.compute, notes: [...(evaluation.notes || []), `the DP4+ record could not be written: ${error.message}`] };
+      task.analyse = { ...task.analyse, notes: [...(evaluation.notes || []), `the DP4+ record could not be written: ${error.message}`] };
     }
     if (evaluation.status === 'computed') {
       this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
@@ -2945,7 +2945,7 @@ export class QueueManager {
       if (task.status === 'running' && task.runId) {
         await this.runManager.cancel(task.runId).catch(() => {});
       }
-      if (task.status === 'running' && task.type === 'conformers') {
+      if (task.status === 'running' && task.type === 'generate') {
         this.conformersRunner?.cancel();
       }
     }

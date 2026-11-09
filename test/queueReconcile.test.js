@@ -18,14 +18,14 @@ import { applyQueueToProject, nextAction, nodeStatesFromQueue } from '../src/sha
  */
 
 const BLOCKS = [
-  { id: 'sp-hf-dz', type: 'calc', state: 'ready', title: 'HF/cc-pVDZ SP' },
-  { id: 'sp-hf-tz', type: 'calc', state: 'ready', title: 'HF/cc-pVTZ SP' },
-  { id: 'mp2-dz', type: 'calc', state: 'ready', title: 'MP2/cc-pVDZ SP' },
-  { id: 'mp2-tz', type: 'calc', state: 'ready', title: 'MP2/cc-pVTZ SP' },
-  { id: 'ccsd-dz', type: 'calc', state: 'ready', title: 'CCSD/cc-pVDZ SP' },
-  { id: 'ccsd-tz', type: 'calc', state: 'ready', title: 'CCSD/cc-pVTZ SP' },
-  { id: 'freq-hf', type: 'calc', state: 'ready', title: 'HF/cc-pVDZ Freq' },
-  { id: 'opt-hf', type: 'calc', state: 'ready', title: 'HF/cc-pVDZ Opt' },
+  { id: 'sp-hf-dz', type: 'calculate', state: 'ready', title: 'HF/cc-pVDZ SP' },
+  { id: 'sp-hf-tz', type: 'calculate', state: 'ready', title: 'HF/cc-pVTZ SP' },
+  { id: 'mp2-dz', type: 'calculate', state: 'ready', title: 'MP2/cc-pVDZ SP' },
+  { id: 'mp2-tz', type: 'calculate', state: 'ready', title: 'MP2/cc-pVTZ SP' },
+  { id: 'ccsd-dz', type: 'calculate', state: 'ready', title: 'CCSD/cc-pVDZ SP' },
+  { id: 'ccsd-tz', type: 'calculate', state: 'ready', title: 'CCSD/cc-pVTZ SP' },
+  { id: 'freq-hf', type: 'calculate', state: 'ready', title: 'HF/cc-pVDZ Freq' },
+  { id: 'opt-hf', type: 'calculate', state: 'ready', title: 'HF/cc-pVDZ Opt' },
   { id: 'loop-cbs', type: 'loop', state: 'ready', title: 'CBS loop' },
   { id: 'cond-1', type: 'condition', state: 'ready', title: 'Converged?' },
   { id: 'report', type: 'output', state: 'ready', title: 'Report' },
@@ -96,7 +96,7 @@ describe('restoring block states from the queue', () => {
   it('counts an untaken branch as a decision only for a control block', () => {
     const skipped = [{ nodeId: 'cond-1', status: 'skipped' }, { nodeId: 'calc-x', status: 'skipped' }];
     const states = nodeStatesFromQueue(skipped, {
-      typeOf: (id) => (id === 'cond-1' ? 'condition' : 'calc'),
+      typeOf: (id) => (id === 'cond-1' ? 'condition' : 'calculate'),
     });
     expect(states.get('cond-1')).toBe('passed');
     expect(states.has('calc-x')).toBe(false);

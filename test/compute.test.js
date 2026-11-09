@@ -49,19 +49,19 @@ const molecule = () => ({
 });
 
 const calc = (id, title = id) => ({
-  id, type: 'calc', kind: 'SP', title, state: 'ready', x: 0, y: 0,
+  id, type: 'calculate', kind: 'SP', title, state: 'ready', x: 0, y: 0,
   settings: defaultSettings({ jobType: 'SP' }), output: null,
 });
 
 const computeNode = (expression, inputs, extra = {}) => ({
-  id: 'cbs', type: 'compute', kind: 'Compute', title: 'CBS limit', state: 'ready', x: 0, y: 0,
-  compute: { expression, inputs },
+  id: 'cbs', type: 'analyse', kind: 'Compute', title: 'CBS limit', state: 'ready', x: 0, y: 0,
+  analyse: { expression, inputs },
   ...extra,
 });
 
 function projectWith(nodes, edges, { datasets = [] } = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Compute protocol',
     molecule: molecule(),
     defaults: { method: 'MP2', basis: 'cc-pVQZ', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -334,7 +334,7 @@ describe('issue 175 — fields, units and refusals', () => {
   it('refuses an undeclared field or a malformed input at definition time', () => {
     expect(() => computeInputsOf({
       expression: 'E', inputs: [{ name: 'E', field: 'finalEnergy', source: 'sp' }],
-    })).toThrow(/not a field a compute block can read/);
+    })).toThrow(/not a field an analyse block can read/);
     expect(() => computeInputsOf({
       expression: 'E', inputs: [{ name: '1E', field: 'finalEnergyHartree', source: 'sp' }],
     })).toThrow(/usable name/);
@@ -377,18 +377,18 @@ describe('issue 175 — schema and plan', () => {
   const expected = (e4, e2) => (e4 * 64 - e2 * 8) / (64 - 8);
 
   it('accepts the node type and keeps the block absent unless it is used', () => {
-    expect(NODE_TYPES).toContain('compute');
+    expect(NODE_TYPES).toContain('analyse');
     const project = validated(projectWith(nodes(), edges()));
     const node = project.nodes.find((item) => item.id === 'cbs');
-    expect(node.type).toBe('compute');
-    expect(node.compute.expression).toBe('fit_cubic_inverse(E4, 4, E2, 2)');
-    expect(node.compute.inputs).toHaveLength(2);
+    expect(node.type).toBe('analyse');
+    expect(node.analyse.expression).toBe('fit_cubic_inverse(E4, 4, E2, 2)');
+    expect(node.analyse.inputs).toHaveLength(2);
     // Round-trip: what is saved is what was validated.
     const saved = stringifyProject(project);
     expect(saved.ok).toBe(true);
     const again = validateProject(JSON.parse(saved.text));
     expect(again.errors).toEqual([]);
-    expect(again.project.nodes.find((item) => item.id === 'cbs').compute).toEqual(node.compute);
+    expect(again.project.nodes.find((item) => item.id === 'cbs').analyse).toEqual(node.analyse);
   });
 
   it('refuses an expression that reads an undeclared name, and an unknown field', () => {
@@ -406,36 +406,36 @@ describe('issue 175 — schema and plan', () => {
   it('produces the CBS limit on the planned task, with the expression echoed', () => {
     const project = validated(projectWith(nodes(), edges()));
     const plan = buildWorkflowPlan(project, { results: results() });
-    const task = plan.tasks.find((item) => item.type === 'compute');
+    const task = plan.tasks.find((item) => item.type === 'analyse');
     expect(task.executable).toBe(false);
-    expect(task.compute.expression).toBe('fit_cubic_inverse(E4, 4, E2, 2)');
-    expect(task.compute.value).toBeCloseTo(expected(-76.41, -76.3), 12);
-    expect(task.compute.unit).toBe('hartree');
-    expect(task.compute.inputs).toEqual([
+    expect(task.analyse.expression).toBe('fit_cubic_inverse(E4, 4, E2, 2)');
+    expect(task.analyse.value).toBeCloseTo(expected(-76.41, -76.3), 12);
+    expect(task.analyse.unit).toBe('hartree');
+    expect(task.analyse.inputs).toEqual([
       { recordId: 'sp4', field: 'finalEnergyHartree', value: -76.41, unit: 'hartree' },
       { recordId: 'sp2', field: 'finalEnergyHartree', value: -76.3, unit: 'hartree' },
     ]);
-    expect(task.compute.notes.join(' ')).toContain(CBS_FORMULA);
+    expect(task.analyse.notes.join(' ')).toContain(CBS_FORMULA);
     // The edge from the compute block keeps the plan's ordering.
     expect(plan.edges.filter((edge) => edge.to === 'cbs')).toHaveLength(3);
   });
 
   it('is pending, not wrong, when the plan is built before the upstream runs', () => {
     const project = validated(projectWith(nodes(), edges()));
-    const task = buildWorkflowPlan(project).tasks.find((item) => item.type === 'compute');
-    expect(task.compute.status).toBe('pending');
-    expect(task.compute.value).toBeNull();
-    expect(task.compute.notComputed).toMatch(/waiting for/);
+    const task = buildWorkflowPlan(project).tasks.find((item) => item.type === 'analyse');
+    expect(task.analyse.status).toBe('pending');
+    expect(task.analyse.value).toBeNull();
+    expect(task.analyse.notComputed).toMatch(/waiting for/);
   });
 
   it('fails the task with the field named when one upstream field is missing', () => {
     const project = validated(projectWith(nodes(), edges()));
     const runs = results();
     runs.sp2 = { parsed: { frequencies: { imaginaryCount: 0 } } };
-    const task = buildWorkflowPlan(project, { results: runs }).tasks.find((item) => item.type === 'compute');
-    expect(task.compute.status).toBe('refused');
-    expect(task.compute.value).toBeNull();
-    expect(task.compute.notComputed).toBe('not computed: finalEnergyHartree missing for record sp2');
+    const task = buildWorkflowPlan(project, { results: runs }).tasks.find((item) => item.type === 'analyse');
+    expect(task.analyse.status).toBe('refused');
+    expect(task.analyse.value).toBeNull();
+    expect(task.analyse.notComputed).toBe('not computed: finalEnergyHartree missing for record sp2');
   });
 
   it('previews exactly the plan value, from the same evaluator', () => {
@@ -445,16 +445,16 @@ describe('issue 175 — schema and plan', () => {
     project.nodes.find((item) => item.id === 'sp2').parsed = runRecord(-76.3).parsed;
     const node = project.nodes.find((item) => item.id === 'cbs');
     const context = computeContext(project, node);
-    const preview = evaluateCompute(node.compute, {
+    const preview = evaluateCompute(node.analyse, {
       recordId: null,
       resolveSource: context.resolveSource,
       allRecords: context.allRecords,
     });
-    const planTask = buildWorkflowPlan(project).tasks.find((item) => item.type === 'compute');
+    const planTask = buildWorkflowPlan(project).tasks.find((item) => item.type === 'analyse');
     expect(preview.status).toBe('computed');
-    expect(preview.value).toBe(planTask.compute.value);
-    expect(preview.expression).toBe(planTask.compute.expression);
-    expect(preview.inputs).toEqual(planTask.compute.inputs);
+    expect(preview.value).toBe(planTask.analyse.value);
+    expect(preview.expression).toBe(planTask.analyse.expression);
+    expect(preview.inputs).toEqual(planTask.analyse.inputs);
   });
 
   it('plans one derived value per record for a dataset family', () => {
@@ -482,21 +482,21 @@ describe('issue 175 — schema and plan', () => {
       ['sp~mol-3', { parsed: { finalEnergy: { hartree: null } } }],
     ]);
     const plan = buildWorkflowPlan(project, { results: runs });
-    const planned = plan.tasks.filter((item) => item.type === 'compute');
+    const planned = plan.tasks.filter((item) => item.type === 'analyse');
     expect(planned.map((item) => item.recordId)).toEqual(['mol-1', 'mol-2', 'mol-3']);
-    expect(planned.map((item) => item.compute.value)).toEqual([-1, -2, null]);
-    expect(planned[2].compute.notComputed).toBe('not computed: finalEnergyHartree missing for record mol-3');
+    expect(planned.map((item) => item.analyse.value)).toEqual([-1, -2, null]);
+    expect(planned[2].analyse.notComputed).toBe('not computed: finalEnergyHartree missing for record mol-3');
   });
 
   it('leaves a plan with no compute block byte-identical', () => {
-    const plain = validated(projectWith(nodes().filter((node) => node.type !== 'compute'),
+    const plain = validated(projectWith(nodes().filter((node) => node.type !== 'analyse'),
       edges().filter((edge) => edge.to !== 'cbs')));
     const once = JSON.stringify(buildWorkflowPlan(plain));
     const twice = JSON.stringify(buildWorkflowPlan(plain));
     const withResults = JSON.stringify(buildWorkflowPlan(plain, { results: results() }));
     expect(twice).toBe(once);
     expect(withResults).toBe(once);
-    expect(once.includes('"compute"')).toBe(false);
+    expect(once.includes('"analyse"')).toBe(false);
   });
 
   it('refuses to plan a compute block with no upstream or no named source', () => {
@@ -546,12 +546,12 @@ describe('issue 175 — the queue writes the derived record', () => {
     await fsp.mkdir(queueDir, { recursive: true });
     const task = {
       nodeId: 'cbs',
-      type: 'compute',
+      type: 'analyse',
       title: 'CBS limit',
       kind: 'Compute',
       executable: false,
       recordId: null,
-      compute: {
+      analyse: {
         expression: 'fit_cubic_inverse(E4, 4, E2, 2)',
         declared: [
           { name: 'E4', field: 'finalEnergyHartree', source: 'sp4', scope: 'record' },
@@ -563,8 +563,8 @@ describe('issue 175 — the queue writes the derived record', () => {
     const queue = {
       id: 'q1',
       tasks: [
-        { nodeId: 'sp2', type: 'calc', status: 'completed', runDir: await runDir('sp2', -76.3) },
-        { nodeId: 'sp4', type: 'calc', status: 'completed', runDir: await runDir('sp4', -76.41) },
+        { nodeId: 'sp2', type: 'calculate', status: 'completed', runDir: await runDir('sp2', -76.3) },
+        { nodeId: 'sp4', type: 'calculate', status: 'completed', runDir: await runDir('sp4', -76.41) },
         task,
       ],
       edges: [
@@ -574,14 +574,14 @@ describe('issue 175 — the queue writes the derived record', () => {
       status: 'running',
       options: {},
     };
-    await manager.runCompute(queue, task);
+    await manager.runAnalyse(queue, task);
     expect(task.status).toBe('completed');
-    expect(task.compute.value).toBeCloseTo((-76.41 * 64 + 76.3 * 8) / 56, 12);
+    expect(task.analyse.value).toBeCloseTo((-76.41 * 64 + 76.3 * 8) / 56, 12);
     const written = JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
     expect(written.kind).toBe('derived');
-    expect(written.compute.expression).toBe('fit_cubic_inverse(E4, 4, E2, 2)');
-    expect(written.compute.value).toBeCloseTo(task.compute.value, 12);
-    expect(written.compute.inputs.map((input) => input.recordId)).toEqual(['sp4', 'sp2']);
+    expect(written.analyse.expression).toBe('fit_cubic_inverse(E4, 4, E2, 2)');
+    expect(written.analyse.value).toBeCloseTo(task.analyse.value, 12);
+    expect(written.analyse.inputs.map((input) => input.recordId)).toEqual(['sp4', 'sp2']);
     // No `parsed` block: a derived value must never read as an engine result.
     expect(written.parsed).toBeUndefined();
   });
@@ -590,11 +590,11 @@ describe('issue 175 — the queue writes the derived record', () => {
 describe('issue 175 — report and card', () => {
   const computed = {
     nodeId: 'cbs',
-    type: 'compute',
+    type: 'analyse',
     title: 'CBS limit',
     kind: 'Compute',
     status: 'completed',
-    compute: {
+    analyse: {
       expression: 'fit_cubic_inverse(E4, 4, E2, 2)',
       status: 'computed',
       value: -76.41242857142858,
@@ -628,7 +628,7 @@ describe('issue 175 — report and card', () => {
   });
 
   it('renders a derived record as a card that names its inputs', () => {
-    const html = resultsPanelHtml({ compute: computed.compute });
+    const html = resultsPanelHtml({ analyse: computed.analyse });
     expect(html).toContain('Derived quantity');
     expect(html).toContain('fit_cubic_inverse(E4, 4, E2, 2)');
     expect(html).toContain('data-role="compute-input"');
@@ -641,8 +641,8 @@ describe('issue 175 — report and card', () => {
     const refused = {
       ...computed,
       status: 'failed',
-      compute: {
-        ...computed.compute,
+      analyse: {
+        ...computed.analyse,
         status: 'refused',
         value: null,
         notComputed: 'not computed: finalEnergyHartree missing for record sp2',

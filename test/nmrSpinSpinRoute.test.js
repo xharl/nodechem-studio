@@ -15,7 +15,7 @@ import { jobKeywordFor } from '../src/shared/tsForceConstants.js';
  */
 
 const projectWith = (settings) => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   name: 'nmr couplings',
   molecule: {
     smiles: '',
@@ -36,7 +36,7 @@ const projectWith = (settings) => ({
     title: 'nmr',
     nodes: [{
       id: 'nmr',
-      type: 'calc',
+      type: 'calculate',
       kind: 'SP',
       title: 'Shieldings',
       state: 'ready',

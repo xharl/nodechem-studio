@@ -155,11 +155,11 @@ export function conformerSettingsFor(node) {
  * connected by a dependency edge.
  */
 export function conformerSourceFor(project, node) {
-  if (!node || node.type === 'conformers') return null;
+  if (!node || node.type === 'generate') return null;
   const edges = Array.isArray(project?.edges) ? project.edges : [];
   const edge = edges.find((item) => item.to === node.id
     && item.type === 'dependency'
-    && nodeById(project, item.from)?.type === 'conformers');
+    && nodeById(project, item.from)?.type === 'generate');
   return edge ? nodeById(project, edge.from) : null;
 }
 
@@ -221,7 +221,7 @@ export function conformerForNode(project, node, conformerMember = null) {
  * time, because that is a decision, not a pending computation.
  */
 export function pendingConformerFor(project, node) {
-  if (!node || node.type === 'conformers') return null;
+  if (!node || node.type === 'generate') return null;
   const source = conformerSourceFor(project, node);
   if (!source) return null;
   if (source.output && typeof source.output === 'object') return null;
@@ -281,7 +281,7 @@ function firstInputBlocksFor(byId, edges, blockId) {
     }
     // A calculation block in between is the one that consumes the record's own
     // coordinates; this block reads its output, so it is not the first.
-    if (node.type === 'calc') continue;
+    if (node.type === 'calculate') continue;
     for (const next of upstream.get(id) || []) stack.push(next);
   }
   return found;
@@ -304,7 +304,7 @@ function firstInputBlocksFor(byId, edges, blockId) {
  */
 export function drawingGateFor(project, node, record, { nodes = null, edges = null, datasetId = '' } = {}) {
   if (!isDrawingRecord(record) || record.drawingConfirmed === true) return null;
-  if (!node || node.type !== 'calc') return null;
+  if (!node || node.type !== 'calculate') return null;
   const jobType = String(node.settings?.jobType || '');
   if (!DRAWING_JOB_TYPES.includes(jobType)) return null;
 
@@ -358,7 +358,7 @@ function refusedDrawingTask(task, refusal) {
  * table, which is the mistake the single-selection refusal exists to stop.
  */
 export function fanOutMembersFor(node) {
-  if (!node || node.type !== 'conformers') return null;
+  if (!node || node.type !== 'generate') return null;
   const settings = conformerSettingsFor(node);
   if (!settings.fanOut) return null;
   const output = node.output && typeof node.output === 'object' ? node.output : null;
@@ -560,13 +560,13 @@ export function oldCheckpointFor(project, node, checkpointTaskId = null) {
 }
 
 export function tsForceConstantIssues(project, node) {
-  if (node?.type !== 'calc') return { errors: [], warnings: [] };
+  if (node?.type !== 'calculate') return { errors: [], warnings: [] };
   return checkTsForceConstants({ settings: node.settings, upstream: checkpointSourceNode(project, node) });
 }
 
 /** Issue #16 findings for a node's optimisation convergence and integration grid. */
 export function optConvergenceIssues(project, node) {
-  if (node?.type !== 'calc') return [];
+  if (node?.type !== 'calculate') return [];
   return [
     ...optConvergenceWarnings(node.settings),
     ...freqGeometryWarnings({ settings: node.settings, upstream: checkpointSourceNode(project, node) }),
@@ -809,9 +809,9 @@ function computeFanMembership(nodes, edges) {
     visiting.add(nodeId);
     let fan = null;
     try {
-      if (node.type === 'conformers') {
+      if (node.type === 'generate') {
         fan = conformerSettingsFor(node).fanOut ? fanOutMembersFor(node) : null;
-      } else if (node.type === 'calc') {
+      } else if (node.type === 'calculate') {
         fan = fanFor(node);
       }
     } finally {
@@ -950,7 +950,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       continue;
     }
 
-    if (node.type === 'conformers') {
+    if (node.type === 'generate') {
       const fanOut = fanForNode.get(node.id) || null;
       const ids = [];
       for (const record of records) {
@@ -972,8 +972,8 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       continue;
     }
 
-    if (node.type === 'compute') {
-      // Issue 175: a compute block is arithmetic over the results of the blocks
+    if (node.type === 'analyse') {
+      // Issue 175: an analyse block is arithmetic over the results of the blocks
       // wired into it. The plan evaluates it when it can — the caller may pass
       // run records (`results`, keyed by task id) — and otherwise plans it as a
       // task that is waiting, never as a value of zero. One task per record of
@@ -1015,7 +1015,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       continue;
     }
 
-    if (node.type !== 'calc') {
+    if (node.type !== 'calculate') {
       // Control-flow blocks are planned once per flow: an output block collects
       // every record, a merge joins branches, a condition routes them.
       tasks.push({
@@ -1229,7 +1229,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
   for (const [taskId, entry] of fanInputs) {
     if (fanFor(taskId) || entry.count < 2) continue;
     const node = nodeById(project, taskId.split('~')[0]);
-    if (!node || (node.type !== 'calc' && node.type !== 'conformers')) continue;
+    if (!node || (node.type !== 'calculate' && node.type !== 'generate')) continue;
     const ensemble = nodeById(project, [...entry.conformerIds][0]);
     throw new Error(`"${node.title}" would run once but ${entry.count} fanned-out branches feed it,`
       + ` so it could only use one member of "${ensemble?.title || 'the ensemble'}".`
@@ -1354,7 +1354,7 @@ function calculationTask(project, node, {
     : null;
   return {
     nodeId: taskId,
-    type: 'calc',
+    type: 'calculate',
     title: title || (Number.isInteger(record?.series?.n)
       ? `${node.title} — n=${record.series.n}`
       // Issue 189: one block, several analogues — the row says which one.
@@ -1364,7 +1364,7 @@ function calculationTask(project, node, {
         : (record?.complex?.members?.length
           ? `${node.title} — ${record.complex.members.map((member) => member.id).join(' + ')}`
           : node.title))),
-    kind: node.kind || 'Calc',
+    kind: node.kind || 'Calculate',
     executable: true,
     engine: built.engine,
     argv: built.argv,
@@ -1423,7 +1423,7 @@ function calculationTask(project, node, {
 }
 
 /**
- * Where a compute block's numbers come from (issue 175).
+ * Where an analyse block's numbers come from (issue 175).
  *
  * One resolver, used by the plan, the queue's planner path and the inspector's
  * preview, so the three cannot disagree about which record a field was read
@@ -1439,15 +1439,15 @@ function calculationTask(project, node, {
 export function computeContext(project, node, { results = null, edges = null } = {}) {
   const nodeEdges = edges || edgesOfFlow(activeFlow(project));
   const sources = orderingSourceIds(nodeEdges, node.id);
-  const definition = node.compute && typeof node.compute === 'object'
-    ? node.compute : { expression: '', inputs: [] };
+  const definition = node.analyse && typeof node.analyse === 'object'
+    ? node.analyse : { expression: '', inputs: [] };
   // Issue 165: a DP4+ block reads whole run records (candidates), not named
   // fields, so it declares no inputs of its own — the upstream blocks are the
   // candidate sources. Every other mode is the arithmetic block unchanged.
   const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
   const declared = mode === 'dp4' ? [] : computeInputsOf(definition);
   if (mode !== 'dp4' && declared.length === 0) {
-    throw new ComputeError(`"${node.title}" declares no inputs; a compute block reads at least one field`
+    throw new ComputeError(`"${node.title}" declares no inputs; an analyse block reads at least one field`
       + ' from an upstream block.');
   }
   if (sources.length === 0) {
@@ -1543,15 +1543,15 @@ export function computeContext(project, node, { results = null, edges = null } =
  * number an engine printed.
  */
 function computeTask(node, { taskId, record = null, recordId = null, evaluation, sources, declared }) {
-  const dp4 = node.compute?.mode === 'dp4' && node.compute?.dp4 && typeof node.compute.dp4 === 'object'
-    ? node.compute.dp4 : null;
+  const dp4 = node.analyse?.mode === 'dp4' && node.analyse?.dp4 && typeof node.analyse.dp4 === 'object'
+    ? node.analyse.dp4 : null;
   return {
     nodeId: taskId,
-    type: 'compute',
+    type: 'analyse',
     title: record ? `${node.title} — ${record.label || record.id}` : node.title,
-    kind: node.kind || 'Compute',
+    kind: node.kind || 'Analyse',
     executable: false,
-    compute: {
+    analyse: {
       ...evaluation,
       // Issue 165: the DP4+ definition travels with the task so the queue can
       // re-evaluate from the run.json files it finds, exactly as the arithmetic
@@ -1592,9 +1592,9 @@ function pendingCalculationTask(project, node, { taskId, title, settingsOverride
   const inputName = engine.id === 'xtb' ? `${base}.xyz` : engine.id === 'orca' ? `${base}.inp` : `${base}.gjf`;
   return {
     nodeId: taskId,
-    type: 'calc',
+    type: 'calculate',
     title: title || node.title,
-    kind: node.kind || 'Calc',
+    kind: node.kind || 'Calculate',
     executable: false,
     engine: engine.id,
     argv: null,
@@ -1634,9 +1634,9 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
   const inputName = `${safeBase(taskId)}.xyz`;
   return {
     nodeId: taskId,
-    type: 'conformers',
+    type: 'generate',
     title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`,
-    kind: node.kind || 'Conformers',
+    kind: node.kind || 'Generate',
     executable: true,
     engine: null,
     inputName,
@@ -1651,7 +1651,7 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
       count: ensemble.members.length,
       spreadKcal: ensemble.spreadKcal,
     },
-    conformers: {
+    generate: {
       ...settings,
       charge,
       multiplicity,
@@ -1704,9 +1704,9 @@ export function conformerSearchTask(project, node, record = null) {
     : null;
   return {
     nodeId: node.id,
-    type: 'conformers',
+    type: 'generate',
     title: node.title,
-    kind: node.kind || 'Conformers',
+    kind: node.kind || 'Generate',
     executable: true,
     engine: null,
     inputName,
@@ -1719,7 +1719,7 @@ export function conformerSearchTask(project, node, record = null) {
     gates: null,
     validity: null,
     checkpointFrom: null,
-    conformers: {
+    generate: {
       ...settings,
       charge,
       multiplicity,

@@ -5,20 +5,21 @@
  * before a project is rendered, and by the renderer when it saves.
  *
  * Contract:
- *   - `schemaVersion: 2` is the current on-disk format: a project carries
+ *   - `schemaVersion: 3` is the current on-disk format: ADR 0001's six data
+ *     stages (`input`, `prepare`, `generate`, `calculate`, `analyse`,
+ *     `output`) plus the control and annotation axes. A project carries
  *     `flows[]` (one graph each) and `datasets[]` (record sets an `input` block
- *     iterates). A v1 project (single `nodes`/`edges` graph) migrates by
- *     wrapping that graph in a flow called `main`; its plans, task ids and run
- *     folders are byte-identical.
- *   - A project written before versioning (no `schemaVersion`, or 0) is
- *     treated as v0.1 and migrated by filling documented defaults.
+ *     iterates).
+ *   - Version 3 is a breaking vocabulary change with no compatibility layer
+ *     (ADR 0001): a project written by an earlier build is refused by version,
+ *     never guessed at or half-read.
  *   - A project from a newer build is rejected, never guessed at.
  *   - Validation collects every error with a JSON path; it does not throw.
  *   - The normalized project is canonical: the same input always yields the
  *     same key order, so a save/reopen round-trip is byte-stable.
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 import { isElementSymbol } from './elements.js';
 import {
@@ -119,7 +120,7 @@ export const LIMITS = Object.freeze({
 });
 
 export const NODE_TYPES = Object.freeze([
-  'input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'compute', 'note',
+  'input', 'calculate', 'generate', 'condition', 'loop', 'merge', 'output', 'analyse', 'note',
 ]);
 
 /** States a project file may carry. Queue states are reserved for GN-003. */
@@ -221,24 +222,24 @@ const JOB_KINDS = {
 
 const TYPE_KINDS = {
   input: 'Input',
-  conformers: 'Conformers',
+  generate: 'Generate',
   condition: 'If',
   loop: 'Loop',
   merge: 'Merge',
   output: 'Output',
-  compute: 'Compute',
+  analyse: 'Analyse',
   note: 'Note',
 };
 
 const TYPE_LABELS = {
   input: 'Dataset input',
-  calc: 'Calculation',
-  conformers: 'Conformer ensemble',
+  calculate: 'Calculate',
+  generate: 'Generate',
   condition: 'Condition',
   loop: 'Retry loop',
   merge: 'Join branches',
   output: 'Project output',
-  compute: 'Compute',
+  analyse: 'Analyse',
   note: 'Note',
 };
 
@@ -246,13 +247,13 @@ const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'name', 'molecule', 'defaults',
 const NODE_COMMON_KEYS = new Set(['id', 'type', 'kind', 'title', 'state', 'x', 'y']);
 const NODE_TYPE_KEYS = {
   input: new Set(['input']),
-  calc: new Set(['settings', 'output', 'checkpointFrom']),
-  conformers: new Set(['settings', 'output']),
+  calculate: new Set(['settings', 'output', 'checkpointFrom']),
+  generate: new Set(['settings', 'output']),
   condition: new Set(['condition']),
   loop: new Set(['loop']),
   merge: new Set(['merge']),
   output: new Set(['output']),
-  compute: new Set(['compute']),
+  analyse: new Set(['analyse']),
   note: new Set(['note']),
 };
 const SETTINGS_KEYS = new Set([
@@ -1741,7 +1742,7 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
   warnUnknown(c, raw, new Set([...NODE_COMMON_KEYS, ...NODE_TYPE_KEYS[type]]), path);
 
   const settingsRaw = isPlainObject(raw.settings) ? raw.settings : {};
-  const kindFallback = type === 'calc' ? kindForJob(settingsRaw.jobType || 'Opt') : TYPE_KINDS[type];
+  const kindFallback = type === 'calculate' ? kindForJob(settingsRaw.jobType || 'Opt') : TYPE_KINDS[type];
   const common = {
     id,
     type,
@@ -1752,7 +1753,7 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     y: readNumber(c, raw.y, `${path}.y`, { legacy, fallback: 0, min: -100000, max: 100000 }),
   };
 
-  if (type === 'calc') {
+  if (type === 'calculate') {
     const checkpointFromRaw = raw.checkpointFrom;
     const checkpointFrom = checkpointFromRaw === undefined || checkpointFromRaw === null || checkpointFromRaw === ''
       ? null
@@ -1894,7 +1895,7 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     };
   }
 
-  if (type === 'conformers') {
+  if (type === 'generate') {
     return {
       ...common,
       settings: normalizeConformerSettings(c, raw.settings, `${path}.settings`, legacy),
@@ -1902,47 +1903,47 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     };
   }
 
-  if (type === 'compute') {
-    // Issue 175: a compute block is arithmetic over other blocks' results. Its
+  if (type === 'analyse') {
+    // Issue 175: an analyse block is arithmetic over other blocks' results. Its
     // expression is parsed at save time, so a project that cannot be evaluated
     // is refused here rather than at the end of a queue.
     //
     // Issue 165: the same block carries DP4+ probabilities when `mode` is
     // `dp4`. Absent `mode` is the expression block byte for byte, so every
     // project written before this existed saves exactly as it did.
-    const source = requiredObject(c, raw.compute, `${path}.compute`, legacy, {});
-    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4']), `${path}.compute`);
+    const source = requiredObject(c, raw.analyse, `${path}.analyse`, legacy, {});
+    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4']), `${path}.analyse`);
     const mode = source.mode === 'dp4' ? DP4_COMPUTE_MODE : 'expression';
     if (source.mode !== undefined && source.mode !== 'dp4' && source.mode !== 'expression') {
-      c.error(`${path}.compute.mode`, 'must be "expression" (the default) or "dp4".');
+      c.error(`${path}.analyse.mode`, 'must be "expression" (the default) or "dp4".');
     }
     if (mode === 'dp4') {
       const checked = validateDp4Definition(source.dp4);
       for (const problem of checked.errors) {
-        c.error(`${path}.compute.dp4${problem.path ? `.${problem.path}` : ''}`, problem.message);
+        c.error(`${path}.analyse.dp4${problem.path ? `.${problem.path}` : ''}`, problem.message);
       }
       if (Array.isArray(source.inputs) && source.inputs.length) {
-        c.error(`${path}.compute.inputs`, 'a DP4+ block reads whole run records, not fields; wire the blocks whose candidates it compares and leave the input list empty.');
+        c.error(`${path}.analyse.inputs`, 'a DP4+ block reads whole run records, not fields; wire the blocks whose candidates it compares and leave the input list empty.');
       }
       if (String(source.expression ?? '').trim()) {
-        c.warn(`${path}.compute.expression`, 'is not saved or evaluated by a DP4+ block: DP4+ reads candidate run records, not an expression.');
+        c.warn(`${path}.analyse.expression`, 'is not saved or evaluated by a DP4+ block: DP4+ reads candidate run records, not an expression.');
       }
       return {
         ...common,
-        compute: {
+        analyse: {
           mode: 'dp4',
           dp4: dp4DefinitionForFile(source.dp4),
         },
       };
     }
-    const expression = readString(c, source.expression, `${path}.compute.expression`,
+    const expression = readString(c, source.expression, `${path}.analyse.expression`,
       { legacy, fallback: '', max: COMPUTE_EXPRESSION_MAX });
     const rawInputs = Array.isArray(source.inputs) ? source.inputs : [];
     if (rawInputs.length > COMPUTE_INPUTS_MAX) {
-      c.error(`${path}.compute.inputs`, `must contain at most ${COMPUTE_INPUTS_MAX} inputs.`);
+      c.error(`${path}.analyse.inputs`, `must contain at most ${COMPUTE_INPUTS_MAX} inputs.`);
     }
     const inputs = rawInputs.slice(0, COMPUTE_INPUTS_MAX).map((entry, position) => {
-      const inputPath = `${path}.compute.inputs[${position}]`;
+      const inputPath = `${path}.analyse.inputs[${position}]`;
       const input = isPlainObject(entry) ? entry : {};
       if (!isPlainObject(entry)) c.error(inputPath, 'must be an object.');
       warnUnknown(c, input, new Set(['name', 'field', 'source', 'scope']), inputPath);
@@ -1969,20 +1970,20 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
         const known = new Set(declared.map((input) => input.name));
         for (const name of names) {
           if (!known.has(name)) {
-            c.error(`${path}.compute.expression`, `uses "${name}", which is not a declared input.`);
+            c.error(`${path}.analyse.expression`, `uses "${name}", which is not a declared input.`);
           }
         }
       }
     } catch (error) {
       if (!(error instanceof ComputeError)) throw error;
-      c.error(`${path}.compute.expression`, error.message);
+      c.error(`${path}.analyse.expression`, error.message);
     }
     if (!expression) {
-      c.warn(`${path}.compute.expression`, 'is empty; the block cannot be evaluated.');
+      c.warn(`${path}.analyse.expression`, 'is empty; the block cannot be evaluated.');
     }
     return {
       ...common,
-      compute: {
+      analyse: {
         expression,
         inputs,
       },
@@ -2333,12 +2334,12 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
 
   flow.nodes.forEach((node, nodeIndex) => {
     const nodePath = `${path}.nodes[${nodeIndex}]`;
-    if (node.type === 'calc' && node.checkpointFrom) {
+    if (node.type === 'calculate' && node.checkpointFrom) {
       const source = byId.get(node.checkpointFrom);
       if (!source) {
         c.error(`${nodePath}.checkpointFrom`, `references unknown node "${node.checkpointFrom}".`);
         node.checkpointFrom = null;
-      } else if (source.type !== 'calc') {
+      } else if (source.type !== 'calculate') {
         c.error(`${nodePath}.checkpointFrom`, `must reference a calculation node, not a ${source.type} node.`);
         node.checkpointFrom = null;
       }
@@ -2348,7 +2349,7 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
       if (!target) {
         c.error(`${nodePath}.loop.target`, `references unknown node "${node.loop.target}".`);
         node.loop.target = '';
-      } else if (target.type !== 'calc') {
+      } else if (target.type !== 'calculate') {
         c.error(`${nodePath}.loop.target`, `must target a calculation node, not a ${target.type} node.`);
         node.loop.target = '';
       }
@@ -2376,7 +2377,7 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
         }
       }
     }
-    if (node.type !== 'calc') return;
+    if (node.type !== 'calculate') return;
     const checkpointEdge = flow.edges.find((edge) => edge.to === node.id && edge.type === 'checkpoint');
     const upstream = checkpointEdge ? byId.get(checkpointEdge.from) || null : null;
     const { errors, warnings } = checkTsForceConstants({ settings: node.settings, upstream });
@@ -2443,7 +2444,7 @@ function evaluateProjectValidity(c, { nodes, molecule, defaults, edges = [] }) {
   const blocking = [];
   const byId = new Map(nodes.map((node) => [node.id, node]));
   nodes.forEach((node, index) => {
-    if (node.type !== 'calc') return;
+    if (node.type !== 'calculate') return;
     // The hand-off may be declared on the node (`checkpointFrom`) or by a
     // `checkpoint` edge; the excited-state check must see both, or a Pop=NTO
     // block fed by an edge would look unconnected (#146).
@@ -2514,10 +2515,28 @@ export function validateProject(raw) {
     schemaVersion = rawVersion;
   }
 
-  // v0 fills defaults; v1 is wrapped in a flow. Neither rewrites a task id, a
-  // run folder or a bundle name, so an existing project plans identically.
-  const migrated = schemaVersion < SCHEMA_VERSION;
-  const legacy = schemaVersion === 0;
+  // ADR 0001 made schemaVersion 3 a breaking vocabulary change: the old block
+  // types (`calc`, `conformers`, `compute`) no longer exist in this build, so
+  // an older file is refused by version instead of being half-read into a
+  // graph the validator would report as a list of unknown types.
+  if (schemaVersion < SCHEMA_VERSION) {
+    c.error('schemaVersion',
+      `project uses schema version ${schemaVersion === 0 ? '0.1' : schemaVersion}; this build reads version ${SCHEMA_VERSION} only. `
+      + 'ADR 0001 replaced the block vocabulary in version 3 with no compatibility layer; rebuild the project in NodeChem Studio.');
+    return {
+      ok: false,
+      errors: c.errors,
+      warnings: c.warnings,
+      project: null,
+      migrated: false,
+      schemaVersion,
+      validity: { overall: 'unknown', findings: [], blocking: [] },
+    };
+  }
+
+  // Nothing older than this build's schema reaches the validators below.
+  const migrated = false;
+  const legacy = false;
   const projectEngine = projectEngineOf(raw.defaults);
 
   const datasetIds = new Set();

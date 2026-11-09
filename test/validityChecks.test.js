@@ -758,7 +758,7 @@ function projectWith({ molecule = water(), settings = {}, disabledChecks } = {})
   const nodeSettings = defaultSettings(settings);
   if (disabledChecks !== undefined) nodeSettings.disabledChecks = disabledChecks;
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name: 'Validity fixture',
     molecule: {
       smiles: '',
@@ -773,7 +773,7 @@ function projectWith({ molecule = water(), settings = {}, disabledChecks } = {})
     },
     nodes: [{
       id: 'opt',
-      type: 'calc',
+      type: 'calculate',
       kind: 'Opt',
       title: 'Optimization',
       state: 'ready',

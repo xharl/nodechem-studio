@@ -367,7 +367,7 @@ describe('queued workflow provenance', () => {
       projectName: 'Queued provenance',
       tasks: [{
         nodeId: 'calc-1',
-        type: 'calc',
+        type: 'calculate',
         title: 'Queued provenance',
         kind: 'Calc',
         executable: true,

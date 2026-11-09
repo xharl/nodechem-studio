@@ -58,7 +58,7 @@ const IMPORT_ORIGIN = {
 const molecule = { charge: 0, multiplicity: 1, fragments: [], coords, geometry: { source: 'imported', file: 'water.xyz', format: 'xyz' } };
 
 const project = (nodes, edges = []) => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'Conformer provenance',
   molecule,
   defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -67,7 +67,7 @@ const project = (nodes, edges = []) => ({
 });
 
 const conformersNode = (settings = {}, output = null) => ({
-  id: 'conf', type: 'conformers', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0, settings, output,
+  id: 'conf', type: 'generate', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0, settings, output,
 });
 
 const kcalMember = (id, rank, energyKcal, extra = {}) => ({
@@ -275,9 +275,9 @@ describe('the ensemble summary carries provenance', () => {
       origin: { program: 'SyntheticGaussLike', version: '26.1 (test)', method: 'MMFF94' },
     })])).project;
     const built = conformerSearchTask(validated, validated.nodes[0]);
-    expect(built.conformers.energyUnit).toBe('kcal/mol');
-    expect(built.conformers.energyMethod).toBe('MMFF94');
-    expect(built.conformers.origin.program).toBe('SyntheticGaussLike');
+    expect(built.generate.energyUnit).toBe('kcal/mol');
+    expect(built.generate.energyMethod).toBe('MMFF94');
+    expect(built.generate.origin.program).toBe('SyntheticGaussLike');
   });
 });
 
@@ -336,7 +336,7 @@ describe('the queue writes the origin it was given', () => {
     })]);
     const validated = validateProject(raw);
     expect(validated.ok).toBe(true);
-    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'conformers');
+    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'generate');
     const started = await queueManager.start({
       projectName: validated.project.name,
       tasks: [task],

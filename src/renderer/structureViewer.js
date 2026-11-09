@@ -464,7 +464,7 @@ export function resolveStructure(node) {
   if (!node) return null;
   // A conformer block has no run to parse: the geometry it would show is the
   // member the user picked, taken from the ensemble summary it carries.
-  if (node.type === 'conformers') {
+  if (node.type === 'generate') {
     const atoms = node.output?.selected?.atoms;
     if (!Array.isArray(atoms) || atoms.length === 0) return null;
     const geometry = { atoms, source: `conformer ${node.output.selected.id}` };
@@ -476,7 +476,7 @@ export function resolveStructure(node) {
     }
     return { geometry: prepared, rawGeometry: geometry, modes: describeModes(null, prepared.atomCount), source: geometry.source };
   }
-  if (node.type !== 'calc') return null;
+  if (node.type !== 'calculate') return null;
   const parsed = node.output?.parsed ?? node.parsed ?? null;
   const geometry = parsed?.finalGeometry ?? parsed?.geometry?.final ?? null;
   if (!geometry || !Array.isArray(geometry.atoms) || geometry.atoms.length === 0) return null;
@@ -958,7 +958,7 @@ export function mountStructureViewer(inspectorEl, node) {
     activeViewer.destroy();
     activeViewer = null;
   }
-  if (!inspectorEl || !node || (node.type !== 'calc' && node.type !== 'conformers')) return null;
+  if (!inspectorEl || !node || (node.type !== 'calculate' && node.type !== 'generate')) return null;
   const resolved = resolveStructure(node);
   if (!resolved) return null;
 
@@ -995,8 +995,8 @@ export function mountStructureViewer(inspectorEl, node) {
   viewer.setGeometry(resolved.rawGeometry, resolved.modes);
 
   const label = panel.querySelector('.section-label');
-  if (label) label.textContent = node.type === 'conformers' ? 'Chosen conformer' : 'Final geometry';
-  panel.setAttribute('aria-label', node.type === 'conformers' ? 'Chosen conformer viewer' : 'Parsed structure viewer');
+  if (label) label.textContent = node.type === 'generate' ? 'Chosen conformer' : 'Final geometry';
+  panel.setAttribute('aria-label', node.type === 'generate' ? 'Chosen conformer viewer' : 'Parsed structure viewer');
   const sourceLabel = resolved.source ? `${resolved.source} orientation` : 'source unknown';
   // The provenance of the topology is part of the caption: "perceived" bonds are
   // a guess from distances and a reader must be able to tell them from a file's

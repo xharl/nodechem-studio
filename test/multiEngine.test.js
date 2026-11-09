@@ -14,7 +14,7 @@ const WATER = [
 
 const calcNode = (id, overrides = {}) => ({
   id,
-  type: 'calc',
+  type: 'calculate',
   title: id,
   x: 0,
   y: 0,
@@ -22,7 +22,7 @@ const calcNode = (id, overrides = {}) => ({
 });
 
 const twoEngineProject = () => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'xtb then gaussian',
   defaults: { engine: 'gaussian', method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: 4 },
   molecule: { charge: 0, multiplicity: 1, coords: WATER, fragments: [], geometry: { kind: 'manual' } },

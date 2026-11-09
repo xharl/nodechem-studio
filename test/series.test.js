@@ -306,7 +306,7 @@ describe('issue 169 — the guards refuse by name, before anything is built', ()
 
 describe('issue 169 — the project schema keeps the definition and refuses it by name', () => {
   const project = (overrides = {}) => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Series fixture',
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -340,7 +340,7 @@ describe('issue 169 — the project schema keeps the definition and refuses it b
         },
         {
           id: 'sp',
-          type: 'calc',
+          type: 'calculate',
           kind: 'SP',
           title: 'Single point',
           state: 'ready',
@@ -437,7 +437,7 @@ describe('issue 169 — the project schema keeps the definition and refuses it b
 describe('issue 169 — the plan expands the series, so nothing downstream changes', () => {
   const plan = () => {
     const result = validateProject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'Series plan',
       molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
       defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -464,7 +464,7 @@ describe('issue 169 — the plan expands the series, so nothing downstream chang
             },
           },
           {
-            id: 'sp', type: 'calc', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
+            id: 'sp', type: 'calculate', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
             settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null,
           },
           { id: 'out1', type: 'output', kind: 'Output', title: 'Table', state: 'ready', x: 400, y: 0, output: { kind: 'csv', path: 'reports/series.csv', include: 'records', bundle: 'project.zip', manifest: true, notes: '' } },
@@ -520,7 +520,7 @@ describe('issue 169 — the plan expands the series, so nothing downstream chang
 
   it('still plans one task per dataset record when the block is not a series', () => {
     const result = validateProject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'Plain',
       molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
       defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -534,7 +534,7 @@ describe('issue 169 — the plan expands the series, so nothing downstream chang
         id: 'main', title: 'Plain',
         nodes: [
           { id: 'in1', type: 'input', kind: 'Input', title: 'Units', state: 'ready', x: 0, y: 0, input: { datasetId: 'units', recordFilter: { field: '', equals: '' } } },
-          { id: 'sp', type: 'calc', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0, settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null },
+          { id: 'sp', type: 'calculate', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0, settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null },
         ],
         edges: [{ from: 'in1', to: 'sp', type: 'dependency' }],
       }],

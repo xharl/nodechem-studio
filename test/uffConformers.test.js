@@ -350,7 +350,7 @@ describe('UFF route wiring (issue 144)', () => {
   const project = (settings = {}, output = null, molecule = null) => {
     const base = butane();
     const raw = {
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: 'UFF route',
       molecule: molecule || {
         charge: 0,
@@ -363,11 +363,11 @@ describe('UFF route wiring (issue 144)', () => {
       defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
       nodes: [
         {
-          id: 'conf', type: 'conformers', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
+          id: 'conf', type: 'generate', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
           settings, output,
         },
         {
-          id: 'opt', type: 'calc', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
+          id: 'opt', type: 'calculate', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
           settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null,
         },
       ],
@@ -385,25 +385,25 @@ describe('UFF route wiring (issue 144)', () => {
     const uffTask = conformerSearchTask(uffProject, uffProject.nodes[0]);
 
     expect(Object.keys(uffTask).sort()).toEqual(Object.keys(crestTask).sort());
-    expect(uffTask.type).toBe('conformers');
+    expect(uffTask.type).toBe('generate');
     expect(uffTask.executable).toBe(true);
     expect(uffTask.engine).toBeNull();
     expect(uffTask.inputText).toBe(crestTask.inputText);
     // Nothing is spawned for the UFF route: no argv, and no CREST output name.
-    expect(uffTask.conformers.argv).toEqual([]);
-    expect(crestTask.conformers.argv.length).toBeGreaterThan(0);
+    expect(uffTask.generate.argv).toEqual([]);
+    expect(crestTask.generate.argv.length).toBeGreaterThan(0);
     expect(uffTask.outputName).toBe('uff.log');
     expect(crestTask.outputName).toBe('crest.out');
     // The project's bond table travels with the task, because the search types
     // atoms from it; CREST perceives its own topology and does not carry it.
-    expect(uffTask.conformers.bonds).toHaveLength(butane().bonds.length);
-    expect(crestTask.conformers.bonds).toBeUndefined();
-    expect(uffTask.conformers.torsionStepDegrees).toBe(180);
-    expect(uffTask.conformers.maxTrials).toBe(4);
+    expect(uffTask.generate.bonds).toHaveLength(butane().bonds.length);
+    expect(crestTask.generate.bonds).toBeUndefined();
+    expect(uffTask.generate.torsionStepDegrees).toBe(180);
+    expect(uffTask.generate.maxTrials).toBe(4);
 
     const plan = buildWorkflowPlan(uffProject);
     const planned = plan.tasks.find((task) => task.nodeId === 'conf');
-    expect(planned.conformers.generator).toBe('uff');
+    expect(planned.generate.generator).toBe('uff');
   });
 
   it('serialises an unset route byte-identically, with no UFF keys at all', () => {
@@ -420,7 +420,7 @@ describe('UFF route wiring (issue 144)', () => {
   it('accepts the UFF knobs and refuses out-of-range values by name', () => {
     const molecule = butane();
     const good = validateProject({
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: 'uff knobs',
       molecule: {
         charge: 0, multiplicity: 1, fragments: [],
@@ -429,7 +429,7 @@ describe('UFF route wiring (issue 144)', () => {
       },
       defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
       nodes: [{
-        id: 'conf', type: 'conformers', title: 'Conf', state: 'ready', x: 0, y: 0,
+        id: 'conf', type: 'generate', title: 'Conf', state: 'ready', x: 0, y: 0,
         settings: { generator: 'uff', torsionStepDegrees: 90, maxTrials: 12 },
       }],
       edges: [],
@@ -439,7 +439,7 @@ describe('UFF route wiring (issue 144)', () => {
     expect(good.project.nodes[0].settings.maxTrials).toBe(12);
 
     const bad = validateProject({
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: 'uff knobs',
       molecule: {
         charge: 0, multiplicity: 1, fragments: [],
@@ -448,7 +448,7 @@ describe('UFF route wiring (issue 144)', () => {
       },
       defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
       nodes: [{
-        id: 'conf', type: 'conformers', title: 'Conf', state: 'ready', x: 0, y: 0,
+        id: 'conf', type: 'generate', title: 'Conf', state: 'ready', x: 0, y: 0,
         settings: { generator: 'uff', torsionStepDegrees: 5, maxTrials: 0 },
       }],
       edges: [],
@@ -463,7 +463,7 @@ describe('UFF route wiring (issue 144)', () => {
     const { atoms, bonds } = pentane();
     const found = generateUffEnsemble({ atoms, bonds, torsionStepDegrees: 180 });
     const saved = validateProject({
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: 'uff summary',
       molecule: {
         charge: 0, multiplicity: 1, fragments: [],
@@ -472,7 +472,7 @@ describe('UFF route wiring (issue 144)', () => {
       },
       defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
       nodes: [{
-        id: 'conf', type: 'conformers', title: 'Conf', state: 'ready', x: 0, y: 0,
+        id: 'conf', type: 'generate', title: 'Conf', state: 'ready', x: 0, y: 0,
         settings: { generator: 'uff' }, output: found.summary,
       }],
       edges: [],
@@ -525,7 +525,7 @@ describe('UFF route in the queue (issue 144)', () => {
   it.skipIf(onWindows)('completes a UFF search with no chemistry binary configured', async () => {
     const molecule = butane();
     const raw = {
-      schemaVersion: 1,
+      schemaVersion: 3,
       name: 'UFF queue',
       molecule: {
         charge: 0,
@@ -537,7 +537,7 @@ describe('UFF route in the queue (issue 144)', () => {
       },
       defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
       nodes: [{
-        id: 'conf', type: 'conformers', title: 'UFF ensemble', state: 'ready', x: 0, y: 0,
+        id: 'conf', type: 'generate', title: 'UFF ensemble', state: 'ready', x: 0, y: 0,
         settings: { generator: 'uff', torsionStepDegrees: 180, maxTrials: 2, rmsdThreshold: 0.05 },
       }],
       edges: [],
@@ -548,7 +548,7 @@ describe('UFF route in the queue (issue 144)', () => {
     const { queueManager } = await stack();
     const started = await queueManager.start({
       projectName: validated.project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'conformers'),
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
       edges: [],
       // No executable and no CREST path: the in-app route must not need either.
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },

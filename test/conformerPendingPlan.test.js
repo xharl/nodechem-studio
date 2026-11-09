@@ -21,7 +21,7 @@ const coords = [
 /** A conformer block feeding one optimisation, through a dependency edge. */
 function conformerProject({ output = null, settings = {} } = {}) {
   const raw = {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name: 'Conformer workflow',
     molecule: {
       charge: 0,
@@ -33,11 +33,11 @@ function conformerProject({ output = null, settings = {} } = {}) {
     defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
     nodes: [
       {
-        id: 'conf', type: 'conformers', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
+        id: 'conf', type: 'generate', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0,
         settings, output,
       },
       {
-        id: 'opt', type: 'calc', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
+        id: 'opt', type: 'calculate', title: 'Optimise chosen conformer', state: 'ready', x: 200, y: 0,
         settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null,
       },
     ],
@@ -83,13 +83,13 @@ describe('pending conformer calculation (#101)', () => {
     const calc = plan.tasks.find((task) => task.nodeId === 'opt');
 
     // The task that creates the ensemble is runnable; the whole plan is queueable.
-    expect(search.type).toBe('conformers');
+    expect(search.type).toBe('generate');
     expect(search.executable).toBe(true);
     expect(search.inputText.split('\n')[0]).toBe('3');
-    expect(search.conformers.argv).toEqual(['conf.xyz', '--gfn2', '--nci']);
+    expect(search.generate.argv).toEqual(['conf.xyz', '--gfn2', '--nci']);
 
     // The calculation is deferred, not built from the project geometry.
-    expect(calc.type).toBe('calc');
+    expect(calc.type).toBe('calculate');
     expect(calc.executable).toBe(false);
     expect(calc.inputText).toBe('');
     expect(calc.argv).toBeNull();
@@ -157,10 +157,10 @@ describe('conformer search task for Run selected block (#101)', () => {
     const task = conformerSearchTask(project, node);
 
     expect(task.nodeId).toBe('conf');
-    expect(task.type).toBe('conformers');
+    expect(task.type).toBe('generate');
     expect(task.executable).toBe(true);
-    expect(task.conformers.member).toBeUndefined();
-    expect(task.conformers.argv).toEqual(['conf.xyz', '--gfn2', '--nci']);
+    expect(task.generate.member).toBeUndefined();
+    expect(task.generate.argv).toEqual(['conf.xyz', '--gfn2', '--nci']);
     // A search starts from the project geometry; fan-out member tasks carry the
     // ensemble instead.
     expect(task.inputText).toContain('charge 0');

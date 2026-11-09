@@ -245,7 +245,7 @@ describe('bounding box and fit-to-view', () => {
 describe('normal-mode availability', () => {
   it('reports the explicit notice when a parsed geometry has no modes', () => {
     const resolved = resolveStructure({
-      type: 'calc',
+      type: 'calculate',
       output: {
         parsed: {
           finalGeometry: {
@@ -262,14 +262,14 @@ describe('normal-mode availability', () => {
   });
 
   it('returns null for a calc node without a parsed geometry instead of faking one', () => {
-    expect(resolveStructure({ type: 'calc', output: { file: 'r_opt.log', size: '1.8 MB' } })).toBeNull();
+    expect(resolveStructure({ type: 'calculate', output: { file: 'r_opt.log', size: '1.8 MB' } })).toBeNull();
     expect(resolveStructure({ type: 'condition' })).toBeNull();
     expect(resolveStructure(null)).toBeNull();
   });
 
   it('carries an optional modes block from the parsed output into the model', () => {
     const resolved = resolveStructure({
-      type: 'calc',
+      type: 'calculate',
       output: {
         parsed: {
           finalGeometry: {

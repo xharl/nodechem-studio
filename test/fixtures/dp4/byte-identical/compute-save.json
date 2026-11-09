@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "name": "Byte identity",
   "molecule": {
     "smiles": "",
@@ -51,7 +51,7 @@
       "nodes": [
         {
           "id": "sp2",
-          "type": "calc",
+          "type": "calculate",
           "kind": "SP",
           "title": "sp2",
           "state": "ready",
@@ -115,7 +115,7 @@
         },
         {
           "id": "sp4",
-          "type": "calc",
+          "type": "calculate",
           "kind": "SP",
           "title": "sp4",
           "state": "ready",
@@ -179,13 +179,13 @@
         },
         {
           "id": "cbs",
-          "type": "compute",
+          "type": "analyse",
           "kind": "Compute",
           "title": "CBS limit",
           "state": "ready",
           "x": 0,
           "y": 0,
-          "compute": {
+          "analyse": {
             "expression": "fit_cubic_inverse(E4, 4, E2, 2)",
             "inputs": [
               {

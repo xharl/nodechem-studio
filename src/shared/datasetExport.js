@@ -73,7 +73,7 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'ladderCbsHartree', label: 'ladder_cbs_hartree' },
   { key: 'ladderCbsSpreadKcal', label: 'ladder_cbs_spread_kcal' },
   { key: 'ladderCbsForm', label: 'ladder_cbs_form' },
-  // Issue 175 follow-up: a compute block writes its own record with
+  // Issue 175 follow-up: an analyse block writes its own record with
   // `kind: 'derived'`, an expression, the numbers it read and either a value or
   // the reason it has no value. Without these columns a protocol's result lives
   // only in the report and never reaches the table a spreadsheet reads. They are
@@ -133,18 +133,18 @@ export function runRow(record) {
   const ladder = run.ladder && typeof run.ladder === 'object' ? run.ladder : {};
   const ladderCbs = ladder.cbs && typeof ladder.cbs === 'object' ? ladder.cbs : {};
   const ensemble = run.ensemble && typeof run.ensemble === 'object' ? run.ensemble : {};
-  // Issue 175: a derived record carries `compute { expression, inputs, value,
+  // Issue 175: a derived record carries `analyse { expression, inputs, value,
   // unit, notComputed }`. Only a computed value reaches a cell; a refusal keeps
   // the value empty and puts the reason in its own column, so a reader can tell
   // "not computed" from "zero" without opening the record.
-  const compute = run.compute && typeof run.compute === 'object' ? run.compute : null;
-  const refused = compute
-    ? (typeof compute.notComputed === 'string' && compute.notComputed.trim() !== ''
-      ? compute.notComputed.trim()
-      : (compute.notComputed ? String(compute.notComputed) : null))
+  const analyse = run.analyse && typeof run.analyse === 'object' ? run.analyse : null;
+  const refused = analyse
+    ? (typeof analyse.notComputed === 'string' && analyse.notComputed.trim() !== ''
+      ? analyse.notComputed.trim()
+      : (analyse.notComputed ? String(analyse.notComputed) : null))
     : null;
-  const derivedInputs = compute && Array.isArray(compute.inputs)
-    ? compute.inputs.map((input) => {
+  const derivedInputs = analyse && Array.isArray(analyse.inputs)
+    ? analyse.inputs.map((input) => {
       const record = text(input?.recordId) ?? '?';
       const field = text(input?.field) ?? '?';
       const value = num(input?.value);
@@ -211,9 +211,9 @@ export function runRow(record) {
     ladderCbsHartree: cbsReported ? num(ladderCbs.energyHartree) : null,
     ladderCbsSpreadKcal: cbsReported ? num(ladderCbs.spread?.kcal ?? ladderCbs.spreadKcal) : null,
     ladderCbsForm: cbsReported ? text(ladderCbs.form) : null,
-    derivedValue: compute && !refused ? num(compute.value) : null,
-    derivedUnit: compute && !refused ? text(compute.unit) : null,
-    derivedExpression: text(compute?.expression),
+    derivedValue: analyse && !refused ? num(analyse.value) : null,
+    derivedUnit: analyse && !refused ? text(analyse.unit) : null,
+    derivedExpression: text(analyse?.expression),
     derivedInputs,
     derivedNotComputed: refused,
   };

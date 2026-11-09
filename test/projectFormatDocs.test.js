@@ -31,7 +31,7 @@ function settingsKeysFromSource() {
 }
 
 function documentedSettingsKeys() {
-  const start = doc.indexOf('`calc.settings` accepts exactly these keys');
+  const start = doc.indexOf('`calculate.settings` accepts exactly these keys');
   expect(start).toBeGreaterThan(-1);
   // The sentence ends with a colon and the list is the next paragraph, so read
   // through to the blank line *after* the list rather than stopping at the
@@ -45,7 +45,7 @@ function documentedSettingsKeys() {
 describe('PROJECT-FORMAT documents the settings the schema reads', () => {
   it('lists every SETTINGS_KEYS member and nothing it does not accept', () => {
     const code = new Set(settingsKeysFromSource());
-    const documented = new Set(documentedSettingsKeys().filter((key) => key !== 'calc'));
+    const documented = new Set(documentedSettingsKeys().filter((key) => key !== 'calculate'));
     const missing = [...code].filter((key) => !documented.has(key));
     const extra = [...documented].filter((key) => !code.has(key));
     expect({ missing, extra }).toEqual({ missing: [], extra: [] });
@@ -53,7 +53,7 @@ describe('PROJECT-FORMAT documents the settings the schema reads', () => {
 
   it('names the per-block time limit on a node, not only on the runner', () => {
     expect(schema).toContain("'timeoutSeconds'");
-    expect(doc).toMatch(/A `calc` block may also carry `timeoutSeconds`/);
+    expect(doc).toMatch(/A `calculate` block may also carry `timeoutSeconds`/);
     expect(doc).toMatch(/`\{ maxParallel, timeoutSeconds\? \}`/);
   });
 
@@ -65,7 +65,7 @@ describe('PROJECT-FORMAT documents the settings the schema reads', () => {
     for (const state of states) expect(doc).toContain(`\`${state}\``);
   });
 
-  it('documents both compute modes, and that the default stays absent', () => {
+  it('documents both analyse modes, and that the default stays absent', () => {
     expect(schema).toContain("'dp4'");
     expect(doc).toMatch(/`mode` is `expression` \(the default, and absent when never set\) or `dp4`/);
   });

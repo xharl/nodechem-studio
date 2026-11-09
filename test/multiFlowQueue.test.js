@@ -109,7 +109,7 @@ function datasetProject({ records = 2 } = {}) {
     enabled: true,
   }));
   const result = validateProject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'family',
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -127,7 +127,7 @@ function datasetProject({ records = 2 } = {}) {
       nodes: [
         { id: 'in1', type: 'input', kind: 'Input', title: 'Family', state: 'ready', x: 0, y: 0,
           input: { datasetId: 'family', recordFilter: { field: '', equals: '' } } },
-        { id: 'opt', type: 'calc', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 0,
+        { id: 'opt', type: 'calculate', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 0,
           settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null },
       ],
       edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
@@ -225,7 +225,7 @@ describe('RFC 0001 — the barrier holds the stage until every record clears it'
   it('starts no stage-2 task before the last stage-1 task finished', async () => {
     const water2 = water;
     const result = validateProject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'barrier',
       molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water2, geometry: { source: 'demo', file: '', format: '' } },
       defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -246,9 +246,9 @@ describe('RFC 0001 — the barrier holds the stage until every record clears it'
         nodes: [
           { id: 'in1', type: 'input', kind: 'Input', title: 'Family', state: 'ready', x: 0, y: 0,
             input: { datasetId: 'family', recordFilter: { field: '', equals: '' } } },
-          { id: 'opt', type: 'calc', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 0,
+          { id: 'opt', type: 'calculate', kind: 'Opt', title: 'Optimise', state: 'ready', x: 0, y: 0,
             settings: defaultSettings({ jobType: 'Opt' }), output: null, checkpointFrom: null },
-          { id: 'sp', type: 'calc', kind: 'SP', title: 'High level', state: 'ready', x: 0, y: 0,
+          { id: 'sp', type: 'calculate', kind: 'SP', title: 'High level', state: 'ready', x: 0, y: 0,
             settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null },
         ],
         edges: [

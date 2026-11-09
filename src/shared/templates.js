@@ -78,7 +78,7 @@ function calcNode(id, title, x, y, settingsOverrides = {}, checkpointFrom = null
   settings.nproc = Number(settings.nproc);
   return {
     id,
-    type: 'calc',
+    type: 'calculate',
     kind: kindForJob(settings.jobType),
     title,
     state: 'ready',

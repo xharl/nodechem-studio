@@ -43,7 +43,7 @@ Reference pages:
 - [DP4 and DP4+ probabilities](dp4.md) — candidate ranking from computed and measured NMR
   shifts: the parameter bank and its provenance, the three DP4+ variants, Boltzmann weighting,
   the missing-nucleus rule, and what the verification does and does not show.
-- [Compute blocks](compute.md) — safe arithmetic over upstream results: the expression language, the
+- [Analyse blocks](analyse.md) — safe arithmetic over upstream results: the expression language, the
   field vocabulary, CBS extrapolation, per-record values and the refusals that name a missing field.
 - [Troubleshooting](troubleshooting.md) — symptom, cause, action.
 - [FAQ](faq.md) — short answers to the questions testers ask first.

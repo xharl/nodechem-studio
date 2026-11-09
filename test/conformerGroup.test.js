@@ -45,7 +45,7 @@ const molecule = {
 };
 
 const project = (nodes, edges = []) => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'Conformer groups',
   molecule,
   defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -54,7 +54,7 @@ const project = (nodes, edges = []) => ({
 });
 
 const conformersNode = (id, settings = {}, output = null) => ({
-  id, type: 'conformers', title: `Ensemble ${id}`, state: 'ready', x: 0, y: 0, settings, output,
+  id, type: 'generate', title: `Ensemble ${id}`, state: 'ready', x: 0, y: 0, settings, output,
 });
 
 const summary = (overrides = {}) => ({
@@ -161,11 +161,11 @@ describe('#132 the group is per block, never per member', () => {
       conformersNode('conf1', { generator: 'import', importPath: 'conf.xyz', group: 'study-1' }),
     ])).project;
     const task = conformerSearchTask(validated, validated.nodes[0]);
-    expect(task.conformers.group).toBe('study-1');
+    expect(task.generate.group).toBe('study-1');
     const ungrouped = validateProject(project([
       conformersNode('conf2', { generator: 'import', importPath: 'conf.xyz' }),
     ])).project;
-    expect(conformerSearchTask(ungrouped, ungrouped.nodes[0]).conformers.group).toBe('');
+    expect(conformerSearchTask(ungrouped, ungrouped.nodes[0]).generate.group).toBe('');
   });
 });
 
@@ -214,36 +214,36 @@ const reportQueue = ({
   projectName: 'Tautomer study',
   status: 'completed',
   tasks: [
-    { nodeId: 'confA', title: titleA, type: 'conformers', status: 'completed', conformers: { temperature: 298.15, group: groupA } },
-    { nodeId: 'confB', title: titleB, type: 'conformers', status: 'completed', conformers: { temperature: 298.15, group: groupB } },
-    { nodeId: 'confC', title: titleC, type: 'conformers', status: 'completed', conformers: { temperature: 298.15, group: groupC } },
+    { nodeId: 'confA', title: titleA, type: 'generate', status: 'completed', generate: { temperature: 298.15, group: groupA } },
+    { nodeId: 'confB', title: titleB, type: 'generate', status: 'completed', generate: { temperature: 298.15, group: groupB } },
+    { nodeId: 'confC', title: titleC, type: 'generate', status: 'completed', generate: { temperature: 298.15, group: groupC } },
     {
-      nodeId: 'optA~c1', title: `${titleA} — c1`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-a1',
+      nodeId: 'optA~c1', title: `${titleA} — c1`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-a1',
       conformer: { nodeId: 'confA', title: titleA, id: 'c1', relativeKcal: 0, population: 0.9, protomer: 'A' },
       fanOut: { conformerId: 'confA', memberId: 'c1' },
     },
     {
-      nodeId: 'optA~c2', title: `${titleA} — c2`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-a2',
+      nodeId: 'optA~c2', title: `${titleA} — c2`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-a2',
       conformer: { nodeId: 'confA', title: titleA, id: 'c2', relativeKcal: 1.0, population: 0.1, protomer: 'A' },
       fanOut: { conformerId: 'confA', memberId: 'c2' },
     },
     {
-      nodeId: 'optB~c1', title: `${titleB} — c1`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-b1',
+      nodeId: 'optB~c1', title: `${titleB} — c1`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-b1',
       conformer: { nodeId: 'confB', title: titleB, id: 'c1', relativeKcal: 0, population: 0.8, protomer: 'B' },
       fanOut: { conformerId: 'confB', memberId: 'c1' },
     },
     {
-      nodeId: 'optB~c2', title: `${titleB} — c2`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-b2',
+      nodeId: 'optB~c2', title: `${titleB} — c2`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-b2',
       conformer: { nodeId: 'confB', title: titleB, id: 'c2', relativeKcal: 2.0, population: 0.2, protomer: 'B' },
       fanOut: { conformerId: 'confB', memberId: 'c2' },
     },
     {
-      nodeId: 'optC~c1', title: `${titleC} — c1`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c1',
+      nodeId: 'optC~c1', title: `${titleC} — c1`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-c1',
       conformer: { nodeId: 'confC', title: titleC, id: 'c1', relativeKcal: 0, population: 1, protomer: '' },
       fanOut: { conformerId: 'confC', memberId: 'c1' },
     },
     {
-      nodeId: 'optC~c2', title: `${titleC} — c2`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c2',
+      nodeId: 'optC~c2', title: `${titleC} — c2`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-c2',
       conformer: { nodeId: 'confC', title: titleC, id: 'c2', relativeKcal: 0.5, population: 0.3, protomer: '' },
       fanOut: { conformerId: 'confC', memberId: 'c2' },
     },
@@ -370,7 +370,7 @@ describe('#132 the queue writes the group into conformers.json', () => {
       }),
     ]));
     expect(validated.ok).toBe(true);
-    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'conformers');
+    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'generate');
     const started = await queueManager.start({
       projectName: validated.project.name,
       tasks: [task],
@@ -400,9 +400,9 @@ describe('#132 the queue writes the group into conformers.json', () => {
     const started = await queueManager.start({
       projectName: 'bad group',
       tasks: [{
-        nodeId: 'conf', type: 'conformers', title: 'Ensemble', inputName: 'in.xyz',
+        nodeId: 'conf', type: 'generate', title: 'Ensemble', inputName: 'in.xyz',
         inputText: '3\nwater\nO 0 0 0\nH 0.96 0 0\nH -0.24 0.93 0\n',
-        conformers: { generator: 'crest', group: 'two words' },
+        generate: { generator: 'crest', group: 'two words' },
       }],
       edges: [],
       options: { dryRun: true, executable: null, crestExecutable: '', scratchDir: '' },
@@ -413,6 +413,6 @@ describe('#132 the queue writes the group into conformers.json', () => {
       const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
       return queue && queue.status !== 'running' ? queue : null;
     });
-    expect(stored.tasks[0].conformers.group).toBe('');
+    expect(stored.tasks[0].generate.group).toBe('');
   });
 });

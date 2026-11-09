@@ -57,9 +57,9 @@ describe('nextReadyTask', () => {
   });
 
   it('treats skipped notes as satisfied', () => {
-    const tasks = [task('note', 'skipped'), task('calc')];
-    const edges = [{ from: 'note', to: 'calc', type: 'dependency' }];
-    expect(nextReadyTask(tasks, edges).nodeId).toBe('calc');
+    const tasks = [task('note', 'skipped'), task('calculate')];
+    const edges = [{ from: 'note', to: 'calculate', type: 'dependency' }];
+    expect(nextReadyTask(tasks, edges).nodeId).toBe('calculate');
   });
 
   it('does not release a task whose parent failed', () => {

@@ -110,7 +110,7 @@ describe('emission template and Root keyword', () => {
     // The plan carries the note block as a non-executable task.
     expect(plan.tasks.map((task) => task.nodeId)).toEqual(['em-s1-opt', 'em-td', 'em-note']);
     expect(plan.tasks.find((task) => task.nodeId === 'em-note').executable).toBe(false);
-    const [opt, emission] = plan.tasks.filter((task) => task.type === 'calc');
+    const [opt, emission] = plan.tasks.filter((task) => task.type === 'calculate');
     expect(opt.settings.jobType).toBe('Opt');
     expect(opt.settings.tdStates).toBe(1);
     expect(opt.settings.tdRoot).toBe(1);

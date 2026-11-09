@@ -313,7 +313,7 @@ describe('the report section (issue 59)', () => {
     id: 'q-1',
     projectName: 'Water',
     status: 'completed',
-    tasks: [{ nodeId: 'opt', title: 'Optimise', type: 'calc', status: 'passed', runId: 'run-1' }],
+    tasks: [{ nodeId: 'opt', title: 'Optimise', type: 'calculate', status: 'passed', runId: 'run-1' }],
   };
 
   it('prints the BCP table and the NCI figure when a checkpoint is supplied', () => {

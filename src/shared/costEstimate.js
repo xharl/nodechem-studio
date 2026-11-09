@@ -959,7 +959,7 @@ export function estimateCost(project, plan, options = {}) {
   const maxParallel = maxParallelOf(project, options.maxParallel);
   const tasks = (Array.isArray(plan) ? plan : (Array.isArray(plan?.tasks) ? plan.tasks : []))
     .map((task, index) => ({ ...task, key: String(task?.taskId ?? task?.nodeId ?? `task-${index}`) }))
-    .filter((task) => task && (task.type === 'calc' || task.type === undefined));
+    .filter((task) => task && (task.type === 'calculate' || task.type === undefined));
   const edges = Array.isArray(plan?.edges) ? plan.edges : [];
 
   if (tasks.length === 0) {

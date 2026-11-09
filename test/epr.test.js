@@ -292,7 +292,7 @@ describe('the report section', () => {
     id: 'q-epr',
     projectName: 'Methyl radical',
     status: 'completed',
-    tasks: [{ nodeId: 'sp~ch3', title: 'CH3 radical SP', type: 'calc', status: 'passed', runId: 'run-ch3' }],
+    tasks: [{ nodeId: 'sp~ch3', title: 'CH3 radical SP', type: 'calculate', status: 'passed', runId: 'run-ch3' }],
   };
   const records = { 'run-ch3': { id: 'run-ch3', engine: 'psi4', parsed, gates: { overall: 'pass' } } };
 
@@ -314,7 +314,7 @@ describe('the report section', () => {
     const closed = parsePsi4Output(WATER_LOG);
     const closedQueue = {
       ...queue,
-      tasks: [{ nodeId: 'sp~water', title: 'Water SP', type: 'calc', status: 'passed', runId: 'run-water' }],
+      tasks: [{ nodeId: 'sp~water', title: 'Water SP', type: 'calculate', status: 'passed', runId: 'run-water' }],
     };
     const html = workflowReportHtml(buildWorkflowReport(closedQueue, {
       'run-water': { id: 'run-water', engine: 'psi4', parsed: closed, gates: { overall: 'pass' } },

@@ -60,7 +60,7 @@ afterEach(async () => {
 /** A project with one input block feeding one single-point block. */
 function project({ name, datasets, input, nodes = null }) {
   const result = validateProject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name,
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -72,7 +72,7 @@ function project({ name, datasets, input, nodes = null }) {
       nodes: [
         { id: 'in1', type: 'input', kind: input.kind || 'Input', title: input.title, state: 'ready', x: 0, y: 0, input: input.input },
         ...(nodes || [{
-          id: 'sp', type: 'calc', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
+          id: 'sp', type: 'calculate', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
           settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null,
         }]),
       ],
@@ -135,7 +135,7 @@ function seriesProject() {
 /** A project with no input block: one task on the project molecule. */
 function singleProject() {
   const result = validateProject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Single',
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -145,7 +145,7 @@ function singleProject() {
       id: 'main',
       title: 'Single',
       nodes: [{
-        id: 'sp', type: 'calc', kind: 'SP', title: 'Single point', state: 'ready', x: 0, y: 0,
+        id: 'sp', type: 'calculate', kind: 'SP', title: 'Single point', state: 'ready', x: 0, y: 0,
         settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null,
       }],
       edges: [],

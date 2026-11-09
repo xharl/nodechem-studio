@@ -136,7 +136,7 @@ describe('workflow templates — recipe contract', () => {
     expect(validateProject(project).ok).toBe(true);
     expect(project.nodes).toHaveLength(1);
     expect(project.edges).toEqual([]);
-    expect(project.nodes[0].type).toBe('calc');
+    expect(project.nodes[0].type).toBe('calculate');
     expect(project.nodes[0].title).toBe('Reactant optimization');
     expect(project.nodes[0].settings.jobType).toBe('Opt');
   });

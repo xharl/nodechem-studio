@@ -1,6 +1,6 @@
 # Conformers and protomers
 
-A conformer block answers a question a single imported geometry cannot: *which shape did I
+A Generate block answers a question a single imported geometry cannot: *which shape did I
 actually calculate?* Two conformers of the same molecule can differ by 2–10 kcal/mol, which is
 often more than the method difference being studied. The block searches or imports an ensemble,
 ranks it, and lets you choose the member that downstream blocks run.
@@ -15,7 +15,7 @@ report the result; an ensemble that mixes labels never gets one picked automatic
 ## Where it sits in a workflow
 
 ```
-Structure (imported geometry)  →  Conformer ensemble  →  Opt+Freq  →  Output
+Structure (imported geometry)  →  Generate  →  Calculate (Opt+Freq)  →  Output
 ```
 
 Add the block from the palette under **Structure**. Its output is an ensemble summary, not a
@@ -194,12 +194,12 @@ task writes its geometry into its own folder (`member.xyz`, `conformers.json`) a
 run's `run.json` names the member it ran. Fan-out needs a stored ensemble, so run the block once
 with fan-out off (or on, with the ensemble absent) before expanding it.
 
-A fresh `Conformer ensemble → calculation` project can be queued as it stands: the plan runs the
+A fresh `Generate → Calculate` project can be queued as it stands: the plan runs the
 search first and marks the calculation **pending**, because its input can only be built from a
 member geometry. The queue fails that pending calculation with the “no selected conformer” reason
 instead of substituting the project geometry; the next **Run workflow** builds it from the stored
 ensemble and the chosen member (a single-protomer ensemble is chosen automatically). To run the
-search alone without deleting the downstream block, select the conformer block and use **Run
+search alone without deleting the downstream block, select the Generate block and use **Run
 selected block** — it queues just that block's search and stores the ensemble in the project.
 
 Fan-out is refused when the ensemble mixes protomers and no member is chosen: comparing protonation

@@ -73,8 +73,8 @@ export function enginesForProject(project) {
   const found = [];
   for (const node of nodes) {
     let id = '';
-    if (node?.type === 'calc') id = node?.settings?.engine || fallback;
-    else if (node?.type === 'conformers' && node?.settings?.generator === 'crest') id = 'crest';
+    if (node?.type === 'calculate') id = node?.settings?.engine || fallback;
+    else if (node?.type === 'generate' && node?.settings?.generator === 'crest') id = 'crest';
     if (id && !found.includes(id)) found.push(id);
   }
   return found;

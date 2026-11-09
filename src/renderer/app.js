@@ -234,7 +234,7 @@ const MEMORY_UNITS = [['GB', 'GB'], ['MB', 'MB'], ['MW', 'MW']];
 function calcNode(id, kind, title, x, y, options = {}) {
   return {
     id,
-    type: 'calc',
+    type: 'calculate',
     kind,
     title,
     state: options.state || 'ready',
@@ -440,7 +440,7 @@ const inputName = (id) => `${id.replace(/-/g, '_')}.gjf`;
 const outputName = (id) => `${id.replace(/-/g, '_')}.log`;
 
 function gateChips(node) {
-  if (node.type !== 'calc') return [];
+  if (node.type !== 'calculate') return [];
   const gates = node.settings.gates;
   const parts = [];
   if (gates.thermo) parts.push('thermo');
@@ -543,7 +543,7 @@ function inputRecordCounts(node) {
 }
 
 function nodeDetail(node) {
-  if (node.type === 'calc') {
+  if (node.type === 'calculate') {
     // The card must describe the engine this block actually runs: with a mixed
     // project the project default is not the block's engine.
     const engine = engineForNode(state.project, node);
@@ -559,16 +559,16 @@ function nodeDetail(node) {
     return routeShort(node.settings);
   }
   if (node.type === 'condition') return node.condition.expression.replace(/\s*\n\s*/g, ' · ');
-  if (node.type === 'compute') {
+  if (node.type === 'analyse') {
     // The card names the expression and the inputs it reads (issue 175): a
     // derived number must never look like a route a block ran.
-    const expression = String(node.compute?.expression || '').trim();
-    const names = (Array.isArray(node.compute?.inputs) ? node.compute.inputs : [])
+    const expression = String(node.analyse?.expression || '').trim();
+    const names = (Array.isArray(node.analyse?.inputs) ? node.analyse.inputs : [])
       .map((input) => String(input?.name || '').trim()).filter(Boolean);
     if (!expression) return 'no expression yet';
     return names.length ? `${expression} · ${names.join(', ')}` : expression;
   }
-  if (node.type === 'conformers') {
+  if (node.type === 'generate') {
     const output = node.output;
     if (!output) {
       // Issue 144: the footer says which route is waiting to run, including the
@@ -624,12 +624,12 @@ function nodeDetail(node) {
 function conformerGroupCount(group) {
   const id = String(group || '');
   if (!id) return 0;
-  return state.project.nodes.filter((item) => item.type === 'conformers'
+  return state.project.nodes.filter((item) => item.type === 'generate'
     && String(item.settings?.group || '') === id).length;
 }
 
 function nodeFoot(node) {
-  if (node.type === 'calc') {
+  if (node.type === 'calculate') {
     const familyDone = (state.queue?.tasks || []).some((task) => String(task.nodeId || '').startsWith(`${node.id}~`) && task.status === 'completed');
     const output = node.parsed || familyDone ? 'parsed' : node.state === 'ready' ? 'ready to run' : 'no output';
     // Issue 186: a sweeping block says so on its own card — this block queues
@@ -638,7 +638,7 @@ function nodeFoot(node) {
     return { left: [gateChips(node).join(' · '), sweep].filter(Boolean).join(' · '), right: output };
   }
   if (node.type === 'condition') return { left: `unknown → ${node.condition.unknown.replace('-', ' ')}`, right: '2 branches' };
-  if (node.type === 'conformers') {
+  if (node.type === 'generate') {
     // Issue 129: the footer names what produced the ensemble — an imported
     // file's declared program, or the CREST method that ran here.
     const origin = node.output && typeof node.output === 'object'
@@ -698,8 +698,8 @@ function nodeFoot(node) {
     };
   }
   if (node.type === 'note') return { left: 'annotation', right: '' };
-  if (node.type === 'compute') {
-    const inputs = Array.isArray(node.compute?.inputs) ? node.compute.inputs : [];
+  if (node.type === 'analyse') {
+    const inputs = Array.isArray(node.analyse?.inputs) ? node.analyse.inputs : [];
     return { left: 'derived', right: `${inputs.length} input${inputs.length === 1 ? '' : 's'}` };
   }
   return { left: '', right: '' };
@@ -707,8 +707,8 @@ function nodeFoot(node) {
 
 function kindCode(node) {
   if (node.type === 'condition') return 'IF';
-  if (node.type === 'compute') return 'fx';
-  if (node.type === 'conformers') return 'CF';
+  if (node.type === 'analyse') return 'fx';
+  if (node.type === 'generate') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
   if (node.type === 'input') return node.input?.complex ? '⊕' : node.input?.edits?.length ? 'Δ' : node.input?.series ? 'n×' : 'IN';
@@ -719,14 +719,14 @@ function kindCode(node) {
 
 function kindLabel(node) {
   if (node.type === 'condition') return 'Control';
-  if (node.type === 'compute') return 'Derived';
-  if (node.type === 'conformers') return 'Structure';
+  if (node.type === 'analyse') return 'Analyse';
+  if (node.type === 'generate') return 'Generate';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
   if (node.type === 'input') return node.input?.complex ? 'Complex' : node.input?.edits?.length ? 'Derivative' : node.input?.series ? 'Series' : 'Data';
   if (node.type === 'output') return 'Data';
   if (node.type === 'note') return 'Note';
-  return 'Calculation';
+  return 'Calculate';
 }
 
 /* ── Graph rendering ──────────────────────────────────────── */
@@ -792,7 +792,7 @@ function resultFacts(node) {
       tone: 'warn',
     };
   }
-  if (node.type === 'calc') {
+  if (node.type === 'calculate') {
     // A block downstream of a dataset runs once per record: there is no single
     // energy to show, so the card reports how many records finished and passed.
     const family = (state.queue?.tasks || []).filter((task) => String(task.nodeId || '').startsWith(`${node.id}~`));
@@ -857,7 +857,7 @@ function resultFacts(node) {
       tone,
     };
   }
-  if (node.type === 'conformers') {
+  if (node.type === 'generate') {
     const output = node.output && typeof node.output === 'object' ? node.output : null;
     if (!output || !Number.isFinite(output.count)) return null;
     const spread = Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(2)}` : '';
@@ -960,14 +960,14 @@ function costCardText(entry) {
  * card prices the one run the block would queue, so the two do not disagree.
  */
 function costEntryForNode(node) {
-  if (!node || node.type !== 'calc' || !state.project) return null;
+  if (!node || node.type !== 'calculate' || !state.project) return null;
   try {
     const engine = engineForNode(state.project, node);
     const entry = estimateCost(state.project, {
       tasks: [{
         taskId: node.id,
         nodeId: node.id,
-        type: 'calc',
+        type: 'calculate',
         title: node.title,
         engine: engine.id,
         settings: node.settings,
@@ -1002,7 +1002,7 @@ function renderNodeCard(node) {
       ? cost.notEstimated
       : `${cost.procs} cores · ${cost.confidence} (${cost.calibrationPoints} pts)`)
     : '';
-  const checkpointBadge = node.type === 'calc' && node.checkpointFrom
+  const checkpointBadge = node.type === 'calculate' && node.checkpointFrom
     ? '<span class="chk-badge">chk</span>'
     : '';
   return `
@@ -1768,7 +1768,7 @@ function renderProjectInspector() {
   // id and each block's own protomer label. An ungrouped block is absent — it
   // is not listed under a null group.
   const conformerGroupList = conformerGroups(nodes
-    .filter((node) => node.type === 'conformers')
+    .filter((node) => node.type === 'generate')
     .map((node) => ({
       id: node.id,
       title: node.title,
@@ -1970,7 +1970,7 @@ function qstStructureRow(node, s, index) {
   const structure = qstStructuresFor(s)[index] || { label: '', source: 'copy', nodeId: '', path: '', atoms: [] };
   const atoms = moleculeForNode(node)?.coords || [];
   const status = qstStructureStatus(structure, atoms);
-  const blocks = state.project.nodes.filter((entry) => entry.type === 'calc'
+  const blocks = state.project.nodes.filter((entry) => entry.type === 'calculate'
     && Array.isArray(entry.parsed?.geometry?.final?.atoms)
     && entry.parsed.geometry.final.atoms.length > 0);
   const position = index + 2;
@@ -2495,7 +2495,7 @@ function calcInspector(node) {
       <option value="">None</option>
       ${ins.map((edge) => {
         const source = nodeById(edge.from);
-        const artifact = source && source.type === 'calc' ? checkpointNameFor(source) : '';
+        const artifact = source && source.type === 'calculate' ? checkpointNameFor(source) : '';
         return source ? `<option value="${source.id}"${node.checkpointFrom === source.id ? ' selected' : ''}>${esc(source.title)}${artifact ? ` · ${esc(artifact)}` : ''}</option>` : '';
       }).join('')}
     </select><span class="inspector-note" style="display:block;margin-top:4px">${checkpointHandoffNote(engine.id)}</span></div>` : '',
@@ -2599,12 +2599,12 @@ function computePreviewOf(node) {
       // can only see the blocks' attached parsed results (a fresh project has
       // no run folders), so it names what it has and refuses rather than guess.
       const rows = dp4RowsFromSources(context.sources, context.rowsFor);
-      return { error: null, mode: 'dp4', result: evaluateDp4(node.compute?.dp4, { rows }) };
+      return { error: null, mode: 'dp4', result: evaluateDp4(node.analyse?.dp4, { rows }) };
     }
     return {
       error: null,
       mode: 'expression',
-      result: evaluateCompute(node.compute || { expression: '', inputs: [] }, {
+      result: evaluateCompute(node.analyse || { expression: '', inputs: [] }, {
         recordId: null,
         resolveSource: context.resolveSource,
         allRecords: context.allRecords,
@@ -2654,7 +2654,7 @@ function refreshComputePreview() {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
   const slot = $('#compute-preview-slot');
-  if (!node || node.type !== 'compute' || !slot) return;
+  if (!node || node.type !== 'analyse' || !slot) return;
   slot.innerHTML = computePreviewHtml(node);
 }
 
@@ -2677,11 +2677,11 @@ function computeInputRow(input, index, upstream) {
  * needs filled in — never a number that has not been chosen.
  */
 function dp4DefinitionOf(node) {
-  if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
-  if (!node.compute.dp4 || typeof node.compute.dp4 !== 'object') {
-    node.compute.dp4 = { level: '', solvation: 'gas', solvent: '', variant: 'full', temperature: 298.15, experimental: [] };
+  if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
+  if (!node.analyse.dp4 || typeof node.analyse.dp4 !== 'object') {
+    node.analyse.dp4 = { level: '', solvation: 'gas', solvent: '', variant: 'full', temperature: 298.15, experimental: [] };
   }
-  const definition = node.compute.dp4;
+  const definition = node.analyse.dp4;
   if (!Array.isArray(definition.experimental)) definition.experimental = [];
   return definition;
 }
@@ -2759,8 +2759,8 @@ function dp4InspectorBody(definition) {
 function computeInspector(node) {
   const upstream = computeUpstreamBlocks(node);
   const ins = incoming(node.id);
-  const definition = node.compute && typeof node.compute === 'object'
-    ? node.compute : { expression: '', inputs: [] };
+  const definition = node.analyse && typeof node.analyse === 'object'
+    ? node.analyse : { expression: '', inputs: [] };
   const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
   const dp4 = mode === 'dp4' ? dp4DefinitionOf(node) : null;
   const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
@@ -2768,12 +2768,12 @@ function computeInspector(node) {
     ? inputs.map((input, index) => computeInputRow(input, index, upstream)).join('')
     : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
   const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
-  return `${inspectorHead(mode === 'dp4' ? 'Derived · DP4+' : 'Derived · compute', node.title, `${upstream.length} upstream · ${mode === 'dp4' ? 'candidate comparison' : 'derived quantity'}`)}
+  return `${inspectorHead(mode === 'dp4' ? 'Derived · DP4+' : 'Derived · analyse', node.title, `${upstream.length} upstream · ${mode === 'dp4' ? 'candidate comparison' : 'derived quantity'}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · evaluated from upstream records</span></div>
     <div class="callout"><strong>Derived, not measured.</strong> This block computes ${mode === 'dp4' ? 'a probability per candidate structure from the committed DP4+ bank' : 'a number from other blocks\' results — a CBS limit, a ΔE, a ratio'}. Its result is never presented as a QM result, and a missing input is a refusal that names it, never a zero.</div>
     ${group('Mode', 'arithmetic or DP4+', true, [
-      `<div class="field full"><label>What this block computes</label><select class="select" data-compute-mode="mode" aria-label="Compute mode">
+      `<div class="field full"><label>What this block computes</label><select class="select" data-compute-mode="mode" aria-label="Analyse mode">
         <option value="expression"${mode === 'expression' ? ' selected' : ''}>Arithmetic expression over upstream fields</option>
         <option value="dp4"${mode === 'dp4' ? ' selected' : ''}>DP4+ probabilities over candidate structures</option>
       </select></div>`,
@@ -2807,14 +2807,14 @@ function computeInspector(node) {
 function addComputeInput() {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'compute') return;
-  if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
-  if (!Array.isArray(node.compute.inputs)) node.compute.inputs = [];
+  if (!node || node.type !== 'analyse') return;
+  if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
+  if (!Array.isArray(node.analyse.inputs)) node.analyse.inputs = [];
   const upstream = computeUpstreamBlocks(node);
-  const used = new Set(node.compute.inputs.map((input) => input.name));
+  const used = new Set(node.analyse.inputs.map((input) => input.name));
   let name = 'E';
   for (let index = 1; used.has(name); index += 1) name = `E${index}`;
-  node.compute.inputs.push({
+  node.analyse.inputs.push({
     name,
     field: 'finalEnergyHartree',
     source: upstream.length === 1 ? upstream[0].id : '',
@@ -2826,7 +2826,7 @@ function addComputeInput() {
 function removeComputeInput(index) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  const inputs = node?.compute?.inputs;
+  const inputs = node?.analyse?.inputs;
   if (!Array.isArray(inputs) || index < 0 || index >= inputs.length) return;
   inputs.splice(index, 1);
   renderGraph();
@@ -2843,7 +2843,7 @@ function removeComputeInput(index) {
 function addDp4Row() {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'compute') return;
+  if (!node || node.type !== 'analyse') return;
   const definition = dp4DefinitionOf(node);
   definition.experimental.push({ nucleus: '13C', shift: null, atoms: [] });
   renderGraph();
@@ -2853,7 +2853,7 @@ function addDp4Row() {
 function removeDp4Row(index) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  const rows = node?.compute?.dp4?.experimental;
+  const rows = node?.analyse?.dp4?.experimental;
   if (!Array.isArray(rows) || !Number.isInteger(index) || index < 0 || index >= rows.length) return;
   rows.splice(index, 1);
   renderGraph();
@@ -2900,7 +2900,7 @@ function loopInspector(node) {
   const ins = incoming(node.id);
   const loopEdge = state.project.edges.find((edge) => edge.from === node.id && edge.type === 'loop');
   const target = nodeById(loop.target);
-  const candidates = state.project.nodes.filter((item) => item.type === 'calc');
+  const candidates = state.project.nodes.filter((item) => item.type === 'calculate');
   return `${inspectorHead('Control · loop', node.title, `retry ×${loop.maxAttempts} · ${target?.title || 'no target'}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · explicit loop edge</span></div>
@@ -2987,7 +2987,7 @@ function conformersInspector(node) {
           ? 'Run the block with an Open Babel executable configured in the run console.'
           : 'Run the block with a CREST executable configured.'))}</div>`;
 
-  return `${inspectorHead('Structure · conformers', node.title, summaryLine)}
+  return `${inspectorHead('Generate · conformers', node.title, summaryLine)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${selected
       ? `using ${esc(selected.id)} · ${formatRelativeKcal(selected.relativeKcal)} kcal/mol · ${formatPopulation(selected.population)}`
@@ -3993,10 +3993,10 @@ function renderInspector() {
   if (state.selected.type === 'node') {
     const node = nodeById(state.selected.id);
     if (!node) { el.innerHTML = renderProjectInspector(); return; }
-    if (node.type === 'calc') { el.innerHTML = calcInspector(node); mountStructureViewer(el, node); return; }
-    if (node.type === 'conformers') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
+    if (node.type === 'calculate') { el.innerHTML = calcInspector(node); mountStructureViewer(el, node); return; }
+    if (node.type === 'generate') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
     if (node.type === 'condition') { el.innerHTML = conditionInspector(node); return; }
-    if (node.type === 'compute') { el.innerHTML = computeInspector(node); return; }
+    if (node.type === 'analyse') { el.innerHTML = computeInspector(node); return; }
     if (node.type === 'loop') { el.innerHTML = loopInspector(node); return; }
     if (node.type === 'input') { el.innerHTML = inputInspector(node); return; }
     el.innerHTML = simpleInspector(node);
@@ -4020,13 +4020,13 @@ const BLOCKS = [
     { type: 'nto', icon: 'NTO', title: 'NTO analysis', note: 'second job of the Pop=NTO chain' },
   ] },
   { group: 'Structure', items: [
-    { type: 'conformers', icon: 'CF', title: 'Conformer ensemble', note: 'rank + prune conformers' },
+    { type: 'generate', icon: 'CF', title: 'Generate structures', note: 'conformer search or import; rank + prune' },
   ] },
   { group: 'Control flow', items: [
     { type: 'condition', icon: 'IF', title: 'Condition', note: 'TRUE / FALSE branches' },
     { type: 'loop', icon: '↻', title: 'Loop', note: 'retry with max attempts' },
     { type: 'merge', icon: '⋈', title: 'Join', note: 'merge branches' },
-    { type: 'compute', icon: 'fx', title: 'Compute', note: 'derived arithmetic: CBS, ΔE, ratios' },
+    { type: 'analyse', icon: 'fx', title: 'Analyse', note: 'derived arithmetic: CBS, ΔE, ratios' },
   ] },
   { group: 'Data', items: [
     { type: 'input', icon: 'IN', title: 'Dataset input', note: 'run the graph once per record' },
@@ -4106,9 +4106,9 @@ function addBlock(type) {
       id, type: 'loop', kind: 'Loop', title: 'Retry loop', state: 'ready', ...position,
       loop: { maxAttempts: 3, mode: 'retry', target: '', until: 'condition is false' },
     };
-  } else if (type === 'conformers') {
+  } else if (type === 'generate') {
     node = {
-      id, type: 'conformers', kind: 'Conformers', title: 'Conformer ensemble', state: 'ready', ...position,
+      id, type: 'generate', kind: 'Generate', title: 'Generate structures', state: 'ready', ...position,
       settings: {
         ...DEFAULT_CONFORMER_SETTINGS,
         // A fresh origin per block: the default is one frozen object, and two
@@ -4124,12 +4124,12 @@ function addBlock(type) {
       id, type: 'merge', kind: 'Merge', title: 'Join branches', state: 'ready', ...position,
       merge: { policy: 'all', notes: '' },
     };
-  } else if (type === 'compute') {
+  } else if (type === 'analyse') {
     // Issue 175: one input named `E` reading the upstream final energy, so a
     // new block previews a real number the moment it is wired.
     node = {
-      id, type: 'compute', kind: 'Compute', title: 'Compute', state: 'ready', ...position,
-      compute: { expression: 'E', inputs: [{ name: 'E', field: 'finalEnergyHartree', source: '' }] },
+      id, type: 'analyse', kind: 'Analyse', title: 'Analyse', state: 'ready', ...position,
+      analyse: { expression: 'E', inputs: [{ name: 'E', field: 'finalEnergyHartree', source: '' }] },
     };
   } else if (type === 'input') {
     const dataset = Array.isArray(state.project.datasets) ? state.project.datasets[0] : null;
@@ -4173,7 +4173,7 @@ function addBlock(type) {
       nto: {
         jobType: 'SP', title: 'NTO analysis', nto: true, dispersion: '', gates: { finalEnergy: true },
       },
-    }[type] || { jobType: 'Opt', title: 'Calculation' };
+    }[type] || { jobType: 'Opt', title: 'Calculate' };
     node = calcNode(id, kindForJob(template.jobType), template.title, position.x, position.y, {
       state: 'ready',
       settings: {
@@ -4205,7 +4205,7 @@ function addBlock(type) {
 function inspectorCalcNode() {
   if (state.selected.type !== 'node') return null;
   const node = nodeById(state.selected.id);
-  return node && node.type === 'calc' ? node : null;
+  return node && node.type === 'calculate' ? node : null;
 }
 
 function addConstraint() {
@@ -4574,7 +4574,7 @@ function duplicateNode(id) {
   copy.x = position.x;
   copy.y = position.y;
   copy.state = 'ready';
-  if (copy.type === 'calc') copy.settings.checkpoint = `${copy.id.replace(/-/g, '_')}.chk`;
+  if (copy.type === 'calculate') copy.settings.checkpoint = `${copy.id.replace(/-/g, '_')}.chk`;
   state.project.nodes.push(copy);
   state.selected = { type: 'node', id: copy.id };
   renderGraph();
@@ -4604,13 +4604,13 @@ function setCheckpoint(edgeIdValue, enabled) {
     }
     edge.type = 'checkpoint';
     const to = nodeById(edge.to);
-    if (to?.type === 'calc') to.checkpointFrom = edge.from;
+    if (to?.type === 'calculate') to.checkpointFrom = edge.from;
     state.selected = { type: 'edge', id: edgeId(edge) };
     toast('Checkpoint hand-off enabled.');
   } else {
     edge.type = 'dependency';
     const to = nodeById(edge.to);
-    if (to?.type === 'calc' && to.checkpointFrom === edge.from) to.checkpointFrom = null;
+    if (to?.type === 'calculate' && to.checkpointFrom === edge.from) to.checkpointFrom = null;
     state.selected = { type: 'edge', id: edgeId(edge) };
     toast('Checkpoint hand-off cleared.');
   }
@@ -5439,7 +5439,7 @@ function validateGraph() {
   const conditions = state.project.nodes.filter((node) => node.type === 'condition').length;
   const loops = state.project.edges.filter((edge) => edge.type === 'loop').length;
   const findings = state.project.nodes
-    .filter((node) => node.type === 'calc')
+    .filter((node) => node.type === 'calculate')
     .map((node) => {
       // The force-constant and convergence rules are Gaussian route rules;
       // xTB rejects unsupported job types when the input is built.
@@ -5533,11 +5533,11 @@ function selectedCalcNode({ conformers = false } = {}) {
   if (state.selected.type !== 'node') return null;
   const node = nodeById(state.selected.id);
   if (!node) return null;
-  if (node.type === 'calc') return node;
+  if (node.type === 'calculate') return node;
   // Issue 101: a conformer block is runnable on its own (its search), so the
   // run paths that pass `conformers: true` accept it; export still asks for a
   // calculation and keeps refusing it.
-  return conformers && node.type === 'conformers' ? node : null;
+  return conformers && node.type === 'generate' ? node : null;
 }
 
 function gatesForNode(node) {
@@ -5796,7 +5796,7 @@ function configuredTimeoutSeconds() {
  * nobody measured one.
  */
 function longRunReason(node) {
-  if (!node || (node.type !== 'calc' && node.type !== 'conformers')) return '';
+  if (!node || (node.type !== 'calculate' && node.type !== 'generate')) return '';
   const s = node.settings || {};
   const atoms = Number(state.project?.molecule?.coords?.length) || 0;
   const states = Number(s.tdStates) || 0;
@@ -5807,7 +5807,7 @@ function longRunReason(node) {
   if (jobType === 'Opt=TS' || jobType === 'Opt=QST2' || jobType === 'Opt=QST3') reasons.push('a transition-state search');
   if (Number(s.counterpoise) > 1) reasons.push(`counterpoise over ${Number(s.counterpoise)} fragments`);
   if (/Freq/.test(jobType) && atoms >= 30) reasons.push(`a frequency job on ${atoms} atoms`);
-  if (node.type === 'conformers' && s.generator === 'crest' && !s.member) {
+  if (node.type === 'generate' && s.generator === 'crest' && !s.member) {
     reasons.push(`a CREST search for up to ${Number(s.maxConformers) || 20} conformers`);
   }
   return reasons.join(', ');
@@ -6057,7 +6057,7 @@ function storedExecutables() {
 /** The engine whose executable the console's single field is editing. */
 function activeRunEngineId() {
   const selected = state.selected?.type === 'node' ? nodeById(state.selected.id) : null;
-  if (selected && selected.type === 'calc') return engineForNode(state.project, selected).id;
+  if (selected && selected.type === 'calculate') return engineForNode(state.project, selected).id;
   return engineOrDefault(state.project?.defaults?.engine).id;
 }
 
@@ -6148,7 +6148,7 @@ async function pickCrest() {
 function selectConformer(id) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'conformers' || !node.output) return;
+  if (!node || node.type !== 'generate' || !node.output) return;
   const member = (node.output.members || []).find((entry) => entry.id === id);
   if (!member || !member.kept) return;
   if (!Array.isArray(member.atoms) || member.atoms.length === 0) {
@@ -6198,7 +6198,7 @@ async function pickEnsembleFile() {
   if (!desktop?.pickEnsembleFile) { toast('Open the Electron app to choose an ensemble file.'); return; }
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'conformers') return;
+  if (!node || node.type !== 'generate') return;
   try {
     const file = await desktop.pickEnsembleFile();
     if (!file) return;
@@ -6251,9 +6251,9 @@ async function preflightRun({ quiet = false } = {}) {
       const tasks = shared.buildWorkflowPlan(state.project).tasks;
       // A fanned-out member task carries a stored ensemble, so it does not need
       // the CREST binary (#80).
-      needsCrest = tasks.some((task) => task.type === 'conformers'
-        && task.conformers?.generator === 'crest'
-        && !task.conformers?.member);
+      needsCrest = tasks.some((task) => task.type === 'generate'
+        && task.generate?.generator === 'crest'
+        && !task.generate?.member);
     } catch {
       // An unbuildable plan is reported by the queue's own error; nothing to add.
     }
@@ -6276,9 +6276,9 @@ async function preflightRun({ quiet = false } = {}) {
     let needsObabel = false;
     try {
       const tasks = shared.buildWorkflowPlan(state.project).tasks;
-      needsObabel = tasks.some((task) => task.type === 'conformers'
-        && task.conformers?.generator === 'obabel'
-        && !task.conformers?.member);
+      needsObabel = tasks.some((task) => task.type === 'generate'
+        && task.generate?.generator === 'obabel'
+        && !task.generate?.member);
     } catch {
       // An unbuildable plan is reported by the queue's own error.
     }
@@ -6306,7 +6306,7 @@ async function preflightRun({ quiet = false } = {}) {
     try {
       const plan = shared.buildWorkflowPlan(state.project);
       const others = [...new Set(plan.tasks
-        .filter((task) => task.executable && task.type === 'calc')
+        .filter((task) => task.executable && task.type === 'calculate')
         .map((task) => String(task.engine || 'gaussian')))]
         .filter((engineId) => engineId !== config.engine);
       const map = runExecutables();
@@ -6345,7 +6345,7 @@ async function startSelectedRun() {
   if (!desktop) { toast(BROWSER_PREVIEW_RUN_MESSAGE); return; }
   // A conformer block is a queue task (CREST is not a calculation engine), so
   // it runs through a one-task queue rather than the single-run bridge.
-  if (node.type === 'conformers') { await startSelectedConformerRun(node); return; }
+  if (node.type === 'generate') { await startSelectedConformerRun(node); return; }
 
   openRunConsole();
   saveRunConfig();
@@ -6436,7 +6436,7 @@ async function startSelectedConformerRun(node) {
   }
   // Only the generator this block actually uses needs a binary. The UFF route
   // spawns nothing, and an imported ensemble is read from disk.
-  const generator = task.conformers?.generator;
+  const generator = task.generate?.generator;
   if (!dryRun && generator === 'crest' && !crestExecutable) {
     toast('Choose the CREST executable before running a conformer search.');
     return;
@@ -6906,7 +6906,7 @@ async function cancelWorkflow() {
 function attachParsedRun(record, nodeId) {
   if (!record?.parsed || !nodeId) return;
   const node = nodeById(nodeId);
-  if (!node || node.type !== 'calc') return;
+  if (!node || node.type !== 'calculate') return;
   node.parsed = record.parsed;
   // The card carries the result now, so it has to be redrawn when one arrives.
   renderGraph();
@@ -6923,7 +6923,7 @@ async function attachQueueParsed(queue) {
     if (!task?.runId || !task?.nodeId) continue;
     const record = byId.get(task.runId);
     const node = nodeById(task.nodeId);
-    if (!record?.parsed || !node || node.type !== 'calc') continue;
+    if (!record?.parsed || !node || node.type !== 'calculate') continue;
     node.parsed = record.parsed;
     changed = true;
   }
@@ -6941,9 +6941,9 @@ async function attachQueueParsed(queue) {
 function attachQueueEnsembles(queue) {
   let changed = false;
   for (const task of queue?.tasks || []) {
-    if (task?.type !== 'conformers' || task.status !== 'completed' || !task.ensemble) continue;
+    if (task?.type !== 'generate' || task.status !== 'completed' || !task.ensemble) continue;
     const node = nodeById(task.nodeId);
-    if (!node || node.type !== 'conformers') continue;
+    if (!node || node.type !== 'generate') continue;
     if (node.output && node.output.generatedAt === task.ensemble.generatedAt) continue;
     node.output = task.ensemble;
     node.settings.selectedConformerId = task.ensemble.selectedId || '';
@@ -7690,7 +7690,7 @@ function validationErrorCountForDiagnostics() {
   const engineId = engineOrDefault(state.project?.defaults?.engine).id;
   const blocking = new Set(VALIDITY_CHECKS.filter((check) => check.blocking).map((check) => check.id));
   return nodes
-    .filter((node) => node.type === 'calc')
+    .filter((node) => node.type === 'calculate')
     .reduce((count, node) => {
       const ts = engineId === 'xtb' ? { errors: [] } : tsForceConstantIssues(node);
       const validity = runValidityChecks({
@@ -8232,7 +8232,7 @@ async function exportMenuGroups() {
       },
     ]);
   }
-  const hasCalc = (state.project?.nodes || []).some((item) => item.type === 'calc');
+  const hasCalc = (state.project?.nodes || []).some((item) => item.type === 'calculate');
   if (hasCalc) {
     groups.push([
       { label: 'SLURM script set…', attrs: 'data-action="cluster" data-cluster-op="export" data-cluster-format="slurm"' },
@@ -8659,7 +8659,7 @@ function onDocumentChange(event) {
       renderInspector();
       return;
     }
-    if (node.type !== 'calc') return;
+    if (node.type !== 'calculate') return;
     updateNodeField(node, key, value);
     renderGraph();
     renderInspector();
@@ -8668,7 +8668,7 @@ function onDocumentChange(event) {
   if (target.dataset.nodeGate) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'calc') return;
+    if (!node || node.type !== 'calculate') return;
     updateGate(node, target.dataset.nodeGate, target.checked);
     renderGraph();
     renderInspector();
@@ -8677,7 +8677,7 @@ function onDocumentChange(event) {
   if (target.dataset.validityCheck) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'calc') return;
+    if (!node || node.type !== 'calculate') return;
     updateValidityCheck(node, target.dataset.validityCheck, target.checked);
     renderInspector();
     return;
@@ -8687,7 +8687,7 @@ function onDocumentChange(event) {
   if (target.dataset.spinState) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'calc') return;
+    if (!node || node.type !== 'calculate') return;
     updateSpinSweepState(node, Number(target.dataset.spinState), target.checked);
     renderGraph();
     renderInspector();
@@ -8696,9 +8696,9 @@ function onDocumentChange(event) {
   if (target.dataset.computeField) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
-    if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
-    node.compute[target.dataset.computeField] = target.value;
+    if (!node || node.type !== 'analyse') return;
+    if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
+    node.analyse[target.dataset.computeField] = target.value;
     refreshDirty();
     // Only the preview redraws: re-rendering the inspector on every keystroke
     // would take the caret out of the expression field.
@@ -8710,8 +8710,8 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     const index = Number(target.dataset.computeInput);
     const key = target.dataset.computeInputField;
-    const input = node?.compute?.inputs?.[index];
-    if (!node || node.type !== 'compute' || !input || !key) return;
+    const input = node?.analyse?.inputs?.[index];
+    if (!node || node.type !== 'analyse' || !input || !key) return;
     input[key] = target.value;
     refreshDirty();
     refreshComputePreview();
@@ -8720,19 +8720,19 @@ function onDocumentChange(event) {
   if (target.dataset.computeMode) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
-    if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
+    if (!node || node.type !== 'analyse') return;
+    if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
     const mode = target.value === 'dp4' ? 'dp4' : 'expression';
     if (mode === 'dp4') {
       // Switching modes creates the DP4+ definition with no level chosen: a
       // block that quietly inherited the first bank level would be computing a
       // level the user never picked.
-      node.compute.mode = 'dp4';
+      node.analyse.mode = 'dp4';
       dp4DefinitionOf(node);
       // The arithmetic declaration is kept until the file is saved, so flipping
       // the mode back does not lose an expression the user typed.
     } else {
-      delete node.compute.mode;
+      delete node.analyse.mode;
     }
     refreshDirty();
     renderGraph();
@@ -8742,7 +8742,7 @@ function onDocumentChange(event) {
   if (target.dataset.dp4Field) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
+    if (!node || node.type !== 'analyse') return;
     const definition = dp4DefinitionOf(node);
     const key = target.dataset.dp4Field;
     if (key === 'level') {
@@ -8777,7 +8777,7 @@ function onDocumentChange(event) {
   if (target.dataset.dp4Row !== undefined) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
+    if (!node || node.type !== 'analyse') return;
     const definition = dp4DefinitionOf(node);
     const index = Number(target.dataset.dp4Row);
     const key = target.dataset.dp4RowField;
@@ -8922,7 +8922,7 @@ function onDocumentChange(event) {
 function applyConformerField(target) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'conformers') return;
+  if (!node || node.type !== 'generate') return;
   const key = target.dataset.conformerField;
   const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity', 'torsionStepDegrees', 'maxTrials', 'nconf'];
   // Issue 129: the declared provenance lives in a nested `origin` object, so

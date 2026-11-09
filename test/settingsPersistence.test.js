@@ -15,7 +15,7 @@ import { defaultSettings, validateProject } from '../src/shared/projectSchema.js
  */
 
 const projectWith = (settings) => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   name: 'settings persistence',
   molecule: {
     smiles: '',
@@ -37,7 +37,7 @@ const projectWith = (settings) => ({
     title: 'persistence',
     nodes: [{
       id: 'sp',
-      type: 'calc',
+      type: 'calculate',
       kind: 'SP',
       title: 'Single point',
       state: 'ready',

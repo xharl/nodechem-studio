@@ -419,7 +419,7 @@ describe('rendered constraint and QST editors (#93)', () => {
   });
 
   const withNode = (settings, coords, run) => {
-    const node = app.state.project.nodes.find((item) => item.settings.jobType === 'Freq' || item.type === 'calc');
+    const node = app.state.project.nodes.find((item) => item.settings.jobType === 'Freq' || item.type === 'calculate');
     const previousSettings = node.settings;
     const previousCoords = app.state.project.molecule.coords;
     node.settings = { ...previousSettings, ...settings };

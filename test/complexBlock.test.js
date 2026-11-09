@@ -376,7 +376,7 @@ describe('issue 188 — guards refuse by name, before a record is built', () => 
 describe('issue 188 — the definition is a schema key, absent unless asked for', () => {
   const project = (overrides = {}) => {
     const base = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'Complex',
       molecule: {
         smiles: '', charge: 0, multiplicity: 1, fragments: [],
@@ -401,7 +401,7 @@ describe('issue 188 — the definition is a schema key, absent unless asked for'
             },
           },
           {
-            id: 'sp', type: 'calc', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
+            id: 'sp', type: 'calculate', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
             settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null,
           },
           {
@@ -510,7 +510,7 @@ describe('issue 188 — the definition is a schema key, absent unless asked for'
 describe('issue 188 — the plan queues one complex, and the task carries its provenance', () => {
   const plan = () => {
     const result = validateProject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'Complex plan',
       molecule: {
         smiles: '', charge: 0, multiplicity: 1, fragments: [],
@@ -535,7 +535,7 @@ describe('issue 188 — the plan queues one complex, and the task carries its pr
             },
           },
           {
-            id: 'sp', type: 'calc', kind: 'SP', title: 'SAPT0', state: 'ready', x: 200, y: 0,
+            id: 'sp', type: 'calculate', kind: 'SP', title: 'SAPT0', state: 'ready', x: 200, y: 0,
             settings: defaultSettings({ jobType: 'SP', engine: 'psi4', method: 'sapt0', basis: 'def2-SVP' }),
             output: null, checkpointFrom: null,
           },
@@ -571,7 +571,7 @@ describe('issue 188 — the plan queues one complex, and the task carries its pr
 
   it('counts one record on the flow tab, not one per member', () => {
     const result = validateProject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'Complex tab',
       molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: waterCoords, geometry: { source: 'demo', file: '', format: '' } },
       defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },

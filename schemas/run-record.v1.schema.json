@@ -115,7 +115,7 @@
     },
     "dp4": {
       "$ref": "#/$defs/dp4Result",
-      "description": "Issue 165: the DP4+ probabilities a derived compute block recorded. Optional, and absent (not null) on every run that computed no comparison."
+      "description": "Issue 165: the DP4+ probabilities a derived analyse block recorded. Optional, and absent (not null) on every run that computed no comparison."
     },
     "provenance": { "$ref": "#/$defs/provenance" },
     "startedAt": { "type": "string", "format": "date-time" },
@@ -143,7 +143,7 @@
   "$defs": {
     "dp4Result": {
       "type": "object",
-      "description": "Issue 165: the object dp4.js returned, as the compute block recorded it. `available` is required so a record cannot carry an empty comparison; on a refusal it is false with the code and the sentence that names the precondition. The rest is open because the result is a table (candidates, per-nucleus deviations, the fit each nucleus used) whose columns belong to the DP4+ procedure, not to this envelope.",
+      "description": "Issue 165: the object dp4.js returned, as the analyse block recorded it. `available` is required so a record cannot carry an empty comparison; on a refusal it is false with the code and the sentence that names the precondition. The rest is open because the result is a table (candidates, per-nucleus deviations, the fit each nucleus used) whose columns belong to the DP4+ procedure, not to this envelope.",
       "required": ["available"],
       "additionalProperties": true,
       "properties": {

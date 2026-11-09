@@ -293,15 +293,15 @@ export function planClusterExport({
   const orderIndex = new Map(ordered.order.map((nodeId, index) => [nodeId, index]));
 
   const byId = new Map(tasks.map((task) => [String(task.nodeId), task]));
-  const conformerBlocks = tasks.filter((task) => task?.type === 'conformers');
+  const conformerBlocks = tasks.filter((task) => task?.type === 'generate');
   if (conformerBlocks.length > 0) {
     // A cluster job that read the project geometry instead of the chosen member
     // would be a silent chemistry change, so this refuses rather than exports
     // a plan whose first calculation is built from the wrong structure.
     const names = conformerBlocks.map((task) => `"${task.title || task.nodeId}"`).join(', ');
-    throw new Error(`Cluster export does not include conformer blocks: ${names}. Run the ensemble, choose the member, and export the calculation blocks from a project whose geometry is that member.`);
+    throw new Error(`Cluster export does not include Generate blocks: ${names}. Run the ensemble, choose the member, and export the calculation blocks from a project whose geometry is that member.`);
   }
-  const calcTasks = tasks.filter((task) => task?.type === 'calc');
+  const calcTasks = tasks.filter((task) => task?.type === 'calculate');
   if (calcTasks.length === 0) {
     throw new Error('The project has no calculation blocks to export.');
   }
@@ -383,7 +383,7 @@ export function planClusterExport({
       throw new Error(`Task "${job.nodeId}" cannot hand off a checkpoint from itself.`);
     }
     const source = byId.get(sourceId);
-    if (!source || source.type !== 'calc' || !jobById.has(String(source.nodeId))) {
+    if (!source || source.type !== 'calculate' || !jobById.has(String(source.nodeId))) {
       throw new Error(`Task "${job.nodeId}" hands off from a node that is not an exported calculation.`);
     }
     const sourceJob = jobById.get(String(source.nodeId));
@@ -446,9 +446,9 @@ export function planClusterExport({
     warnings,
     nodes: jobs.map((job) => ({
       nodeId: job.nodeId,
-      type: 'calc',
+      type: 'calculate',
       title: job.title,
-      kind: job.kind || 'Calc',
+      kind: job.kind || 'Calculate',
       inputName: job.inputName,
       outputName: job.outputName,
       checkpointName: job.checkpointName,

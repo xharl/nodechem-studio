@@ -38,9 +38,9 @@ const chain = (atoms) => Array.from({ length: atoms }, (_, index) => ({
 function task(overrides = {}) {
   const { settings = {}, molecule = water, ...rest } = overrides;
   return {
-    taskId: 'calc',
-    nodeId: 'calc',
-    type: 'calc',
+    taskId: 'calculate',
+    nodeId: 'calculate',
+    type: 'calculate',
     title: 'Calc',
     engine: 'gaussian',
     validity: { molecule: { coords: molecule } },

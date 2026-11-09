@@ -17,7 +17,7 @@ const molecule = {
 };
 
 const project = (nodes, edges = []) => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'Conformer test',
   molecule: { ...molecule, geometry: { source: 'imported', file: 'water.xyz', format: 'xyz' } },
   defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -27,7 +27,7 @@ const project = (nodes, edges = []) => ({
 
 const conformersNode = (overrides = {}) => ({
   id: 'conf1',
-  type: 'conformers',
+  type: 'generate',
   title: 'Conformer ensemble',
   state: 'ready',
   x: 40,
@@ -42,8 +42,8 @@ describe('conformers node schema', () => {
     const result = validateProject(project([conformersNode()]));
     expect(result.ok).toBe(true);
     const node = result.project.nodes[0];
-    expect(node.type).toBe('conformers');
-    expect(node.kind).toBe('Conformers');
+    expect(node.type).toBe('generate');
+    expect(node.kind).toBe('Generate');
     expect(node.settings.generator).toBe('crest');
     expect(node.settings.method).toBe('gfn2');
     expect(node.settings.energyWindowKcal).toBe(10);

@@ -564,7 +564,7 @@ describe('dp4 — the card and the report', () => {
       createdAt: '2026-11-09T00:00:00.000Z',
       finishedAt: '2026-11-09T00:10:00.000Z',
       tasks: [{
-        nodeId: 'dp4-1', type: 'calc', title: 'Candidate ranking', status: 'completed', runId: 'run-dp4',
+        nodeId: 'dp4-1', type: 'calculate', title: 'Candidate ranking', status: 'completed', runId: 'run-dp4',
       }],
     };
     const records = {

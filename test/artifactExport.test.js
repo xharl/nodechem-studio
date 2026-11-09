@@ -10,11 +10,11 @@ const QUEUE = {
   status: 'partial',
   tasks: [
     {
-      nodeId: 'opt~m1', recordId: 'm1', flowId: 'barrier', type: 'calc', title: 'Optimise — one',
+      nodeId: 'opt~m1', recordId: 'm1', flowId: 'barrier', type: 'calculate', title: 'Optimise — one',
       status: 'completed', runId: 'run-1', record: { id: 'm1', label: 'one', charge: 0, multiplicity: 1 },
     },
     {
-      nodeId: 'opt~m2', recordId: 'm2', flowId: 'barrier', type: 'calc', title: 'Optimise — two',
+      nodeId: 'opt~m2', recordId: 'm2', flowId: 'barrier', type: 'calculate', title: 'Optimise — two',
       status: 'failed', runId: 'run-2', error: ' Error termination',
       record: { id: 'm2', label: 'two', charge: -1, multiplicity: 2 },
     },

@@ -35,7 +35,7 @@ function calcTask(nodeId, extra = {}) {
   });
   return {
     nodeId,
-    type: 'calc',
+    type: 'calculate',
     title: `Task ${nodeId}`,
     kind: 'Calc',
     executable: true,

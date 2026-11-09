@@ -345,13 +345,13 @@ describe('`timed out` is its own state, not a failure (issue 177)', () => {
     const states = nodeStatesFromQueue([{ nodeId: 'slow', status: 'timed out' }]);
     expect(states.get('slow')).toBe('timed out');
     const nodes = [
-      { id: 'slow', type: 'calc', state: 'timed out', title: 'slow' },
-      { id: 'next', type: 'calc', state: 'ready', title: 'next' },
+      { id: 'slow', type: 'calculate', state: 'timed out', title: 'slow' },
+      { id: 'next', type: 'calculate', state: 'ready', title: 'next' },
     ];
     // A timeout outranks unrun work: it already cost a slot and needs a decision.
     expect(nextAction(nodes)).toMatchObject({ kind: 'timeout', node: { id: 'slow' } });
     // A real failure still outranks it — that is the one to examine.
-    nodes.push({ id: 'bad', type: 'calc', state: 'review', title: 'bad' });
+    nodes.push({ id: 'bad', type: 'calculate', state: 'review', title: 'bad' });
     expect(nextAction(nodes)?.kind).toBe('review');
   });
 });

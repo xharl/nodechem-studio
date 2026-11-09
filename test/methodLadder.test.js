@@ -24,7 +24,7 @@ function exampleProject() {
 
 function withLadder(settings) {
   const project = exampleProject();
-  const calc = project.nodes.find((node) => node.type === 'calc');
+  const calc = project.flows[0].nodes.find((node) => node.type === 'calculate');
   calc.settings = { ...calc.settings, ...settings };
   return project;
 }
@@ -32,18 +32,18 @@ function withLadder(settings) {
 function project(overrides = {}) {
   const calc = {
     id: 'sp',
-    type: 'calc',
+    type: 'calculate',
     kind: 'SP',
     title: 'Single point',
     settings: { jobType: 'SP', method: 'B3LYP', basis: 'def2-SVP', dispersion: 'GD3BJ' },
     ...overrides,
   };
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name: 'Ladder',
     defaults: { engine: 'gaussian' },
     molecule: { charge: 0, multiplicity: 1, coords: [] },
-    nodes: [calc, { id: 'sp2', type: 'calc', kind: 'SP', title: 'Downstream', settings: { jobType: 'SP', method: 'B3LYP', basis: 'def2-SVP' } }],
+    nodes: [calc, { id: 'sp2', type: 'calculate', kind: 'SP', title: 'Downstream', settings: { jobType: 'SP', method: 'B3LYP', basis: 'def2-SVP' } }],
     edges: [{ from: 'sp', to: 'sp2', type: 'dependency' }],
   };
 }

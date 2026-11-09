@@ -43,8 +43,8 @@ a single member without touching the dataset.
 
 ## Conformer fan-out in a chain
 
-A conformer block with **Fan out** on multiplies the whole branch, not just the block wired to it.
-`Input ─▶ Conformers ─▶ Optimise ─▶ Frequencies` runs `opt~m3~c1` and `freq~m3~c1` for every
+A Generate block with **Fan out** on multiplies the whole branch, not just the block wired to it.
+`Input ─▶ Generate ─▶ Optimise ─▶ Frequencies` runs `opt~m3~c1` and `freq~m3~c1` for every
 retained member, alongside `opt~m3~c2` and `freq~m3~c2`. Each stage keeps the member segment in its
 id, builds from that member's geometry on a dependency edge, and reads that member's own checkpoint
 on a checkpoint edge (`opt~m3~c1` writes `opt_m3_c1.chk`). A block that mixes a fanned branch with

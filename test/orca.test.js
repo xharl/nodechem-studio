@@ -262,13 +262,13 @@ describe('ORCA provenance and checkpoint artifacts', () => {
 
 describe('ORCA workflow integration', () => {
   const orcaProject = (nodeOverrides = {}) => validateProject({
-    schemaVersion: 1,
+    schemaVersion: 3,
     name: 'orca project',
     defaults: { engine: 'orca', method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: 4 },
     molecule: { charge: 0, multiplicity: 1, coords: WATER, fragments: [], geometry: { kind: 'manual' } },
     nodes: [{
       id: 'sp',
-      type: 'calc',
+      type: 'calculate',
       title: 'water sp',
       x: 0,
       y: 0,

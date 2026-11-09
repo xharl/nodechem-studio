@@ -423,8 +423,8 @@ async function projectFile({ jobType = null } = {}) {
   const project = JSON.parse(readFileSync('examples/single-point.ncs', 'utf8'));
   project.molecule.coords = WATER.coords;
   project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
-  for (const node of project.nodes) {
-    if (node.type === 'calc') {
+  for (const node of project.flows[0].nodes) {
+    if (node.type === 'calculate') {
       node.settings.basis = '6-31G*';
       node.settings.dispersion = '';
       node.settings.population = '';
@@ -561,8 +561,8 @@ describe('ncs convert --format <deck>', () => {
     const project = JSON.parse(readFileSync('examples/single-point.ncs', 'utf8'));
     project.molecule.coords = WATER.coords;
     project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
-    for (const node of project.nodes) {
-      if (node.type === 'calc') {
+    for (const node of project.flows[0].nodes) {
+      if (node.type === 'calculate') {
         node.settings.basis = '6-31G*';
         node.settings.solvation = true;
         node.settings.solvationModel = 'PCM';
