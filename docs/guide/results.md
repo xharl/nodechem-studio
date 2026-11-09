@@ -41,7 +41,11 @@ below the output shows what the parser actually reported:
 - the **engine** that ran, and the run status,
 - the **excited states** table when the job printed a TD record (energy in eV, wavelength, f and
   the dominant transitions), with a simulated UV-Vis curve whose Gaussian broadening is printed
-  as an explicit FWHM — the caption says it is a simulation, not a measured spectrum,
+  as an explicit FWHM — the caption says it is a simulation, not a measured spectrum. A **Psi4
+  TD-DFT** run fills the same cards from Psi4's excitation table; that table also carries the
+  rotatory strength in both length and velocity form, and the card prints the state's irrep and the
+  allocation Psi4 used (see *Engines → Psi4*: a state request is split across irreducible
+  representations, so a small request can contain no bright state at all),
 - the **gate list** with its verdict and evidence,
 - parsed values — termination, SCF energy and cycles, frequencies and the imaginary count, final
   energy, charges, thermochemistry when present,

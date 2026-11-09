@@ -443,8 +443,17 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
 - **Methods**: HF, B3LYP, PBE0, M06-2X, ωB97X-D, B97-D, MP2, CCSD, CCSD(T) and SAPT0.
 - **Bases**: def2-SVP/TZVP/QZVP, 6-31G(d), 6-31G(d,p), 6-311++G(d,p), cc-pVDZ/TZVP/QZVP and
   aug-cc-pVDZ.
-- **Job types**: `SP`, `Opt`, `Freq` and `Opt Freq` — the last writes `optimize(...)` followed by
-  `frequencies(...)` in one script.
+- **Job types**: `SP`, `Opt`, `Freq`, `Opt Freq` and `TD-DFT` — the four point/geometry jobs, and
+  the excited-state one described below.
+- **TD-DFT** writes `set tdscf_states N` and `energy('td-<method>')`, and the app parses Psi4's
+  excitation table — energy in au and eV, total energy, oscillator strength and rotatory strength in
+  both the length and velocity forms. **N is not a promise of the N lowest states:** Psi4 splits the
+  request across the point group's irreducible representations in point-group order. Measured on
+  D<sub>2h</sub> ethylene at B3LYP/6-31G\*: asking for 5 states allocated one each to Ag, B1g, B2g,
+  B3g and Au and **none to B1u**, so all five came back with f = 0; asking for two per irrep returned
+  the bright B1u at 8.236 eV (f = 0.3501) and again at 12.696 eV (f = 0.4183). The inspector says so
+  beside the States field. Excited-state *optimisation* is refused by name — Psi4 cannot relax an
+  excited surface in this build — as is a Root above 1.
 - **SAPT0** on a dimer, with the interaction energy split into electrostatics, exchange, induction
   and dispersion.
 

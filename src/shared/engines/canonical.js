@@ -22,6 +22,7 @@
  *     frequencies: { count, imaginaryCount, imaginaryValues, minImaginary },
  *     thermochemistry: { freeEnergyHartree, enthalpyHartree, zpeHartree, entropyTreatment },
  *     finalEnergy: { hartree, source },
+ *     excitedStates: { count, requested, perIrrep, states, source, verified } | absent,
  *     extras: { ... },                            // engine-specific evidence
  *     lineCount
  *   }
@@ -82,6 +83,10 @@ export function canonicalResult({
   // SAPT's interaction-energy table, when the engine produced one. Kept out of
   // `finalEnergy` on purpose: it is not a total energy for the complex.
   sapt = null,
+  // An excitation table, when the engine computed one. Present only for a job
+  // that asked for excited states; absent otherwise, so a Gaussian log without a
+  // TD section and a Psi4 single point look the same to every consumer.
+  excitedStates = null,
   extras = {},
   lineCount = 0,
 } = {}) {
@@ -146,6 +151,19 @@ export function canonicalResult({
       source: finalEnergy.source ? String(finalEnergy.source) : null,
     },
     ...(sapt && typeof sapt === 'object' ? { sapt } : {}),
+    ...(excitedStates && Array.isArray(excitedStates.states) && excitedStates.states.length > 0
+      ? {
+        excitedStates: {
+          count: Number.isFinite(excitedStates.count) ? excitedStates.count : excitedStates.states.length,
+          requested: integerOrNull(excitedStates.requested),
+          perIrrep: Array.isArray(excitedStates.perIrrep) ? excitedStates.perIrrep : [],
+          states: excitedStates.states,
+          source: excitedStates.source ? String(excitedStates.source) : null,
+          /** True only when a real log of this layout was parsed (not a guess). */
+          verified: excitedStates.verified === true,
+        },
+      }
+      : {}),
     extras: extras && typeof extras === 'object' ? extras : {},
     lineCount: Number.isFinite(lineCount) ? lineCount : 0,
   };
