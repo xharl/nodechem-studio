@@ -14,6 +14,7 @@
 
 import { cbsExtrapolate } from './cbs.js';
 import { boltzmannWeightedObservables, formatPopulation } from './conformers.js';
+import { dp4Verdict } from './dp4.js';
 import { IMPORTED_BADGE_TEXT, importedSummary } from './importedRecord.js';
 import { contentHash } from './figures/primitives.js';
 import { flowGraphFigure } from './figures/dag.js';
@@ -700,6 +701,20 @@ export function buildWorkflowReport(queue, records = {}, {
         nmr: block,
       };
     }).filter(Boolean),
+    // Issue 165: one entry per DP4+ analysis a run record (or a task) carries.
+    // The probabilities were computed by `dp4.js`; the report only prints them
+    // with the level, the variant and the bank they came from.
+    dp4: tasks.map((task) => {
+      const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+      const block = (record && typeof record.dp4 === 'object' ? record.dp4 : null)
+        || (task && typeof task.dp4 === 'object' ? task.dp4 : null);
+      if (!block) return null;
+      return {
+        nodeId: text(task?.nodeId),
+        title: text(record?.title) || text(task?.title) || text(task?.nodeId),
+        result: block,
+      };
+    }).filter(Boolean),
     // Issue 175: one entry per compute block, with the expression it evaluated,
     // the upstream values it read and — when a field was missing — the refusal
     // that names the field. A derived value is not a calculation result, so it
@@ -1293,6 +1308,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + ladderBlocks
     + conformerBlocks
     + spinBlocks
+    + dp4SectionHtml(model.dp4, sectionHeading)
     + eprSectionHtml(model.epr, sectionHeading)
     + nmrSectionHtml(model.nmr, sectionHeading)
     + reactionBlocks
@@ -1393,6 +1409,159 @@ function nmrSectionHtml(entries, headingTag = 'h2') {
     + '<p class="note">Isotropic shieldings are absolute ppm as printed. A shift is only printed when '
     + 'the record carries its reference and that reference states its provenance; a coupling pair is '
     + 'only printed when the log printed it.</p>'
+    + blocks;
+}
+
+/**
+ * DP4+ probability tables (issue 165), rendered once and used by both the
+ * results card and the workflow report.
+ *
+ * The panel prints the numbers `dp4.js` computed and the terms they were
+ * computed under: the level and its standard, the variant (DP4+ unscaled,
+ * scaled or full — never called classic DP4), the temperature, the error
+ * distribution with its per-class fit, the experimental list, and the
+ * candidates that were excluded and why. A refused result prints the refusal
+ * instead of an empty table.
+ *
+ * @param {object} result the object `dp4Probabilities()` returned
+ * @param {object} [options]
+ * @param {string} [options.tableClass] the class this surface's tables carry
+ * @param {string} [options.heading] an `<h4>` label, omitted inside a card
+ * @param {boolean} [options.compact] trim the per-nucleus tables to 15 rows
+ */
+export function dp4PanelHtml(result, { tableClass = '', heading = '', compact = false } = {}) {
+  const className = tableClass ? ` class="${tableClass}"` : '';
+  const label = heading ? `<h4 data-field="dp4-entry">${escapeHtml(heading)}</h4>` : '';
+  if (!result || typeof result !== 'object') {
+    return label + '<p class="warn" data-field="dp4-state">no DP4 result was recorded for this block</p>';
+  }
+  if (result.available !== true) {
+    return `${label}<p class="warn" data-field="dp4-refusal">DP4+ not computed — `
+      + `${escapeHtml(result.reason || result.code || 'unknown reason')}</p>`
+      + (Array.isArray(result.excluded) && result.excluded.length
+        ? `<p class="meta" data-field="dp4-excluded">Excluded: ${escapeHtml(result.excluded
+          .map((entry) => `${entry.candidateId} (${entry.reason})`).join('; '))}</p>`
+        : '');
+  }
+
+  const verdict = dp4Verdict(result);
+  const level = result.level || {};
+  const experimental = result.experimental || {};
+  const terms = [
+    `${level.label || MISSING}`,
+    result.variantLabel || result.variant || MISSING,
+    `${escapeHtml(String(result.temperatureK ?? MISSING))} K`,
+    `bank ${result.bank?.package || MISSING} ${result.bank?.version || ''}`.trim(),
+  ].filter(Boolean).join(' · ');
+
+  const probabilityRows = (Array.isArray(result.candidates) ? result.candidates : []).map((candidate) => '<tr>'
+    + `<td><strong>${escapeHtml(candidate.title || candidate.id)}</strong></td>`
+    + `<td class="num">${escapeHtml(String(candidate.conformerCount ?? MISSING))}</td>`
+    + `<td>${escapeHtml(candidate.weights?.source === 'stored' ? 'stored populations' : 'from energies')}</td>`
+    + `<td class="num">${escapeHtml(value(candidate.percentages?.uns, 2))}</td>`
+    + `<td class="num">${escapeHtml(value(candidate.percentages?.sca, 2))}</td>`
+    + `<td class="num">${escapeHtml(value(candidate.percent, 2))}</td>`
+    + `<td class="num">${escapeHtml(String(Array.isArray(candidate.nuclei) ? candidate.nuclei.length : MISSING))}</td>`
+    + '</tr>').join('');
+  const probabilityTable = '<table' + className + ' data-field="dp4-probabilities"><thead><tr>'
+    + '<th>Candidate</th><th class="num">Conformers</th><th>Boltzmann weights</th>'
+    + '<th class="num">p uns / %</th><th class="num">p sca / %</th><th class="num">p full / %</th>'
+    + `<th class="num">Nuclei scored</th></tr></thead><tbody>${probabilityRows}</tbody></table>`;
+
+  // Which fit each nucleus class actually used, and how many nuclei went
+  // through it. A class with no nuclei is still listed: the fit exists and its
+  // absence from the product is a fact about the molecule, not about the bank.
+  const counts = new Map();
+  const first = Array.isArray(result.candidates) ? result.candidates[0] : null;
+  for (const nucleus of (first?.nuclei || [])) {
+    for (const key of [nucleus.unscaledClass, nucleus.scaledClass]) {
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  const classes = result.errorDistribution?.classes || {};
+  const fitRows = Object.entries(classes).map(([key, fit]) => '<tr>'
+    + `<td>${escapeHtml(fit.label || key)}</td>`
+    + `<td class="num">${escapeHtml(value(fit.df, 5))}</td>`
+    + `<td class="num">${escapeHtml(value(fit.mean, 6))}</td>`
+    + `<td class="num">${escapeHtml(value(fit.scale, 6))}</td>`
+    + `<td class="num">${escapeHtml(String(counts.get(key) || 0))}</td>`
+    + '</tr>').join('');
+  const fitTable = '<table' + className + ' data-field="dp4-error-fit"><thead><tr><th>Class</th>'
+    + '<th class="num">ν (df)</th><th class="num">mean / ppm</th><th class="num">scale / ppm</th>'
+    + `<th class="num">Nuclei</th></tr></thead><tbody>${fitRows}</tbody></table>`;
+
+  const limit = compact ? 15 : 60;
+  const deviations = (Array.isArray(result.candidates) ? result.candidates : []).slice(0, compact ? 3 : 12).map((candidate) => {
+    const rows = (candidate.nuclei || []).slice(0, limit).map((nucleus) => '<tr>'
+      + `<td class="num">${escapeHtml(String(nucleus.index))}</td>`
+      + `<td>${escapeHtml(nucleus.nucleus)}${nucleus.sp2 ? ' sp²' : ''}</td>`
+      + `<td class="num">${escapeHtml(value(nucleus.experimental, 2))}</td>`
+      + `<td class="num">${escapeHtml(value(nucleus.computed, 2))}</td>`
+      + `<td class="num">${escapeHtml(value(nucleus.unscaledError, 2))}</td>`
+      + `<td class="num">${escapeHtml(value(nucleus.computedScaled, 2))}</td>`
+      + `<td class="num">${escapeHtml(value(nucleus.scaledError, 2))}</td>`
+      + `<td class="num">${escapeHtml(value(nucleus.unscaledProbability, 4))}</td>`
+      + `<td class="num">${escapeHtml(value(nucleus.scaledProbability, 4))}</td>`
+      + '</tr>').join('');
+    const omitted = (candidate.nuclei || []).length - Math.min((candidate.nuclei || []).length, limit);
+    const fits = Object.entries(candidate.fits || {})
+      .filter(([, fit]) => fit?.used === 'fit')
+      .map(([element, fit]) => `${element}: δ_scaled = ${value(fit.slope, 6)}·δ_uns + ${value(fit.intercept, 6)} (${fit.points} nuclei)`);
+    const unused = Object.entries(candidate.fits || {})
+      .filter(([, fit]) => fit?.used !== 'fit' && (fit?.points || 0) > 1)
+      .map(([element]) => element);
+    return `<p class="meta" data-field="dp4-candidate-terms">${escapeHtml(candidate.title || candidate.id)} — `
+      + `${escapeHtml(String((candidate.nuclei || []).length))} nuclei, `
+      + `${escapeHtml(String(candidate.conformerCount ?? MISSING))} conformers, weights `
+      + `${escapeHtml(candidate.weights?.source === 'stored' ? 'as the block stored them' : 'computed from the energies here')}`
+      + `${fits.length ? `; ${escapeHtml(fits.join('; '))}` : ''}`
+      + `${unused.length ? `; no usable ${escapeHtml(unused.join('/'))} fit, those nuclei keep the unscaled shift` : ''}`
+      + `${candidate.diastereotopicLabels?.length ? `; diastereotopic pairs ${escapeHtml(candidate.diastereotopicLabels.join(', '))} ordered by the measured shift` : ''}.</p>`
+      + '<table' + className + ' data-field="dp4-deviations"><thead><tr><th class="num">Atom</th><th>Nucleus</th>'
+      + '<th class="num">δ exp</th><th class="num">δ uns</th><th class="num">err uns</th>'
+      + '<th class="num">δ sca</th><th class="num">err sca</th><th class="num">p uns</th><th class="num">p sca</th>'
+      + `</tr></thead><tbody>${rows}</tbody></table>`
+      + (omitted > 0 ? `<p class="meta">${omitted} more nuclei are in the result object but not printed here.</p>` : '');
+  }).join('');
+
+  const excluded = Array.isArray(result.excluded) && result.excluded.length
+    ? `<p class="warn" data-field="dp4-excluded">Excluded from the comparison: ${escapeHtml(result.excluded
+      .map((entry) => `${entry.candidateId} — ${entry.reason}`).join('; '))}. A candidate is never scored on `
+      + 'fewer nuclei than its rivals: that would compare each one with a different experiment.</p>'
+    : '';
+
+  const sp2Count = (experimental.shifts || []).filter((shift) => shift.sp2).length;
+  return label
+    + `<p class="meta" data-field="dp4-terms">${escapeHtml(terms)}</p>`
+    + (verdict ? `<p data-field="dp4-verdict"><strong>${escapeHtml(verdict.text)}</strong></p>` : '')
+    + probabilityTable
+    + `<p class="meta" data-field="dp4-experimental">${escapeHtml(String(experimental.count ?? MISSING))} experimental shifts `
+    + `(${escapeHtml(String(experimental.carbon ?? MISSING))} C, ${escapeHtml(String(experimental.hydrogen ?? MISSING))} H), `
+    + `${escapeHtml(String(sp2Count))} marked sp², the rest scored as sp³; `
+    + `standard shielding σ(TMS) C ${escapeHtml(value(level.standard?.C, 4))} ppm, H ${escapeHtml(value(level.standard?.H, 4))} ppm `
+    + `from the ${escapeHtml(level.standardSheet || MISSING)} standard table.</p>`
+    + `<p class="meta" data-field="dp4-distribution">Per-nucleus probability is a Student-t tail, `
+    + `${escapeHtml(result.errorDistribution?.statistic || MISSING)}; the fit is per nucleus class and per level, `
+    + 'from the bank, and no value is interpolated between levels.</p>'
+    + fitTable
+    + deviations
+    + excluded
+    + `<p class="note" data-field="dp4-variant-note">This is ${escapeHtml(result.variantLabel || 'DP4+')}, not classic DP4 `
+    + `(Smith &amp; Goodman 2010); ${escapeHtml(result.citation?.short || MISSING)} (doi ${escapeHtml(result.citation?.doi || MISSING)}). `
+    + `Parameters: ${escapeHtml(result.citation?.parameters || MISSING)}; workbook SHA-256 `
+    + `<span class="mono">${escapeHtml(shortHash(result.bank?.workbookSha256) || MISSING)}</span>.</p>`;
+}
+
+/** One report subsection per DP4 analysis the model carries (issue 165). */
+export function dp4SectionHtml(entries, headingTag = 'h2') {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const blocks = entries.map((entry) => dp4PanelHtml(entry.result ?? entry.dp4, {
+    heading: entry.title || entry.nodeId || MISSING,
+  })).join('');
+  return `<${headingTag}>DP4+ probabilities</${headingTag}>`
+    + '<p class="note">Probabilities of candidate structures under DP4+, computed from the error fits the '
+    + 'committed parameter bank carries. A candidate at a level the bank does not carry has no probability '
+    + 'here: it is refused, never estimated.</p>'
     + blocks;
 }
 
