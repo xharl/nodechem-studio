@@ -23,16 +23,46 @@ calculation: it has no route, no gates and no termination record, and it is deli
 engine. A calculation block downstream of it runs the selected member's geometry instead of the
 project geometry.
 
-## Three sources
+## Four sources
 
 | `generator` | What happens |
 | --- | --- |
 | `crest` | The app runs the CREST executable you chose in the run console, with `--gfn2` (or `--gfnff`) and `--nci`, plus `--chrg`/`--uhf` when charge or multiplicity are non-default. Each search runs in its own folder under the queue directory: the starting geometry is staged there as `ensemble.xyz`, so `crest_conformers.xyz`, `crest.energies` and `crest.out` land beside the file CREST was given. |
 | `import` | The app reads a multi-XYZ file you point it at. Use this when CREST ran elsewhere, or when a collaborator sent the ensemble. A `crest.energies` file beside it (or `<stem>.energies`) supplies the energies for frames whose comment does not carry one. |
 | `uff` | The app generates the ensemble here, with UFF, and needs no external binary. See [Generating with UFF](#generating-with-uff-in-app) for what it does and does not claim. |
+| `obabel` | The app runs the Open Babel executable you chose in the run console: `obabel ensemble.xyz -O obabel_conformers.xyz --conformer --nconf N --ff MMFF94 --score energy --writeconformers`, then a second pass (`--energy --append Energy`) that attaches one MMFF94 energy to every frame. The search log and the scored ensemble stay in the queue folder. Open Babel is not bundled. |
 
 The app never bundles CREST. If the generator is `crest` and no executable is configured, the
 queue refuses to start and says so; it does not fabricate an ensemble.
+
+## Generating with Open Babel (MMFF94)
+
+The `obabel` route is the force-field stage for machines with no CREST, and the
+one that carries **electrostatics**. It is an external program like CREST: point
+the run console at `obabel`, and the block spawns it.
+
+- **It is a genetic-algorithm search scored on energy**, not an RMSD-diverse
+  sample: `--score energy`. Open Babel's default is RMSD diversity, which picks
+  shapes for being different from each other rather than for being low in
+  energy.
+- **Energies are evaluated in a second pass.** Open Babel's search log prints
+  the best energy per generation, not one per conformer (verified on 3.1.0), so
+  the app runs `--energy --append Energy` over the generated ensemble and reads
+  one number per frame.
+- **The numbers are kcal/mol and the record says so**: `energyUnit:
+  "kcal/mol"`, `energyMethod: "MMFF94"` (or `MMFF94s`). An MM energy is not a
+  total electronic energy and is never stored in a Hartree field.
+- **MMFF94 does not cover every element.** It is parameterised for H, C, N, O,
+  F, Si, P, S, Cl, Br and I. An atom outside that list is refused by name before
+  Open Babel is spawned; the alternative is a plausible-looking energy for a
+  molecule the force field never described.
+- **This is not Spartan's stage.** Spartan uses MMFF94/DLFF03 with its own
+  search protocol. Re-running the same molecule with Open Babel MMFF94 is a
+  different, reproducible search: on a real 84-atom 2,4-DHI-IQ ensemble the two
+  ranked differently (Spearman ρ = 0.66, a near-constant ≈11 kcal/mol offset).
+  The provenance line names the force field so the two are never confused.
+- `MMFF94s` is offered as a separate choice because it is a different claim
+  about the geometry (delocalised trigonal nitrogen flattened), not a default.
 
 ## Generating with UFF (in-app)
 

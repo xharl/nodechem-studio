@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   pickExecutable: () => ipcRenderer.invoke('gaussian:pick-executable'),
   pickCrestExecutable: () => ipcRenderer.invoke('crest:pick-executable'),
+  pickObabelExecutable: () => ipcRenderer.invoke('obabel:pick-executable'),
   pickEnsembleFile: () => ipcRenderer.invoke('conformers:pick-ensemble'),
   // The wavefunction viewport: a user-supplied cube (text, capped in main) and
   // the binary PNG/STL the surface viewport exports.

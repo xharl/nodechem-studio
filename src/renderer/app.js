@@ -575,7 +575,9 @@ function nodeDetail(node) {
       // in-app one that needs no external binary.
       const route = node.settings.generator === 'import'
         ? 'import'
-        : (node.settings.generator === 'uff' ? 'UFF (in-app)' : 'CREST');
+        : (node.settings.generator === 'uff'
+          ? 'UFF (in-app)'
+          : (node.settings.generator === 'obabel' ? 'Open Babel (external)' : 'CREST'));
       return `${route} · not run`;
     }
     const spread = Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(1)}` : '';
@@ -643,7 +645,9 @@ function nodeFoot(node) {
       ? conformerOriginShort(node.output)
       : (node.settings.generator === 'crest'
         ? `CREST ${node.settings.method === 'gfnff' ? 'GFN-FF' : 'GFN2'}`
-        : (node.settings.generator === 'uff' ? 'UFF · in-app' : 'imported ensemble'));
+        : (node.settings.generator === 'uff'
+          ? 'UFF · in-app'
+          : (node.settings.generator === 'obabel' ? 'Open Babel · MMFF94' : 'imported ensemble')));
     // Issue 132: a grouped block says so, and how many blocks in this flow
     // share the id. An ungrouped block adds nothing — no "group null".
     const groupId = node.settings.group || '';
@@ -2979,7 +2983,9 @@ function conformersInspector(node) {
       ? 'Choose a multi-XYZ file and run the block.'
       : (s.generator === 'uff'
         ? 'Run the block: the UFF search runs here and needs no external binary.'
-        : 'Run the block with a CREST executable configured.')}</div>`;
+        : (s.generator === 'obabel'
+          ? 'Run the block with an Open Babel executable configured in the run console.'
+          : 'Run the block with a CREST executable configured.'))}</div>`;
 
   return `${inspectorHead('Structure · conformers', node.title, summaryLine)}
   <div class="inspector-scroll">
@@ -2992,16 +2998,27 @@ function conformersInspector(node) {
     ${warningBlock}
     ${group('Ensemble', output ? caption : summaryLine, true, [rows])}
     ${groupBlock}
-    ${group('Search', s.generator === 'crest' ? 'CREST' : (s.generator === 'uff' ? 'UFF, in-app' : 'imported file'), true, [
+    ${group('Search', s.generator === 'crest'
+      ? 'CREST'
+      : (s.generator === 'uff' ? 'UFF, in-app' : (s.generator === 'obabel' ? 'Open Babel, external' : 'imported file')), true, [
       `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
         <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
         <option value="import"${s.generator === 'import' ? ' selected' : ''}>Import a multi-XYZ</option>
         <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
+        <option value="obabel"${s.generator === 'obabel' ? ' selected' : ''}>Open Babel (external, MMFF94)</option>
       </select></div>`,
       ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
             <option value="gfn2"${s.method === 'gfn2' ? ' selected' : ''}>GFN2-xTB</option>
             <option value="gfnff"${s.method === 'gfnff' ? ' selected' : ''}>GFN-FF</option>
           </select></div>`] : []),
+      ...(s.generator === 'obabel' ? [
+        `<div class="field"><label>Force field</label><select class="select" data-conformer-field="ff">
+          <option value="mmff94"${s.ff === undefined || s.ff === 'mmff94' ? ' selected' : ''}>MMFF94</option>
+          <option value="mmff94s"${s.ff === 'mmff94s' ? ' selected' : ''}>MMFF94s (static)</option>
+        </select></div>`,
+        `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
+        `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on MMFF94 energy, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name.</span></div>`,
+      ] : []),
       ...(s.generator === 'import' ? [`<div class="field full"><label>Ensemble file</label>
             <div style="display:flex;gap:6px">
               <input class="input" data-conformer-field="importPath" value="${esc(s.importPath || '')}" placeholder="C:\\path\\to\\conformers.xyz">
@@ -6059,6 +6076,7 @@ function runExecutables() {
 function readRunConfig() {
   const saved = storedRunConfig();
   if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
+  if (saved.obabelExecutable) $('#run-obabel').value = saved.obabelExecutable;
   if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
   if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
   const field = $('#run-exe');
@@ -6070,6 +6088,7 @@ function saveRunConfig() {
     localStorage.setItem(RUN_CONFIG_STORAGE_KEY, JSON.stringify({
       executables: runExecutables(),
       crestExecutable: $('#run-crest').value.trim(),
+      obabelExecutable: $('#run-obabel').value.trim(),
       scratchDir: $('#run-scratch').value.trim(),
       dryRun: $('#run-dry').checked,
     }));
@@ -6090,6 +6109,20 @@ async function pickGaussian() {
     }
   } catch (error) {
     toast(`Could not choose executable: ${error.message}`);
+  }
+}
+
+async function pickObabel() {
+  if (!desktop?.pickObabelExecutable) { toast('Open the Electron app to choose an executable.'); return; }
+  try {
+    const selected = await desktop.pickObabelExecutable();
+    if (selected) {
+      $('#run-obabel').value = selected;
+      saveRunConfig();
+      toast('Open Babel executable selected.');
+    }
+  } catch (error) {
+    toast(`Could not choose the Open Babel executable: ${error.message}`);
   }
 }
 
@@ -6240,6 +6273,31 @@ async function preflightRun({ quiet = false } = {}) {
         ],
       };
     }
+    let needsObabel = false;
+    try {
+      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      needsObabel = tasks.some((task) => task.type === 'conformers'
+        && task.conformers?.generator === 'obabel'
+        && !task.conformers?.member);
+    } catch {
+      // An unbuildable plan is reported by the queue's own error.
+    }
+    if (needsObabel) {
+      const obabel = $('#run-obabel')?.value.trim() || '';
+      result = {
+        ...result,
+        ok: result.ok && Boolean(obabel),
+        checks: [
+          ...(Array.isArray(result.checks) ? result.checks : []),
+          {
+            id: 'obabel',
+            label: 'Open Babel executable',
+            ok: Boolean(obabel),
+            detail: obabel || 'not chosen — an Open Babel conformer block cannot run',
+          },
+        ],
+      };
+    }
   }
   // A mixed flow launches one binary per engine, so preflight every engine the
   // plan needs, not only the selected block's. The queue enforces this too; the
@@ -6332,6 +6390,7 @@ async function startSelectedRun() {
       settings: settingsForNode(node),
       executable: runExecutables()[built.engine] || '',
       crestExecutable: $('#run-crest').value.trim(),
+      obabelExecutable: $('#run-obabel').value.trim(),
       scratchDir: $('#run-scratch').value.trim(),
       dryRun,
       gates: gatesForNode(node),
@@ -6365,10 +6424,7 @@ async function startSelectedConformerRun(node) {
   saveRunConfig();
   const dryRun = $('#run-dry').checked;
   const crestExecutable = $('#run-crest').value.trim();
-  if (!dryRun && !crestExecutable) {
-    toast('Choose the CREST executable before running a conformer search.');
-    return;
-  }
+  const obabelExecutable = $('#run-obabel').value.trim();
 
   let task;
   try {
@@ -6376,6 +6432,17 @@ async function startSelectedConformerRun(node) {
   } catch (error) {
     appendRunOutput(`Input builder error: ${error.message}\n`);
     toast(`Cannot build the conformer search: ${error.message}`);
+    return;
+  }
+  // Only the generator this block actually uses needs a binary. The UFF route
+  // spawns nothing, and an imported ensemble is read from disk.
+  const generator = task.conformers?.generator;
+  if (!dryRun && generator === 'crest' && !crestExecutable) {
+    toast('Choose the CREST executable before running a conformer search.');
+    return;
+  }
+  if (!dryRun && generator === 'obabel' && !obabelExecutable) {
+    toast('Choose the Open Babel executable before running an Open Babel conformer search.');
     return;
   }
 
@@ -6402,6 +6469,7 @@ async function startSelectedConformerRun(node) {
         dryRun,
         executable: runExecutables()[engineForNode(state.project, node).id] || '',
         crestExecutable,
+        obabelExecutable,
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue
@@ -6765,6 +6833,7 @@ async function startWorkflowUnlocked() {
         dryRun,
         executables: runExecutables(),
         crestExecutable: $('#run-crest').value.trim(),
+        obabelExecutable: $('#run-obabel').value.trim(),
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue
@@ -8307,6 +8376,7 @@ function handleAction(action, element) {
     case 'select-conformer': selectConformer(element.dataset.conformerId); break;
     case 'pick-ensemble': pickEnsembleFile(); break;
     case 'pick-crest': pickCrest(); break;
+    case 'pick-obabel': pickObabel(); break;
     case 'pause-workflow': pauseWorkflow(); break;
     case 'export-workflow-report': exportWorkflowReportAction(); break;
     case 'resume-workflow': resumeWorkflow(); break;
@@ -8854,7 +8924,7 @@ function applyConformerField(target) {
   const node = nodeById(state.selected.id);
   if (!node || node.type !== 'conformers') return;
   const key = target.dataset.conformerField;
-  const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity', 'torsionStepDegrees', 'maxTrials'];
+  const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity', 'torsionStepDegrees', 'maxTrials', 'nconf'];
   // Issue 129: the declared provenance lives in a nested `origin` object, so
   // the flat `settings[key] = value` path cannot write it.
   const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
@@ -8866,6 +8936,8 @@ function applyConformerField(target) {
       temperature: [1, 1000], spreadThresholdKcal: [0, 50], charge: [-10, 10], multiplicity: [1, 10],
       // Issue 144: the in-app UFF route's grid resolution and trial cap.
       torsionStepDegrees: [15, 360], maxTrials: [1, 2000],
+      // The Open Babel route's conformer count; the schema bounds it the same way.
+      nconf: [1, 1000],
     }[key];
     const value = Number(target.value);
     if (!Number.isFinite(value)) return;

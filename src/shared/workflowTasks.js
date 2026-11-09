@@ -13,6 +13,7 @@ import { ladderRungs } from './methodLadder.js';
 import { spinSweepFor } from './spinSweep.js';
 import { runSettingsFor } from './engineSettings.js';
 import { DEFAULT_CONFORMER_SETTINGS, crestArgv, xyzText } from './conformers.js';
+import { OBABEL_DEFAULT_FF, OBABEL_DEFAULT_NCONF, obabelSearchArgv } from './obabelConformers.js';
 import { checkTsForceConstants, freqGeometryWarnings, optConvergenceWarnings } from './tsForceConstants.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from './validityChecks.js';
 import { LIMITS } from './projectSchema.js';
@@ -141,6 +142,11 @@ export function conformerSettingsFor(node) {
       ? { torsionStepDegrees: Number(source.torsionStepDegrees) } : {}),
     ...(Number.isFinite(Number(source.maxTrials))
       ? { maxTrials: Number(source.maxTrials) } : {}),
+    // The Open Babel route's settings, passed through the same way.
+    ...(Number.isFinite(Number(source.nconf))
+      ? { nconf: Number(source.nconf) } : {}),
+    ...(['mmff94', 'mmff94s'].includes(String(source.ff || '').toLowerCase())
+      ? { ff: String(source.ff).toLowerCase() } : {}),
   };
 }
 
@@ -1706,7 +1712,9 @@ export function conformerSearchTask(project, node, record = null) {
     inputName,
     // The UFF route runs in-app and writes its own short log; CREST writes
     // `crest.out` in the folder it ran in.
-    outputName: settings.generator === 'uff' ? 'uff.log' : 'crest.out',
+    outputName: settings.generator === 'uff'
+      ? 'uff.log'
+      : (settings.generator === 'obabel' ? 'obabel.log' : 'crest.out'),
     inputText: xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
     gates: null,
     validity: null,
@@ -1717,7 +1725,13 @@ export function conformerSearchTask(project, node, record = null) {
       multiplicity,
       argv: settings.generator === 'crest'
         ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
-        : [],
+        : (settings.generator === 'obabel'
+          ? obabelSearchArgv({
+            inputName,
+            nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
+            ff: settings.ff ?? OBABEL_DEFAULT_FF,
+          })
+          : []),
       ...(settings.generator === 'uff' && projectBonds ? { bonds: projectBonds } : {}),
     },
     ...(record ? {

@@ -463,6 +463,20 @@ async function chooseCrestExecutable() {
   return result.canceled ? null : result.filePaths[0];
 }
 
+async function chooseObabelExecutable() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Locate the Open Babel executable (obabel)',
+    defaultPath: process.platform === 'win32'
+      ? 'C:\\ProgramData\\miniforge3\\Library\\bin\\obabel.exe'
+      : '/usr/local/bin/obabel',
+    properties: ['openFile'],
+    filters: process.platform === 'win32'
+      ? [{ name: 'Open Babel for Windows', extensions: ['exe', 'bat', 'cmd'] }, { name: 'All files', extensions: ['*'] }]
+      : [{ name: 'All files', extensions: ['*'] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+}
+
 async function chooseEnsembleFile() {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Choose a multi-XYZ conformer ensemble',
@@ -1118,6 +1132,7 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('gaussian:pick-executable', (_event, config) => chooseExecutable(config || {}));
   ipcMain.handle('crest:pick-executable', () => chooseCrestExecutable());
+  ipcMain.handle('obabel:pick-executable', () => chooseObabelExecutable());
   ipcMain.handle('conformers:pick-ensemble', () => chooseEnsembleFile());
   /**
    * A user-supplied volume file for the wavefunction viewport. The renderer
