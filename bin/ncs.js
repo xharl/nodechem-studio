@@ -45,7 +45,17 @@ import {
 } from '../src/shared/qcschema.js';
 import { parseFchk } from '../src/shared/fchk.js';
 import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
-import { parseCube } from '../src/shared/cubeFile.js';
+import { parseCube, writeCube } from '../src/shared/cubeFile.js';
+import {
+  evaluateOrbital,
+  fieldOfValues,
+  gridFor,
+  integrateField,
+} from '../src/shared/volume.js';
+import { detectWavefunctionFormat } from '../src/shared/wavefunction.js';
+import { parseMolden } from '../src/shared/molden.js';
+import { parseWfn } from '../src/shared/wfn.js';
+import { parseWfx } from '../src/shared/wfx.js';
 import { extractSurface } from '../src/shared/marchingCubes.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
@@ -87,6 +97,8 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
   ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
   ncs cache <file.ncsr> --inspect [--json]
+  ncs cube <run-dir|wavefunction> --orbital homo|lumo|n=<i> --out <file.cube>
+      [--grid <angstrom>] [--padding <angstrom>] [--json]
 
 Exit codes: 0 success, 2 invalid project, 3 gate failure, 4 engine failure,
 5 partial queue (some records failed) or merge conflict.
@@ -1407,6 +1419,261 @@ async function commandCache({ positional, flags }) {
   process.exit(EXIT.ok);
 }
 
+/* ── ncs cube ─────────────────────────────────────────────── */
+
+/**
+ * `ncs cube` — evaluate one MO on a grid and write it as a Gaussian cube.
+ *
+ * The wavefunction is a formatted checkpoint, a Molden file, a WFN or a WFX,
+ * given directly or found in a run folder. The orbital is chosen by name
+ * (`homo`, `lumo`) or by the 1-based index the file's own order implies, and it
+ * is evaluated by the same `volume.js` code the app's viewport uses — there is
+ * no second evaluator here.
+ *
+ * The numbers the command prints are the ones a reader should check the picture
+ * against: the grid spacing actually used (the cap may have coarsened it), the
+ * orbital energy as the file states it, and ∫|ψ|² over the box, which is not 1
+ * and does not claim to be.
+ */
+class CubeCliError extends Error {}
+
+const WAVEFUNCTION_EXTENSIONS = ['.fchk', '.fch', '.molden', '.wfn', '.wfx'];
+
+function cubeUsage(message) {
+  process.stderr.write(`ncs: ${message}\n`);
+  process.exit(EXIT.usage);
+}
+
+function cubeRefuse(error) {
+  process.stderr.write(`ncs: ${error.message}\n`);
+  process.exit(EXIT.invalid);
+}
+
+async function resolveWavefunctionFile(target) {
+  const absolute = path.resolve(target);
+  let stats;
+  try {
+    stats = await fs.stat(absolute);
+  } catch (error) {
+    throw new CubeCliError(`cannot read ${target}: ${error.message}`);
+  }
+  if (stats.isFile()) return absolute;
+  if (!stats.isDirectory()) {
+    throw new CubeCliError(`${target} is neither a file nor a directory.`);
+  }
+
+  const candidates = (await fs.readdir(absolute, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && WAVEFUNCTION_EXTENSIONS.includes(path.extname(entry.name).toLowerCase()))
+    .map((entry) => entry.name)
+    .sort();
+  if (candidates.length === 0) {
+    throw new CubeCliError(
+      `${target} holds no wavefunction file (${WAVEFUNCTION_EXTENSIONS.join(', ')}), so there is nothing to evaluate.`,
+    );
+  }
+  if (candidates.length > 1) {
+    throw new CubeCliError(
+      `${target} holds ${candidates.length} wavefunction files (${candidates.join(', ')}); pass the one you mean directly.`,
+    );
+  }
+  return path.join(absolute, candidates[0]);
+}
+
+async function readWavefunctionFile(file) {
+  const text = await fs.readFile(file, 'utf8');
+  const kind = detectWavefunctionFormat(text);
+  if (kind === 'cube') {
+    throw new CubeCliError(`${file} is a cube, not a wavefunction: there are no coefficients in it to evaluate.`);
+  }
+  if (kind === 'fchk') return { kind, parsed: parseFchk(text) };
+  if (kind === 'molden') return { kind, parsed: parseMolden(text) };
+  if (kind === 'wfn') return { kind, parsed: parseWfn(text) };
+  if (kind === 'wfx') return { kind, parsed: parseWfx(text) };
+  throw new CubeCliError(
+    `${file} is not a wavefunction this build reads (expected a formatted checkpoint, Molden, WFN or WFX file).`,
+  );
+}
+
+/**
+ * The alpha orbitals in file order, 1-based, with the occupation the file
+ * states. This is the same table the results surface shows: a restricted
+ * checkpoint has no per-orbital occupations, so they are derived from the alpha
+ * electron count (2 each when alpha equals beta, 1 each otherwise) — the one
+ * derived number in this command, and the reason `homo`/`lumo` mean what they
+ * do.
+ */
+function orbitalTable(parsed) {
+  if (Array.isArray(parsed.orbitals) && parsed.orbitals.length > 0) {
+    // `Alpha and Beta` is a closed-shell spatial orbital (WFX says so); `Beta`
+    // is a separate spin set this command does not write.
+    const alphaOnly = parsed.orbitals.filter((orbital) => !orbital?.spin || /alpha/i.test(String(orbital.spin)));
+    return alphaOnly.map((orbital, index) => ({
+      index: index + 1,
+      energyHartree: Number.isFinite(orbital?.energy) ? orbital.energy : null,
+      occupation: Number.isFinite(orbital?.occupation) ? orbital.occupation : 0,
+      coefficients: orbital?.coefficients ?? [],
+    }));
+  }
+  const functions = Number(parsed.numberOfBasisFunctions);
+  if (!Array.isArray(parsed.alphaMOCoefficients) || !Number.isInteger(functions) || functions <= 0) {
+    return [];
+  }
+  const matrix = parsed.alphaMOCoefficients;
+  const count = Math.floor(matrix.length / functions);
+  const alpha = Number.isInteger(parsed.numberOfAlphaElectrons) ? parsed.numberOfAlphaElectrons : null;
+  const beta = Number.isInteger(parsed.numberOfBetaElectrons) ? parsed.numberOfBetaElectrons : null;
+  const restricted = alpha !== null && beta !== null && alpha === beta;
+  const orbitals = [];
+  for (let index = 0; index < count; index += 1) {
+    orbitals.push({
+      index: index + 1,
+      energyHartree: Array.isArray(parsed.orbitalEnergies) && Number.isFinite(parsed.orbitalEnergies[index])
+        ? parsed.orbitalEnergies[index]
+        : null,
+      occupation: alpha === null ? null : (index < alpha ? (restricted ? 2 : 1) : 0),
+      coefficients: matrix.slice(index * functions, (index + 1) * functions),
+    });
+  }
+  return orbitals;
+}
+
+function selectOrbital(table, request) {
+  if (table.length === 0) {
+    throw new CubeCliError('the wavefunction carries no alpha MO coefficients, so there is no orbital to evaluate.');
+  }
+  if (request === 'homo') {
+    const chosen = table.filter((orbital) => (orbital.occupation ?? 0) > 0).at(-1);
+    if (!chosen) throw new CubeCliError('no orbital has a non-zero occupation, so the file has no HOMO.');
+    return { requested: 'homo', orbital: chosen };
+  }
+  if (request === 'lumo') {
+    const chosen = table.find((orbital) => (orbital.occupation ?? 0) === 0);
+    if (!chosen) throw new CubeCliError(`every one of the ${table.length} orbitals is occupied, so the file has no LUMO.`);
+    return { requested: 'lumo', orbital: chosen };
+  }
+  const explicit = /^n=(\d+)$/.exec(request);
+  if (!explicit) {
+    throw new CubeCliError(`--orbital takes homo, lumo or n=<i>; got "${request}".`);
+  }
+  const wanted = Number(explicit[1]);
+  if (wanted < 1 || wanted > table.length) {
+    throw new CubeCliError(
+      `--orbital n=${wanted} is outside 1–${table.length}: the file has ${table.length} alpha orbitals.`,
+    );
+  }
+  return { requested: `n=${wanted}`, orbital: table[wanted - 1] };
+}
+
+function positiveFlag(value, name) {
+  if (typeof value !== 'string' || value.trim() === '' || !Number.isFinite(Number(value)) || Number(value) <= 0) {
+    cubeUsage(`${name} needs a positive number of Å.`);
+  }
+  return Number(value);
+}
+
+async function commandCube({ positional, flags }) {
+  const [target] = positional;
+  if (!target) cubeUsage('cube needs a run folder or a wavefunction file.');
+  if (flags.orbital === undefined || flags.orbital === true) cubeUsage('--orbital is required: homo, lumo or n=<i>.');
+  if (!flags.out || flags.out === true) cubeUsage('--out is required: the cube file to write.');
+
+  const spacing = flags.grid === undefined ? 0.2 : positiveFlag(flags.grid, '--grid');
+  let padding = 3;
+  if (flags.padding !== undefined) {
+    if (typeof flags.padding !== 'string' || !Number.isFinite(Number(flags.padding)) || Number(flags.padding) < 0) {
+      cubeUsage('--padding needs zero or more Å.');
+    }
+    padding = Number(flags.padding);
+  }
+
+  try {
+    const file = await resolveWavefunctionFile(target);
+    const { kind, parsed } = await readWavefunctionFile(file);
+    if (!Array.isArray(parsed.atoms) || parsed.atoms.length === 0) {
+      throw new CubeCliError(`${file} carries no atoms, so there is nowhere to place the basis functions.`);
+    }
+
+    const table = orbitalTable(parsed);
+    const { requested, orbital } = selectOrbital(table, String(flags.orbital).trim().toLowerCase());
+    const grid = gridFor(parsed.atoms, { spacing, padding });
+    const values = evaluateOrbital({
+      shells: parsed,
+      coefficients: orbital.coefficients,
+      grid,
+      precision: 'f64',
+    });
+
+    const label = `MO ${orbital.index} (${requested})`;
+    const field = fieldOfValues({
+      kind: 'orbital',
+      label,
+      grid,
+      values,
+      signed: true,
+      unit: 'a.u.',
+    });
+    const integral = integrateField(field, { square: true });
+    const boxAngstrom3 = grid.points * grid.step ** 3;
+    const integralNote = '|psi|^2 over the finite grid box; a finite box does not integrate to exactly 1, '
+      + 'because the density outside it is not counted.';
+
+    const out = path.resolve(String(flags.out));
+    const text = writeCube(field, {
+      title: `${label} from ${path.basename(file)}`,
+      comment: 'NodeChem Studio orbital cube; values in a.u.; outer loop X, middle loop Y, inner loop Z',
+      atoms: parsed.atoms,
+      units: 'angstrom',
+    });
+    await fs.mkdir(path.dirname(out), { recursive: true });
+    await fs.writeFile(out, text, 'utf8');
+
+    const payload = {
+      file,
+      orbital: {
+        requested,
+        index: orbital.index,
+        label,
+        occupation: orbital.occupation,
+      },
+      energyEh: orbital.energyHartree,
+      ...(orbital.energyHartree === null
+        ? { energyNote: `not available: the ${kind} file states no orbital energy for MO ${orbital.index}` }
+        : {}),
+      grid: {
+        spacing: grid.step,
+        points: grid.points,
+        capped: grid.capped,
+        note: grid.note,
+      },
+      integral: {
+        value: integral,
+        boxAngstrom3,
+        note: integralNote,
+      },
+      wavefunction: { kind, format: kind, basisFunctions: parsed.numberOfBasisFunctions ?? null },
+      out,
+      bytes: Buffer.byteLength(text),
+    };
+
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      process.exit(EXIT.ok);
+    }
+    process.stdout.write(`wavefunction: ${file} (${kind})\n`);
+    process.stdout.write(`orbital: ${label}, occupation ${orbital.occupation === null ? 'not available: the file states no occupations' : orbital.occupation.toFixed(3)}\n`);
+    process.stdout.write(orbital.energyHartree === null
+      ? `energy: ${payload.energyNote}\n`
+      : `energy: ${orbital.energyHartree.toFixed(6)} Eh\n`);
+    process.stdout.write(`grid: ${grid.step.toFixed(3)} Å, ${grid.counts.join('×')} = ${grid.points} points${grid.capped ? ` (${grid.note})` : ''}\n`);
+    process.stdout.write(`integral: ∫|ψ|²dV = ${integral.toFixed(6)} over ${boxAngstrom3.toFixed(3)} Å³ — ${integralNote}\n`);
+    process.stdout.write(`wrote: ${out} (${payload.bytes} bytes)\n`);
+    process.exit(EXIT.ok);
+  } catch (error) {
+    if (error instanceof CubeCliError) cubeRefuse(error);
+    cubeRefuse(new CubeCliError(error.message));
+  }
+}
+
 const { command, positional, flags } = parseArgs(process.argv.slice(2));
 if (!command || command === '--help' || command === '-h' || command === 'help') {
   process.stdout.write(USAGE);
@@ -1424,6 +1691,7 @@ const handlers = {
   convert: commandConvert,
   qcschema: commandQcschema,
   cache: commandCache,
+  cube: commandCube,
 };
 const handler = handlers[command];
 if (!handler) fail(`unknown command "${command}".`);
