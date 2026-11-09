@@ -8,7 +8,7 @@
  */
 
 const FORMAT_LABELS = Object.freeze({
-  extxyz: 'extxyz', xyz: 'xyz', sdf: 'sdf', jcamp: 'JCAMP-DX',
+  extxyz: 'extxyz', xyz: 'xyz', sdf: 'sdf', jcamp: 'JCAMP-DX', molden: 'Molden',
 });
 
 export function parseExportChoice(value) {

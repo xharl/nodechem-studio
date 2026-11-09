@@ -18,6 +18,8 @@
  */
 
 import { broadenedSpectrum } from '../spectrum.js';
+import { parseFchk } from '../fchk.js';
+import { detectWavefunctionFormat } from '../wavefunction.js';
 import { moldenFromFchk } from './molden.js';
 import { writeExtxyz } from './extxyz.js';
 import { writeJcampDx } from './jcampDx.js';
@@ -258,6 +260,34 @@ export function convertFchk(fchk, formatId, { title = '' } = {}) {
     text: written.text,
     notes: written.notes,
   };
+}
+
+/**
+ * Convert a saved wavefunction file into a format that needs the basis.
+ *
+ * The run console's Export as → Molden hands a run folder's `.fchk` here: the
+ * exported record carries only a summary of the checkpoint, so the file itself
+ * has to be read. Content decides the reader, as it does everywhere else in this
+ * app, and a log is refused with the reason a user can act on instead of being
+ * converted into a Molden file with no basis in it.
+ *
+ * @param {string} text the file's text
+ * @param {string} formatId `molden` is the only format this can produce today
+ * @param {{ title?: string, filename?: string }} [options]
+ */
+export function convertWavefunctionFile(text, formatId, { title = '', filename = '' } = {}) {
+  const kind = detectWavefunctionFormat(text);
+  if (kind === 'molden') {
+    throw new ConversionError(`${filename || 'this file'} is already a Molden file; there is nothing to convert.`);
+  }
+  if (kind !== 'fchk') {
+    throw new ConversionError(
+      `${filename || 'the file'} is ${kind ? `a ${kind} file` : 'not a formatted checkpoint'}, and ${formatId} `
+      + 'needs the basis functions and MO coefficients that only a formatted checkpoint carries. '
+      + 'Run formchk on the job\'s .chk first.',
+    );
+  }
+  return convertFchk(parseFchk(text, { filename }), formatId, { title });
 }
 
 /** Convert an already-imported structure record (atoms, optional 1-based bonds). */

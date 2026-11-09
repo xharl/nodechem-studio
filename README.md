@@ -69,7 +69,8 @@ driving the same job from the app's own run console remains unverified. Read
 - **Structure viewer** — normal-mode animation from real displacement blocks, optimisation
   trajectory replay, Kabsch/Horn superposition with RMSD, and SVG figure export.
 - **Reports and export** — a self-contained `report.html` per flow and a combined document across
-  flows, `report.json`, dataset CSV/JSON with a versioned envelope, and run bundles with a per-file
+  flows with a figure set (`basic`, `surfaces`, `none` — the same three `ncs report --figures`
+  takes), `report.json`, dataset CSV/JSON with a versioned envelope, and run bundles with a per-file
   SHA-256 manifest.
 - **Provenance** — `run.json` records the exact input hash, the parsed output, the engine's method
   block and the app version; a run bundle adds `methods.md` and a per-file SHA-256 manifest.
@@ -77,7 +78,9 @@ driving the same job from the app's own run console remains unverified. Read
   fixed and not themed.
 - **Headless CLI** — `ncs validate`, `build-input`, `run`, `report`, `export`, `convert`, `cache`,
   plus `ncs diff` / `ncs merge` for projects shared through a drive; `ncs run --json` carries the
-  kinetics summary and exits 5 when a family run is partial.
+  kinetics summary and exits 5 when a family run is partial. `diff`, `merge`, `qcschema`, `cache`,
+  `export`, `export-input` and `record import` are deliberately CLI-only, and every command's home
+  is listed in [Headless CLI](docs/guide/cli.md).
 - **Local only** — no account, no telemetry, and no network code beyond the update check you
   trigger yourself.
 

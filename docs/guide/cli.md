@@ -93,6 +93,38 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   and can write its structure as XYZ. Refusals exit 2 with a `qcschema-*` code on stderr. The
   fields and units are in [Scripting against NodeChem Studio](../SCRIPTING.md#qcschema-molssi-in-and-out).
 
+## The window, and the commands that stay on the command line
+
+Every subcommand below is in this build, and the table says where to reach it. The
+rows marked **CLI only** are a choice, not a gap: they are pipeline-integrity
+tools, or they write a document a script consumes, and a dialog would add a step
+without adding a capability. Naming them here is what keeps the window from
+looking like it forgot them.
+
+This table is checked against the handler table in `bin/ncs.js` by
+`test/cliOnlyCommands.test.js`: a subcommand that appears in the CLI and not in
+this table fails the suite, so a new CLI-only capability cannot ship undocumented.
+
+| Command | Where it lives | What it is for |
+| --- | --- | --- |
+| `ncs validate` | window: **Validate** | Schema errors, warnings and pre-run findings. |
+| `ncs build-input` | window: the input preview | The exact bytes the queue would write for one block. |
+| `ncs run` | window: **Run workflow** / **Run selected block** | Queue the workflow and run it. |
+| `ncs report` | window: **Report…** and the figure set beside it | `report.html` + `report.json` for the newest queue. |
+| `ncs convert` | window: **Export as…** | A finished run as extxyz, xyz, sdf, JCAMP or Molden. |
+| `ncs cube` | window: **Write cube…** on the wavefunction card | One orbital's cube from a checkpoint, without `cubegen`. |
+| `ncs smiles` | window: SMILES in the molecule drawer | A SMILES string as a bond graph: formula, charges, hydrogens. |
+| `ncs export` | **CLI only** | Every `run.json` in one versioned envelope, with the schema path a script validates against. |
+| `ncs record` | **CLI only** | `record import`: a number another program computed, labelled *imported, not run here*. |
+| `ncs diff` | **CLI only** | Two projects compared per node and per field. |
+| `ncs merge` | **CLI only** | Three-way, node-keyed project merge; a conflict writes nothing. |
+| `ncs export-input` | **CLI only** | The deck one block would be for NWChem, GAMESS or Q-Chem — engines this build exports but does not run. |
+| `ncs qcschema` | **CLI only** | MolSSI `qcschema_output` in and out, validated against the vendored schema. |
+| `ncs cache` | **CLI only** | A run or a volumetric field as typed `.ncsr` arrays; `--inspect` reads the header back. |
+
+The window says the same thing in its About text, so a user who never opens a
+terminal is told these exist rather than left to infer their absence.
+
 ## Exit codes
 
 | Code | Meaning |

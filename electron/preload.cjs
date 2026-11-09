@@ -54,7 +54,7 @@ contextBridge.exposeInMainWorld('desktop', {
   setTheme: (payload) => ipcRenderer.invoke('app:set-theme', payload),
   listQueues: () => ipcRenderer.invoke('queue:list'),
   getQueue: (queueId) => ipcRenderer.invoke('queue:get', queueId),
-  exportWorkflowReport: (queueId) => ipcRenderer.invoke('queue:report', queueId),
+  exportWorkflowReport: (queueId, figureLevel) => ipcRenderer.invoke('queue:report', queueId, figureLevel),
   importLogDirectory: () => ipcRenderer.invoke('logs:import-directory'),
   onRunEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);

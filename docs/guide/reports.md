@@ -36,6 +36,11 @@ absent says so: `figure not available: no cube file in the run folder`. The whol
 `ncs report --figures none|basic|surfaces` selects how much is drawn. `none` reproduces the
 table-only document of 0.4.0; `surfaces` adds the projected isosurface (the slab slice is drawn at every level when a cube is present).
 
+The window offers the same three names in the select beside **Report…**. `basic` is the default and
+writes the document the window has always written; `surfaces` also reads the `.cube` files in each
+run folder and meshes them; `none` omits the figure section. The choice is per report and is not
+saved in the project — there is no new settings key, so opening an old project changes nothing.
+
 ## The per-flow report
 
 A flow that iterates over a dataset groups its tasks by record. The report has:

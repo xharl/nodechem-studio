@@ -26,10 +26,22 @@ describe('the run-console export action', () => {
   it('refuses a format the converters do not write', async () => {
     const notify = vi.fn();
     const result = await exportRunFormatAction({
-      desktop: { exportRunFormat: vi.fn() }, runId: 'abc', choice: 'molden', notify,
+      desktop: { exportRunFormat: vi.fn() }, runId: 'abc', choice: 'cif', notify,
     });
     expect(result).toMatchObject({ error: 'unknown-format' });
     expect(notify).toHaveBeenCalled();
+  });
+
+  it('sends Molden through like any other format (issue 187)', async () => {
+    const exportRunFormat = vi.fn().mockResolvedValue({
+      canceled: false, path: '/tmp/abc.molden', format: 'molden', bytes: 4096,
+    });
+    const notify = vi.fn();
+    const result = await exportRunFormatAction({
+      desktop: { exportRunFormat }, runId: 'abc', choice: 'molden', notify,
+    });
+    expect(exportRunFormat).toHaveBeenCalledWith('abc', 'molden', null);
+    expect(result.path).toBe('/tmp/abc.molden');
   });
 
   it('passes the spectrum through and reports the written path', async () => {

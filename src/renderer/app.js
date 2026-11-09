@@ -6445,6 +6445,7 @@ function renderQueue() {
   $('#resume-workflow')?.toggleAttribute('disabled', !canResume);
   $('#cancel-workflow')?.toggleAttribute('disabled', !active);
   $('#report-workflow')?.toggleAttribute('disabled', !queue.id || queue.status === 'running');
+  $('#report-figures')?.toggleAttribute('disabled', !queue.id || queue.status === 'running');
   renderRecordSummary();
 }
 
@@ -6556,6 +6557,10 @@ async function startWorkflowUnlocked() {
 /**
  * Write the workflow report for the current queue (report.html + report.json).
  * The main process reads the queue's run folders; the renderer only asks.
+ *
+ * The figure set beside the button is `ncs report --figures` under another
+ * name: `basic` (the default, and the document the window has always written),
+ * `surfaces` (also mesh the .cube files in each run folder) or `none`.
  */
 async function exportWorkflowReportAction() {
   if (!desktop?.exportWorkflowReport) {
@@ -6566,14 +6571,15 @@ async function exportWorkflowReportAction() {
     toast('Run a workflow first; the report describes a finished queue.');
     return;
   }
+  const figures = $('#report-figures')?.value || 'basic';
   try {
-    const result = await desktop.exportWorkflowReport(state.queue.id);
+    const result = await desktop.exportWorkflowReport(state.queue.id, figures);
     if (!result || result.canceled) return;
     if (result.error) {
       toast(`Could not write the report: ${result.error.message}`);
       return;
     }
-    toast(`Report written · ${result.taskCount} task(s) · verdict ${result.verdict}`);
+    toast(`Report written · ${result.taskCount} task(s) · verdict ${result.verdict} · figures ${result.figures || figures}`);
   } catch (error) {
     toast(`Could not write the report: ${error.message}`);
   }
@@ -8011,7 +8017,7 @@ function handleAction(action, element) {
       if (typeof run === 'function') run();
       break;
     }
-    case 'about': toast(`NodeChem Studio — the graph is the workspace. The inspector exposes the full job parameter set; the local runner executes one selected block or the whole workflow queue${appVersion ? ` (v${appVersion})` : ''}.`); break;
+    case 'about': toast(`NodeChem Studio — the graph is the workspace. The inspector exposes the full job parameter set; the local runner executes one selected block or the whole workflow queue${appVersion ? ` (v${appVersion})` : ''}. Some capabilities are CLI-only by design: ncs export, ncs record import, ncs diff, ncs merge, ncs export-input, ncs qcschema, ncs cache. docs/guide/cli.md lists every command and where it lives.`); break;
     default: break;
   }
 }
