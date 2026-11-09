@@ -65,12 +65,25 @@ describe('the transition-dipole record in the Psi4 deck', () => {
     expect(build({ recordTransitionDipoles: false }).inputText).toBe(DECK_BEFORE_ISSUE_173);
   });
 
-  it('adds the NCS-TDM block and changes nothing else when it did', () => {
+  it('adds the wavefunction record and changes nothing else when it did', () => {
     const text = build({ recordTransitionDipoles: true }).inputText;
     expect(text).toContain('set tdscf_states 5');
-    expect(text).toContain("_ncs_energy, _ncs_wfn = energy('td-b3lyp', return_wfn=True)");
+    expect(text).toContain("E, wfn = energy('td-b3lyp', return_wfn=True)");
     expect(text).toContain("if 'ELECTRIC TRANSITION DIPOLE MOMENT (LEN)' not in _ncs_name:");
-    expect(text).toContain("print('NCS-TDM ROOT %s %s %.10f %.10f %.10f a.u.' % (");
+    // Issue 173, route B: the same record also carries the transition density,
+    // the fragment labels and the checkpoint that turns amplitudes into a
+    // density over atoms.
+    expect(text).toContain("psi4.core.print_out('NCS-CTFRAG 3 1 1 1'");
+    expect(text).toContain("psi4.core.print_out('NCS-TDMAT ROOT %d %d %d tda");
+    expect(text).toContain('set tdscf_tda true');
+    expect(text).toContain('symmetry c1');
+    expect(text).toContain("fchk(wfn, 'td.fchk')");
+    // The record has to go through Psi4's own stream and through the accessor
+    // 1.11 actually has; `print` and `get_array` both leave the record outside
+    // the log (measured, issue 173).
+    expect(text).toContain('psi4.core.print_out(');
+    expect(text).not.toContain('get_array(');
+    expect(text).not.toMatch(/^print\(/m);
     // One energy call, and it is the one that hands back the wavefunction: a
     // second bare call would run the calculation twice.
     expect(text.match(/energy\('td-b3lyp'/g)).toHaveLength(1);
@@ -80,7 +93,7 @@ describe('the transition-dipole record in the Psi4 deck', () => {
     // is the only difference.
     const onLines = text.split('\n');
     const start = onLines.indexOf('set tdscf_states 5');
-    const end = onLines.findIndex((line) => line.includes('float(_ncs_v[0])'));
+    const end = onLines.indexOf("fchk(wfn, 'td.fchk')");
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const rebuilt = [
@@ -88,7 +101,7 @@ describe('the transition-dipole record in the Psi4 deck', () => {
       "energy('td-b3lyp')",
       ...onLines.slice(end + 1),
     ].join('\n');
-    expect(rebuilt).toBe(DECK_BEFORE_ISSUE_173);
+    expect(rebuilt.replace('symmetry c1\n', '')).toBe(DECK_BEFORE_ISSUE_173);
   });
 
   it('refuses the setting on a job that runs no TD wavefunction', () => {

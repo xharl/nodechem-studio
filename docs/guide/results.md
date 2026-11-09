@@ -666,18 +666,21 @@ strengths but **no transition-dipole vector**. |μ| can be recovered from f; its
 and the direction is what a coupling is made of. The vector does exist on the returned
 wavefunction, so the opt-in adds this to the deck after the energy call:
 
-```
-_ncs_energy, _ncs_wfn = energy('td-b3lyp', return_wfn=True)
-for _ncs_name in _ncs_wfn.array_variables():
+```python
+E, wfn = energy('td-b3lyp', return_wfn=True)          # one call, and it returns the wavefunction
+for _ncs_name in wfn.array_variables():
     if 'ELECTRIC TRANSITION DIPOLE MOMENT (LEN)' not in _ncs_name:
         continue
+    _ncs_v = wfn.array_variable(_ncs_name).to_array()
     …
-    print('NCS-TDM ROOT %s %s %.10f %.10f %.10f a.u.' % (…))
+    psi4.core.print_out('NCS-TDM ROOT %d %s %.10f %.10f %.10f a.u.' % (…))
 ```
 
-`set tdscf_print` does **not** print the dipole (tried at level 3 on Psi4 1.11), which is why the
-wavefunction is read instead. A block that does not opt in produces exactly the input it did before,
-and its log gains no line.
+Two details in that block are there because the obvious version does not work on Psi4 1.11:
+`print` writes to the process's stdout, which the runner does not keep, so every record goes through
+`psi4.core.print_out`; and `wfn.get_array(name)` does not exist — `wfn.array_variable(name)` does.
+`set tdscf_print` does **not** print the dipole either (tried at level 3). A block that does not opt
+in produces exactly the input it did before, and its log gains no line.
 
 **What the card prints**, all units explicit:
 
@@ -691,8 +694,9 @@ and its log gains no line.
 
 The card states the approximation on every run, including the part that matters most: **point-dipole
 coupling does not describe charge-transfer character.** A CT band has no monomer analogue, so a model
-built from two monomer-like dipoles cannot produce one; that is route B (supersystem transition
-densities), which is not built.
+built from two monomer-like dipoles cannot produce one. Route B — the same transition density the run
+already computed — is described in the next section, and when it is present the card says where this
+J stops being the right model.
 
 **The pairing rule.** Only states that carry **both** a recorded dipole vector and a non-zero
 oscillator strength can couple, and the card pairs the two lowest such states. A dark state (f = 0)
@@ -727,6 +731,108 @@ as a typo, but it does not yet round-trip it through the block inspector; a save
 key until that one-line change lands. Recorded dipoles are therefore visible today for a block whose
 settings carry the flag (hand-edited project, or a builder call), and absent — never guessed — for
 every other run.
+
+## Charge-transfer character of an excited state (Psi4, route B)
+
+The question route A cannot answer is: *how much of this excitation moves an electron from one
+fragment to the other?* The answer comes from the transition density of the same TD run — not from a
+second calculation and not from the dipoles.
+
+**Where the numbers come from.** The opt-in above writes three records into the log, all measured
+quantities of the run:
+
+| record | what it carries |
+|---|---|
+| `NCS-CTFRAG <natoms> <label per atom>` | which fragment each atom belongs to, as the block declared it |
+| `NCS-TDM ROOT <n> <irrep> x y z a.u.` | the transition dipole vector of state *n* |
+| `NCS-TDMAT ROOT <n> <nocc> <nvir> tda` … `NCS-TDMAT END <n>` | the Tamm–Dancoff amplitudes X, row-major over occupied × virtual |
+
+The deck also calls `fchk(wfn, ...)`, so the run's checkpoint sits beside its log and supplies the
+**MO coefficients**, the **electron counts** and the **Gaussian basis**. From those three the analysis
+builds the one-particle transition density in the atomic-orbital basis,
+
+```
+D^{0I}_{μν} = Σ_{i∈occ} Σ_{a∈vir} C_{μi} X_{ia} C_{νa},
+```
+
+and the AO overlap **S** analytically from the basis (the same Gaussian-overlap machinery the ESP
+card uses). Nothing is read from the engine's own density object: the density is reconstructed from
+what the engine printed and checked, which is why a mismatched checkpoint is detectable rather than
+silently wrong.
+
+**The partition.** Two fragments, so the natural partition is Mulliken's, and the analysis does it in
+both the Mulliken and the Löwdin metric:
+
+| symbol | definition | range |
+|---|---|---|
+| Ω_AB | `Σ_{μ∈A} Σ_{ν∈B} (D S)_{μν} (S D)_{νμ}`, the fraction of the transition density with its hole on A and its particle on B | 0…1, `Σ_AB Ω_AB = 1` |
+| CT fraction | `Ω₁₂ + Ω₂₁` — the part of the excitation that is inter-fragment | 0…1 |
+| Ω (local), also written Ω_AA | `Ω₁₁ + Ω₂₂` — the on-fragment part | 0…1, `CT + Ω = 1` |
+| Λ | `Σ_A √(Ω_AA)` — the Plasser–Lischka delocalisation index, evaluated over fragments instead of atoms | 0…√2; 1 = the excitation sits on one fragment, 0 = hole and particle are on different fragments |
+| Δq | `Σ_{μ∈1} (ρ_particle)_{μμ} − Σ_{μ∈1} (ρ_hole)_{μμ}` in electrons | −1…+1; the net charge fragment 1 gained |
+
+with `ρ_hole = D S Dᵀ` and `ρ_particle = Dᵀ S D`, so that `tr(ρ_hole S) = tr(ρ_particle S) = 1`.
+The Löwdin variant replaces D with `S^{1/2} D S^{1/2}`, the same `S^{1/2}` the spin-population code
+uses. The card prints the fraction, Ω, Λ, Δq **and the partition's name**, because a Mulliken and a
+Löwdin fraction are not the same number; `partitionSpread` is the largest disagreement between the
+two over all states, and on the committed fixtures it is 0.004 (ethylene dimer) and 0.011
+(ammonia–water). When that spread is large, the card says the value depends on the partition.
+
+**What the numbers mean — and what they do not.** They characterise **the transition density at this
+level of theory**. They are not an observable, not a measurement, and not a property of the molecule:
+a different functional, basis or geometry moves them. The card says so in the same paragraph, and
+names the level (`TD-B3LYP def2-SVP`, from the run's provenance).
+
+**Δq is not the fraction.** They coincide only when the transfer runs one way. In a homodimer every
+state has hole and particle spread equally over both fragments, so an excitation can be 99 %
+inter-fragment with **Δq = 0** — charge moved in both directions with equal weight. Both committed
+fixtures exist to keep that distinction in view.
+
+**Where it appears.** The **Exciton coupling** card gains one row per paired state beside the
+point-dipole J:
+
+```
+Charge transfer (state 2)   98.2 % of the excitation is inter-fragment · Ω = 0.018 ·
+                            Λ = 0.19 · Δq = +0.00 e · Löwdin partition
+```
+
+and when either paired state is more inter-fragment than not (local fraction < 0.5), or has |Δq| ≥
+0.5 e, the card prints, in place of a footnote:
+
+> Charge transfer is large for state 2: the transition density is not two point dipoles, so J above
+> is printed with that caveat and is not a prediction for this pair.
+
+Those two thresholds are the module's, exported as `CT_LOCAL_FRACTION_LIMIT` and
+`CT_TRANSFER_LIMIT_E`, and they are stated on the card rather than tuned.
+
+**Refusals, never zeros:**
+
+| situation | the card says |
+|---|---|
+| monomer run, no second fragment | `not modelled: no dimer geometry` |
+| no amplitude block in the log (block did not opt in) | `not modelled: no transition density was recorded for any state` |
+| no checkpoint beside the log | `not modelled: no wavefunction (the run has no checkpoint)` |
+| a truncated amplitude block | `not modelled: state <n> holds <k> amplitudes for a <i>×<a> block` |
+| amplitudes that do not sum to 1 | `not modelled: the <partition> partition of state <n> sums to <s> instead of 1` |
+| RPA (non-TDA) amplitudes | `not modelled: state <n> records a transition density that is not TDA` |
+| a checkpoint of a different molecule | `not modelled: atom <k> is <X> in this run and <Y> in the checkpoint` |
+| three or more fragments | `not modelled: the analysis is a two-fragment model and the run declares <n> fragments` |
+
+A state with no density is left out of `chargeTransfer.states`; it never appears with a fraction of 0.
+
+**Cost.** None beyond the opt-in: the amplitudes are already computed by the TD step, the checkpoint
+is written anyway, and the analysis is a 16×80×160 matrix product per state.
+
+**Fixtures.** `test/fixtures/psi4-ct/` carries two whole runs (deck, log, checkpoint, README with the
+image, version, command, geometry and sha256): a slipped cofacial ethylene dimer (CT up to 0.99 with
+Δq = 0) and an ammonia–water complex (Δq = +0.83 e for state 1, −0.28 e for state 7). The numbers in
+`test/chargeTransfer.test.js` are recomputed from the definitions rather than compared with stored
+constants.
+
+**Cross-check.** The same states recomputed inside Psi4, with Psi4's own `S` and MO coefficients and
+no code from this repository, agree with the card to ≈2×10⁻⁶ — the precision the log records the
+amplitudes to. That is the evidence that the analytic overlap and the checkpoint's orbital order
+describe the same density the engine used.
 
 ## Natural transition orbitals
 

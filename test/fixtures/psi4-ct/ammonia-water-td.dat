@@ -1,0 +1,79 @@
+# NodeChem Studio — generated Psi4 input
+# Ammonia-water dimer (N...H-O 1.98 A) - issue 173 CT fixture
+# Every line below is written by the app; edit and re-run at your own risk.
+
+memory 4096 mb
+
+molecule {
+symmetry c1
+0 1
+  N  0.000000  0.000000  0.000000
+  H  0.000000  0.939372  0.376464
+  H  -0.813520  -0.469686  0.376464
+  H  0.813520  -0.469686  0.376464
+  O  0.000000  0.000000  -2.950000
+  H  0.000000  0.000000  -1.980000
+  H  0.926500  0.000000  -3.189000
+}
+
+set basis def2-svp
+set reference rhf
+set scf_type df
+set e_convergence 1.0e-8
+set d_convergence 1.0e-8
+
+set tdscf_states 12
+set tdscf_tda true
+# NCS-CT: the fragment label of each atom, in the order the molecule block
+# lists them. The transition density is partitioned by these labels.
+psi4.core.print_out('NCS-CTFRAG 7 1 1 1 1 2 2 2' + "\n")
+E, wfn = energy('td-b3lyp', return_wfn=True)
+# NCS-TDM: the TDSCF table has no transition-dipole vector, so the wavefunction
+# is read instead. One line per root, values in atomic units (a.u.).
+_ncs_dipoles = {}
+for _ncs_name in wfn.array_variables():
+    if 'ROOT 0 (' not in _ncs_name or '-> ROOT ' not in _ncs_name or _ncs_name.endswith(' TRANSITION'):
+        continue
+    if 'ELECTRIC TRANSITION DIPOLE MOMENT (LEN)' not in _ncs_name:
+        continue
+    _ncs_root = int(_ncs_name.split('-> ROOT ')[-1].split(' ')[0])
+    if _ncs_root not in _ncs_dipoles:
+        _ncs_dipoles[_ncs_root] = _ncs_name
+for _ncs_root in sorted(_ncs_dipoles):
+    _ncs_v = wfn.array_variable(_ncs_dipoles[_ncs_root]).to_array().flatten()
+    psi4.core.print_out('NCS-TDM ROOT %d %s %.10f %.10f %.10f a.u.\n' % (
+        _ncs_root, _ncs_dipoles[_ncs_root].split('(')[1].split(')')[0],
+        float(_ncs_v[0]), float(_ncs_v[1]), float(_ncs_v[2])))
+# NCS-TDMAT: the state's transition density in the MO basis (TDA amplitudes,
+# occupied rows, virtual columns), from which chargeTransfer.js builds the AO
+# transition density. Eight decimals of an O(1) amplitude are well inside the
+# distance a CT fraction can resolve.
+_ncs_eigen = {}
+for _ncs_name in wfn.array_variables():
+    if 'RIGHT EIGENVECTOR ALPHA' not in _ncs_name:
+        continue
+    if 'ROOT 0 (' not in _ncs_name or '-> ROOT ' not in _ncs_name or _ncs_name.endswith(' TRANSITION'):
+        continue
+    _ncs_root = int(_ncs_name.split('-> ROOT ')[-1].split(' ')[0])
+    if _ncs_root not in _ncs_eigen:
+        _ncs_eigen[_ncs_root] = _ncs_name
+for _ncs_root in sorted(_ncs_eigen):
+    _ncs_blocks = wfn.array_variable(_ncs_eigen[_ncs_root]).to_array()
+    if not isinstance(_ncs_blocks, tuple):
+        _ncs_blocks = (_ncs_blocks,)
+    _ncs_rows = 0
+    _ncs_cols = 0
+    _ncs_text = []
+    for _ncs_block in _ncs_blocks:
+        _ncs_a = __import__('numpy').asarray(_ncs_block)
+        if _ncs_a.size == 0:
+            continue
+        _ncs_rows += _ncs_a.shape[0]
+        _ncs_cols = max(_ncs_cols, _ncs_a.shape[1])
+        for _ncs_row in _ncs_a:
+            _ncs_text.append(' '.join('%.8f' % float(_v) for _v in _ncs_row))
+    psi4.core.print_out('NCS-TDMAT ROOT %d %d %d tda\n' % (_ncs_root, _ncs_rows, _ncs_cols))
+    for _ncs_line in _ncs_text:
+        psi4.core.print_out(_ncs_line + "\n")
+    psi4.core.print_out('NCS-TDMAT END %d\n' % _ncs_root)
+fchk(wfn, 'ammonia-water-td.fchk')
