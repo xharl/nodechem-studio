@@ -136,6 +136,9 @@ function atomsInBohr(fchk) {
     }
     return {
       atomicNumber: Number.isInteger(atom?.atomicNumber) ? atom.atomicNumber : 0,
+      // Carried through for the EPR card, which names a nucleus by element and
+      // index; the potential never needed it and ignored it.
+      element: typeof atom?.element === 'string' ? atom.element : null,
       x: x * BOHR_PER_ANGSTROM,
       y: y * BOHR_PER_ANGSTROM,
       z: z * BOHR_PER_ANGSTROM,
@@ -162,10 +165,17 @@ export function basisFunctions(fchk) {
   const prepared = prepareBasis(described.shells);
   const atoms = atomsInBohr(fchk);
   const functions = Array.from({ length: prepared.functionCount }, () => []);
+  // Which atom owns each basis function (issue 168: a population is a sum over
+  // the functions of one centre, so the map has to travel with the basis).
+  const atomOfFunction = new Int32Array(prepared.functionCount).fill(-1);
   for (const shell of prepared.shells) {
     const centre = atoms[shell.atom];
     if (!centre) {
       throw new EspError(`a shell is attached to atom ${shell.atom + 1}, which the checkpoint does not carry.`);
+    }
+    for (let component = 0; component < shell.functions; component += 1) {
+      const at = shell.offset + component;
+      if (at >= 0 && at < atomOfFunction.length) atomOfFunction[at] = shell.atom;
     }
     for (const primitiveIndex of shell.primitiveIndices) {
       const primitive = prepared.primitives[primitiveIndex];
@@ -189,6 +199,7 @@ export function basisFunctions(fchk) {
     functions,
     count: prepared.functionCount,
     atoms,
+    atomOfFunction,
     shells: prepared.shells.length,
     basisFunctions: described.numberOfBasisFunctions,
   };
@@ -273,8 +284,15 @@ function erfcAsymptotic(z) {
 
 const E_ZERO = 1e-300;
 
-/** MD coefficients E^{i,j}_t in one dimension, t = 0…i+j. */
-function hermiteCoefficients(i, j, ax, bx, p, gamma) {
+/**
+ * MD coefficients E^{i,j}_t in one dimension, t = 0…i+j.
+ *
+ * Exported (issue 168) because the overlap matrix a population analysis needs is
+ * the same expansion at t = 0: ⟨χ_a|χ_b⟩ = (π/γ)^{3/2} exp(−αβ/γ |A−B|²) ·
+ * E_x0 E_y0 E_z0. One expansion, used for the Coulomb sum and for the overlaps,
+ * so a population and a potential cannot disagree about the basis.
+ */
+export function hermiteCoefficients(i, j, ax, bx, p, gamma) {
   const max = i + j;
   const inv2p = 1 / (2 * gamma);
   const xpa = p - ax;
@@ -586,13 +604,42 @@ export function electronDensityAt({ fchk, points } = {}) {
   const density = densityMatrix(fchk);
   if (!density.ok) return density;
   const basis = basisFunctions(fchk);
+  const values = densityAtBohrPoints({
+    density,
+    basis,
+    pointsBohr: points.map((point) => point.map((value) => value * BOHR_PER_ANGSTROM)),
+  });
+  return {
+    ok: true,
+    values,
+    unit: 'e/bohr^3',
+    densityBlock: density.source,
+    basisFunctions: basis.count,
+  };
+}
+
+/**
+ * The same sum, at points already in bohr, for a caller that has its own matrix
+ * and basis — issue 168's spin density is exactly this with `D^α − D^β` in place
+ * of the total density, so the two densities are evaluated by one piece of code
+ * and cannot disagree about the basis.
+ *
+ * `density` is anything with a `source` and an `element(i, j)` accessor (see
+ * `densityMatrix`); `basis` is the object `basisFunctions` returns.
+ */
+export function densityAtBohrPoints({ density, basis, pointsBohr } = {}) {
+  if (!density || typeof density.element !== 'function') {
+    throw new EspError('a density needs an element(i, j) accessor.');
+  }
+  if (!basis || !Array.isArray(basis.functions)) {
+    throw new EspError('a density evaluation needs a compiled basis (see basisFunctions).');
+  }
+  if (!Array.isArray(pointsBohr)) throw new EspError('a density evaluation needs a list of points in bohr.');
   const { functions } = basis;
   const chi = new Float64Array(functions.length);
-  const out = new Float64Array(points.length);
-  for (let index = 0; index < points.length; index += 1) {
-    const x = points[index][0] * BOHR_PER_ANGSTROM;
-    const y = points[index][1] * BOHR_PER_ANGSTROM;
-    const z = points[index][2] * BOHR_PER_ANGSTROM;
+  const out = new Float64Array(pointsBohr.length);
+  for (let index = 0; index < pointsBohr.length; index += 1) {
+    const [x, y, z] = pointsBohr[index];
     for (let mu = 0; mu < functions.length; mu += 1) {
       let sum = 0;
       for (const primitive of functions[mu]) {
@@ -615,13 +662,7 @@ export function electronDensityAt({ fchk, points } = {}) {
     }
     out[index] = total;
   }
-  return {
-    ok: true,
-    values: out,
-    unit: 'e/bohr^3',
-    densityBlock: density.source,
-    basisFunctions: basis.count,
-  };
+  return out;
 }
 
 /* ── grids ───────────────────────────────────────────────────────── */

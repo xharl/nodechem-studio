@@ -24,6 +24,8 @@
  *     finalEnergy: { hartree, source },
  *     excitedStates: { count, requested, perIrrep, states, source, verified,
  *                      transitionDipoleCount } | absent,
+ *     epr: { status: 'open-shell'|'closed-shell'|'unavailable', populations,
+ *            hyperfine, gTensor } | absent,   // issue 168
  *     extras: { ... },                            // engine-specific evidence
  *     lineCount
  *   }
@@ -88,6 +90,14 @@ export function canonicalResult({
   // that asked for excited states; absent otherwise, so a Gaussian log without a
   // TD section and a Psi4 single point look the same to every consumer.
   excitedStates = null,
+  // Issue 168: the EPR block (spin populations, Fermi-contact couplings, and the
+  // g-tensor refusal). Present whenever an engine reported one — including the
+  // closed-shell case, whose block says "no unpaired electrons" in words. It is
+  // passed through whole rather than field-by-field because a consumer that
+  // reads a population must also be able to read the scheme and the caveat that
+  // qualify it, and a half-copied section is how a table ends up on a card with
+  // no statement of where it came from.
+  epr = null,
   extras = {},
   lineCount = 0,
 } = {}) {
@@ -174,6 +184,7 @@ export function canonicalResult({
         },
       }
       : {}),
+    ...(epr && typeof epr === 'object' && typeof epr.status === 'string' ? { epr } : {}),
     extras: extras && typeof extras === 'object' ? extras : {},
     lineCount: Number.isFinite(lineCount) ? lineCount : 0,
   };

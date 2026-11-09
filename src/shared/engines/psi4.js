@@ -26,6 +26,8 @@
  */
 
 import { canonicalResult, TERMINATION } from './canonical.js';
+import { parseFchk } from '../fchk.js';
+import { eprBlock } from '../epr.js';
 
 export const PSI4_ENGINE_ID = 'psi4';
 
@@ -201,7 +203,24 @@ export const PSI4_CAPABILITIES = Object.freeze({
     'separate dispersion corrections (choose a D3-carrying functional instead)',
     'Gaussian-style checkpoints and routes',
     'frequency gradients for CCSD/CCSD(T)',
+    // Issue 168: named here as well as in the card, so a settings dialog or a
+    // capability listing can refuse it without inventing a g-value.
+    'EPR g-tensor (needs a spin-orbit treatment Psi4 job blocks here have no step for; ORCA is not installed)',
   ]),
+  /**
+   * Issue 168: what this engine can say about an open-shell species.
+   *
+   * `spinPopulations` and `hyperfine` are read from the checkpoint the builder
+   * writes for an open-shell single point; both are density-only and the card
+   * states that. `gTensor` is false with its reason, which is the whole point of
+   * the entry.
+   */
+  epr: Object.freeze({
+    spinPopulations: true,
+    hyperfine: 'density-only (Fermi contact, no core polarisation from correlation beyond the method, no spin-orbit)',
+    gTensor: false,
+    gTensorReason: 'Psi4 has no g-tensor property in the module set this builder writes, and ORCA is not installed',
+  }),
 });
 
 /* ── Settings refusals ────────────────────────────────────── */
@@ -558,6 +577,18 @@ export function buildPsi4Input({
   lines.push('');
 
   const fn = method.fn;
+  // Issue 168: an open-shell single point on a single-reference SCF/DFT method
+  // also writes the checkpoint, because the spin populations and the
+  // Fermi-contact couplings are read from `Spin SCF Density` in that file and
+  // from nothing else. Restricted to a single point on purpose: for an
+  // optimisation the converged density belongs to the last geometry, and Psi4's
+  // `optimize()` does not hand back a wavefunction that can be checked against
+  // the log's final energy. Correlated methods are excluded too — their
+  // `return_wfn` wavefunction is the SCF reference, and a spin density from the
+  // reference presented as the correlated one would be a different calculation
+  // wearing this one's name.
+  const writesSpinCheckpoint = multiplicity > 1 && jobType === 'SP'
+    && (method.kind === 'scf' || method.kind === 'dft');
   if (jobType === 'TD-DFT') {
     // Psi4 splits a scalar request across the point group's irreducible
     // representations, one state per irrep in point-group order, so the number
@@ -574,8 +605,14 @@ export function buildPsi4Input({
     } else {
       lines.push(`energy('td-${fn}')`);
     }
-  } else if (jobType === 'SP') lines.push(`energy('${fn}')`);
-  else if (jobType === 'Opt') lines.push(`optimize('${fn}')`);
+  } else if (jobType === 'SP') {
+    if (writesSpinCheckpoint) {
+      lines.push(`E, wfn = energy('${fn}', return_wfn=True)`);
+      lines.push(`fchk(wfn, '${safeName.replace(/\.dat$/i, '')}.fchk')`);
+    } else {
+      lines.push(`energy('${fn}')`);
+    }
+  } else if (jobType === 'Opt') lines.push(`optimize('${fn}')`);
   else if (jobType === 'Freq') lines.push(`frequencies('${fn}')`);
   else {
     lines.push(`optimize('${fn}')`);
@@ -1011,7 +1048,7 @@ export const PSI4_PARSE_BRANCHES = Object.freeze([
   },
 ]);
 
-export function parsePsi4Output(text, { truncated = false, argv = null, route = null } = {}) {
+export function parsePsi4Output(text, { truncated = false, argv = null, route = null, fchk = null } = {}) {
   // Psi4 on Windows writes CRLF, and several blocks here are matched with
   // whole-text regular expressions that assume `\n`. Parsing a real Windows log
   // without normalising first lost the method and basis (the input-echo regex
@@ -1152,6 +1189,35 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   const charge = geometries[geometries.length - 1]?.charge ?? null;
   const multiplicity = geometries[geometries.length - 1]?.multiplicity ?? null;
 
+  // Issue 168: the EPR block. The log itself carries no spin population and no
+  // spin density, so the numbers come from the checkpoint this run wrote
+  // (`Spin SCF Density`), read here and computed by `epr.js`. `fchk` may arrive
+  // as text or already parsed; a file that fails to parse is reported as the
+  // reason the block is unavailable, never as an empty table. With no
+  // checkpoint at all, a closed-shell job still answers in words — that answer
+  // needs only the multiplicity, and it is the one acceptance criterion a log
+  // alone can settle.
+  let checkpoint = null;
+  let checkpointError = null;
+  if (typeof fchk === 'string' && fchk.trim() !== '') {
+    try {
+      checkpoint = parseFchk(fchk);
+    } catch (error) {
+      checkpointError = String(error?.message ?? error);
+    }
+  } else if (fchk && typeof fchk === 'object') {
+    checkpoint = fchk;
+  }
+  const epr = eprBlock({
+    fchk: checkpoint,
+    level: [reference, echo.method?.label, basisEntry?.label ?? namedBasis].filter(Boolean).join(' ') || null,
+    engine: 'Psi4',
+    multiplicity,
+    unavailableReason: checkpointError
+      ? `the checkpoint beside this run could not be read: ${checkpointError}`
+      : null,
+  });
+
   const result = canonicalResult({
     engine: PSI4_ENGINE_ID,
     program: { name: 'Psi4', version: version.version, revision: version.revision },
@@ -1172,6 +1238,7 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
       attempted: optimization.attempted,
     },
     excitedStates: parsePsi4Excitations(body, lines),
+    epr,
     frequencies: {
       count: frequencies.values.length,
       imaginaryCount: imaginary.length,

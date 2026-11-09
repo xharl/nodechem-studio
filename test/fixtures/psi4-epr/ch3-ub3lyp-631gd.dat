@@ -1,0 +1,20 @@
+# NodeChem Studio — generated Psi4 input
+# CH3 radical, UB3LYP/6-31G*, spin density fixture (issue 168)
+# Every line below is written by the app; edit and re-run at your own risk.
+
+
+molecule {
+0 2
+  C  0.000000  0.000000  0.000000
+  H  0.000000  1.079000  0.000000
+  H  0.932984  -0.539500  0.000000
+  H  -0.932984  -0.539500  0.000000
+}
+
+set basis 6-31G*
+set reference uhf
+set scf_type df
+
+E, wfn = energy('b3lyp', return_wfn=True)
+fchk(wfn, 'ch3-ub3lyp-631gd.fchk')
+

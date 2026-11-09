@@ -477,11 +477,34 @@ export class RunManager {
     }
 
     const outputProvenance = await this.describeOutput(context, outputText);
+    // Issue 168: an open-shell Psi4 single point writes a formatted checkpoint
+    // (`fchk(wfn, …)` in the input, see `buildPsi4Input`), and the spin
+    // populations and Fermi-contact couplings live in that file's `Spin SCF
+    // Density` block — nowhere in the log. Read it here and hand the text to the
+    // parser, and copy it beside `run.json` so the wavefunction view and the
+    // Molden export find it the way they already find a Gaussian checkpoint.
+    // No checkpoint is an ordinary case (a closed-shell job), not an error.
+    let spinCheckpoint = null;
+    if (engine.id === 'psi4') {
+      for (const dir of [scratchDir, runDir]) {
+        if (spinCheckpoint) break;
+        try {
+          const entries = await fsp.readdir(dir);
+          const name = entries.filter((entry) => /\.fchk$/i.test(entry)).sort((a, b) => a.localeCompare(b))[0];
+          if (!name) continue;
+          spinCheckpoint = await fsp.readFile(path.join(dir, name), 'utf8');
+          if (dir === scratchDir) await fsp.copyFile(path.join(dir, name), path.join(runDir, name));
+        } catch {
+          // No readable checkpoint for this run; the parser says so in words.
+        }
+      }
+    }
     const parsed = engine.parse(outputText, {
       truncated: Boolean(context.outputMeta?.truncated),
       byteRange: context.outputMeta?.outputBytes || null,
       argv: Array.isArray(payload.argv) ? payload.argv.map(String) : null,
       route: payload.route || null,
+      ...(spinCheckpoint ? { fchk: spinCheckpoint } : {}),
     });
     // xTB writes the optimised geometry to `xtbopt.xyz` instead of printing it,
     // so a downstream block can only receive a parsed geometry if it is read

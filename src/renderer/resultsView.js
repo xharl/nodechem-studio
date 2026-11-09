@@ -562,6 +562,108 @@ function chargesCard(parsed, flags) {
   return card('Charges & dipole', blocks.join('') + caveatHtml(flags, 'This charge record'), 'is-wide');
 }
 
+/* ── issue 168: spin density / EPR ─────────────────────────── */
+
+/**
+ * The spin-population and Fermi-contact tables, and the g-tensor refusal.
+ *
+ * Every number here comes from `parsed.epr`, which `epr.js` computed from the
+ * run's checkpoint and `parsePsi4Output` put in the canonical result — the card
+ * does no arithmetic of its own beyond formatting, so the card and `run.json`
+ * cannot disagree. The three states are printed as three different things:
+ * an open-shell table, the exact words `no unpaired electrons`, or the reason
+ * the block is unavailable. There is no fourth, empty-table state.
+ */
+function eprCard(parsed, flags) {
+  const epr = isObject(parsed?.epr) ? parsed.epr : null;
+  if (!epr) return '';
+  const gTensor = isObject(epr.gTensor) ? epr.gTensor : null;
+  // The refusal is the same sentence on every card: the engine was asked for
+  // something it cannot produce, so no cell is filled in.
+  const gTensorHtml = `<p class="results-note" data-field="epr-gtensor">`
+    + `<strong>g-tensor</strong> — ${esc(gTensor?.message || 'refused: this engine does not produce one')}</p>`;
+
+  if (epr.status === 'closed-shell') {
+    return card('Spin density / EPR',
+      `<p class="results-note" data-field="epr-state">no unpaired electrons</p>`
+      + '<p class="results-note">A closed-shell wavefunction has no spin density to report, so there is '
+      + 'no population table and no Fermi-contact coupling. The g-tensor is refused separately, below.</p>'
+      + gTensorHtml
+      + caveatHtml(flags, 'The EPR block'),
+      'is-wide');
+  }
+
+  if (epr.status !== 'open-shell') {
+    return card('Spin density / EPR',
+      `<p class="results-missing" data-field="epr-state">not available — ${esc(epr.reason || 'unknown reason')}</p>`
+      + gTensorHtml
+      + caveatHtml(flags, 'The EPR block'),
+      'is-wide');
+  }
+
+  const populations = Array.isArray(epr.populations) ? epr.populations : [];
+  const populationRows = populations.map((row) => '<tr>'
+    + `<td>${integerText(row.atom) ?? missingHtml()}</td>`
+    + `<td>${valueOrMissing(row.element)}</td>`
+    + `<td class="num">${finite(row.mulliken) === null ? missingHtml() : esc(row.mulliken.toFixed(4))}</td>`
+    + `<td class="num">${finite(row.lowdin) === null ? missingHtml() : esc(row.lowdin.toFixed(4))}</td>`
+    + '</tr>').join('');
+  const populationTable = '<div class="results-charge-block">'
+    + '<h5 class="results-charge-title">Spin populations<span>electrons (alpha − beta)</span></h5>'
+    + '<table class="results-table results-charge-table" data-field="epr-population-table"><thead>'
+    + '<tr><th>Atom</th><th>El</th><th class="num">Mulliken</th><th class="num">Löwdin</th></tr></thead>'
+    + `<tbody>${populationRows}</tbody></table></div>`;
+
+  const hyperfine = Array.isArray(epr.hyperfine) ? epr.hyperfine : [];
+  const hyperfineRows = hyperfine.map((row) => {
+    const reported = row.status === 'reported';
+    const isotope = reported ? `${esc(row.element)}-${esc(String(row.massNumber))}` : valueOrMissing(row.element);
+    // A rare isotope is named as such: the same spin density with a different
+    // g_N is a real coupling for that nucleus, and calling it plain "C" would
+    // read as a coupling of the natural (spin-zero) carbon.
+    const isotopeNote = reported && row.naturalIsotope === false ? ' <span class="sub">(not the natural isotope)</span>' : '';
+    return '<tr>'
+      + `<td>${integerText(row.atom) ?? missingHtml()}</td>`
+      + `<td>${isotope}${isotopeNote}</td>`
+      + `<td class="num">${reported && finite(row.aIsoMhz) !== null ? esc(row.aIsoMhz.toFixed(2)) : missingHtml()}</td>`
+      + `<td class="num">${reported && finite(row.aIsoGauss) !== null ? esc(row.aIsoGauss.toFixed(2)) : missingHtml()}</td>`
+      + `<td>${reported ? '' : esc(row.note || row.status || '')}</td>`
+      + '</tr>';
+  }).join('');
+  const hyperfineTable = '<div class="results-charge-block">'
+    + '<h5 class="results-charge-title">Fermi-contact coupling'
+    + '<span>MHz · gauss</span></h5>'
+    + '<table class="results-table results-charge-table" data-field="epr-hyperfine-table"><thead>'
+    + '<tr><th>Atom</th><th>Isotope</th><th class="num">A<sub>iso</sub> / MHz</th>'
+    + '<th class="num">A<sub>iso</sub> / G</th><th>Note</th></tr></thead>'
+    + `<tbody>${hyperfineRows}</tbody></table></div>`;
+
+  const rows = [
+    fieldValue('Electrons', `${esc(String(epr.electrons?.alpha ?? '?'))} alpha, `
+      + `${esc(String(epr.electrons?.beta ?? '?'))} beta — `
+      + `<strong>${esc(String(epr.electrons?.unpaired ?? '?'))} unpaired</strong>`, 'epr-electrons'),
+    fieldValue('Level', valueOrMissing(epr.level), 'epr-level'),
+    fieldValue('Populations from', valueOrMissing(epr.scheme ?? epr.provenance?.spinDensityBlock), 'epr-scheme'),
+    fieldValue('Population sum',
+      finite(epr.populationSum) === null ? missingHtml()
+        : `${esc(epr.populationSum.toFixed(6))} <span class="results-unit">electrons</span>`
+          + ` (n<sub>alpha</sub> − n<sub>beta</sub> = ${esc(String(epr.electrons?.unpaired ?? '?'))})`,
+      'epr-population-sum'),
+  ];
+
+  return card('Spin density / EPR',
+    kv(rows)
+    + populationTable
+    + hyperfineTable
+    + `<p class="results-note" data-field="epr-hyperfine-method">${esc(epr.hyperfineMethod
+      || 'Fermi contact from the spin density at each nucleus')}.</p>`
+    + `<p class="results-note" data-field="epr-hyperfine-caveat">${esc(epr.hyperfineCaveat
+      || 'Density-only estimate: no core polarisation beyond this density, no spin-orbit term.')}</p>`
+    + gTensorHtml
+    + caveatHtml(flags, 'The EPR block'),
+    'is-wide');
+}
+
 function t1Card(parsed, flags) {
   const t1 = finite(parsed?.t1Diagnostic);
   const body = t1 === null
@@ -2021,6 +2123,7 @@ export function resultsPanelHtml(record, options = {}) {
       vcdCard(parsed, flags),
       ecdCard(parsed, flags),
       chargesCard(parsed, flags),
+      eprCard(parsed, flags),
       sensitivityCard(record),
       t1Card(parsed, flags),
       resourcesCard(parsed, flags),

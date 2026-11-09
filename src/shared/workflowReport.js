@@ -667,6 +667,20 @@ export function buildWorkflowReport(queue, records = {}, {
       title: row.title,
       ...row.imported,
     })),
+    // Issue 168: one entry per run that recorded an EPR block — spin
+    // populations, Fermi-contact couplings, and the g-tensor refusal. Read from
+    // `run.json`'s `parsed.epr`, so the report prints the numbers the run
+    // recorded rather than recomputing them from a log that does not carry them.
+    epr: tasks.map((task) => {
+      const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+      const block = record && record.parsed && typeof record.parsed.epr === 'object' ? record.parsed.epr : null;
+      if (!block) return null;
+      return {
+        nodeId: text(task?.nodeId),
+        title: text(record.title) || text(task?.title) || text(task?.nodeId),
+        epr: block,
+      };
+    }).filter(Boolean),
     // Issue 175: one entry per compute block, with the expression it evaluated,
     // the upstream values it read and — when a field was missing — the refusal
     // that names the field. A derived value is not a calculation result, so it
@@ -1260,6 +1274,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + ladderBlocks
     + conformerBlocks
     + spinBlocks
+    + eprSectionHtml(model.epr, sectionHeading)
     + reactionBlocks
     + derivedBlocks
     + importedBlocks
@@ -1267,6 +1282,75 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'
     + '<tbody>' + provenanceRows + '</tbody></table>';
+}
+
+/**
+ * The EPR section (issue 168): per-run spin populations and Fermi-contact
+ * couplings, in the units the numbers are in, with the level of theory and the
+ * density-only caveat printed beside them. A closed-shell run prints the words
+ * `no unpaired electrons`; a run whose block is unavailable prints the reason.
+ * An empty table is never rendered — that is the shape this section exists to
+ * avoid.
+ */
+function eprSectionHtml(entries, headingTag = 'h2') {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const blocks = entries.map((entry) => {
+    const epr = entry.epr || {};
+    const title = `<h4 data-field="epr-entry">${escapeHtml(entry.title || entry.nodeId || MISSING)}</h4>`;
+    const gTensor = epr.gTensor && typeof epr.gTensor === 'object'
+      ? `<p class="meta" data-field="epr-gtensor">g-tensor: ${escapeHtml(epr.gTensor.message || epr.gTensor.status || MISSING)}</p>`
+      : '';
+    if (epr.status === 'closed-shell') {
+      return title
+        + `<p class="ok" data-field="epr-state">no unpaired electrons</p>`
+        + gTensor;
+    }
+    if (epr.status !== 'open-shell') {
+      return title
+        + `<p class="warn" data-field="epr-state">EPR not available — ${escapeHtml(epr.reason || 'unknown reason')}</p>`
+        + gTensor;
+    }
+    const populations = Array.isArray(epr.populations) ? epr.populations : [];
+    const populationRows = populations.map((row) => '<tr>'
+      + `<td>${escapeHtml(String(row.atom ?? MISSING))}</td>`
+      + `<td>${escapeHtml(row.element ?? MISSING)}</td>`
+      + `<td class="num">${escapeHtml(value(row.mulliken, 4))}</td>`
+      + `<td class="num">${escapeHtml(value(row.lowdin, 4))}</td>`
+      + '</tr>').join('');
+    const populationTable = '<table data-field="epr-populations"><thead><tr><th>Atom</th><th>Element</th>'
+      + '<th class="num">Mulliken / e</th><th class="num">Löwdin / e</th></tr></thead>'
+      + `<tbody>${populationRows}</tbody></table>`;
+    const hyperfine = Array.isArray(epr.hyperfine) ? epr.hyperfine : [];
+    const hyperfineRows = hyperfine.map((row) => {
+      const reported = row.status === 'reported';
+      return '<tr>'
+        + `<td>${escapeHtml(String(row.atom ?? MISSING))}</td>`
+        + `<td>${escapeHtml(reported ? `${row.element}-${row.massNumber}` : (row.element ?? MISSING))}</td>`
+        + `<td class="num">${escapeHtml(reported ? value(row.aIsoMhz, 2) : MISSING)}</td>`
+        + `<td class="num">${escapeHtml(reported ? value(row.aIsoGauss, 2) : MISSING)}</td>`
+        + `<td>${escapeHtml(reported ? '' : (row.note || row.status || ''))}</td>`
+        + '</tr>';
+    }).join('');
+    const hyperfineTable = '<table data-field="epr-hyperfine"><thead><tr><th>Atom</th><th>Isotope</th>'
+      + '<th class="num">A_iso / MHz</th><th class="num">A_iso / gauss</th><th>Note</th></tr></thead>'
+      + `<tbody>${hyperfineRows}</tbody></table>`;
+    const sum = Number.isFinite(epr.populationSum) ? epr.populationSum.toFixed(6) : MISSING;
+    return title
+      + `<p class="meta" data-field="epr-level">${escapeHtml(epr.level || MISSING)} · `
+      + `${escapeHtml(String(epr.electrons?.alpha ?? '?'))} alpha, ${escapeHtml(String(epr.electrons?.beta ?? '?'))} beta, `
+      + `${escapeHtml(String(epr.electrons?.unpaired ?? '?'))} unpaired · populations from `
+      + `${escapeHtml(epr.provenance?.spinDensityBlock || MISSING)}, sum ${escapeHtml(sum)} electrons `
+      + `(n_alpha − n_beta)</p>`
+      + populationTable
+      + hyperfineTable
+      + `<p class="note" data-field="epr-hyperfine-method">${escapeHtml(epr.hyperfineMethod || MISSING)}</p>`
+      + `<p class="meta" data-field="epr-hyperfine-caveat">${escapeHtml(epr.hyperfineCaveat || MISSING)}</p>`
+      + gTensor;
+  }).join('');
+  return `<${headingTag}>Spin density / EPR</${headingTag}>`
+    + '<p class="note">Spin populations are in electrons (alpha − beta), Fermi-contact couplings in MHz and in '
+    + 'gauss, both from the spin density the run recorded.</p>'
+    + blocks;
 }
 
 /**

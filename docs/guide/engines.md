@@ -472,6 +472,13 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
   excited surface in this build — as is a Root above 1.
 - **SAPT0** on a dimer, with the interaction energy split into electrostatics, exchange, induction
   and dispersion.
+- **Spin populations and Fermi-contact hyperfine couplings** for an open-shell single point (issue
+  168). The builder writes `E, wfn = energy('…', return_wfn=True)` and `fchk(wfn, '<task>.fchk')`, so
+  the run leaves a checkpoint beside its log; the parser reads that file's `Spin SCF Density` block and
+  computes Mulliken and Löwdin populations and the Fermi contact at each nucleus, in MHz and gauss.
+  Both are **density-only** — the card and `docs/guide/results.md` state what that omits. A closed-shell
+  job prints `no unpaired electrons`. The **g-tensor is refused by name**: Psi4 has no such property in
+  the modules this builder writes, and ORCA is not installed.
 
 **Which energy is reported.** A correlated Psi4 job prints several totals in the same log, and the
 result is the one the job asked for: the `CCSD(T)` total when that is the method, else the `CCSD`
@@ -495,7 +502,9 @@ What a Psi4 block will **not** do in this build, each refused by name rather tha
 - **Frequencies at CCSD/CCSD(T)** — Psi4 has no analytic Hessian there; run the frequency at DFT
   or MP2 level.
 - **Checkpoint hand-off** — Psi4 leaves no restart file this app can hand to another block; a
-  downstream block reads the upstream geometry instead.
+  downstream block reads the upstream geometry instead. The `.fchk` an open-shell single point writes
+  for the EPR block is read by this run's parser and kept with its `run.json`; it is not a restart
+  file and is not passed to another block.
 
 Two things the parser does deliberately, because a Psi4 log can mislead:
 

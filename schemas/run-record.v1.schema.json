@@ -471,6 +471,66 @@
             "source": { "type": ["string", "null"] }
           }
         },
+        "epr": {
+          "description": "Issue 168: spin populations, Fermi-contact couplings and the g-tensor refusal, computed from the run's spin density. Absent for engines that report none.",
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["status"],
+          "properties": {
+            "status": { "type": "string", "enum": ["open-shell", "closed-shell", "unavailable"] },
+            "message": { "type": "string" },
+            "reason": { "type": "string" },
+            "level": { "type": ["string", "null"] },
+            "electrons": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "alpha": { "type": ["integer", "null"] },
+                "beta": { "type": ["integer", "null"] },
+                "unpaired": { "type": ["integer", "null"] }
+              }
+            },
+            "populations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "atom": { "type": "integer" },
+                  "element": { "type": ["string", "null"] },
+                  "mulliken": { "type": "number" },
+                  "lowdin": { "type": "number" }
+                }
+              }
+            },
+            "populationSum": { "type": "number" },
+            "hyperfine": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "atom": { "type": "integer" },
+                  "element": { "type": ["string", "null"] },
+                  "status": { "type": "string" },
+                  "massNumber": { "type": "integer" },
+                  "aIsoMhz": { "type": ["number", "null"] },
+                  "aIsoGauss": { "type": ["number", "null"] }
+                }
+              }
+            },
+            "gTensor": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["status"],
+              "properties": {
+                "status": { "type": "string", "enum": ["refused"] },
+                "engine": { "type": "string" },
+                "message": { "type": "string" }
+              }
+            }
+          }
+        },
         "extras": { "type": "object", "additionalProperties": true },
         "lineCount": { "type": "integer" }
       }
