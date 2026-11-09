@@ -31,6 +31,39 @@ truncated to 60 characters — `"Réaction de Diels–Alder"` becomes `reaction-
 
 The normative definition of the document is [`docs/PROJECT-FORMAT.md`](../PROJECT-FORMAT.md).
 
+## The project menu and recent projects
+
+The project name in the top bar opens a menu for the project that is open:
+
+- **Rename project…** changes the name stored in the `.ncs` file; the file name is untouched.
+- **Reveal in file manager** shows the saved file. It is disabled until the project has a path.
+- **Close project** replaces the open graph with a clean blank project in memory.
+- **Open project…** is the same dialog as the one in the application menu.
+- **Recent projects** lists the last ten `.ncs` files, newest first. Each row shows the project
+  name, its parent folder, the engines its blocks use (`xTB · Psi4 · CREST`) and the file's modified
+  date. Selecting a row opens it exactly as **Open project…** does.
+- **Clear recent list** forgets every entry.
+
+Opening a project when the current one has unsaved changes asks first, with the same prompt as
+starting from a template: Keep editing leaves the open project alone, Discard continues.
+
+The list lives beside the rest of the app's state:
+
+```
+<userData>/recent-projects.json
+```
+
+It is a list of paths and nothing else — no project content, no runs, no settings — written by the
+main process every time a project is successfully opened or saved. Paths are canonicalised
+(`realpath`) so the same file opened through a symlink or a different spelling appears once, and the
+list is capped at ten with the newest first. It is not a backup: deleting it only forgets the list.
+
+A recorded file that has since been moved or deleted is **not** pruned silently. It stays in the
+menu, disabled, tagged `Missing`, with a **Remove** action — so a project that disappeared from a
+mounted drive is visible rather than quietly vanishing. Name and engine columns are re-read from the
+file when the menu opens; when it cannot be read, the values captured when it was last opened are
+shown instead.
+
 ## Run folders
 
 Every run gets its own immutable folder:

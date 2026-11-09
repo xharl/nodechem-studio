@@ -60,10 +60,13 @@
 
     <div class="project-block">
       <span class="eyebrow">Project</span>
-      <button class="project-name" data-action="project-menu" aria-haspopup="true">
-        <span id="project-name-text">Diels–Alder TS verification</span>
-        <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-      </button>
+      <div style="position:relative;min-width:0">
+        <button class="project-name" id="project-menu-btn" data-action="toggle-project-menu" aria-haspopup="true" aria-expanded="false" aria-controls="project-menu">
+          <span id="project-name-text">Diels–Alder TS verification</span>
+          <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true"><path d="m3 4.5 3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+        <div class="top-overflow project-menu" id="project-menu" hidden role="menu" aria-labelledby="project-menu-btn" style="left:0;right:auto;top:34px;width:min(360px,calc(100vw - 32px));max-height:calc(100vh - 88px);overflow-y:auto"></div>
+      </div>
       <span class="save-pill is-dirty" id="save-pill"><i class="dot"></i> unsaved changes</span>
     </div>
 

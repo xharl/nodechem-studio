@@ -64,6 +64,7 @@ import {
   isConformerGroupId,
 } from '../shared/conformers.js';
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
+import { engineSummary, formatRecentModified } from '../shared/recentProjects.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import { buildOrcaInput } from '../shared/engines/orca.js';
 import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../shared/engines/psi4.js';
@@ -3594,6 +3595,16 @@ function renderDrawer() {
     renderBatchImport();
     return;
   }
+  if (drawer.type === 'replace-confirm') {
+    renderReplaceConfirm();
+    placeModal();
+    return;
+  }
+  if (drawer.type === 'rename-project') {
+    renderRenameProject();
+    placeModal();
+    return;
+  }
   const draft = drawer.draft;
   const drawerDatasets = projectDatasetRecords();
   const tabs = drawer.type === 'settings'
@@ -5275,12 +5286,63 @@ async function openProjectPath(filePath) {
 
 async function openProject() {
   if (!desktop) { toast('Open the Electron app to use native project files.'); return; }
-  try {
-    const result = await desktop.openProject();
-    applyOpenedProject(result);
-  } catch (error) {
-    toast(`Could not open project: ${error.message}`);
+  closeProjectMenu();
+  // issue 149: the same unsaved-changes prompt guards every path that swaps the
+  // project in memory, so Open project… and a recent entry cannot lose work.
+  requestProjectReplacement(async () => {
+    try {
+      const result = await desktop.openProject();
+      applyOpenedProject(result);
+    } catch (error) {
+      toast(`Could not open project: ${error.message}`);
+    }
+  });
+}
+
+/** Open a recorded recent path; main refuses anything that is not in its list. */
+async function openRecentProject(filePath) {
+  if (!desktop?.openRecentProject) {
+    toast('Open the Electron app to use recent projects.');
+    return;
   }
+  closeProjectMenu();
+  requestProjectReplacement(async () => {
+    try {
+      const result = await desktop.openRecentProject(filePath);
+      if (result?.canceled) return;
+      if (result?.error) {
+        toast(`Could not open project: ${result.error.message}`);
+        return;
+      }
+      applyOpenedProject(result);
+    } catch (error) {
+      toast(`Could not open project: ${error.message}`);
+    }
+  });
+}
+
+/**
+ * Ask before a menu action replaces the project in memory. `run` is held on the
+ * drawer (like the template chooser's step) so the confirm button can resume
+ * exactly the action the user chose.
+ */
+function requestProjectReplacement(run) {
+  if (typeof run !== 'function') return;
+  if (!hasUnsavedChanges()) {
+    run();
+    return;
+  }
+  state.drawer = {
+    type: 'replace-confirm',
+    run,
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  };
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  renderDrawer();
+  requestAnimationFrame(() => {
+    $('#modal')?.querySelector('[data-action="confirm-replace"]')?.focus();
+  });
 }
 
 /* ── New project from a template ──────────────────────────── */
@@ -5432,6 +5494,62 @@ function renderBatchImport() {
     <div class="modal-foot">
       <div class="modal-note">${esc(summary)}</div>
       <button type="button" class="btn" data-modal-close>Close</button>
+    </div>`;
+}
+
+/**
+ * The unsaved-changes prompt for actions that replace the open project (issue 149).
+ * Same modal shell and same wording as the template chooser's confirm step; the
+ * pending action is resumed only after the user chooses Discard.
+ */
+function renderReplaceConfirm() {
+  const modal = $('#modal');
+  if (!modal || state.drawer?.type !== 'replace-confirm') return;
+  const current = state.project?.name || 'Untitled project';
+  modal.innerHTML = `
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">Unsaved changes</span>
+        <h2 id="modal-title">Discard unsaved changes?</h2>
+        <p>Continuing replaces the graph that is open now.</p>
+      </div>
+      <button type="button" class="icon-btn" data-modal-close aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="callout red"><strong>“${esc(current)}” has unsaved changes.</strong> The project is replaced in memory, and the app keeps no undo copy of it.</div>
+      <p class="inspector-note" style="margin-top:10px">Save the project first if you want to keep it. Cancel here leaves this project exactly as it is.</p>
+    </div>
+    <div class="modal-foot">
+      <div class="modal-note">Nothing is written or closed until you choose.</div>
+      <button type="button" class="btn" data-modal-close>Keep editing</button>
+      <button type="button" class="btn primary" data-action="confirm-replace">Discard and continue</button>
+    </div>`;
+}
+
+/** Rename is a project field, not a file rename: the next Save writes the name. */
+function renderRenameProject() {
+  const modal = $('#modal');
+  if (!modal || state.drawer?.type !== 'rename-project') return;
+  const name = state.drawer.draft?.name || '';
+  modal.innerHTML = `
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">Project</span>
+        <h2 id="modal-title">Rename project</h2>
+        <p>The name is stored inside the <code>.ncs</code> file. The file name does not change.</p>
+      </div>
+      <button type="button" class="icon-btn" data-modal-close aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-section">
+        <label class="section-label" for="project-name-input">Project name</label>
+        <input class="input" id="project-name-input" data-drawer-field="name" value="${esc(name)}" maxlength="120" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <div class="modal-note">The graph and file path are unchanged.</div>
+      <button type="button" class="btn" data-modal-close>Cancel</button>
+      <button type="button" class="btn primary" data-action="save-project-name">Rename</button>
     </div>`;
 }
 
@@ -5870,6 +5988,253 @@ function closeExportMenu() {
   syncMenuButton('#export-menu-btn', false);
 }
 
+/* ── Project menu and recent projects (issue 149) ────────────────
+ * The project name was already drawn as a menu trigger (`aria-haspopup`), but
+ * its handler was a toast. This is the real menu: current-project actions, Open
+ * project…, the last ten projects main recorded, and Clear recent list.
+ */
+
+let projectMenuLoad = 0;
+
+function recentProjectRow(entry) {
+  const name = entry.name || 'Untitled project';
+  const missing = entry.missing === true;
+  // Name, parent folder, engine summary and modified label all come from the
+  // file/main's stat — never from this menu's assumptions.
+  const meta = [
+    entry.folder || 'Folder not recorded',
+    entry.engineSummary || engineSummary(entry.engines),
+    entry.modifiedLabel || formatRecentModified(entry.modifiedAt, Date.now()),
+    missing ? 'not on disk' : '',
+  ].filter(Boolean).join(' · ');
+  const row = `<button type="button" class="overflow-item" role="menuitem" style="display:block;width:100%;min-width:0;text-align:left"${missing
+    ? ' disabled aria-disabled="true"'
+    : ` data-action="open-recent" data-recent-path="${esc(entry.path)}"`} title="${esc(entry.path)}">
+      <span style="display:flex;align-items:baseline;gap:6px;min-width:0">
+        <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name)}</span>
+        ${missing ? '<span class="status-pill review">Missing</span>' : ''}
+      </span>
+      <span style="display:block;color:var(--text-tertiary);font-size:var(--text-size-xs);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(meta)}</span>
+    </button>`;
+  if (!missing) return row;
+  // A missing entry is visible but not openable; Remove is a separate menu item
+  // so the disabled row is not the only thing the user can act on.
+  return `<div role="none" style="display:flex;gap:2px;align-items:stretch">
+    <div role="none" style="flex:1;min-width:0">${row}</div>
+    <button type="button" class="overflow-item" role="menuitem" data-action="forget-recent" data-recent-path="${esc(entry.path)}" style="flex:0 0 auto" title="Remove this missing project from the list" aria-label="Remove ${esc(name)} from the recent list">Remove</button>
+  </div>`;
+}
+
+function projectMenuHtml(entries, { loading = false, error = '' } = {}) {
+  const rows = Array.isArray(entries) ? entries : [];
+  let recentBody;
+  if (loading) recentBody = '<div class="overflow-note">Loading recent projects…</div>';
+  else if (error) recentBody = `<div class="overflow-note">${esc(error)}</div>`;
+  else if (!desktop?.recentProjects) recentBody = '<div class="overflow-note">Recent projects are available in the desktop app.</div>';
+  else if (!rows.length) recentBody = '<div class="overflow-note">No recent projects. Open a <code>.ncs</code> file to start the list.</div>';
+  else recentBody = rows.map(recentProjectRow).join('');
+
+  const projectTitle = state.project?.name || 'Untitled project';
+  return `
+    <div class="overflow-note" role="presentation" style="padding-bottom:2px"><strong style="color:var(--text-secondary)">Current project</strong><br>${esc(projectTitle)}${state.projectPath ? `<br><span style="overflow-wrap:anywhere">${esc(state.projectPath)}</span>` : ' · not saved yet'}</div>
+    <button type="button" class="overflow-item" role="menuitem" data-action="rename-project">Rename project…</button>
+    <button type="button" class="overflow-item" role="menuitem" data-action="reveal-project"${state.projectPath ? '' : ' disabled'} title="${state.projectPath ? 'Show the project file in the file manager' : 'Save the project first'}">Reveal in file manager</button>
+    <button type="button" class="overflow-item" role="menuitem" data-action="close-project">Close project</button>
+    <div class="overflow-split" aria-hidden="true"></div>
+    <button type="button" class="overflow-item" role="menuitem" data-action="open-project">Open project…</button>
+    <div class="overflow-split" aria-hidden="true"></div>
+    <div class="overflow-note" role="presentation" style="padding-bottom:2px"><strong style="color:var(--text-secondary)">Recent projects</strong></div>
+    ${recentBody}
+    <div class="overflow-split" aria-hidden="true"></div>
+    <button type="button" class="overflow-item" role="menuitem" data-action="clear-recent"${rows.length ? '' : ' disabled'}>Clear recent list</button>`;
+}
+
+function focusFirstProjectMenuItem() {
+  const menu = $('#project-menu');
+  if (!menu || menu.hidden) return;
+  const first = menu.querySelector('[role="menuitem"]:not([disabled])');
+  first?.focus();
+}
+
+function closeProjectMenu({ focus = false } = {}) {
+  const menu = $('#project-menu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  syncMenuButton('#project-menu-btn', false);
+  if (focus) $('#project-menu-btn')?.focus();
+}
+
+async function toggleProjectMenu() {
+  const menu = $('#project-menu');
+  if (!menu) return;
+  const opening = menu.hidden;
+  closeAppMenu();
+  closeExportMenu();
+  if (!opening) {
+    closeProjectMenu();
+    return;
+  }
+  const load = ++projectMenuLoad;
+  menu.innerHTML = projectMenuHtml([], { loading: Boolean(desktop?.recentProjects) });
+  menu.hidden = false;
+  syncMenuButton('#project-menu-btn', true);
+  focusFirstProjectMenuItem();
+  if (!desktop?.recentProjects) return;
+  try {
+    const result = await desktop.recentProjects();
+    // The user may have closed the menu while the list was being read.
+    if (load !== projectMenuLoad || menu.hidden) return;
+    menu.innerHTML = projectMenuHtml(result?.entries, {});
+    focusFirstProjectMenuItem();
+  } catch (error) {
+    if (load !== projectMenuLoad || menu.hidden) return;
+    menu.innerHTML = projectMenuHtml([], { error: `Could not read the recent list: ${error.message}` });
+    focusFirstProjectMenuItem();
+  }
+}
+
+/** Re-render an open menu after Forget/Clear, keeping focus inside it. */
+async function refreshProjectMenu() {
+  const menu = $('#project-menu');
+  if (!menu || menu.hidden || !desktop?.recentProjects) return;
+  try {
+    const result = await desktop.recentProjects();
+    if (menu.hidden) return;
+    menu.innerHTML = projectMenuHtml(result?.entries, {});
+    focusFirstProjectMenuItem();
+  } catch {
+    // The project actions still work; only the list is unavailable.
+  }
+}
+
+/** ↓/↑ move, Home/End jump, Esc closes and returns focus to the trigger. */
+function onProjectMenuKeydown(event) {
+  const menu = event.currentTarget;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeProjectMenu({ focus: true });
+    return;
+  }
+  if (event.key === 'Tab') {
+    closeProjectMenu();
+    return;
+  }
+  const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
+  if (!keys.includes(event.key)) return;
+  const items = [...menu.querySelectorAll('[role="menuitem"]:not([disabled])')];
+  if (!items.length) return;
+  event.preventDefault();
+  const index = items.indexOf(document.activeElement);
+  let next;
+  if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = items.length - 1;
+  else if (index < 0) next = event.key === 'ArrowDown' ? 0 : items.length - 1;
+  else next = (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+  items[next].focus();
+}
+
+function setProjectNameLabel() {
+  const name = $('#project-name-text');
+  if (name) name.textContent = state.project?.name || 'Untitled project';
+}
+
+function openProjectRename() {
+  closeProjectMenu();
+  state.drawer = {
+    type: 'rename-project',
+    draft: { name: state.project?.name || '' },
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  };
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  renderDrawer();
+  requestAnimationFrame(() => {
+    const input = $('#project-name-input');
+    input?.focus();
+    input?.select?.();
+  });
+}
+
+function saveProjectName() {
+  const input = $('#project-name-input');
+  const value = String(input?.value || '').trim();
+  if (!value) {
+    toast('Enter a project name.');
+    input?.focus();
+    return;
+  }
+  closeDrawer();
+  state.project.name = value;
+  setProjectNameLabel();
+  refreshDirty();
+  renderInspector();
+  toast('Project renamed. Save to write the new name to the file.');
+}
+
+/** Close the current project: the canvas returns to a clean blank project. */
+function closeProject() {
+  closeProjectMenu();
+  requestProjectReplacement(() => {
+    state.project = blankProject();
+    state.selected = { type: 'project', id: null };
+    state.connecting = null;
+    state.keyboardConnect = null;
+    state.paletteOpen = false;
+    state.history = null;
+    markProjectSaved(null);
+    clearDraft();
+    setProjectNameLabel();
+    state.statusMessage = 'Project closed · blank project in memory';
+    renderGraph();
+    renderInspector();
+    updateCounts();
+    updateRunConsoleCopy();
+    syncMaxParallelInput();
+    toast('Project closed. The canvas now holds a blank project.');
+  });
+}
+
+async function revealProjectInFileManager() {
+  closeProjectMenu();
+  if (!state.projectPath) {
+    toast('Save the project first: there is no file to show yet.');
+    return;
+  }
+  if (!desktop?.revealProject) {
+    toast('Open the Electron app to show the project file.');
+    return;
+  }
+  try {
+    const result = await desktop.revealProject(state.projectPath);
+    if (!result?.ok) toast(result?.error?.message || 'Could not show the project file.');
+  } catch (error) {
+    toast(`Could not show the project file: ${error.message}`);
+  }
+}
+
+async function forgetRecentProject(filePath) {
+  if (!desktop?.forgetRecentProject) return;
+  try {
+    await desktop.forgetRecentProject(filePath);
+    await refreshProjectMenu();
+    toast('Removed from the recent list.');
+  } catch (error) {
+    toast(`Could not update the recent list: ${error.message}`);
+  }
+}
+
+async function clearRecentProjects() {
+  if (!desktop?.clearRecentProjects) return;
+  try {
+    await desktop.clearRecentProjects();
+    await refreshProjectMenu();
+    toast('Recent projects cleared.');
+  } catch (error) {
+    toast(`Could not clear the recent list: ${error.message}`);
+  }
+}
+
 /**
  * The application menu (File/Edit/Help equivalents) hangs off the brand mark.
  * Undo/redo are mirrored from the toolbar state so a disabled command does not
@@ -5880,6 +6245,7 @@ function toggleAppMenu() {
   if (!menu) return;
   const opening = menu.hidden;
   closeExportMenu();
+  closeProjectMenu();
   if (!opening) {
     closeAppMenu();
     return;
@@ -5945,6 +6311,7 @@ async function toggleExportMenu() {
   if (!menu) return;
   const opening = menu.hidden;
   closeAppMenu();
+  closeProjectMenu();
   if (!opening) {
     closeExportMenu();
     return;
@@ -6087,7 +6454,21 @@ function handleAction(action, element) {
     case 'import-log': openBatchImport(); break;
     case 'import-log-directory': openBatchImport(); break;
     case 'view-output': openRunConsole(); break;
-    case 'project-menu': toast('Use Open or Save in the top bar for native project files.'); break;
+    case 'project-menu': toggleProjectMenu(); break;
+    case 'toggle-project-menu': toggleProjectMenu(); break;
+    case 'rename-project': openProjectRename(); break;
+    case 'save-project-name': saveProjectName(); break;
+    case 'reveal-project': revealProjectInFileManager(); break;
+    case 'close-project': closeProject(); break;
+    case 'open-recent': openRecentProject(element.dataset.recentPath); break;
+    case 'forget-recent': forgetRecentProject(element.dataset.recentPath); break;
+    case 'clear-recent': clearRecentProjects(); break;
+    case 'confirm-replace': {
+      const run = state.drawer?.run;
+      closeDrawer();
+      if (typeof run === 'function') run();
+      break;
+    }
     case 'about': toast(`NodeChem Studio — the graph is the workspace. The inspector exposes the full job parameter set; the local runner executes one selected block or the whole workflow queue${appVersion ? ` (v${appVersion})` : ''}.`); break;
     default: break;
   }
@@ -6106,6 +6487,11 @@ function onDocumentClick(event) {
     if (!event.target.closest('.brand-wrap')) closeAppMenu();
     if (!event.target.closest('.export-wrap')) closeExportMenu();
   }
+  // The project menu sits in its own wrapper, so it is closed independently of
+  // the brand and export dropdowns. A click on its chrome (a heading) keeps it
+  // open; a command or an outside click closes it.
+  if (actionEl?.closest('#project-menu')) closeProjectMenu();
+  else if (!event.target.closest('#project-menu, #project-menu-btn')) closeProjectMenu();
 
   const nodeButton = event.target.closest('[data-select-node]');
   if (nodeButton) selectNode(nodeButton.dataset.selectNode);
@@ -6612,6 +6998,7 @@ function wireEvents() {
       if (state.renamingFlowId) { cancelFlowRename(); return; }
       if (state.confirmDeleteFlowId) { cancelDeleteFlow(); return; }
       if (state.drawer) { closeDrawer(); return; }
+      if (!$('#project-menu')?.hidden) { closeProjectMenu({ focus: true }); return; }
       if (!$('#app-menu')?.hidden) { closeAppMenu(); return; }
       if (!$('#export-menu')?.hidden) { closeExportMenu(); return; }
       if (state.paletteOpen) { togglePalette(false); return; }
@@ -6706,6 +7093,9 @@ function wireEvents() {
   backdrop?.addEventListener('pointerdown', (event) => {
     if (event.target === backdrop) closeDrawer();
   });
+
+  // issue 149: the project menu's keyboard contract (↓/↑/Home/End/Esc).
+  $('#project-menu')?.addEventListener('keydown', onProjectMenuKeydown);
 }
 
 /* ── Boot ─────────────────────────────────────────────────── */
