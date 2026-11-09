@@ -16,7 +16,7 @@ import { terminationCodeOf } from './engines/canonical.js';
 import { dispersionSupport } from './dispersion.js';
 import { ELEMENTS } from './elements.js';
 import { parseIrcSummary, parseScanSummary } from './reactionPath.js';
-import { parseShieldings } from './nmr.js';
+import { couplingSummary, parseCouplings, parseShieldings } from './nmr.js';
 import { animatableModes, parseNormalModes } from './normalModes.js';
 import { attachRaman, parseRamanActivities } from './raman.js';
 import { attachVcd, parseVcdStrengths } from './vcd.js';
@@ -1422,9 +1422,15 @@ export const GAUSSIAN_PARSE_BRANCHES = Object.freeze([
   },
   {
     id: 'nmr',
-    line: '`GIAO Magnetic shielding tensor (ppm)` / `Total nuclear spin-spin coupling J (Hz)`',
+    line: '`GIAO Magnetic shielding tensor (ppm)`',
     versions: ['09'],
     taken: (parsed) => parsed.nmr !== null && parsed.nmr !== undefined,
+  },
+  {
+    id: 'nmr-couplings',
+    line: '`Total nuclear spin-spin coupling K (Hz)` and `Total nuclear spin-spin coupling J (Hz)`',
+    versions: ['09'],
+    taken: (parsed) => Boolean(parsed.nmr?.couplings?.matrix || parsed.nmr?.couplings?.kMatrix),
   },
   {
     id: 'raman',
@@ -1585,6 +1591,14 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   const reactionPath = parseIrcSummary(text);
   const scan = parseScanSummary(text);
   const nmr = parseShieldings(text);
+  // A `NMR=(GIAO,SpinSpin)` job prints the coupling tables after the shieldings.
+  // They ride in the same block because a run's shieldings and its J values are
+  // the same calculation; `couplings` is null (not an empty table) when the
+  // route asked for neither table.
+  const nmrCouplings = couplingSummary(parseCouplings(text));
+  const nmrBlock = nmr
+    ? { ...nmr, couplings: nmrCouplings }
+    : (nmrCouplings ? { gauge: null, method: null, count: 0, atoms: [], couplings: nmrCouplings } : null);
   // Normal-mode vectors: only the modes whose displacement block is complete are
   // offered for animation, and the count of the rest is kept so the viewer can
   // say what it is not showing.
@@ -1671,7 +1685,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     excitedStateOptimization: parseExcitedStateOptimization(text, { truncated: truncated === true }),
     reactionPath,
     scan,
-    nmr,
+    nmr: nmrBlock,
     trajectory,
     normalModes,
     normalModesMeta: parsedModes

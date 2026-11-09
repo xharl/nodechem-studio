@@ -50,6 +50,7 @@ describe('shipped reference dataset', () => {
       mode: null,
       citation: null,
       reason: 'no reference for B3LYP/STO-3G',
+      source: null,
     });
   });
 
@@ -73,6 +74,8 @@ describe('single-reference mode', () => {
     expect(result.citation).toBe(entry().citation);
     expect(result.reason).toBeNull();
     expect(result.level).toBe('B3LYP/sto-3g');
+    expect(result.source).toContain('reference: σ_ref = 190.5 ppm at B3LYP/sto-3g');
+    expect(result.source).toContain(entry().citation);
   });
 
   it('accepts a bare array and a level label split into method and basis', () => {
@@ -200,3 +203,62 @@ describe('no path subtracts a default reference', () => {
     expect(shiftFor({ nucleus: '13C', sigma: 114.088 }).reason).toBe('no level of theory given');
   });
 });
+
+describe('an explicit reference the caller states', () => {
+  const level = { method: 'B3LYP', basis: 'sto-3g' };
+  const stated = {
+    ppm: 31.9,
+    provenance: 'TMS, B3LYP/sto-3g, gas phase — run in this project, 2026-11-08',
+  };
+
+  it('subtracts a stated σ_ref and prints it with its provenance', () => {
+    const result = shiftFor({ level, nucleus: '1H', sigma: 25.5, reference: stated });
+    // 31.9 − 25.5 = 6.4 ppm; the reference ships with no dataset entry.
+    expect(result.delta).toBeCloseTo(6.4, 12);
+    expect(result.mode).toBe('single');
+    expect(result.reason).toBeNull();
+    expect(result.source).toBe(`reference: σ_ref = 31.9 ppm — ${stated.provenance}`);
+  });
+
+  it('refuses a stated σ_ref that states no provenance, naming what is missing', () => {
+    for (const provenance of ['', '   ', undefined, null]) {
+      const result = shiftFor({
+        level, nucleus: '1H', sigma: 25.5, reference: { ppm: 31.9, provenance },
+      });
+      expect(result.delta).toBeNull();
+      expect(result.reason).toMatch(/no stated provenance/);
+      expect(result.source).toBeNull();
+    }
+  });
+
+  it('refuses a reference at another level rather than borrowing the number', () => {
+    const result = shiftFor({
+      level,
+      nucleus: '13C',
+      sigma: 114.088,
+      reference: { ...stated, level: { method: 'B3LYP', basis: 'def2-TZVP' } },
+    });
+    expect(result.delta).toBeNull();
+    expect(result.reason).toBe('the reference is at B3LYP/def2-TZVP, the run is at B3LYP/sto-3g');
+  });
+
+  it('accepts a matching stated level and keeps it in the source line', () => {
+    const result = shiftFor({
+      level,
+      nucleus: '13C',
+      sigma: 114.088,
+      reference: { ...stated, ppm: 190.5, level },
+    });
+    expect(result.delta).toBeCloseTo(76.412, 6);
+    expect(result.source).toContain('σ_ref = 190.5 ppm at B3LYP/sto-3g');
+  });
+
+  it('refuses a non-finite σ_ref and still reports a missing shielding first', () => {
+    expect(shiftFor({ level, sigma: 25.5, reference: { ppm: '', provenance: 'x' } }).reason)
+      .toBe('the reference has no finite σ_ref');
+    const noShielding = shiftFor({ level, sigma: null, reference: stated });
+    expect(noShielding.delta).toBeNull();
+    expect(noShielding.reason).toBe('no shielding for the nucleus at B3LYP/sto-3g');
+  });
+});
+
