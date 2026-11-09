@@ -1,0 +1,11 @@
+molecule water {
+0 1
+O 0.000000 0.000000 0.117300
+H 0.000000 0.757000 -0.469200
+H 0.000000 -0.757000 -0.469200
+}
+set basis cc-pvqz
+set scf_type df
+set mp2_type df
+set freeze_core true
+energy('mp2')

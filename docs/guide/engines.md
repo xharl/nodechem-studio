@@ -445,6 +445,14 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
   aug-cc-pVDZ.
 - **Job types**: `SP`, `Opt`, `Freq`, `Opt Freq` and `TD-DFT` — the four point/geometry jobs, and
   the excited-state one described below.
+- **Core correlation**: MP2, CCSD and CCSD(T) correlate every electron unless told otherwise, so a
+  block has a **Core correlation** choice — *Engine default* (writes nothing, so an existing project
+  is byte-identical), *Frozen core* (`set freeze_core true`) or *All-electron* (`set freeze_core
+  false`). Frozen core is the convention the focal-point and CBS-extrapolation literature is written
+  in, and the difference is not small: on water/cc-pVQZ, DF-MP2 is −76.378089 Eh all-electron and
+  −76.347609 Eh frozen core, **30.48 mEh** (19.1 kcal/mol). The choice is recorded in `run.json` as
+  `method.freezeCore`; it is refused on HF, SAPT0 and any functional, none of which has a core
+  correlation step for the keyword to act on.
 - **TD-DFT** writes `set tdscf_states N` and `energy('td-<method>')`, and the app parses Psi4's
   excitation table — energy in au and eV, total energy, oscillator strength and rotatory strength in
   both the length and velocity forms. **N is not a promise of the N lowest states:** Psi4 splits the

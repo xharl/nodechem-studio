@@ -193,6 +193,21 @@ function jobTypeOf(settings = {}) {
   return oneLine(settings.jobType, 'SP') || 'SP';
 }
 
+/**
+ * The core-correlation choice, or null for "whatever Psi4 does by itself".
+ *
+ * `null` is the default and it writes nothing, so an existing project keeps
+ * producing byte-identical input. `true`/`false` are the user asking for frozen
+ * core (the literature convention for extrapolations) or an all-electron run,
+ * and only then does `set freeze_core` appear.
+ */
+function freezeCoreChoice(settings = {}) {
+  const value = settings.freezeCore;
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  return null;
+}
+
 
 /** Method entry for a settings object, or throw naming the field. */
 export function psi4MethodFor(settings = {}) {
@@ -269,6 +284,27 @@ export function psi4SettingsOffenders(settings = {}) {
       message: 'Excited states in Psi4 are a job type (TD-DFT), not a keyword on another job: '
         + 'set the block to TD-DFT so the input runs the calculation you asked for.',
     });
+  }
+  // Freezing the core is a property of a correlated method: HF has no correlation
+  // step and SAPT0 does not correlate monomers here, so the keyword would be a
+  // no-op that reads as if it had done something.
+  const freezeChoice = freezeCoreChoice(settings);
+  if (settings.freezeCore !== undefined && settings.freezeCore !== null
+      && !['auto', 'true', 'false', true, false].includes(settings.freezeCore)) {
+    offenders.push({
+      field: 'freezeCore',
+      message: 'Core correlation takes auto, frozen or all-electron; '
+        + `"${String(settings.freezeCore)}" is not one of them.`,
+    });
+  } else if (freezeChoice !== null) {
+    const chosen = METHOD_BY_KEY.get(oneLine(settings.method, 'b3lyp').toLowerCase());
+    if (!chosen || chosen.kind !== 'correlated') {
+      offenders.push({
+        field: 'freezeCore',
+        message: 'Freezing the core means excluding the 1s electrons from the correlation treatment, '
+          + `and ${chosen ? chosen.label : 'this method'} has no correlation step. Choose MP2, CCSD or CCSD(T).`,
+      });
+    }
   }
   if (text(settings.population)) {
     offenders.push({
@@ -446,6 +482,12 @@ export function buildPsi4Input({
   // Density fitting is Psi4's default for SCF and its fastest reliable path;
   // writing it makes the run reproducible across Psi4 versions.
   lines.push('set scf_type df');
+  const freezeChoice = freezeCoreChoice(settings);
+  if (freezeChoice !== null && method.kind === 'correlated') {
+    // Only written when the user chose it: 'auto' leaves Psi4's own default in
+    // place, so an existing MP2 project produces byte-identical input.
+    lines.push(`set freeze_core ${freezeChoice ? 'true' : 'false'}`);
+  }
   if (oneLine(settings.scf) === 'tight') {
     lines.push('set e_convergence 1.0e-8');
     lines.push('set d_convergence 1.0e-8');
@@ -479,7 +521,8 @@ export function buildPsi4Input({
     outputName,
     inputText: lines.join('\n'),
     argv: [safeName],
-    route: `psi4 ${method.label}/${basis.label}${jobType === 'SP' ? ''
+    route: `psi4 ${method.label}/${basis.label}${freezeChoice === null ? ''
+      : freezeChoice ? ' (frozen core)' : ' (all-electron)'}${jobType === 'SP' ? ''
       : jobType === 'TD-DFT' ? ` TD-DFT (${Number(settings.tdStates)} states)` : ` ${jobType}`}`,
     // Recorded for the run record; a Psi4 block has no checkpoint to hand off.
     oldCheckpoint: oneLine(oldCheckpoint) || null,
@@ -506,6 +549,12 @@ export function psi4MethodBlock(settings = {}, { argv = null, jobType = null } =
     dispersion: null,
     solvation: null,
     scf: oneLine(settings.scf) || null,
+    // Provenance for the one setting that decides whether a correlated number is
+    // comparable with the frozen-core literature at all.
+    freezeCore: method && method.kind === 'correlated'
+      ? (freezeCoreChoice(settings) === null ? 'engine default'
+        : freezeCoreChoice(settings) ? 'frozen core' : 'all-electron')
+      : null,
     resources: {
       memoryMb: Number.isFinite(Number(settings.memory)) ? Number(settings.memory)
         * (String(settings.memoryUnit || 'GB').toUpperCase() === 'MW' ? 8

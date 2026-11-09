@@ -1917,6 +1917,22 @@ function calcInspector(node) {
       ? '<div class="field full"><span class="inspector-note">CCSD and CCSD(T) have no analytic Hessian in Psi4: '
         + 'Freq and Opt Freq are refused for these methods.</span></div>'
       : '',
+    // Issue 174: only a correlated method has a core to freeze, and the choice
+    // moves the energy by ~30 mEh at cc-pVQZ, so it is shown where the method is
+    // chosen and named for what it changes.
+    psi4MethodEntry.kind === 'correlated'
+      ? [
+        selectField('Core correlation', 'freezeCore', [
+          ['auto', 'Engine default'],
+          ['true', 'Frozen core'],
+          ['false', 'All-electron'],
+        ], String(s.freezeCore ?? 'auto')),
+        '<div class="field full"><span class="inspector-note">Writes <code>set freeze_core</code> only when you '
+          + 'choose it. Frozen core excludes the 1s electrons from the correlation treatment — the usual choice for '
+          + 'basis-set extrapolation, and 30 mEh below the all-electron MP2 number on water/cc-pVQZ. The default '
+          + 'writes nothing, so an existing project is unchanged.</span></div>',
+      ].join('')
+      : '',
   ].join(''));
 
   // Issue 166: Psi4's TD-DFT is a job type of its own, and its state count is
