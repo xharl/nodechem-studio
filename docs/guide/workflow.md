@@ -61,10 +61,65 @@ it is never parsed. The queue row shows the elapsed time against the limit while
 the block card and Next Action say it timed out and to raise the limit — there is no output to
 review. Dependents are blocked, because there is no result to hand on.
 
-Because a limit has to be chosen before the run, **Setup** also names the blocks whose own
-parameters make a long run likely — many excited states, an IRC path, a transition-state search,
-counterpoise, a frequency job on a large system, a CREST search. That is a list of parameters, not
-an estimate: no run time is predicted from them.
+Because a limit has to be chosen before the run, **Setup** names the blocks whose own parameters make
+a long run likely — many excited states, an IRC path, a transition-state search, counterpoise, a
+frequency job on a large system, a CREST search. That list is about shape, not duration; the
+estimated duration is separate and is described next.
+
+## Cost estimate
+
+Before a workflow is queued, the Setup pane and every calculation card show a **range** for how long
+the run will take, in wall time on the machine's core count, plus the core-seconds it will consume.
+It is deliberately not a single number.
+
+```
+Estimated 12 min–47 min on 8 cores at 4 at a time · low confidence (3 points) · 5 of 5 tasks priced.
+```
+
+The model is fitted to logs that ship with the app, not to a vendor's benchmark:
+
+| Engine | Measured jobs | What the fit uses |
+| --- | --- | --- |
+| Gaussian 16 | water/6-31G(d) SP, Opt, Freq; DVB/STO-3G SP, Opt, Freq, TD (5 states) | CPU and wall seconds printed by the program |
+| Psi4 | water/def2-SVP MP2, CCSD(T), B3LYP Freq | user+system seconds; wall time |
+| ORCA | water/STO-3G MP2; DVB/STO-3G frequency | wall time only — ORCA does not print CPU seconds here, so core-seconds equal wall seconds |
+| xTB | water Opt+Freq | wall time |
+
+Everything the logs do not settle is written down as an assumption on the card (hover it) and in
+the module:
+
+- cost scales as **Nbf³** for the SCF-sized jobs and **atom²** for xTB. Three small molecules cannot
+  determine the exponent; N³ is the middle of the documented range and is labelled.
+- a new DFT single point is assumed to take the **9 SCF cycles** the water anchor took; a tighter
+  SCF setting adds 3.
+- an optimisation is assumed to take **5 steps**; the two measured ones took 4 and 5. The measured
+  per-step costs differ by a factor of seven, so the range is that measured spread — not a
+  comfortable ±10 %.
+- wall time divides core-seconds by `cores × 0.65`, plus a 1 s startup floor. 0.65 is an assumption;
+  the water single point ran at roughly 0.3 and the 20-atom frequency job at 1.0.
+- the queue's wall total is the sum over dependency levels, `ceil(tasks / concurrency)` waves in
+  each, with a 5 % allowance per concurrent task. It **ignores stragglers** beyond the slowest task
+  in a level.
+
+Confidence follows the number of measured points behind the class: 20 or more is `high`, 5–19
+`medium`, fewer than 5 `low`. The first release is `low` for everything and prints the count, as in
+the example above.
+
+**Warnings.** If the estimate exceeds the limit that will actually apply to the task (the block's
+own limit, then the project's, then 3600 s), the card says the queue will stop it at that limit. If
+the total is longer than an overnight run (8 hours), Setup says so — a low bound over 8 hours is
+the case worth waking up to.
+
+**Refusals.** A task the model cannot price shows a sentence instead of a number:
+
+- a composite method (G4, CBS-QB3, …) is a toolchain of links this model does not describe;
+- an engine with no committed timing measurement;
+- a job type with no measurement on that engine (for example Gaussian IRC, ORCA Opt);
+- a basis or element outside the basis-function table, or a geometry with no composition.
+
+Psi4 TD-DFT is the one priced-but-unmeasured case: no Psi4 TD-DFT log is committed, so its range is
+scaled from Psi4's smallest measured job by **atom count only**, says so on the card, and is wide.
+
 
 Under `ncs run`, a project's `runner.timeoutSeconds` is used, and a queue with a timed-out task
 exits with the engine-failure code (4) rather than reporting success.
