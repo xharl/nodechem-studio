@@ -1,0 +1,34 @@
+Initial conformer count: 6
+31 attempts,  22 duplicates, 4 failed filter.
+0 0 0 
+0 2 0 
+0 2 2 
+1 2 2 
+2 2 2 
+2 2 0 
+
+=====> Starting conformers search with a Genetic Algorithm <=====
+Perform elitist generation replacement with mutation only
+Mutation probability: 0.2
+Will stop after 5 generations without improvement.
+
+Generation #1  -5.44312
+Generation #2  -5.44312
+Generation #3  -5.44312
+Generation #4  -5.44312
+Generation #5  -5.44312
+Generation #6  -5.44312
+2 2 2 
+1 2 2 
+2 0 2 
+2 2 0 
+2 2 1 
+2 1 2 
+GetConformers:
+2 2 2 
+1 2 2 
+2 0 2 
+2 2 0 
+2 2 1 
+2 1 2 
+1 molecule converted

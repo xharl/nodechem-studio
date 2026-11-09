@@ -24,7 +24,7 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ```
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
-ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--timeout <seconds>]
+ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--timeout <seconds>]
 ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
 ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--json]
@@ -187,7 +187,7 @@ If the workflow contains a conformer block, `ncs run` also needs CREST unless th
 ensemble or uses the in-app `uff` route (which spawns nothing):
 
 ```
-ncs run my-project.ncs --out ./runs --executable /opt/g16/g16 --crest /opt/crest/crest
+ncs run my-project.ncs --out ./runs --executable /opt/g16/g16 --crest /opt/crest/crest --obabel /usr/local/bin/obabel
 ```
 
 Cluster export refuses a project that contains a conformer block — the export would otherwise build

@@ -20,6 +20,7 @@ import { LIMITS } from '../../src/shared/projectSchema.js';
 import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
 import { sha256File } from './hashing.js';
 import { CrestRunner } from './crestRunner.js';
+import { ObabelRunner } from './obabelRunner.js';
 import {
   ensembleSummary,
   fixtureConformerFrames,
@@ -29,6 +30,14 @@ import {
   withEnergies,
   xyzText,
 } from '../../src/shared/conformers.js';
+import {
+  OBABEL_DEFAULT_FF,
+  OBABEL_SEARCH_LOG,
+  normalizeObabelForceField,
+  obabelCoverageRefusal,
+  obabelForceFieldKeyword,
+  obabelSearchSummary,
+} from '../../src/shared/obabelConformers.js';
 import { generateUffEnsemble, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 
 // `~` joins a block id to the conformer member it was expanded for (#80); it
@@ -285,7 +294,7 @@ function conformerTaskRecord(raw, nodeId) {
   // treated as CREST, which is the historical default.
   const generator = conf.generator === 'import'
     ? 'import'
-    : (conf.generator === 'uff' ? 'uff' : 'crest');
+    : (conf.generator === 'uff' ? 'uff' : (conf.generator === 'obabel' ? 'obabel' : 'crest'));
   const importPath = oneLine(conf.importPath, 500);
   // A fanned-out member task (#80) carries one member of an ensemble that is
   // already stored in the project. It does not search, so it needs neither a
@@ -416,6 +425,12 @@ function conformerTaskRecord(raw, nodeId) {
         ? { torsionStepDegrees: number(conf.torsionStepDegrees, 120, 15, 360) } : {}),
       ...(generator === 'uff' && Number.isFinite(Number(conf.maxTrials))
         ? { maxTrials: Math.round(number(conf.maxTrials, 200, 1, 2000)) } : {}),
+      // The Open Babel route's knobs. Bounded like every other number a
+      // hand-written queue payload could carry.
+      ...(generator === 'obabel' && Number.isFinite(Number(conf.nconf))
+        ? { nconf: Math.round(number(conf.nconf, 20, 1, 1000)) } : {}),
+      ...(generator === 'obabel' && ['mmff94', 'mmff94s'].includes(String(conf.ff || '').toLowerCase())
+        ? { ff: String(conf.ff).toLowerCase() } : {}),
       ...(generator === 'uff' && Array.isArray(conf.bonds)
         ? {
           bonds: conf.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
@@ -1031,6 +1046,7 @@ export class QueueManager {
       : null;
     const executableFor = (engineId) => executables?.[String(engineId || '')] || executable;
     const crestExecutable = String(options.crestExecutable || '').trim();
+    const obabelExecutable = String(options.obabelExecutable || '').trim();
     const scratchDir = String(options.scratchDir || '').trim();
     // RFC 0001: 1 keeps the sequential drain every existing queue had.
     const maxParallel = Math.max(1, Math.min(Number(options.maxParallel) || 1, LIMITS.maxParallel));
@@ -1046,6 +1062,11 @@ export class QueueManager {
     const needsCrest = tasks.some((task) => task.type === 'conformers'
       && task.conformers?.generator === 'crest'
       && !task.conformers?.member);
+    // The Open Babel route is external too, so it needs its own binary; a
+    // fanned-out member carries its ensemble already and needs nothing.
+    const needsObabel = tasks.some((task) => task.type === 'conformers'
+      && task.conformers?.generator === 'obabel'
+      && !task.conformers?.member);
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1059,6 +1080,11 @@ export class QueueManager {
         if (!crestExecutable) throw new Error('Choose the CREST executable before running a conformer search (or set the block to import an ensemble).');
         const stat = await fsp.stat(crestExecutable).catch(() => null);
         if (!stat?.isFile()) throw new Error(`CREST executable not found: ${crestExecutable}`);
+      }
+      if (needsObabel) {
+        if (!obabelExecutable) throw new Error('Choose the Open Babel executable before running an Open Babel conformer search (or change the block to CREST, UFF or an import).');
+        const stat = await fsp.stat(obabelExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`Open Babel executable not found: ${obabelExecutable}`);
       }
     }
 
@@ -1083,6 +1109,7 @@ export class QueueManager {
         // still tell which binary each task ran.
         executables: dryRun ? null : executables,
         crestExecutable: dryRun ? null : crestExecutable,
+        obabelExecutable: dryRun ? null : obabelExecutable,
         scratchDir,
         // A relative conformer `importPath` resolves against this folder, so it
         // travels with the queue and a replay resolves it the same way.
@@ -1552,10 +1579,14 @@ export class QueueManager {
       // Issue #130: a CREST search writes Hartree energies; only an imported
       // file can carry another unit, and only if the block says so. A UFF
       // search writes kcal/mol force-field energies and nothing else.
-      const energyUnit = conf.generator === 'import'
+      let energyUnit = conf.generator === 'import'
         ? (conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree')
-        : (conf.generator === 'uff' ? 'kcal/mol' : 'hartree');
-      const energyMethod = conf.generator === 'import' ? conf.energyMethod : (conf.generator === 'uff' ? 'UFF' : '');
+        : (conf.generator === 'uff' || conf.generator === 'obabel' ? 'kcal/mol' : 'hartree');
+      let energyMethod = conf.generator === 'import'
+        ? conf.energyMethod
+        : (conf.generator === 'uff'
+          ? 'UFF'
+          : (conf.generator === 'obabel' ? (obabelForceFieldKeyword(conf.ff) || 'MMFF94') : ''));
       if (conf.generator === 'import') {
         // Reading an ensemble is a file operation, not an engine call, so a dry
         // run must use the real ensemble. It used to drop straight to the
@@ -1643,11 +1674,91 @@ export class QueueManager {
         ensembleText = fixture.text;
         energies = fixture.energies;
         source = 'fixture';
+        // The fixture's numbers are synthetic Hartree values, not the force-field
+        // kcal/mol an Open Babel or UFF block would record.
+        energyUnit = 'hartree';
+        energyMethod = '';
         this.emit({
           type: 'queue-output',
           queueId: queue.id,
           nodeId: task.nodeId,
           text: 'Dry run: a labelled three-member fixture, not a conformer search.',
+        });
+      } else if (conf.generator === 'obabel') {
+        // Open Babel is external, like CREST: the app stages one starting
+        // geometry, spawns the search, then evaluates one MMFF94 energy per
+        // conformer. Nothing is inferred from the binary's absence.
+        const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+        const parsedInput = parseMultiXyz(inputText);
+        if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+          throw new Error(`The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
+        }
+        // MMFF94 has no parameters for every element. Refusing by name here is
+        // the difference between "this molecule is out of scope" and a silently
+        // untyped atom producing a plausible-looking energy.
+        const coverageRefusal = obabelCoverageRefusal(parsedInput.frames[0].atoms);
+        if (coverageRefusal) throw new Error(coverageRefusal);
+
+        const argv = await this.stageConformerSearchInput(queue, task, dir);
+        const runner = new ObabelRunner();
+        this.conformersRunner = runner;
+        const result = await runner.run({
+          executable: queue.options.obabelExecutable,
+          argv,
+          cwd: dir,
+          outputName: task.outputName || OBABEL_SEARCH_LOG,
+          ff: normalizeObabelForceField(conf.ff),
+          // Issue 177: the same wall-clock limit the calculation tasks get.
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        }).finally(() => {
+          if (this.conformersRunner === runner) this.conformersRunner = null;
+        });
+        if (result.timedOut) {
+          const startedAt = Date.parse(task.startedAt || '') || Date.now();
+          const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 100) / 10);
+          task.status = 'timed out';
+          task.timeout = {
+            limitSeconds: this.taskTimeoutSeconds(queue, task),
+            elapsedSeconds,
+            lastOutput: lastLineOf(result.outputText),
+          };
+          task.error = `Stopped after ${elapsedSeconds.toFixed(1)} s: the ${task.timeout.limitSeconds} s wall-clock limit was reached; the search output was not used.`;
+          task.finishedAt = new Date().toISOString();
+          this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Timed out: ${task.error}\n` });
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
+        if (result.cancelled) throw new Error('Conformer search cancelled by the user.');
+        if (Number(result.exitCode) !== 0) {
+          throw new Error(`Open Babel exited with code ${result.exitCode}; see ${task.outputName || OBABEL_SEARCH_LOG} in the queue folder.`);
+        }
+        if (!result.ensembleText) {
+          throw new Error('Open Babel returned no scored conformers; see obabel.log in the queue folder for the reason.');
+        }
+        ensembleText = result.ensembleText;
+        energies = result.energies;
+        source = 'obabel';
+        origin = {
+          program: 'Open Babel',
+          version: result.version || '',
+          method: obabelForceFieldKeyword(conf.ff) || 'MMFF94',
+          // The digest identifies the starting geometry this search consumed,
+          // not the conformers it produced: a re-run from the same input is
+          // reproducible, a re-run from a different one is visibly different.
+          sourceSha256: await sha256File(path.join(dir, CONFORMER_STAGED_INPUT)).catch(() => ''),
+        };
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: obabelSearchSummary({
+            version: result.version,
+            ff: conf.ff,
+            nconf: conf.nconf ?? 0,
+            log: result.log,
+          }),
         });
       } else {
         const argv = await this.stageConformerSearchInput(queue, task, dir);
@@ -1721,7 +1832,7 @@ export class QueueManager {
         // Issue 144: a UFF search has no xTB method, and recording the block's
         // `method` (gfn2 by default) beside a UFF ensemble would be a false
         // provenance claim.
-        method: conf.generator === 'uff' ? '' : conf.method,
+        method: conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method,
         origin: recordedOrigin,
         energyUnit,
         energyMethod,

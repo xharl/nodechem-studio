@@ -48,6 +48,13 @@ import {
   isConformerGroupId,
 } from './conformers.js';
 import {
+  OBABEL_DEFAULT_FF,
+  OBABEL_DEFAULT_NCONF,
+  OBABEL_FORCE_FIELDS,
+  OBABEL_MAX_NCONF,
+  OBABEL_MIN_NCONF,
+} from './obabelConformers.js';
+import {
   DEFAULT_OPT_CONVERGENCE,
   DEFAULT_TS_FORCE_CONSTANTS,
   OPT_CONVERGENCE_IDS,
@@ -623,6 +630,9 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // Issue 144: the in-app UFF route's own two knobs. Optional; a block that
     // stays on CREST or import never states them.
     'torsionStepDegrees', 'maxTrials',
+    // The Open Babel route's knobs: how many conformers the genetic algorithm
+    // is asked for, and which force field it uses.
+    'nconf', 'ff',
   ]), path);
   // A conformer block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
@@ -696,6 +706,18 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     ...(provided.maxTrials === undefined ? {} : {
       maxTrials: readInteger(c, provided.maxTrials, `${path}.maxTrials`, {
         legacy, fallback: 200, min: 1, max: 2000,
+      }),
+    }),
+    // The Open Babel route: only present when stated, so existing projects
+    // serialise byte-for-byte as before.
+    ...(provided.nconf === undefined ? {} : {
+      nconf: readInteger(c, provided.nconf, `${path}.nconf`, {
+        legacy, fallback: OBABEL_DEFAULT_NCONF, min: OBABEL_MIN_NCONF, max: OBABEL_MAX_NCONF,
+      }),
+    }),
+    ...(provided.ff === undefined ? {} : {
+      ff: readEnum(c, provided.ff, OBABEL_FORCE_FIELDS, `${path}.ff`, {
+        legacy, fallback: OBABEL_DEFAULT_FF,
       }),
     }),
   };

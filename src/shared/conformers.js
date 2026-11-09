@@ -17,7 +17,7 @@ export const HARTREE_KCAL = 627.5094740631;
 /** Boltzmann constant in kcal/mol/K. */
 export const KB_KCAL = 0.00198720425864083;
 
-export const CONFORMER_GENERATORS = Object.freeze(['crest', 'import', 'uff']);
+export const CONFORMER_GENERATORS = Object.freeze(['crest', 'import', 'uff', 'obabel']);
 export const CONFORMER_METHODS = Object.freeze(['gfn2', 'gfnff']);
 
 /**
@@ -623,6 +623,13 @@ export function conformerOriginShort(ensemble) {
     // "computed" belongs to `conformerOriginLabel`; this line names the engine.
     return 'UFF · in-app torsion grid';
   }
+  if (generator === 'obabel') {
+    // MMFF94 is a force field, and the ensemble's own `energyMethod` says
+    // which spelling ran (MMFF94 or MMFF94s). Never "computed here": the
+    // process is external, even though the app drove it.
+    const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim() || 'MMFF94';
+    return `Open Babel · ${method}`;
+  }
   if (generator === 'fixture') return 'dry-run fixture';
   if (generator === 'import') {
     const program = originProgramText(origin);
@@ -650,6 +657,13 @@ export function conformerOriginLabel(ensemble) {
     // Issue 144: computed here, by a force field. The label never says "QM"
     // and never prints a Hartree value beside these numbers.
     return 'computed here · UFF · torsional grid + relaxation (force field, not QM)';
+  }
+  if (generator === 'obabel') {
+    // The process is external, so the label names it rather than claiming the
+    // app computed the numbers. The force field is part of the claim.
+    const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim() || 'MMFF94';
+    const program = originProgramText(origin) || 'Open Babel';
+    return `external MM stage · ${program} · ${method} (force field, not QM)`;
   }
   const parts = ['imported'];
   const program = originProgramText(origin);
@@ -716,7 +730,13 @@ export function conformerTableCaption(ensemble) {
     uffTail = ` · force-field energies, not QM${parts.length ? ` · ${parts.join(', ')}` : ''}`
       + ' · torsional grid + UFF relaxation, not a Monte-Carlo search';
   }
-  return `ΔE in kcal/mol · absolute energies in ${ENERGY_UNIT_LABEL[unit]}${method ? ` (${method})` : ''}${uffTail}`;
+  // An external MM stage is not a QM stage and not the search Spartan ran, and
+  // the table is where those numbers are read. The force field is already in
+  // `(method)`; this says what class of number it is.
+  const obabelTail = generator === 'obabel'
+    ? ' · force-field energies, not QM · genetic-algorithm search, not Spartan DLFF03'
+    : '';
+  return `ΔE in kcal/mol · absolute energies in ${ENERGY_UNIT_LABEL[unit]}${method ? ` (${method})` : ''}${uffTail}${obabelTail}`;
 }
 
 /**
