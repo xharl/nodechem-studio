@@ -47,6 +47,14 @@ The units are not written anywhere. They are encoded in the sign of the first gr
 writes bohr. This is the single most common way to read a cube wrongly, so the reader decides once,
 from the first grid row, and converts once — a coordinate is never multiplied by 0.529 twice.
 
+Because the sign is one character wide, a caller that knows which units it wants can say so:
+`parseCube(text, { units: 'angstrom' })` refuses a file whose counts declare bohr instead of reading
+it with every distance off by the bohr-to-Å factor, and the other way round. The default, `'auto'`,
+accepts whatever the file declares and reports it as `units.source`. The path is covered by a real
+pair in `test/fixtures/psi4/` — one Psi4 1.11 cube with positive counts and the same field with
+negative ones — and `ncs cube --units` writes both forms, so the round trip is a test and not a
+claim.
+
 The values themselves carry no unit either. A density cube usually holds electrons/bohr³, an
 orbital cube the wavefunction amplitude, an ESP cube a potential in hartree/e. The app does not
 label them: it reports the numbers it read and leaves the interpretation to the file that produced
@@ -517,7 +525,7 @@ no `cubegen`, no Gaussian installation, no network:
 
 ```
 ncs cube <run-dir|wavefunction> --orbital homo|lumo|n=<i> --out file.cube
-    [--grid 0.2] [--padding 3] [--json]
+    [--units angstrom|bohr] [--grid 0.2] [--padding 3] [--json]
 ```
 
 - The input is a run folder holding exactly one `.fchk`, `.molden`, `.wfn` or `.wfx` file, or that
@@ -530,8 +538,12 @@ ncs cube <run-dir|wavefunction> --orbital homo|lumo|n=<i> --out file.cube
   atom bounding box (default 3). If the 4-million-point ceiling forces a coarser grid, the spacing
   actually used is printed, never the requested one.
 - The values are written in **atomic units**, as the evaluator produced them (an orbital amplitude
-  in bohr^-3/2), in the standard layout above: Å in the header (negative counts), the grid rows
-  first, four numbers each, then the atoms, then the values six per line in `%12.5E` with x fastest.
+  in bohr^-3/2), in the standard layout above: the grid rows come first, four numbers each, then the
+  atoms, then the values six per line in `%12.5E` with x fastest. `--units` picks what the header
+  declares and nothing else: `angstrom` (the default) writes **negative** counts, which is how a cube
+  says its distances are Å; `bohr` writes positive counts and the distances in bohr, which is the
+  form `cubegen` itself writes. The values are the same either way, and the command prints which
+  header it wrote.
 
 What the command prints is what the picture should be checked against, and `--json` carries the same
 fields:
@@ -540,6 +552,7 @@ fields:
 | --- | --- |
 | `orbital`, `energyEh` | The MO that was evaluated and the energy the file states. No energy in the file means `energyEh: null` and an `energyNote` beginning `not available:` — never a 0 |
 | `grid.spacing`, `grid.points`, `grid.capped`, `grid.note` | The grid actually used, including the coarsening when the cap forced one |
+| `units.header`, `units.gridCounts` | What the header declares: `angstrom` (negative counts) or `bohr` (positive counts), with the sign spelled out so a consumer does not have to re-derive it from line 4 of the file |
 | `integral.value` | ∫\|ψ\|²dV over the box, in bohr³ — **not** 1.0, and its `note` says why: a finite box does not integrate to exactly 1 because the density outside it is not counted. A value well below 1 means the padding is too small or the grid too coarse |
 
 ```
@@ -549,6 +562,7 @@ orbital: MO 35 (homo), occupation 2.000
 energy: -0.153073 Eh
 grid: 0.200 Å, 78×58×31 = 140244 points
 integral: ∫|ψ|²dV = 0.999992 over 1121.952 Å³ — |psi|^2 over the finite grid box; a finite box does not integrate to exactly 1, because the density outside it is not counted.
+units: angstrom header (negative, which declares Å)
 wrote: homo.cube (1824551 bytes)
 ```
 
