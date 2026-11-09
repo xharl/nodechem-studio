@@ -1060,6 +1060,18 @@ kbd {
 .parity.ok { color: var(--tone-green-13); background: var(--tone-green-2a); border: 1px solid var(--tone-green-7a); }
 .parity.bad { color: var(--tone-red-13); background: var(--tone-red-4a); border: 1px solid var(--tone-red-7a); }
 .field-hint { margin: 6px 0 0; color: var(--text-tertiary); font-size: var(--text-size-xs); line-height: 1.5; }
+/* Issue issue 233: the run console's executable field came from engine detection. */
+.run-detected {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: var(--text-size-xs);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.run-detected[hidden] { display: none; }
 .drop-zone .run-actions {
   /* Pinned to the bottom of the pane: the fields above may scroll, the actions
      never disappear under the fold. */
