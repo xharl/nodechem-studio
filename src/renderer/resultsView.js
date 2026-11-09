@@ -19,7 +19,10 @@ import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 import { ircGate, pathBarrier, profileSvg, profilePoints, scanExtremum, scanSurfaceSvg } from '../shared/reactionPath.js';
-import { buildKinetics, kineticsSummaryLine } from '../shared/kinetics.js';
+import {
+  RADIATIVE_NOT_MODELLED, buildKinetics, kineticsSummaryLine,
+  radiativeKineticsReport, radiativeKineticsSummary,
+} from '../shared/kinetics.js';
 import { pkaCycle, pkaCycleLine, redoxCycle, redoxCycleLine } from '../shared/pka.js';
 import { trajectoryEnergies, trajectorySvg } from '../shared/trajectory.js';
 import { mountSuperposition } from './superpositionCard.js';
@@ -695,7 +698,8 @@ function emissionCard(parsed, flags, emission) {
     + '<p class="results-note" data-field="emission-not-reported"><strong>Not reported:</strong> fluorescence '
     + 'lifetime, fluorescence quantum yield, and a Stokes shift against an experimental band maximum. '
     + 'Gaussian 16 does not print the first two for this workflow, and the third needs a measured spectrum '
-    + 'this run does not contain.</p>'
+    + 'this run does not contain. The <strong>Excited states</strong> card prints the radiative-only '
+    + 'lifetime derived from f — an upper bound on the observed lifetime, not a fluorescence lifetime.</p>'
     + caveatHtml(flags, 'These emission values'), 'is-wide');
 }
 
@@ -858,11 +862,23 @@ function orbitalsCard(parsed, flags) {
   );
 }
 
+/**
+ * Excited states, with the radiative kinetics those states imply (issue 170).
+ *
+ * The table keeps the printed quantities and adds two derived columns: k_r and
+ * its inverse, the *radiative* lifetime. Both are labelled in the header, and
+ * the paragraph under the table prints the relation, the wavenumber source and
+ * the level of theory, then says what the estimate leaves out. A cell that
+ * could not be computed prints `not reported` with the reason; an f = 0 state
+ * prints `not finite (f = 0)` rather than a lifetime that does not exist.
+ */
 function excitedStatesCard(parsed, flags, record = null) {
   const block = parsed?.excitedStates;
   const states = Array.isArray(block?.states) ? block.states.filter(isObject) : [];
   if (!Number.isFinite(block?.count) || block.count === 0 || states.length === 0) return '';
-  const rows = states.slice(0, 20).map((state) => {
+  const levelOfTheory = methodSummary(record?.provenance?.method);
+  const kinetics = radiativeKineticsReport(states, { levelOfTheory });
+  const rows = states.slice(0, 20).map((state, position) => {
     const dominant = Array.isArray(state.transitions) && state.transitions.length
       ? [...state.transitions]
         .sort((a, b) => Math.abs(Number(b.coefficient) || 0) - Math.abs(Number(a.coefficient) || 0))
@@ -871,25 +887,68 @@ function excitedStatesCard(parsed, flags, record = null) {
         .join(' · ')
       : MISSING_TEXT;
     const label = [state.spin, state.symmetry].filter(Boolean).join('-');
+    const kineticsRow = kinetics.rows[position] || null;
+    const unavailable = kineticsRow && !kineticsRow.available
+      ? ` <span class="results-missing">(${esc(kineticsRow.reason)})</span>`
+      : '';
+    const rate = kineticsRow
+      ? `${kineticsRow.available ? esc(kineticsRow.rateText) : missingHtml()}${unavailable}`
+      : missingHtml();
+    const lifetime = kineticsRow && kineticsRow.available
+      ? esc(kineticsRow.radiativeLifetimeText)
+      : `${missingHtml()}${unavailable}`;
     return '<tr data-excited-state="' + esc(state.index) + '">'
       + `<td>${esc(state.index)}</td>`
       + `<td>${esc(label || MISSING_TEXT)}</td>`
       + `<td>${Number.isFinite(state.energyEv) ? state.energyEv.toFixed(4) : MISSING_TEXT}</td>`
       + `<td>${Number.isFinite(state.wavelengthNm) ? state.wavelengthNm.toFixed(2) : MISSING_TEXT}</td>`
       + `<td>${Number.isFinite(state.oscillatorStrength) ? state.oscillatorStrength.toFixed(4) : MISSING_TEXT}</td>`
+      + `<td data-field="radiative-rate">${rate}</td>`
+      + `<td data-field="radiative-lifetime">${lifetime}</td>`
       + `<td class="is-left">${dominant}</td>`
       + '</tr>';
   }).join('');
   const body = emissionLine(record, parsed)
     + '<table class="results-table" data-field="excited-states">'
-    + '<thead><tr><th>#</th><th>State</th><th>eV</th><th>nm</th><th>f</th><th class="is-left">Dominant transitions</th></tr></thead>'
+    + '<thead><tr><th>#</th><th>State</th><th>eV</th><th>nm</th><th>f</th>'
+    + '<th>k_r (s⁻¹)</th><th>τ_r (radiative)</th>'
+    + '<th class="is-left">Dominant transitions</th></tr></thead>'
     + `<tbody>${rows}</tbody></table>`
     + (states.length > 20
       ? `<p class="results-missing">Showing the first 20 of ${esc(block.count)} parsed states.</p>`
       : '')
     + spectrumFigure(states)
-    + caveatHtml(flags, 'These excitation energies');
+    + radiativeKineticsHtml(kinetics)
+    + caveatHtml(flags, 'These excitation energies and the rates derived from them');
   return card('Excited states', body, 'is-wide');
+}
+
+/**
+ * The paragraph that keeps τ_r honest: the relation, where ν̄ came from, the
+ * level of theory, the strongest channel, and the channels that are not in this
+ * calculation at all. The "not modelled" sentence is not a footnote to be
+ * dropped — it is the difference between an upper bound and a prediction.
+ */
+function radiativeKineticsHtml(kinetics) {
+  const sources = new Set(kinetics.rows.map((row) => row.wavenumberSource).filter(Boolean));
+  const sourceSentence = sources.size === 1
+    ? (sources.has('energy')
+      ? 'ν̄ comes from the energy column: ν̄ = E(eV) × 8065.544 cm⁻¹.'
+      : 'ν̄ comes from the wavelength column: ν̄ = 1 × 10⁷ / λ(nm) cm⁻¹.')
+    : 'ν̄ comes from the wavelength column where the table carries one, and from the energy '
+      + 'column otherwise.';
+  const levelSentence = kinetics.levelOfTheory
+    ? `Level of theory: ${esc(kinetics.levelOfTheory)}.`
+    : 'Level of theory: not recorded for this run.';
+  return '<p class="results-note" data-field="radiative-kinetics">'
+    + '<strong>Radiative kinetics.</strong> Per state, '
+    + `<code>${esc(kinetics.formula)}</code> s⁻¹ (f dimensionless, λ in nm), and `
+    + `τ_r = 1 / k_r. ${esc(sourceSentence)} ${levelSentence} `
+    + `${esc(radiativeKineticsSummary(kinetics, { note: false }))}</p>`
+    + '<p class="results-missing" data-field="radiative-not-modelled">'
+    + `<strong>Not modelled:</strong> ${esc(RADIATIVE_NOT_MODELLED.join('; '))}. `
+    + 'No observed lifetime, fluorescence quantum yield or phosphorescence rate is predicted from '
+    + 'this calculation.</p>';
 }
 
 /**

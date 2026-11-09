@@ -41,7 +41,10 @@ below the output shows what the parser actually reported:
 - the **engine** that ran, and the run status,
 - the **excited states** table when the job printed a TD record (energy in eV, wavelength, f and
   the dominant transitions), with a simulated UV-Vis curve whose Gaussian broadening is printed
-  as an explicit FWHM — the caption says it is a simulation, not a measured spectrum. A **Psi4
+  as an explicit FWHM — the caption says it is a simulation, not a measured spectrum. The same
+  table carries a **radiative rate `k_r` and radiative lifetime `τ_r` per state**, derived from
+  the printed f, with the relation and its limits printed under the table (see
+  [Radiative kinetics](#radiative-kinetics-from-oscillator-strengths)). A **Psi4
   TD-DFT** run fills the same cards from Psi4's excitation table; that table also carries the
   rotatory strength in both length and velocity form, and the card prints the state's irrep and the
   allocation Psi4 used (see *Engines → Psi4*: a state request is split across irreducible
@@ -472,8 +475,10 @@ table"), never filled in.
 
 **What the card does not report.** Fluorescence lifetime, fluorescence quantum yield, and a Stokes
 shift against an experimental band maximum. Gaussian 16 does not print the first two for this
-workflow, and the third needs a measured spectrum the run does not contain. The card also says the
-number is a vertical energy at one geometry, **not** the adiabatic 0–0 energy.
+workflow, and the third needs a measured spectrum the run does not contain. The **Excited states**
+card does print a radiative-only lifetime for every state it parsed — an upper bound on the observed
+lifetime, not a fluorescence lifetime; the next section says exactly what it leaves out. The card
+also says the number is a vertical energy at one geometry, **not** the adiabatic 0–0 energy.
 
 **Which geometry it used.** A **checkpoint** edge hands the optimised geometry over (`Geom=Check`)
 and the card says so. A **normal ordering edge** does not: in this app an ordinary edge orders the
@@ -481,6 +486,64 @@ run but the block still uses its own input (project, dataset or conformer) geome
 that and prints *No checkpoint edge supplies the geometry* rather than calling a project geometry an
 optimised excited state. If the block is not connected to an excited-state optimisation at all, the
 card says the vertical-emission reading is not supported by the graph it ran in.
+
+## Radiative kinetics from oscillator strengths
+
+A TD calculation prints an oscillator strength for each excited state. That one number fixes the
+Einstein A coefficient of the same transition, so the **Excited states** card adds two columns beside
+the printed values:
+
+| Column | Meaning |
+| --- | --- |
+| `k_r` (s⁻¹) | spontaneous-emission rate of that state, from the printed f |
+| `τ_r` (radiative) | `1 / k_r`, in ns/µs/ms as the magnitude needs |
+
+The relation is printed under the table, because the number is meaningless without it:
+
+```
+k_r = 2π e² ν² f / (3 ε₀ mₑ c³) = 0.22234 · ν̄² · f = 2.2234 × 10¹³ · f / λ²   (s⁻¹)
+```
+
+with f the dimensionless length-form oscillator strength the TD job printed and λ in nm. The 1/3 is
+the isotropic average over molecular orientations; f as printed already sums the degenerate
+components of that state. `ν̄` comes from the **wavelength column** (`ν̄ = 1 × 10⁷ / λ(nm)` cm⁻¹) —
+the number the log prints in the same row as f. When a parser reported energy but no wavelength the
+card uses `ν̄ = E(eV) × 8065.544` cm⁻¹ instead, and says so; the two routes differ only by the
+rounding of the printed digits.
+
+The prefactor is evaluated from the SI constants in `src/shared/kinetics.js` rather than typed from
+prose, and the tests pin it against two measured transition probabilities — Na 3s→3p
+(6.25 × 10⁷ s⁻¹ at 589 nm, f = 0.982) and H Ly-α (6.265 × 10⁸ s⁻¹ at 121.567 nm, f = 0.4162) — to
+within 1 %. A 300 nm state with f = 1.0 comes out at 2.47 × 10⁸ s⁻¹, τ_r = 4.05 ns.
+
+**What is on the card is the radiative lifetime, and nothing else.** Spontaneous emission is the
+only channel in the Einstein A coefficient. Non-radiative decay (internal conversion), intersystem
+crossing and phosphorescence (which need spin–orbit coupling), and conical intersections or
+non-adiabatic dynamics (which need surface hopping) are **not modelled**, and the card names all
+three under the table. The observed lifetime is therefore at most τ_r: a measured decay can only be
+shorter. No field named `lifetime` is filled from this calculation; the module returns
+`radiativeLifetimeSeconds` and leaves `observedLifetimeSeconds` null with the reason, and the card
+never prints the word *lifetime* without *radiative* in front of it.
+
+Two more cases are reported instead of being smoothed over:
+
+- **f = 0** (a symmetry-forbidden or spin-forbidden transition in this calculation) gives
+  `k_r = 0` and `τ_r = not finite (f = 0)`. The state can still decay by the channels above; it has
+  no one-photon radiative channel in this approximation.
+- **No f, or no wavelength and no energy** prints *not reported* with the reason, never zero.
+
+The level of theory travels with the numbers: the card prints the functional/basis it read from the
+run's provenance, or `Level of theory: not recorded for this run.` when the record carries none. The
+rates are exactly as good — and as limited — as that level: a TD-DFT f is a vertical, single-geometry
+quantity with no vibronic structure and no solvent shift, and the caption of the UV-Vis figure
+already says the curve is a simulation.
+
+**Measured decay traces are not overlaid.** Comparing "measured 3 ps, computed radiative 40 ns"
+needs a transient-absorption series (time versus ΔA) imported beside the computed states, with its
+own axis and unit discipline. That is **not built**: the only measured-series overlay in the app
+today is the Raman card's single `.jdx` slot, which draws an energy-axis trace against a vibrational
+figure (see [Spectra](spectra.md)). A time-resolved trace shares no axis with the excitation table,
+so it needs its own surface rather than a reused slot — and this card does not pretend otherwise.
 
 ## Natural transition orbitals
 
