@@ -6,7 +6,7 @@ the app and anything that reads or writes a project file.
 > **ADR 0001 is in force:** [ADR 0001](adr/0001-block-taxonomy.md) defines the
 > block taxonomy (input · prepare · generate · calculate · analyse · output) and
 > `schemaVersion: 3`. Version 3 is a breaking vocabulary change with no
-> compatibility layer; `prepare` is specified but not yet implemented.
+> compatibility layer.
 
 ## 1. File identity
 
