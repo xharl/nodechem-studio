@@ -746,6 +746,7 @@ kbd {
 .readiness-track .ready { background: var(--kind-merge); }
 .readiness-track .blocked { background: var(--tone-blue-47); }
 .readiness-track .review { background: var(--state-review); }
+.readiness-track .timed-out { background: var(--kind-condition); }
 .legend { display: flex; flex-wrap: wrap; gap: 9px; color: var(--text-tertiary); font-size: var(--text-size-xs); }
 .legend span { display: inline-flex; align-items: center; gap: 4px; }
 
@@ -1397,6 +1398,7 @@ kbd {
 .run-tools > summary:hover { color: var(--text-primary); }
 .run-hint { margin: 0; color: var(--text-secondary); font-size: var(--text-size-xs); line-height: 1.45; }
 .run-hint.is-warn { color: var(--kind-condition); }
+.run-hint.is-budget { color: var(--kind-condition); }
 .run-output-wrap {
   min-width: 0; display: flex; flex-direction: column; min-height: 0; padding: 13px 14px; gap: 8px;
   /* The console output, gate pills, thermochemistry card and recent runs add up to
@@ -1465,6 +1467,10 @@ kbd {
 .queue-item.is-blocked .queue-dot { background: var(--kind-condition); }
 .queue-item.is-cancelled .queue-dot { background: var(--text-secondary); }
 .queue-item.is-running .queue-meta { color: var(--kind-merge); }
+/* Issue 177: stopped at the wall-clock limit — neither a pass nor a rejection. */
+.queue-item.is-timed-out .queue-dot { background: var(--kind-condition); }
+.queue-item .queue-budget { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.queue-item.is-running .queue-budget { color: var(--kind-merge); }
 .run-history { margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
 .run-history .run-output-head { align-items: center; }
 .run-history .queue-list { max-height: 120px; }

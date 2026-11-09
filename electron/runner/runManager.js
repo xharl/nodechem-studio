@@ -111,6 +111,11 @@ export class RunManager {
     }
 
     const dryRun = Boolean(payload.dryRun);
+    // Issue 177: the task's wall-clock limit, in whole seconds. Zero means no
+    // limit — the queue always sends one; a direct `runTask` from the UI may not.
+    const timeoutSeconds = Number.isInteger(Number(payload.timeoutSeconds)) && Number(payload.timeoutSeconds) > 0
+      ? Number(payload.timeoutSeconds)
+      : 0;
     if (!dryRun) {
       if (!payload.executable) throw new Error(`Choose the ${engine.label} executable before running without dry-run.`);
       const stat = await fsp.stat(payload.executable).catch(() => null);
@@ -220,13 +225,107 @@ export class RunManager {
       throw error;
     }
 
-    const context = { runId, runDir, payload, engine, scratchDir, cancelled: false, timer: null, runner: null, outputMeta: null };
+    const context = { runId, runDir, payload, engine, scratchDir, cancelled: false, timedOut: false, finished: false, timer: null, runner: null, outputMeta: null, lastOutputLine: null, timeoutSeconds };
     this.active.set(runId, context);
     this.emit({ type: 'started', runId, runDir, record });
     this.execute(context).catch(async (error) => {
       await this.fail(context, error);
     });
     return { runId, runDir, status: 'running' };
+  }
+
+  /**
+   * Remember the last line the engine printed (issue 177).
+   *
+   * When a run is stopped for taking too long, the last line is the only
+   * evidence of where it was. It is the literal last non-empty line written —
+   * never an inference from the elapsed time or the route.
+   */
+  noteOutputText(context, text) {
+    const lines = String(text ?? '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length > 0) context.lastOutputLine = lines[lines.length - 1].slice(0, 300);
+  }
+
+  /**
+   * Await one engine invocation under a wall-clock limit (issue 177).
+   *
+   * Enforced here, in one place, because every engine has the same failure
+   * mode: the process is alive and will not finish. The limit is a race, not a
+   * guarded wait — a runner whose promise never settles (a wrapper waiting on a
+   * pipe, a fake in a test) must not keep the queue slot either.
+   *
+   * @returns {Promise<{timedOut: true, elapsedMs: number}|{result: object}>}
+   */
+  async awaitUnderLimit(promise, limitSeconds) {
+    // Both handlers are attached here, so an invocation that settles after the
+    // deadline is abandoned without becoming an unhandled rejection.
+    const settled = promise.then((result) => ({ result }), (error) => ({ error }));
+    if (!(limitSeconds > 0)) {
+      const outcome = await settled;
+      if (outcome.error) throw outcome.error;
+      return { result: outcome.result };
+    }
+    const startedAt = Date.now();
+    let timer = null;
+    const expired = new Promise((resolve) => {
+      timer = setTimeout(
+        () => resolve({ timedOut: true, elapsedMs: Date.now() - startedAt }),
+        limitSeconds * 1000,
+      );
+    });
+    let outcome;
+    try {
+      outcome = await Promise.race([settled, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (outcome.timedOut) return outcome;
+    if (outcome.error) throw outcome.error;
+    return { result: outcome.result };
+  }
+
+  /**
+   * Stop a run that reached its limit and record that fact.
+   *
+   * The process tree is stopped before the record is written, and the
+   * runner's report says whether SIGTERM was enough (`escalated`) and whether
+   * anything was still alive afterwards (`survived`). A partially written log
+   * is not parsed: `parsed` and `gates` stay null, so a truncated file can
+   * never be read as a result.
+   */
+  async finishTimedOut(context, elapsedMs) {
+    context.timedOut = true;
+    let termination = null;
+    try {
+      termination = await context.runner?.cancel();
+    } catch {
+      // A failed kill is reported as unverified, never as a stop.
+      termination = null;
+    }
+    const limitSeconds = context.timeoutSeconds;
+    const elapsedSeconds = Math.max(0, Math.round((elapsedMs / 1000) * 10) / 10);
+    const tree = termination && typeof termination === 'object'
+      ? { escalated: termination.escalated === true, survived: termination.survived === true }
+      : null;
+    const lastOutput = context.lastOutputLine || null;
+    await this.finish(context, {
+      status: 'timed out',
+      exitCode: null,
+      parsed: null,
+      gates: null,
+      error: `Stopped after ${elapsedSeconds.toFixed(1)} s: the ${limitSeconds} s wall-clock limit was reached`
+        + `${tree?.survived ? ' and the process tree did not report itself gone' : ' and the process tree was stopped'}`
+        + '; the output was not parsed.',
+      timeout: {
+        limitSeconds,
+        elapsedSeconds,
+        lastOutput,
+        tree,
+      },
+    });
   }
 
   async execute(context) {
@@ -284,7 +383,10 @@ export class RunManager {
       const runner = this.runnerFor(engine);
       context.runner = runner;
       const timeoutMs = Number(payload.timeoutMs) || 0;
-      const onOutput = ({ text }) => this.emit({ type: 'output', runId, text });
+      const onOutput = ({ text }) => {
+        this.noteOutputText(context, text);
+        this.emit({ type: 'output', runId, text });
+      };
       const argv = Array.isArray(payload.argv) && payload.argv.length > 0
         ? payload.argv.map(String) : [payload.inputName];
       const runArgs = {
@@ -294,29 +396,38 @@ export class RunManager {
         timeoutMs,
         onOutput,
       };
+      let invocation;
       let result;
       if (engine.id === 'xtb') {
-        result = await runner.run({
+        invocation = runner.run({
           ...runArgs,
           argv,
           xtbPath: payload.xtbPath || null,
           threads: payload.settings?.xtbThreads ?? null,
         });
       } else if (engine.id === 'orca') {
-        result = await runner.run({ ...runArgs, argv });
+        invocation = runner.run({ ...runArgs, argv });
       } else if (engine.id === 'psi4') {
-        result = await runner.run({
+        invocation = runner.run({
           ...runArgs,
           argv,
           threads: payload.settings?.psi4Threads ?? payload.settings?.nproc ?? null,
         });
       } else {
-        result = await runner.run({
+        invocation = runner.run({
           ...runArgs,
           inputName: payload.inputName,
           scratchDir,
         });
       }
+      // Issue 177: the wall clock starts when the engine is launched and the
+      // task is stopped when it runs out, whatever the engine is doing.
+      const awaited = await this.awaitUnderLimit(invocation, context.timeoutSeconds);
+      if (awaited.timedOut) {
+        await this.finishTimedOut(context, awaited.elapsedMs);
+        return;
+      }
+      result = awaited.result;
       outputText = result.outputText;
       exitCode = result.exitCode;
       context.engineId = engine.id;
@@ -484,8 +595,11 @@ export class RunManager {
     };
   }
 
-  async finish(context, { status, exitCode, parsed, gates, error, outputProvenance = null }) {
+  async finish(context, { status, exitCode, parsed, gates, error, outputProvenance = null, timeout = null }) {
     const { runId, runDir } = context;
+    // One record per run: a second settle (a cancelled invocation resolving
+    // after the deadline already stopped it) must not rewrite the verdict.
+    if (context.finished) return;
     const runPath = path.join(runDir, 'run.json');
     const record = JSON.parse(await fsp.readFile(runPath, 'utf8'));
     const output = outputProvenance || null;
@@ -524,15 +638,20 @@ export class RunManager {
       parsed,
       gates,
       error,
+      // Issue 177: present only on a run stopped by its wall-clock limit, so a
+      // run that finished inside it is byte-identical to a run from before.
+      ...(timeout ? { timeout } : {}),
       finishedAt: new Date().toISOString(),
     };
     await writeJson(runPath, finished);
+    context.finished = true;
     this.active.delete(runId);
     this.emit({ type: 'done', runId, runDir, record: finished });
   }
 
   async fail(context, error) {
-    if (context.cancelled) return;
+    // A run that was stopped for taking too long has already settled.
+    if (context.cancelled || context.timedOut || context.finished) return;
     await this.finish(context, {
       status: 'failed',
       exitCode: null,
@@ -545,14 +664,19 @@ export class RunManager {
   async cancel(runId) {
     const context = this.active.get(runId);
     if (!context) return { canceled: false, reason: 'not-active' };
+    if (context.finished) return { canceled: false, reason: 'settled' };
     context.cancelled = true;
     if (context.timer) clearTimeout(context.timer);
+    // The runner stops the whole tree (issue 177); this does not wait for that
+    // report, because the record is written when the runner's own promise
+    // settles and a UI cancel must return at once.
     context.runner?.cancel();
     return { canceled: true };
   }
 
   cancelAll() {
     for (const context of this.active.values()) {
+      if (context.finished) continue;
       context.cancelled = true;
       if (context.timer) clearTimeout(context.timer);
       context.runner?.cancel();

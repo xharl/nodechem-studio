@@ -10,7 +10,7 @@
 import { parseTaskId } from '../shared/flows.js';
 
 const SUCCESS = new Set(['completed', 'skipped']);
-const TERMINAL = new Set(['completed', 'failed', 'blocked', 'cancelled', 'skipped', 'interrupted']);
+const TERMINAL = new Set(['completed', 'failed', 'blocked', 'cancelled', 'skipped', 'interrupted', 'timed out']);
 
 /** `task.recordId` when the planner set it, otherwise the task-id segment. */
 export function recordIdOfTask(task) {
@@ -23,6 +23,9 @@ function statusForTasks(tasks) {
   const statuses = tasks.map((task) => String(task.status || 'pending'));
   if (statuses.some((status) => status === 'failed')) return 'failed';
   if (statuses.some((status) => status === 'needs-review')) return 'needs-review';
+  // Issue 177: its own row status. A stopped record is settled (it counts in
+  // `finished`) but it is not a failure, so it does not read as one.
+  if (statuses.some((status) => status === 'timed out')) return 'timed out';
   if (statuses.some((status) => status === 'running')) return 'running';
   if (statuses.some((status) => status === 'pending')) return 'pending';
   if (statuses.every((status) => status === 'cancelled')) return 'cancelled';

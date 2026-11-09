@@ -47,7 +47,26 @@ const CONFORMER_STAGED_INPUT = 'ensemble.xyz';
 
 const TASK_STATUSES = new Set([
   'pending', 'running', 'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
+  // Issue 177: a task stopped by its wall-clock limit is its own outcome. It is
+  // not `failed`: the engine never said no, the queue gave up.
+  'timed out',
 ]);
+
+/**
+ * The wall-clock limit a task gets when neither the block nor the project names
+ * one (issue 177). Generous on purpose: an hour is longer than any single block
+ * this app plans, and the point is to catch a hang, not to police a slow run.
+ * It is applied at enforcement time and never written into the project file, so
+ * a project saved before this setting existed serialises byte-identically.
+ */
+const DEFAULT_TIMEOUT_SECONDS = 3600;
+
+/** A usable limit from configuration, or null when none was given. */
+function timeoutSecondsFrom(value) {
+  const seconds = Number(value);
+  if (!Number.isInteger(seconds) || seconds < 1) return null;
+  return Math.min(seconds, LIMITS.timeoutSeconds);
+}
 
 const TASK_TYPES = new Set(['input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'note']);
 
@@ -116,6 +135,15 @@ async function writeJsonAtomic(filePath, value) {
 
 function oneLine(value, max = 200) {
   return String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+}
+
+/** The last non-empty line of a captured stream, or null (issue 177). */
+function lastLineOf(text, max = 300) {
+  const lines = String(text ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.length > 0 ? lines[lines.length - 1].slice(0, max) : null;
 }
 
 /** The hash a manifest entry records; computed here, never in a pure module. */
@@ -332,6 +360,8 @@ function conformerTaskRecord(raw, nodeId) {
     reaction: null,
     conformer: null,
     fanOut,
+    // Issue 177: a per-block wall-clock limit, or null to inherit the project's.
+    timeoutSeconds: timeoutSecondsFrom(raw?.settings?.timeoutSeconds),
     loopAttempts: 0,
     conditionResult: null,
     summary: null,
@@ -630,6 +660,9 @@ function taskRecord(raw, index) {
     conformer,
     pendingInput,
     fanOut,
+    // Issue 177: the block's own wall-clock limit, or null to inherit the
+    // project's. Never invented here — an absent value stays absent.
+    timeoutSeconds: timeoutSecondsFrom(raw?.settings?.timeoutSeconds),
     // Issue 193: the series derivation, so the run record can say "the 4-mer of
     // that unit" without re-deriving it from a task id or a file name.
     series: seriesTaskRecord(raw?.series),
@@ -899,6 +932,9 @@ export class QueueManager {
     const scratchDir = String(options.scratchDir || '').trim();
     // RFC 0001: 1 keeps the sequential drain every existing queue had.
     const maxParallel = Math.max(1, Math.min(Number(options.maxParallel) || 1, LIMITS.maxParallel));
+    // Issue 177: the project's wall-clock limit for one task. Absent from the
+    // start payload means the generous default, never "no limit".
+    const timeoutSeconds = timeoutSecondsFrom(options.timeoutSeconds) ?? DEFAULT_TIMEOUT_SECONDS;
     const calcEngines = [...new Set(tasks
       .filter((task) => task.executable && task.type === 'calc')
       .map((task) => String(task.engine || 'gaussian')))];
@@ -951,6 +987,10 @@ export class QueueManager {
         projectDir: options.projectDir || this.projectDir || null,
       },
       maxParallel,
+      // Issue 177: the wall-clock limit every task inherits unless its own
+      // block overrides it. Persisted with the queue so a replay enforces what
+      // the run enforced, and shown on the running row as elapsed-vs-limit.
+      timeoutSeconds,
       edges,
       tasks,
       // Method ladders: one verdict per ladder group, evaluated when every rung
@@ -984,7 +1024,7 @@ export class QueueManager {
    * over the rungs that did run.
    */
   async evaluateLadders(queue) {
-    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted']);
+    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted', 'timed out']);
     const groups = new Map();
     for (const task of queue.tasks) {
       if (!task.ladder?.id) continue;
@@ -1028,7 +1068,7 @@ export class QueueManager {
    * rather than assumed to be higher.
    */
   async evaluateSpins(queue) {
-    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted']);
+    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted', 'timed out']);
     const groups = new Map();
     for (const task of queue.tasks) {
       if (!task.spin?.id) continue;
@@ -1063,7 +1103,7 @@ export class QueueManager {
    * entry says which one, and no number is written.
    */
   async evaluateReactions(queue) {
-    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted']);
+    const finished = new Set(['completed', 'failed', 'needs-review', 'cancelled', 'blocked', 'skipped', 'interrupted', 'timed out']);
     const byNodeId = new Map(queue.tasks.map((task) => [task.nodeId, task]));
     let changed = false;
     for (const task of queue.tasks) {
@@ -1191,7 +1231,7 @@ export class QueueManager {
    * a report naming the records that failed.
    */
   outputReady(queue, task) {
-    const terminal = new Set(['completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted']);
+    const terminal = new Set(['completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted', 'timed out']);
     const sources = queue.edges
       .filter((edge) => edge.to === task.nodeId && edge.type !== 'loop')
       .map((edge) => queue.tasks.find((entry) => entry.nodeId === edge.from))
@@ -1386,6 +1426,7 @@ export class QueueManager {
     task.finishedAt = null;
     task.error = null;
     task.reason = null;
+    task.timeout = null;
     queue.currentTaskId = task.nodeId;
     await this.persist(queue);
     this.publish(queue);
@@ -1460,10 +1501,29 @@ export class QueueManager {
           argv,
           cwd: dir,
           outputName: task.outputName,
+          // Issue 177: the same wall-clock limit the calculation tasks get.
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
           onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
         }).finally(() => {
           if (this.conformersRunner === runner) this.conformersRunner = null;
         });
+        if (result.timedOut) {
+          // A killed search left a partial ensemble; it is not a result.
+          const startedAt = Date.parse(task.startedAt || '') || Date.now();
+          const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 100) / 10);
+          task.status = 'timed out';
+          task.timeout = {
+            limitSeconds: this.taskTimeoutSeconds(queue, task),
+            elapsedSeconds,
+            lastOutput: lastLineOf(result.outputText),
+          };
+          task.error = `Stopped after ${elapsedSeconds.toFixed(1)} s: the ${task.timeout.limitSeconds} s wall-clock limit was reached; the search output was not used.`;
+          task.finishedAt = new Date().toISOString();
+          this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Timed out: ${task.error}\n` });
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
         if (result.cancelled) throw new Error('Conformer search cancelled by the user.');
         if (Number(result.exitCode) !== 0) {
           throw new Error(`CREST exited with code ${result.exitCode}; see ${task.outputName} in the queue folder.`);
@@ -1662,6 +1722,19 @@ export class QueueManager {
     return null;
   }
 
+  /**
+   * The wall-clock limit one task gets (issue 177).
+   *
+   * Precedence is the block's own value, then the queue's (which the project's
+   * runner setting filled in), then the generous default. Never "no limit":
+   * an unbounded task is the failure this exists to stop.
+   */
+  taskTimeoutSeconds(queue, task) {
+    return timeoutSecondsFrom(task?.timeoutSeconds)
+      ?? timeoutSecondsFrom(queue?.timeoutSeconds)
+      ?? DEFAULT_TIMEOUT_SECONDS;
+  }
+
   async runTask(queue, task) {
     let checkpointHandoff = null;
     if (task.checkpointFrom && !task.checkpointFrom.geometryOnly) {
@@ -1704,6 +1777,7 @@ export class QueueManager {
     task.finishedAt = null;
     task.error = null;
     task.reason = null;
+    task.timeout = null;
     task.runId = null;
     task.runDir = null;
     queue.currentTaskId = task.nodeId;
@@ -1767,6 +1841,10 @@ export class QueueManager {
         executable: queueExecutableFor(queue, task),
         scratchDir: queue.options.scratchDir,
         dryRun: queue.options.dryRun,
+        // Issue 177: this task's wall-clock limit — the block's own when it
+        // declared one, otherwise the queue's. The run manager stops the
+        // process tree and records `timed out` with the limit and elapsed.
+        timeoutSeconds: this.taskTimeoutSeconds(queue, task),
         gates: task.gates,
         validity,
         checkpointHandoff,
@@ -1795,8 +1873,12 @@ export class QueueManager {
       }
 
       const record = await this.waitForRun(response.runId);
+      const timedOut = record.status === 'timed out';
       task.gateVerdict = record.gates?.overall || null;
-      task.summary = conditionFields(record.parsed, record.gates);
+      // A timed-out run produced no result, so it carries no condition fields:
+      // a downstream condition must block on "no parsed result", not read a
+      // wall of `false` as a verdict the engine never gave.
+      task.summary = timedOut ? null : conditionFields(record.parsed, record.gates);
       // Keep only the records a downstream validity check needs; the full
       // parsed output stays in the run folder.
       task.parsedSummary = record.parsed ? {
@@ -1823,8 +1905,29 @@ export class QueueManager {
       } : null;
       task.status = record.status === 'completed' ? 'completed'
         : record.status === 'needs-review' ? 'needs-review'
-          : record.status === 'cancelled' ? 'cancelled' : 'failed';
+          // Issue 177: its own state. Folding it into `failed` would report the
+          // engine as having refused the calculation, with exit code 143.
+          : record.status === 'timed out' ? 'timed out'
+            : record.status === 'cancelled' ? 'cancelled' : 'failed';
       task.error = record.error || null;
+      // The limit, the elapsed seconds and the last output line travel onto the
+      // task so the queue row can say them without re-reading the record.
+      task.timeout = record.timeout && typeof record.timeout === 'object'
+        ? {
+          limitSeconds: Number(record.timeout.limitSeconds) || null,
+          elapsedSeconds: Number.isFinite(Number(record.timeout.elapsedSeconds))
+            ? Number(record.timeout.elapsedSeconds) : null,
+          lastOutput: record.timeout.lastOutput || null,
+        }
+        : null;
+      if (timedOut) {
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: `Timed out: ${task.error}\n`,
+        });
+      }
       if (task.status === 'needs-review' && !task.error) {
         task.error = 'One or more gates did not pass; review the run output before continuing.';
       }
@@ -2243,7 +2346,7 @@ export class QueueManager {
       for (const edge of queue.edges) {
         if (edge.from === id && edge.type !== 'loop') stack.push(edge.to);
       }
-      if (!['completed', 'failed', 'needs-review', 'blocked', 'skipped', 'interrupted'].includes(task.status)) continue;
+      if (!['completed', 'failed', 'needs-review', 'blocked', 'skipped', 'interrupted', 'timed out'].includes(task.status)) continue;
       task.history = [
         ...(task.history || []),
         { runId: task.runId, status: task.status, gateVerdict: task.gateVerdict, finishedAt: task.finishedAt },
@@ -2256,6 +2359,7 @@ export class QueueManager {
       task.conditionResult = null;
       task.error = null;
       task.reason = null;
+      task.timeout = null;
       task.startedAt = null;
       task.finishedAt = null;
       reset.push(id);

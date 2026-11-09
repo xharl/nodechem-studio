@@ -50,6 +50,7 @@ export function nodeStatesFromQueue(tasks, { typeOf = () => null } = {}) {
       // unresolved and keeps whatever state it had.
       if (CONTROL_TYPES.has(String(typeOf(parentId) || ''))) states.set(parentId, 'passed');
     } else if (statuses.some((status) => status === 'failed')) states.set(parentId, 'review');
+    else if (statuses.some((status) => status === 'timed out')) states.set(parentId, 'timed out');
     else if (completed.length > 0 && !everyCompletedPassed) states.set(parentId, 'review');
     else if (everyCompletedPassed) states.set(parentId, 'passed');
     else if (statuses.some((status) => status === 'blocked')) states.set(parentId, 'blocked');
@@ -71,6 +72,12 @@ export function nextAction(nodes) {
   const list = (Array.isArray(nodes) ? nodes : []).filter((node) => node?.type !== 'note');
   const review = list.find((node) => node?.state === 'review');
   if (review) return { node: review, kind: 'review' };
+  // Issue 177: a block stopped at its wall-clock limit is not something to fix
+  // in the method or the code — it has no output to review at all. It outranks
+  // unrun work because it has already cost the user a slot, and the decision
+  // (raise the limit, or investigate the engine) is theirs.
+  const timedOut = list.find((node) => node?.state === 'timed out');
+  if (timedOut) return { node: timedOut, kind: 'timeout' };
   const ready = list.find((node) => node?.state === 'ready');
   if (ready) return { node: ready, kind: 'ready' };
   return null;

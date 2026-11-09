@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
+import { terminateTree, treeSpawnOptions } from './processTree.js';
 
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
@@ -87,13 +88,11 @@ export class XtbRunner {
       let truncated = false;
       let timeout = null;
 
-      const child = spawn(executable, args, {
+      const child = spawn(executable, args, treeSpawnOptions({
         cwd,
         env,
-        windowsHide: true,
-        shell: false,
         stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      }));
       this.child = child;
 
       child.stdout.on('data', (chunk) => {
@@ -160,19 +159,10 @@ export class XtbRunner {
 
   cancel() {
     const child = this.child;
-    if (!child) return;
+    if (!child) return undefined;
     this.cancelled = true;
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      killer.unref();
-    } else {
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
-      }, 2000).unref();
-    }
+    // Issue 177: same whole-tree discipline as every other engine — xTB can
+    // leave its parameter helper running if only the direct child is signalled.
+    return terminateTree(child);
   }
 }

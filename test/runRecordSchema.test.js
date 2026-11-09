@@ -42,7 +42,7 @@ const v1Schema = loadRecordSchema(1);
  * produce. Each one is exercised below; anything else missing from a fixture
  * would mean the schema describes a record the app does not write.
  */
-const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay']);
+const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay', 'timeout']);
 
 describe('run-record schema — publication', () => {
   it('is a draft 2020-12 schema with a version and an id', () => {
@@ -149,6 +149,35 @@ describe('run-record schema — field coverage', () => {
     const nulled = JSON.parse(JSON.stringify(fixtures[0].record));
     nulled.record = null;
     expect(validateRecord(nulled).ok).toBe(false);
+  });
+
+  it('validates a timed-out record and refuses an invented one (issue 177)', () => {
+    const record = JSON.parse(JSON.stringify(fixtures[0].record));
+    record.status = 'timed out';
+    record.parsed = null;
+    record.gates = null;
+    record.exitCode = null;
+    record.timeout = {
+      limitSeconds: 60,
+      elapsedSeconds: 60.4,
+      lastOutput: ' SCF Done:  E(RB3LYP) = -76.0267608317',
+      tree: { escalated: false, survived: false },
+    };
+    expect(validateRecord(record).errors).toEqual([]);
+    expect(validateRecord(record, { version: 1 }).errors).toEqual([]);
+    // `timed out` must not be read as a failure that carries a result.
+    expect(record.parsed).toBe(null);
+    // A limit below 1 s, a negative elapsed time, or a missing last output is
+    // not a record of a stop: the schema refuses it rather than rounding it.
+    for (const mutate of [
+      (copy) => { copy.timeout.limitSeconds = 0; },
+      (copy) => { copy.timeout.elapsedSeconds = -1; },
+      (copy) => { delete copy.timeout.lastOutput; },
+    ]) {
+      const bad = JSON.parse(JSON.stringify(record));
+      mutate(bad);
+      expect(validateRecord(bad).ok, JSON.stringify(bad.timeout)).toBe(false);
+    }
   });
 
   it('requires every envelope field, and accepts a record without schemaVersion', () => {

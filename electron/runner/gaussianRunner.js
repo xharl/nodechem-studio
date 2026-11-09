@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
 import { discoverOutput, outputCandidates } from './outputDiscovery.js';
+import { terminateTree, treeSpawnOptions } from './processTree.js';
 import { outputEvidence } from '../../src/shared/gaussianOutput.js';
 import { gaussianInstallDir } from './gaussianPlatform.js';
 
@@ -135,13 +136,11 @@ export class GaussianRunner {
     let polling = null;
     let timeout = null;
 
-    const child = spawn(executable, [inputName], {
+    const child = spawn(executable, [inputName], treeSpawnOptions({
       cwd,
       env,
-      windowsHide: true,
-      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    }));
     this.child = child;
 
     child.stdout.on('data', (chunk) => {
@@ -218,19 +217,10 @@ export class GaussianRunner {
 
   cancel() {
     const child = this.child;
-    if (!child) return;
+    if (!child) return undefined;
     this.cancelled = true;
-    if (process.platform === 'win32') {
-      const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      killer.unref();
-    } else {
-      child.kill('SIGTERM');
-      setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
-      }, 2000).unref();
-    }
+    // The whole tree, not just the process that was spawned (issue 177): a
+    // Gaussian Link dying must not leave its helpers holding the queue slot.
+    return terminateTree(child);
   }
 }

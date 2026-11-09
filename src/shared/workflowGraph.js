@@ -22,9 +22,19 @@ export const ORDERING_EDGE_TYPES = Object.freeze(['dependency', 'checkpoint', 'b
 
 export const TERMINAL_STATUSES = Object.freeze([
   'completed', 'failed', 'needs-review', 'blocked', 'skipped', 'cancelled', 'interrupted',
+  // Issue 177: a task the queue stopped at its wall-clock limit is settled —
+  // the queue must move on, not wait for a process it already killed.
+  'timed out',
 ]);
 
 export const FAILED_STATUSES = Object.freeze(['failed', 'cancelled', 'interrupted']);
+
+/**
+ * States a dependent cannot run on. `timed out` is not a failure verdict, but
+ * it did leave no output, so a task that needs this one's result is blocked
+ * rather than run on stale or missing data.
+ */
+const UNUSABLE_STATUSES = Object.freeze([...FAILED_STATUSES, 'timed out']);
 
 const isTerminal = (status) => TERMINAL_STATUSES.includes(status);
 const isSatisfied = (status) => status === 'completed' || status === 'skipped';
@@ -136,7 +146,7 @@ export function blockedPendingTasks(tasks, edges) {
     if (task.status !== 'pending') continue;
     for (const id of prerequisites.get(task.nodeId)) {
       const source = byId.get(id);
-      if (source.status === 'blocked' || source.status === 'needs-review' || FAILED_STATUSES.includes(source.status)) {
+      if (source.status === 'blocked' || source.status === 'needs-review' || UNUSABLE_STATUSES.includes(source.status)) {
         blocked.push({ nodeId: task.nodeId, reason: `blocked by ${source.title || source.nodeId} (${source.status})` });
         break;
       }
@@ -151,7 +161,8 @@ export function blockedPendingTasks(tasks, edges) {
  *   completed     → every task completed or skipped
  *   partial       → some records finished and some failed (RFC 0001)
  *   failed        → at least one task failed and nothing succeeded
- *   needs-review  → gates failed or control-flow nodes blocked
+ *   needs-review  → gates failed, control-flow nodes blocked, or a task stopped
+ *                   at its wall-clock limit (issue 177)
  *   cancelled     → cancelled with no failures
  *
  * `partial` exists because a family run that lost three records of two hundred
@@ -171,10 +182,15 @@ export function finalStatus(tasks) {
   // needs-review, exactly as before.
   const failed = statuses.filter((status) => status === 'failed' || status === 'interrupted'
     || (recordScoped && status === 'needs-review')).length;
+  const timedOut = statuses.filter((status) => status === 'timed out').length;
   // `partial` is a record-family verdict: a graph that lost one block and ran
   // another is still a failed graph. A dataset run that lost three records of
   // two hundred is neither a pass nor a failure.
   if (failed > 0) return recordScoped && succeeded > 0 ? 'partial' : 'failed';
+  // Issue 177: a run stopped at its wall-clock limit is not a code failure and
+  // not a pass. A family that lost one record reports `partial`; anything else
+  // asks for a human decision — raise the limit, or look at the engine.
+  if (timedOut > 0) return recordScoped && succeeded > 0 ? 'partial' : 'needs-review';
   if (statuses.includes('needs-review') || statuses.includes('blocked')) return 'needs-review';
   if (statuses.includes('cancelled')) return 'cancelled';
   return 'completed';

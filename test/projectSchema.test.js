@@ -142,6 +142,51 @@ function projectWithNode(node) {
   };
 }
 
+describe('project schema — the optional wall-clock limit (issue 177)', () => {
+  it('leaves an absent runner.timeoutSeconds absent, so an old project is unchanged', () => {
+    const result = validateProject(legacyProject());
+    expect(result.ok).toBe(true);
+    expect(result.project.runner).toEqual({ maxParallel: 1 });
+    expect(Object.keys(result.project.runner)).not.toContain('timeoutSeconds');
+  });
+
+  it('accepts a project limit and a per-block override, and round-trips them', () => {
+    const project = {
+      ...validateProject(legacyProject()).project,
+      runner: { maxParallel: 1, timeoutSeconds: 120 },
+      nodes: [calcNode({ settings: { ...defaultSettings(), timeoutSeconds: 45 } })],
+      edges: [],
+    };
+    const result = validateProject(project);
+    expect(result.ok, summarizeErrors(result.errors)).toBe(true);
+    expect(result.project.runner.timeoutSeconds).toBe(120);
+    expect(result.project.nodes[0].settings.timeoutSeconds).toBe(45);
+    const text = stringifyProject(result.project).text;
+    const reread = parseProjectText(text).project;
+    expect(reread.runner.timeoutSeconds).toBe(120);
+    expect(reread.nodes[0].settings.timeoutSeconds).toBe(45);
+    expect(stringifyProject(reread).text).toBe(text);
+  });
+
+  it('refuses a limit below one second or above the day cap', () => {
+    for (const value of [0, -5, 86401]) {
+      const project = {
+        ...validateProject(legacyProject()).project,
+        runner: { maxParallel: 1, timeoutSeconds: value },
+      };
+      const result = validateProject(project);
+      expect(result.ok, `runner.timeoutSeconds=${value}`).toBe(false);
+      expect(hasErrorAt(result, 'runner.timeoutSeconds')).toBe(true);
+    }
+  });
+
+  it('does not read the block limit as a typo', () => {
+    const project = projectWithNode(calcNode({ settings: { ...defaultSettings(), timeoutSeconds: 30 } }));
+    const result = validateProject(project);
+    expect(result.warnings.some((warning) => /timeoutSeconds/.test(String(warning.message || warning)))).toBe(false);
+  });
+});
+
 function calcNode(overrides = {}) {
   return {
     id: 'calc-1',
