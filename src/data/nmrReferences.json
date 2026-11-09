@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "$comment": "Adding an entry requires a citation. A reference shielding is the sigma of a standard computed at one exact level of theory; an entry without that level and a source for it is a borrowed number, not a reference. The loader in src/shared/nmrReferences.js refuses an entry that has no citation.",
+  "note": "Empty on purpose. Computing sigma(TMS), sigma(CFCl3) or sigma(H3PO4) at a new method/basis is a run per level, not a constant. Until such a run exists in this repository there is nothing honest to put here, so every lookup returns delta = null with the reason 'no reference for <method>/<basis>'.",
+  "entries": []
+}
