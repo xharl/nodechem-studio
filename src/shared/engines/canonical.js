@@ -26,6 +26,9 @@
  *                      transitionDipoleCount } | absent,
  *     epr: { status: 'open-shell'|'closed-shell'|'unavailable', populations,
  *            hyperfine, gTensor } | absent,   // issue 168
+ *     solvation: { provider, model, solvent, radiiSet, gasPhaseHartree,
+ *                  solvatedHartree, deltaHartree, deltaKcal,
+ *                  interactionHartree } | absent,  // issue 167, DDX only
  *     extras: { ... },                            // engine-specific evidence
  *     lineCount
  *   }
@@ -86,6 +89,11 @@ export function canonicalResult({
   // SAPT's interaction-energy table, when the engine produced one. Kept out of
   // `finalEnergy` on purpose: it is not a total energy for the complex.
   sapt = null,
+  // Issue 167: the DDX solvation block (model, solvent, cavity, the gas-phase
+  // and solvated energies and their difference). Passed through whole for the
+  // same reason as `epr`: a difference without the model and the cavity that
+  // produced it is a number nobody can check. Absent on a vacuum run.
+  solvation = null,
   // An excitation table, when the engine computed one. Present only for a job
   // that asked for excited states; absent otherwise, so a Gaussian log without a
   // TD section and a Psi4 single point look the same to every consumer.
@@ -169,6 +177,10 @@ export function canonicalResult({
       source: finalEnergy.source ? String(finalEnergy.source) : null,
     },
     ...(sapt && typeof sapt === 'object' ? { sapt } : {}),
+    // Issue 167: a block without a `provider` is not a solvation section and is
+    // dropped rather than passed on as an empty one.
+    ...(solvation && typeof solvation === 'object'
+      && typeof solvation.provider === 'string' ? { solvation } : {}),
     ...(excitedStates && Array.isArray(excitedStates.states) && excitedStates.states.length > 0
       ? {
         excitedStates: {

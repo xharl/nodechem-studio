@@ -313,6 +313,55 @@ function saptCard(parsed, flags) {
     + caveatHtml(flags, 'The SAPT decomposition'));
 }
 
+/**
+ * Issue 167: what the solvent did — three numbers, not one.
+ *
+ * `ΔE(solv)` is the difference between the two single points the deck runs.
+ * `DDX solute–solvent interaction` is the `DD Solvation Energy` row Psi4 prints
+ * at the solvated density; it is a *different* quantity (the two differ by
+ * 0.65 mEh on water/6-31G*), so it gets its own row and is never added to or
+ * subtracted from the difference. Nothing on this card is a free energy: the
+ * note says what a solvation free energy would additionally need.
+ */
+function solvationCard(parsed, flags) {
+  const block = isObject(parsed?.solvation) ? parsed.solvation : null;
+  if (!block) return '';
+  const eh = (value) => (Number.isFinite(value) ? `${value.toFixed(8)} Eh` : missingHtml());
+  const kcal = (value) => (Number.isFinite(value) ? `${value.toFixed(2)} kcal/mol` : missingHtml());
+  const model = text(block.model);
+  const version = text(block.pyddxVersion);
+  const solvent = text(block.solvent);
+  const epsilon = Number.isFinite(block.dielectricConstant) ? block.dielectricConstant : null;
+  const cavity = [text(block.radiiSet), Number.isFinite(block.radiiScaling) ? `×${block.radiiScaling}` : null]
+    .filter(Boolean).join(' ');
+  const rows = [
+    fieldValue('Gas phase', eh(block.gasPhaseHartree), 'solvation-gas'),
+    fieldValue('In solvent', eh(block.solvatedHartree), 'solvation-solvated'),
+    fieldValue('ΔE(solv)', `${eh(block.deltaHartree)} · ${kcal(block.deltaKcal)}`, 'solvation-delta'),
+    fieldValue('DDX solute–solvent interaction',
+      `${eh(block.interactionHartree)} · ${kcal(block.interactionKcal)}`, 'solvation-interaction'),
+    fieldValue('Model', model
+      ? esc(`${model.toUpperCase()} (DDX${version ? ` ${version}` : ''})`) : missingHtml(), 'solvation-model'),
+    fieldValue('Solvent', solvent
+      ? esc(`${solvent}${epsilon === null ? '' : ` · ε = ${epsilon}`}`) : missingHtml(), 'solvation-solvent'),
+    fieldValue('Cavity', cavity ? esc(cavity) : missingHtml(), 'solvation-cavity'),
+  ];
+  const notes = [
+    'DDX-PCM/COSMO is not PCMSolver\'s PCM and not SMD: it solves the continuum on a '
+      + 'surface of atomic spheres with the radii set above.',
+    'ΔE(solv) is an electronic-energy difference between the gas-phase and solvated single '
+      + 'points at one level. It is not a solvation free energy — no cavity work, thermal '
+      + 'correction or standard-state term is applied — and the DDX interaction row is a '
+      + 'different quantity, shown beside it rather than folded into it.',
+  ];
+  if (!Number.isFinite(block.gasPhaseHartree)) {
+    notes.push('This log carries no gas-phase single point, so the difference is not reported.');
+  }
+  return card('Solvation', kv(rows)
+    + notes.map((note) => `<p class="results-note">${esc(note)}</p>`).join('')
+    + caveatHtml(flags, 'The solvation block'));
+}
+
 function energyCard(parsed, flags) {
   const finalEnergy = isObject(parsed?.finalEnergy) ? parsed.finalEnergy : {};
   const scf = isObject(parsed?.scf) ? parsed.scf : {};
@@ -2362,6 +2411,7 @@ export function resultsPanelHtml(record, options = {}) {
       energyCard(parsed, flags),
       spinSweepCard(options.spinSweep, options.spinStates),
       saptCard(parsed, flags),
+      solvationCard(parsed, flags),
       thermochemistryCard(parsed, flags),
       methodsCard(record),
       frequenciesCard(parsed, flags),
