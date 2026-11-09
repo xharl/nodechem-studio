@@ -165,6 +165,71 @@ The path is relative and must stay inside the output folder (no `..`), and its e
 the kind. **Include** chooses one artifact for the whole flow or one per record. **Include manifest**
 adds the SHA-256 list beside the artifact.
 
+## Homologous series
+
+A record set is usually a set of *different* molecules. A **series block** is the other case: one
+record is a repeat unit, and the block expands it into the n-mer, where n runs over a range. Select
+an input block, bind a dataset, and press **Repeat this record as a series…**. The block stays an
+`input` block — it is a *kind* of structure block, not a new block type — so fan-out, conformer
+searches, gates, writers and the report need no change: they see N ordinary records.
+
+```
+series block ──▶ optimise ──▶ frequency ──▶ output
+ unit: monomer    (n=1)        (n=1)        one row per n
+ n = 1…4          (n=2)        (n=2)
+                  (n=3)        (n=3)
+```
+
+The inspector asks for five things:
+
+| Field | Meaning |
+| --- | --- |
+| Repeat unit | which record of the dataset is repeated (one record, not a set) |
+| from n / to n | the range; n = 1 is the unit itself |
+| Donor atom | the atom of copy *i* that forms the new bond (1-based, as written in the geometry) |
+| Acceptor atom | the atom of copy *i+1* that forms it |
+| Junction bond | the length of that new bond, in Å |
+| Leaving atoms | atoms dropped where a junction forms, written `9, 10` |
+
+Member ids name their parent and their n — `monomer-n3` — so a queue row or a record folder is
+traceable without opening the project. Each generated record also carries `parentId`, `n`, the
+member count and the linkage rule.
+
+### What the geometry is, and is not
+
+Each copy of the unit is the unit's **own coordinates**, moved rigidly along the donor → acceptor
+axis. Nothing is rebuilt: every bond length and angle inside a copy is the unit's, and the one new
+bond at each junction is exactly the requested length. That makes the result **a starting point for
+optimisation, not a minimum** — the same status as an imported structure. Optimise a member before
+reading any energy from it.
+
+The step from one copy to the next is the unit's own donor → acceptor distance plus the junction
+bond, which is what makes the new bond come out at the requested length instead of zero.
+
+**Terminal rule.** Leaving atoms are dropped only where a junction forms: a leaving atom on the
+donor side is removed from every copy that uses its donor (all but the first), and one on the
+acceptor side from every copy that uses its acceptor (all but the last). The first and last copies
+therefore keep their outer leaving groups, the chain is capped at both ends, and **n = 1 is the unit
+unchanged**.
+
+### Refused by name
+
+Nothing is generated unless the whole series can be built. The message names the atoms:
+
+| Refused | Message names |
+| --- | --- |
+| donor = acceptor, or either outside the unit | the index and the unit's atom count |
+| a bond that would exceed the element's standard valence | the atom, its element, its current bond order and the limit |
+| a leaving atom bonded to something other than the linkage atoms | both atoms |
+| copies that overlap (an atom pair below 0.5 Å) | both copies and both atoms |
+| `to` above 24, or `from` below 1 | the range and the cap |
+| a member that would hold more than 1 000 atoms | the member size |
+
+Bond orders are not stored on dataset records, so the unit's bonds are perceived from covalent
+radii and counted as single bonds. The valence guard therefore catches over-coordination, not an
+over-valent double bond; a linkage on an atom whose multiple bond matters is a judgement the user
+still has to make.
+
 ## Next
 
 - [Workflows](workflow.md) — the queue, barrier edges, checkpoint hand-off and cluster export.

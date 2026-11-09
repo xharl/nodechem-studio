@@ -16,6 +16,8 @@
  * would leave the flow pointing at the old array.
  */
 
+import { expandSeries, seriesUnitRecord } from './series.js';
+
 export const DEFAULT_FLOW_ID = 'main';
 
 /** Same grammar as node ids: what can appear in a task id and a folder name. */
@@ -168,10 +170,17 @@ export function recordMatchesFilter(record, filter) {
   return String(record?.[field] ?? '').trim() === equals;
 }
 
-/** The records an input block iterates: enabled, then filtered. */
+/** The records an input block iterates: enabled, then filtered, then expanded. */
 export function recordsForInput(input, dataset) {
   const filter = input?.input?.recordFilter;
-  return enabledRecords(dataset).filter((record) => recordMatchesFilter(record, filter));
+  const records = enabledRecords(dataset).filter((record) => recordMatchesFilter(record, filter));
+  const series = input?.input?.series;
+  if (!series) return records;
+  // Issue 169: a series block is a structure block whose unit is one record and
+  // whose output is N generated ones. The expansion happens here, at plan time,
+  // so every consumer of a record set keeps working unchanged. A linkage that
+  // cannot be built throws with the atoms named — never a guessed geometry.
+  return expandSeries(seriesUnitRecord(records, input?.input?.recordId), series).records;
 }
 
 export function inputNodesOf(nodes) {

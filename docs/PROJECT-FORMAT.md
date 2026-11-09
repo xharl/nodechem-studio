@@ -107,7 +107,7 @@ Type-specific payloads:
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
 | `merge` | `merge { policy, notes }` |
-| `input` | `input { datasetId, recordFilter { field, equals } }` — starts iteration (4.3) |
+| `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
 | `note` | `note { text }` |
 
@@ -320,6 +320,59 @@ A block fed by two different datasets is refused at plan time: there is no
 honest pairing between two record sets. A plan is capped at 5 000 tasks, and the
 refusal names the product (`60 records × the blocks they feed`).
 
+### 4.3.1 A series block (`kind: "series"`)
+
+A structure block may carry a **series definition** instead of a plain dataset reference. It is the
+same `input` node type, with `kind: "series"`: one record is the repeat unit, the linkage rule joins
+copy *i* to copy *i+1*, and the range `from … to` says how many copies each member has.
+
+```json
+{ "type": "input", "kind": "series",
+  "input": { "datasetId": "monomers", "recordId": "monomer",
+             "recordFilter": { "field": "", "equals": "" },
+             "series": { "from": 1, "to": 4,
+                         "linkage": { "donor": 3, "acceptor": 8,
+                                      "bondLengthAngstrom": 1.5,
+                                      "leaving": [9, 10] } } } }
+```
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `recordId` | string | the repeat unit, one record id of the block's dataset; absent means "the only enabled record", and more than one candidate is refused |
+| `series.from`, `series.to` | integer | required; `from` ≥ 1, `to` ≥ `from`, at most **24** members |
+| `series.linkage.donor` | integer | required; 1-based atom index of copy *i* that forms the new bond |
+| `series.linkage.acceptor` | integer | required; 1-based atom index of copy *i+1* that forms it |
+| `series.linkage.bondLengthAngstrom` | number | required; the new bond's length, 0.5–4 Å |
+| `series.linkage.leaving` | integer[] | optional; atoms dropped where a junction forms, ≤ 32, default `[]` |
+
+Both keys are absent by default: a project that never asked for a series saves the same bytes it
+did before, and a block whose `kind` is `"series"` without `input.series` is a validation error.
+
+**Expansion is at plan time.** The block yields N ordinary records, one per n, and every consumer of
+a record set — fan-out, conformer searches, gates, writers, the report — sees them exactly as it
+sees dataset records. Member ids are `<recordId>-n<n>` (`monomer-n3`), so the parent and the n
+survive in every task id, run folder and record row. Each generated record carries
+`series { parentId, n, count, of, linkage, terminal }` as provenance.
+
+**Geometry.** Each copy of the unit is the unit's own coordinates translated rigidly along the
+donor → acceptor axis: every bond length and angle inside a copy is the unit's, and the junction bond
+is exactly `bondLengthAngstrom` by construction. The step between copies is the unit's own
+donor → acceptor distance plus that bond length — a single-bond-length step would put the donor of
+copy *i+1* on the acceptor of copy *i* (0 Å). The generated geometry is **a starting point for
+optimisation, not a minimum**.
+
+**Terminal rule.** A leaving atom attached to the donor is dropped from every copy that uses its
+donor (all but the first); one attached to the acceptor from every copy that uses its acceptor (all
+but the last). The end copies keep their outer leaving groups, so the chain is capped at both ends
+and n = 1 is the unit unchanged.
+
+**Refusals** (before any file is written, each naming the atoms): donor = acceptor or outside the
+unit; a bond that would exceed the element's standard valence; a leaving atom bonded to anything
+other than the linkage atoms; copies that overlap (an atom pair below 0.5 Å); a range above 24 or
+below 1; a member above 1 000 atoms. Bonds are perceived from covalent radii and counted as single
+bonds, because dataset records store no bond orders — the valence guard therefore catches
+over-coordination, not an over-valent multiple bond.
+
 ### 4.4 `output` blocks
 
 | Key | Type | Notes |
@@ -350,6 +403,8 @@ Failed and partial records are named in its index, never hidden.
 | Fragments | 64 |
 | Atoms | 1 000 |
 | Records per dataset | 2 000 |
+| Series members per block | 24 |
+| Atoms in one series member | 1 000 |
 | Datasets | 64 |
 | Flows | 32 |
 | Planned tasks | 5 000 |

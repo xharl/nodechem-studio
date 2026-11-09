@@ -13,6 +13,7 @@ import {
   flowsOf,
   nodesOfFlow,
 } from '../shared/flows.js';
+import { seriesMemberCount } from '../shared/series.js';
 
 /**
  * A flow id has the same grammar as a node id (it never reaches a task id, but
@@ -69,15 +70,26 @@ export function nextFlowTitle(flows = []) {
  */
 export function flowTabModels(project) {
   const active = activeFlow(project);
+  const datasets = Array.isArray(project?.datasets) ? project.datasets : [];
   return flowsOf(project).map((flow) => {
     const nodes = nodesOfFlow(flow);
     const inputs = nodes.filter((node) => node.type === 'input');
-    const datasetIds = [...new Set(inputs.map((node) => node.input?.datasetId).filter(Boolean))];
-    const records = datasetIds.reduce((total, id) => {
-      const dataset = (Array.isArray(project?.datasets) ? project.datasets : [])
-        .find((entry) => entry.id === id);
-      return total + (dataset ? enabledRecords(dataset).length : 0);
-    }, 0);
+    // Issue 169: a series block queues one run per member, not one per unit
+    // record, so it contributes its member count to the tab. Plain blocks keep
+    // the old rule: a dataset counts once however many blocks name it.
+    const seen = new Set();
+    let records = 0;
+    for (const node of inputs) {
+      if (node.input?.series) {
+        records += seriesMemberCount(node.input.series);
+        continue;
+      }
+      const id = node.input?.datasetId;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const dataset = datasets.find((entry) => entry.id === id);
+      records += dataset ? enabledRecords(dataset).length : 0;
+    }
     return {
       id: flow.id,
       title: flow.title || flow.id,

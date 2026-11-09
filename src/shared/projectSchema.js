@@ -31,6 +31,7 @@ import {
   flowsOf,
   isPlainObject as isPlainObjectValue,
   nodesOfFlow,
+  recordsForInput,
 } from './flows.js';
 import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, clearCompositeConflicts, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
 import { ENGINE_IDS } from './engines/index.js';
@@ -1286,6 +1287,72 @@ function normalizeOutputRef(c, raw, path, legacy) {
   };
 }
 
+/**
+ * Issue 169: the linkage rule of a series block.
+ *
+ * Shape only — donor/acceptor are 1-based atom indices, the bond length is a
+ * number, `leaving` is a list of 1-based indices. Whether those atoms exist and
+ * whether the linkage can be built is checked against the unit record in
+ * `validateFlow`, because it needs the geometry. Both bounds here are
+ * deliberately wider than the scientific ones (0.5–4 Å, at most 24 members) so
+ * the refusal the user sees is the one that explains the chemistry instead of a
+ * generic range message.
+ */
+function normalizeSeriesLinkage(c, raw, path, legacy) {
+  const source = requiredObject(c, raw, path, legacy, {});
+  warnUnknown(c, source, new Set(['donor', 'acceptor', 'bondLengthAngstrom', 'leaving']), path);
+  const leavingRaw = Array.isArray(source.leaving) ? source.leaving : [];
+  if (source.leaving !== undefined && source.leaving !== null && !Array.isArray(source.leaving)) {
+    c.error(`${path}.leaving`, 'must be an array of atom indices.');
+  }
+  if (leavingRaw.length > 32) {
+    c.error(`${path}.leaving`, 'must list at most 32 leaving atoms.');
+  }
+  const leaving = [];
+  for (const [index, value] of leavingRaw.slice(0, 32).entries()) {
+    const atom = readInteger(c, value, `${path}.leaving[${index}]`, { legacy, fallback: 1, min: 1, max: LIMITS.atoms });
+    if (!leaving.includes(atom)) leaving.push(atom);
+  }
+  return {
+    // Required, not defaulted: a linkage is a claim about specific atoms and a
+    // specific bond, and a guess here would produce a plausible geometry that
+    // nobody asked for.
+    donor: readInteger(c, source.donor, `${path}.donor`, { min: 1, max: LIMITS.atoms }),
+    acceptor: readInteger(c, source.acceptor, `${path}.acceptor`, { min: 1, max: LIMITS.atoms }),
+    bondLengthAngstrom: readNumber(c, source.bondLengthAngstrom, `${path}.bondLengthAngstrom`, {
+      min: 0.1, max: 10,
+    }),
+    leaving,
+  };
+}
+
+/**
+ * Issue 169: a series definition on an `input` block — which record is the
+ * repeat unit, the range of n, and the linkage that joins copy i to copy i+1.
+ * `null` means "this is a normal dataset block", which is what every project
+ * written before the field existed says.
+ */
+function normalizeSeries(c, raw, path, legacy) {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be null or an object with from, to and linkage.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['from', 'to', 'linkage']), path);
+  // The range is part of the definition, so both ends are required: defaulting
+  // either would silently change how many molecules the block claims to make.
+  const from = readInteger(c, raw.from, `${path}.from`, { min: 1, max: 1000 });
+  const to = readInteger(c, raw.to, `${path}.to`, { min: 1, max: 1000 });
+  if (Number.isInteger(from) && Number.isInteger(to) && to < from) {
+    c.error(path, `is empty: n runs from ${from} to ${to}.`);
+  }
+  return {
+    from,
+    to,
+    linkage: normalizeSeriesLinkage(c, raw.linkage, `${path}.linkage`, legacy),
+  };
+}
+
 function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePath = 'nodes') {
   const path = `${basePath}[${index}]`;
   if (!isPlainObject(raw)) {
@@ -1401,20 +1468,38 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
 
   if (type === 'input') {
     const source = requiredObject(c, raw.input, `${path}.input`, legacy, {});
-    warnUnknown(c, source, new Set(['datasetId', 'recordFilter']), `${path}.input`);
+    warnUnknown(c, source, new Set(['datasetId', 'recordFilter', 'recordId', 'series']), `${path}.input`);
     const datasetId = readString(c, source.datasetId, `${path}.input.datasetId`, { legacy, fallback: '', max: 64, required: true });
     if (datasetId && !GRAPH_ID_RE.test(datasetId)) {
       c.error(`${path}.input.datasetId`, 'must be a dataset id: letters, digits, dot, underscore or dash.');
     }
     const filterRaw = isPlainObject(source.recordFilter) ? source.recordFilter : {};
+    // Issue 169: the repeat unit, when the block is a series. One record id, not
+    // an array: a chain has one unit, and letting two records share the role
+    // would make the member list depend on dataset order.
+    const recordId = readString(c, source.recordId, `${path}.input.recordId`, { legacy, fallback: '', max: 64 });
+    if (recordId && !RECORD_ID_RE.test(recordId)) {
+      c.error(`${path}.input.recordId`, 'must be a record id: letters, digits, dot, underscore or dash.');
+    }
+    const series = normalizeSeries(c, source.series, `${path}.input.series`, legacy);
+    if (!series && common.kind === 'series') {
+      c.error(`${path}.input.series`, 'is required when the block kind is "series".');
+    }
     return {
       ...common,
+      // A block that carries a series definition *is* a series block; the kind is
+      // stored so a renderer can branch on one key instead of two.
+      ...(series ? { kind: 'series' } : {}),
       input: {
         datasetId,
         recordFilter: {
           field: readString(c, filterRaw.field, `${path}.input.recordFilter.field`, { legacy, fallback: '', max: 64 }),
           equals: readString(c, filterRaw.equals, `${path}.input.recordFilter.equals`, { legacy, fallback: '', max: 200 }),
         },
+        // Both are absent-by-default: a project that never asked for a series
+        // saves exactly the bytes it did before.
+        ...(recordId ? { recordId } : {}),
+        ...(series ? { series } : {}),
       },
     };
   }
@@ -1763,6 +1848,15 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
         c.error(`${nodePath}.input.datasetId`, `references unknown dataset "${node.input.datasetId}".`);
       } else if (enabledRecords(dataset).length === 0) {
         c.error(`${nodePath}.input`, `dataset "${dataset.id}" has no enabled record; import or enable at least one.`);
+      } else if (node.input.series) {
+        // Issue 169: a series is expanded here, at validation time, exactly as
+        // the plan will expand it — so an unusable linkage is refused by name
+        // when the project is opened, not after the first input file is written.
+        try {
+          recordsForInput(node, dataset);
+        } catch (error) {
+          c.error(`${nodePath}.input.series`, error.message);
+        }
       }
     }
     if (node.type !== 'calc') return;
