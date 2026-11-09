@@ -230,6 +230,75 @@ radii and counted as single bonds. The valence guard therefore catches over-coor
 over-valent double bond; a linkage on an atom whose multiple bond matters is a judgement the user
 still has to make.
 
+## Derivatives
+
+A **derivative block** is the other kind of structure block: instead of a set of molecules or a
+chain, it is *one* parent record seen through a list of atom-level edits. Select an input block,
+bind a dataset, and press **Derive a related structure…**. The block stays an `input` block with
+`kind: "derivative"`, so every downstream block runs once per derivative, unchanged.
+
+```
+derivative block ──▶ optimise ──▶ frequency ──▶ output
+ benzene (parent)     H7 → F       H7 → F       one row per edit
+ edits: H7 → F        H8 → Cl      H8 → Cl
+        H8 → Cl
+```
+
+| Field | Meaning |
+| --- | --- |
+| Parent record | which record of the dataset is edited; **every enabled record** when none is named |
+| Op | `substitute`, `add`, `remove`, `isotope`, `protonate` or `deprotonate` |
+| Atom | the 1-based atom index, as written in the parent's geometry |
+| Element | the element a `substitute` or `add` introduces |
+| Mass | the mass number an `isotope` sets |
+| Charge, Mult | the spin state a `protonate`/`deprotonate` **must** state |
+
+Each row is its own record: the edits do not chain. That is what makes one block a substituent scan
+(H → F, Cl, OMe), a protonated/deprotonated pair, or an isotopologue series. Record ids name the
+parent, the op and the atom — `benzene-sub7-F`, `benzene-iso7-2` — so a queue row, a run folder or a
+record row is traceable without opening the project. Each generated record carries
+`derivative { parentId, operations, atomIndexBase: 1, formula, summary, geometryStatus }`, and the
+task carries the same object.
+
+### What the geometry is, and is not
+
+A derivative is **a topology with a plausible starting geometry, not a minimum**, and the block says
+`needs optimisation` in those words. The geometry rule:
+
+- `substitute` keeps the direction of the replaced bond, seen from the atom that stays, and sets the
+  new bond length to the sum of the two Cordero covalent radii;
+- `add` places the new atom opposite the parent atom's existing bonds (the bisector when there are
+  several) at the same radii-sum distance;
+- `remove` and `isotope` move nothing at all;
+- every atom that was not edited keeps its coordinates **to the last bit**.
+
+A C–F placed on a C–H vector is not a relaxed C–F. Optimise a derivative before reading any energy
+from it.
+
+### Refused by name
+
+Every refusal comes from the edit engine itself, so the message the card shows is the message the
+plan would give — and it happens before a single input file is written:
+
+| Refused | Message names |
+| --- | --- |
+| the parent states no bonds | that the topology must be stated; a valence check on a perceived topology would be a guess |
+| an atom index outside the parent | the index and the parent's atom count |
+| a bond that refers to a missing atom | both atoms |
+| a substitution past the element's valence | the atom, its element, the bonds it uses and the limit |
+| `add` to an atom with no free valence | the atom, its element and its ceiling |
+| an `isotope` mass the element does not have | the atom, the element and the masses that exist |
+| `protonate`/`deprotonate` without a charge or multiplicity | which of the two is missing |
+| two edits that produce the same structure | both edits and the record id |
+| a record with no 3D coordinates | the record id |
+| an empty list, or more than 32 edits | the list |
+
+**A parent must state its bonds.** The edit engine refuses a molecule without a topology rather than
+perceiving one from distances, so a dataset record needs a `bonds` array (see
+[`docs/PROJECT-FORMAT.md`](../PROJECT-FORMAT.md)) for a derivative to be built at all. The SDF reader
+does not carry the bond block today, so a record imported from an SDF is refused by name instead of
+being given a guessed valence.
+
 ## Next
 
 - [Workflows](workflow.md) — the queue, barrier edges, checkpoint hand-off and cluster export.
