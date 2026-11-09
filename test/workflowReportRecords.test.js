@@ -16,22 +16,22 @@ const QUEUE = {
   finishedAt: '2026-11-08T00:10:00.000Z',
   tasks: [
     {
-      nodeId: 'opt~m1', recordId: 'm1', flowId: 'barrier', type: 'calc', title: 'Optimise — one',
+      nodeId: 'opt~m1', recordId: 'm1', flowId: 'barrier', type: 'calculate', title: 'Optimise — one',
       kind: 'Opt', status: 'completed', runId: 'run-opt-1', gateVerdict: 'pass',
       record: { id: 'm1', label: 'acetylacetone', charge: 0, multiplicity: 1 },
     },
     {
-      nodeId: 'sp~m1', recordId: 'm1', flowId: 'barrier', type: 'calc', title: 'SP — one',
+      nodeId: 'sp~m1', recordId: 'm1', flowId: 'barrier', type: 'calculate', title: 'SP — one',
       kind: 'SP', status: 'completed', runId: 'run-sp-1', gateVerdict: 'pass',
       record: { id: 'm1', label: 'acetylacetone', charge: 0, multiplicity: 1 },
     },
     {
-      nodeId: 'opt~m2', recordId: 'm2', flowId: 'barrier', type: 'calc', title: 'Optimise — two',
+      nodeId: 'opt~m2', recordId: 'm2', flowId: 'barrier', type: 'calculate', title: 'Optimise — two',
       kind: 'Opt', status: 'completed', runId: 'run-opt-2', gateVerdict: 'pass',
       record: { id: 'm2', label: 'ethyl acetoacetate', charge: -1, multiplicity: 2 },
     },
     {
-      nodeId: 'sp~m2', recordId: 'm2', flowId: 'barrier', type: 'calc', title: 'SP — two',
+      nodeId: 'sp~m2', recordId: 'm2', flowId: 'barrier', type: 'calculate', title: 'SP — two',
       kind: 'SP', status: 'failed', runId: 'run-sp-2', gateVerdict: 'fail',
       error: ' Error termination via Lnk1e', record: { id: 'm2', label: 'ethyl acetoacetate', charge: -1, multiplicity: 2 },
     },
@@ -137,7 +137,7 @@ describe('combined report', () => {
     status: 'completed',
     tasks: [
       {
-        nodeId: 'sp~m1', recordId: 'm1', flowId: 'solvation', type: 'calc', title: 'SP — one',
+        nodeId: 'sp~m1', recordId: 'm1', flowId: 'solvation', type: 'calculate', title: 'SP — one',
         status: 'completed', runId: 'run-solv-1', gateVerdict: 'pass',
         record: { id: 'm1', label: 'acetylacetone', charge: 0, multiplicity: 1 },
       },

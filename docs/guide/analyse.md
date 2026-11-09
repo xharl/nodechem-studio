@@ -1,6 +1,6 @@
-# Compute blocks: arithmetic across results
+# Analyse blocks: arithmetic across results
 
-A run produces numbers; a **protocol** does arithmetic with them. The Compute block is the block that
+A run produces numbers; a **protocol** does arithmetic with them. The Analyse block is the block that
 takes results from other blocks, evaluates an expression over them, and produces a derived value
 that cards, reports and downstream blocks read like any other result.
 
@@ -21,26 +21,26 @@ it never enters an energy column, and every card and report row names the values
 
 The block has two modes (issue 165), chosen with **What this block computes** in the inspector:
 
-| `compute.mode` | Computes |
+| `analyse.mode` | Computes |
 | --- | --- |
 | absent, or `"expression"` (the default) | the arithmetic this page describes — one value per record |
 | `"dp4"` | DP4+ probabilities over candidate structures, from the NMR shields of the wired blocks' runs; see [DP4 and DP4+ probabilities](dp4.md) |
 
 A project that never asks for `"dp4"` saves and plans exactly as it did before the mode existed.
 
-## Wiring a compute block
+## Wiring an analyse block
 
-1. Wire the blocks whose results it reads into the compute block with ordinary dependency edges.
+1. Wire the blocks whose results it reads into the analyse block with ordinary dependency edges.
    Only wired-in blocks can supply a number; a block that is not wired cannot be named.
 2. Declare an **input** for each number: a name (`E4`, `G`, `n`), a field, and the upstream block it
-   comes from. When exactly one block feeds the compute block, the source may be left empty.
+   comes from. When exactly one block feeds the analyse block, the source may be left empty.
 3. Write the expression using those names, e.g. `fit_cubic_inverse(E4, 4, E2, 2)`.
 4. Read the preview. It is computed by the same evaluator, from the same records, that the plan and
    the queue use — the number in the inspector is the number the run will write.
 
 ## Fields
 
-A field is a column of the dataset export, so a compute input and a CSV column name the same
+A field is a column of the dataset export, so an analyse input and a CSV column name the same
 quantity:
 
 | Field | Unit |
@@ -98,7 +98,7 @@ extrapolated number for one an engine printed.
 
 The fit is arithmetic on total energies. It is not the same thing as the correlation-energy
 extrapolation on a method ladder, which is a separate, more careful calculation described in
-[Reports](reports.md); a compute block is the general tool, and it trusts the expression you write.
+[Reports](reports.md); an analyse block is the general tool, and it trusts the expression you write.
 
 ## Units
 
@@ -112,7 +112,7 @@ Unit propagation is deliberately conservative:
 
 ## Per-record mode
 
-A compute block inside a dataset's scope evaluates **once per record**, exactly as a calculation block
+An analyse block inside a dataset's scope evaluates **once per record**, exactly as a calculation block
 runs once per record: one derived value per molecule, per record row. An input declared with
 `scope: records` instead reads every record of its upstream block at once, which is how `sum`,
 `mean`, `min` and `max` produce a family-wide number.
@@ -134,8 +134,9 @@ Nothing is guessed and nothing is zero:
 - **Inspector**: the expression, the input table, the live preview, and the refusal or value.
 - **Card**: the derived value with its unit, its expression, and every input (record, field, value,
   unit).
-- **Queue and `run.json`**: the block writes its own record with `kind: "derived"`, the expression,
-  the resolved inputs and the value — and no `parsed` block, so nothing can read it as a run.
+- **Queue and `run.json`**: the block writes its own record with `kind: "derived"` and an `analyse`
+  block carrying the expression, the resolved inputs and the value — and no `parsed` block, so
+  nothing can read it as a run.
 - **Report**: a "Derived quantity" section with the methods sentence that states the expression the
   value came from.
 

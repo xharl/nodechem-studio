@@ -113,7 +113,9 @@ export function conformerSettingsFor(node) {
   const source = node?.settings && typeof node.settings === 'object' ? node.settings : {};
   const pick = (key) => (source[key] === undefined || source[key] === null ? DEFAULT_CONFORMER_SETTINGS[key] : source[key]);
   return {
+    source: source.source === 'imported' ? 'imported' : 'search',
     generator: String(pick('generator') || 'crest'),
+    rankBy: typeof source.rankBy === 'string' ? source.rankBy : '',
     method: String(pick('method') || 'gfn2'),
     energyWindowKcal: Number(pick('energyWindowKcal')),
     rmsdThreshold: Number(pick('rmsdThreshold')),
@@ -121,20 +123,10 @@ export function conformerSettingsFor(node) {
     temperature: Number(pick('temperature')),
     spreadThresholdKcal: Number(pick('spreadThresholdKcal')),
     selectedConformerId: String(source.selectedConformerId || ''),
-    importPath: String(source.importPath || ''),
     fanOut: pick('fanOut') === true,
     // Issue #132: the study id the block carries. Passed through, never derived:
     // the app does not decide which blocks belong together.
     group: String(source.group || ''),
-    // Issues #129/#130: what an imported file is, and what its energies are.
-    // Passed through as declared — the queue records it, it does not guess it.
-    energyUnit: pick('energyUnit') === 'kcal/mol' ? 'kcal/mol' : 'hartree',
-    energyMethod: String(source.energyMethod || ''),
-    origin: {
-      program: String(source.origin?.program || ''),
-      version: String(source.origin?.version || ''),
-      method: String(source.origin?.method || ''),
-    },
     // Issue 144: the in-app UFF route's settings, passed through only when the
     // block states them. Absent by default, so a CREST or import task carries
     // exactly the fields it always did.
@@ -155,11 +147,11 @@ export function conformerSettingsFor(node) {
  * connected by a dependency edge.
  */
 export function conformerSourceFor(project, node) {
-  if (!node || node.type === 'conformers') return null;
+  if (!node || node.type === 'generate') return null;
   const edges = Array.isArray(project?.edges) ? project.edges : [];
   const edge = edges.find((item) => item.to === node.id
     && item.type === 'dependency'
-    && nodeById(project, item.from)?.type === 'conformers');
+    && nodeById(project, item.from)?.type === 'generate');
   return edge ? nodeById(project, edge.from) : null;
 }
 
@@ -221,7 +213,7 @@ export function conformerForNode(project, node, conformerMember = null) {
  * time, because that is a decision, not a pending computation.
  */
 export function pendingConformerFor(project, node) {
-  if (!node || node.type === 'conformers') return null;
+  if (!node || node.type === 'generate') return null;
   const source = conformerSourceFor(project, node);
   if (!source) return null;
   if (source.output && typeof source.output === 'object') return null;
@@ -281,7 +273,7 @@ function firstInputBlocksFor(byId, edges, blockId) {
     }
     // A calculation block in between is the one that consumes the record's own
     // coordinates; this block reads its output, so it is not the first.
-    if (node.type === 'calc') continue;
+    if (node.type === 'calculate') continue;
     for (const next of upstream.get(id) || []) stack.push(next);
   }
   return found;
@@ -304,7 +296,7 @@ function firstInputBlocksFor(byId, edges, blockId) {
  */
 export function drawingGateFor(project, node, record, { nodes = null, edges = null, datasetId = '' } = {}) {
   if (!isDrawingRecord(record) || record.drawingConfirmed === true) return null;
-  if (!node || node.type !== 'calc') return null;
+  if (!node || node.type !== 'calculate') return null;
   const jobType = String(node.settings?.jobType || '');
   if (!DRAWING_JOB_TYPES.includes(jobType)) return null;
 
@@ -358,7 +350,7 @@ function refusedDrawingTask(task, refusal) {
  * table, which is the mistake the single-selection refusal exists to stop.
  */
 export function fanOutMembersFor(node) {
-  if (!node || node.type !== 'conformers') return null;
+  if (!node || node.type !== 'generate') return null;
   const settings = conformerSettingsFor(node);
   if (!settings.fanOut) return null;
   const output = node.output && typeof node.output === 'object' ? node.output : null;
@@ -560,13 +552,13 @@ export function oldCheckpointFor(project, node, checkpointTaskId = null) {
 }
 
 export function tsForceConstantIssues(project, node) {
-  if (node?.type !== 'calc') return { errors: [], warnings: [] };
+  if (node?.type !== 'calculate') return { errors: [], warnings: [] };
   return checkTsForceConstants({ settings: node.settings, upstream: checkpointSourceNode(project, node) });
 }
 
 /** Issue #16 findings for a node's optimisation convergence and integration grid. */
 export function optConvergenceIssues(project, node) {
-  if (node?.type !== 'calc') return [];
+  if (node?.type !== 'calculate') return [];
   return [
     ...optConvergenceWarnings(node.settings),
     ...freqGeometryWarnings({ settings: node.settings, upstream: checkpointSourceNode(project, node) }),
@@ -809,9 +801,9 @@ function computeFanMembership(nodes, edges) {
     visiting.add(nodeId);
     let fan = null;
     try {
-      if (node.type === 'conformers') {
+      if (node.type === 'generate') {
         fan = conformerSettingsFor(node).fanOut ? fanOutMembersFor(node) : null;
-      } else if (node.type === 'calc') {
+      } else if (node.type === 'calculate') {
         fan = fanFor(node);
       }
     } finally {
@@ -911,6 +903,35 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
     const records = scope ? scope.records : [null];
 
     if (node.type === 'input') {
+      // ADR 0001: an ensemble input is the source of candidates, not a dataset
+      // scope. It still gets a task because the file is read and hashed at run
+      // time; the frames land in the run folder, and the summary in
+      // `node.output`. No downstream calculation is planned from it directly.
+      if (node.input?.kind === 'ensemble') {
+        tasks.push({
+          nodeId: node.id,
+          type: 'input',
+          title: node.title,
+          kind: node.kind || 'Ensemble input',
+          executable: false,
+          flowId: flowKey,
+          input: {
+            kind: 'ensemble',
+            path: node.input.path || '',
+            format: node.input.format || 'xyz',
+            energyUnit: node.input.energyUnit || 'hartree',
+            energyMethod: node.input.energyMethod || '',
+            origin: {
+              program: node.input.origin?.program || '',
+              version: node.input.origin?.version || '',
+              method: node.input.origin?.method || '',
+            },
+            ...(node.input.sourceSha256 ? { sourceSha256: node.input.sourceSha256 } : {}),
+          },
+        });
+        idsFor.set(node.id, [node.id]);
+        continue;
+      }
       // An input block is the *source* of a scope, so `scopeFor` finds nothing
       // upstream of it; its records come straight from the dataset it names.
       // Issue 169: a series block's records are the N generated members, so the
@@ -950,7 +971,53 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       continue;
     }
 
-    if (node.type === 'conformers') {
+    if (node.type === 'prepare') {
+      // ADR 0001 §2.9: one structure in, one out. A prepare block follows the
+      // same record scope as its input, so a dataset family gets one prepared
+      // structure per record — never an enumeration of its own.
+      const ids = [];
+      for (const record of records) {
+        const recordId = record?.id || null;
+        const taskId = taskIdFor(node.id, recordId);
+        const chemistry = moleculeForNode(project, node, null, record);
+        const settings = node.settings || {};
+        ids.push(taskId);
+        pushTask({
+          nodeId: taskId,
+          type: 'prepare',
+          title: record?.id ? `${node.title} — ${record.label || record.id}` : node.title,
+          kind: node.kind || 'Prepare',
+          executable: true,
+          engine: null,
+          inputName: `${safeBase(taskId)}.xyz`,
+          outputName: 'prepare.json',
+          inputText: xyzText(chemistry.coords, `${node.title} · prepare`),
+          settings: null,
+          gates: null,
+          validity: null,
+          checkpointFrom: null,
+          prepare: {
+            kind: settings.kind === 'embed3d' ? 'embed3d' : 'relax',
+            converter: settings.kind === 'embed3d'
+              ? 'openbabel'
+              : (settings.converter === 'openbabel' || settings.converter === 'aimnet2'
+                ? settings.converter : 'uff'),
+            forceField: settings.forceField === 'MMFF94' || settings.forceField === 'AIMNet2'
+              ? settings.forceField
+              : (settings.converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
+            smiles: String(settings.smiles || ''),
+            charge: chemistry.charge ?? 0,
+            multiplicity: chemistry.multiplicity ?? 1,
+            bonds: Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length
+              ? project.molecule.bonds.map((bond) => ({ a: bond.a, b: bond.b, order: bond.order })) : null,
+          },
+        }, recordId);
+      }
+      idsFor.set(node.id, ids);
+      continue;
+    }
+
+    if (node.type === 'generate') {
       const fanOut = fanForNode.get(node.id) || null;
       const ids = [];
       for (const record of records) {
@@ -972,8 +1039,8 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       continue;
     }
 
-    if (node.type === 'compute') {
-      // Issue 175: a compute block is arithmetic over the results of the blocks
+    if (node.type === 'analyse') {
+      // Issue 175: an analyse block is arithmetic over the results of the blocks
       // wired into it. The plan evaluates it when it can — the caller may pass
       // run records (`results`, keyed by task id) — and otherwise plans it as a
       // task that is waiting, never as a value of zero. One task per record of
@@ -1015,7 +1082,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       continue;
     }
 
-    if (node.type !== 'calc') {
+    if (node.type !== 'calculate') {
       // Control-flow blocks are planned once per flow: an output block collects
       // every record, a merge joins branches, a condition routes them.
       tasks.push({
@@ -1229,12 +1296,24 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
   for (const [taskId, entry] of fanInputs) {
     if (fanFor(taskId) || entry.count < 2) continue;
     const node = nodeById(project, taskId.split('~')[0]);
-    if (!node || (node.type !== 'calc' && node.type !== 'conformers')) continue;
+    if (!node || (node.type !== 'calculate' && node.type !== 'generate')) continue;
     const ensemble = nodeById(project, [...entry.conformerIds][0]);
     throw new Error(`"${node.title}" would run once but ${entry.count} fanned-out branches feed it,`
       + ` so it could only use one member of "${ensemble?.title || 'the ensemble'}".`
       + ' Wire it to the conformer block directly so it runs once per member,'
       + ' or collect the branches with a merge block if one run is what you want.');
+  }
+
+  // ADR 0001 §2.9: a calculate block wired from a prepare block runs on the
+  // prepared geometry, read at run time. The plan names the source; the queue
+  // applies the coordinates, exactly as it does for a cross-engine checkpoint.
+  for (const task of tasks) {
+    if (task.type !== 'calculate') continue;
+    const blockId = String(task.nodeId).split('~')[0];
+    const edge = projectEdges.find((candidate) => candidate.to === blockId
+      && candidate.type === 'dependency'
+      && nodes.find((entry) => entry.id === candidate.from)?.type === 'prepare');
+    if (edge) task.prepareFrom = { nodeId: edge.from };
   }
 
   // A downstream task reads the checkpoint of the *primary* rung; record that
@@ -1339,6 +1418,12 @@ function calculationTask(project, node, {
   const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember, record, checkpointTaskId, ignoreConformer });
   const emissionFor = emissionContextFor(project, node, settingsOverride);
   const taskSettings = settingsOverride || settingsForNode(project, node);
+  // ADR 0001 §2.10: a scorer provider keeps the block a calculate block but
+  // bypasses the engine. The structure it scores is the same one the input
+  // builder consumed, carried explicitly so the queue need not parse a route.
+  const scorerChemistry = taskSettings.provider
+    ? moleculeForNode(project, node, conformerMember, record, { ignoreConformer })
+    : null;
   // NTO (#146): the second job of the chain. The transition it analyses lives
   // on the TD block that wrote the checkpoint, so it is read from there — never
   // guessed from the NTO block's own settings.
@@ -1354,7 +1439,7 @@ function calculationTask(project, node, {
     : null;
   return {
     nodeId: taskId,
-    type: 'calc',
+    type: 'calculate',
     title: title || (Number.isInteger(record?.series?.n)
       ? `${node.title} — n=${record.series.n}`
       // Issue 189: one block, several analogues — the row says which one.
@@ -1364,7 +1449,7 @@ function calculationTask(project, node, {
         : (record?.complex?.members?.length
           ? `${node.title} — ${record.complex.members.map((member) => member.id).join(' + ')}`
           : node.title))),
-    kind: node.kind || 'Calc',
+    kind: node.kind || 'Calculate',
     executable: true,
     engine: built.engine,
     argv: built.argv,
@@ -1373,6 +1458,14 @@ function calculationTask(project, node, {
     outputName: built.outputName,
     inputText: built.inputText,
     settings: settingsOverride || settingsForNode(project, node),
+    ...(scorerChemistry ? {
+      scorer: {
+        spec: taskSettings.provider,
+        atoms: scorerChemistry.coords,
+        charge: scorerChemistry.charge,
+        multiplicity: scorerChemistry.multiplicity,
+      },
+    } : {}),
     gates: gatesForNode(node),
     validity: validityForNode(project, node, conformerMember, record, { ignoreConformer }),
     checkpointName: checkpointNameFor(project, node, taskId),
@@ -1423,7 +1516,7 @@ function calculationTask(project, node, {
 }
 
 /**
- * Where a compute block's numbers come from (issue 175).
+ * Where an analyse block's numbers come from (issue 175).
  *
  * One resolver, used by the plan, the queue's planner path and the inspector's
  * preview, so the three cannot disagree about which record a field was read
@@ -1439,15 +1532,15 @@ function calculationTask(project, node, {
 export function computeContext(project, node, { results = null, edges = null } = {}) {
   const nodeEdges = edges || edgesOfFlow(activeFlow(project));
   const sources = orderingSourceIds(nodeEdges, node.id);
-  const definition = node.compute && typeof node.compute === 'object'
-    ? node.compute : { expression: '', inputs: [] };
+  const definition = node.analyse && typeof node.analyse === 'object'
+    ? node.analyse : { expression: '', inputs: [] };
   // Issue 165: a DP4+ block reads whole run records (candidates), not named
   // fields, so it declares no inputs of its own — the upstream blocks are the
   // candidate sources. Every other mode is the arithmetic block unchanged.
   const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
   const declared = mode === 'dp4' ? [] : computeInputsOf(definition);
   if (mode !== 'dp4' && declared.length === 0) {
-    throw new ComputeError(`"${node.title}" declares no inputs; a compute block reads at least one field`
+    throw new ComputeError(`"${node.title}" declares no inputs; an analyse block reads at least one field`
       + ' from an upstream block.');
   }
   if (sources.length === 0) {
@@ -1543,15 +1636,15 @@ export function computeContext(project, node, { results = null, edges = null } =
  * number an engine printed.
  */
 function computeTask(node, { taskId, record = null, recordId = null, evaluation, sources, declared }) {
-  const dp4 = node.compute?.mode === 'dp4' && node.compute?.dp4 && typeof node.compute.dp4 === 'object'
-    ? node.compute.dp4 : null;
+  const dp4 = node.analyse?.mode === 'dp4' && node.analyse?.dp4 && typeof node.analyse.dp4 === 'object'
+    ? node.analyse.dp4 : null;
   return {
     nodeId: taskId,
-    type: 'compute',
+    type: 'analyse',
     title: record ? `${node.title} — ${record.label || record.id}` : node.title,
-    kind: node.kind || 'Compute',
+    kind: node.kind || 'Analyse',
     executable: false,
-    compute: {
+    analyse: {
       ...evaluation,
       // Issue 165: the DP4+ definition travels with the task so the queue can
       // re-evaluate from the run.json files it finds, exactly as the arithmetic
@@ -1592,9 +1685,9 @@ function pendingCalculationTask(project, node, { taskId, title, settingsOverride
   const inputName = engine.id === 'xtb' ? `${base}.xyz` : engine.id === 'orca' ? `${base}.inp` : `${base}.gjf`;
   return {
     nodeId: taskId,
-    type: 'calc',
+    type: 'calculate',
     title: title || node.title,
-    kind: node.kind || 'Calc',
+    kind: node.kind || 'Calculate',
     executable: false,
     engine: engine.id,
     argv: null,
@@ -1634,9 +1727,9 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
   const inputName = `${safeBase(taskId)}.xyz`;
   return {
     nodeId: taskId,
-    type: 'conformers',
+    type: 'generate',
     title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`,
-    kind: node.kind || 'Conformers',
+    kind: node.kind || 'Generate',
     executable: true,
     engine: null,
     inputName,
@@ -1651,7 +1744,7 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
       count: ensemble.members.length,
       spreadKcal: ensemble.spreadKcal,
     },
-    conformers: {
+    generate: {
       ...settings,
       charge,
       multiplicity,
@@ -1679,6 +1772,21 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
 }
 
 /**
+ * ADR 0001: the one upstream input(ensemble) a generate block reads when its
+ * source is `imported`. Validation refuses zero or several; the planner picks
+ * the declared wiring rather than guessing from node order.
+ */
+function ensembleInputFor(project, node) {
+  const flow = activeFlow(project);
+  const byId = new Map(nodesOfFlow(flow).map((entry) => [entry.id, entry]));
+  const edge = edgesOfFlow(flow).find((candidate) => candidate.to === node.id
+    && candidate.type === 'dependency'
+    && byId.get(candidate.from)?.type === 'input'
+    && byId.get(candidate.from)?.input?.kind === 'ensemble');
+  return edge?.from || '';
+}
+
+/**
  * The conformer-search task.
  *
  * It is executable but has no engine: CREST is not a calculation engine in this
@@ -1695,44 +1803,55 @@ export function conformerSearchTask(project, node, record = null) {
   const charge = chemistry.charge ?? 0;
   const multiplicity = chemistry.multiplicity ?? 1;
   const coords = chemistry.coords;
-  const inputName = `${safeBase(node.id)}.xyz`;
+  const ensembleFrom = settings.source === 'imported' ? ensembleInputFor(project, node) : '';
+  const inputName = settings.source === 'imported' ? '' : `${safeBase(node.id)}.xyz`;
   // Issue 144: the in-app UFF route reads the project's own bond table (the
-  // same 1-based `{ a, b, order }` list the schema validates). A CREST or
-  // import task does not carry it: CREST perceives its own topology.
-  const projectBonds = Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length > 0
+  // same 1-based `{ a, b, order }` list the schema validates). A CREST task
+  // does not carry it: CREST perceives its own topology. An imported ensemble
+  // is read from its input block and needs no starting geometry here.
+  const projectBonds = settings.generator === 'uff' && Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length > 0
     ? project.molecule.bonds.map((bond) => ({ a: bond.a, b: bond.b, order: bond.order }))
     : null;
   return {
     nodeId: node.id,
-    type: 'conformers',
+    type: 'generate',
     title: node.title,
-    kind: node.kind || 'Conformers',
+    kind: node.kind || 'Generate',
     executable: true,
     engine: null,
     inputName,
     // The UFF route runs in-app and writes its own short log; CREST writes
-    // `crest.out` in the folder it ran in.
-    outputName: settings.generator === 'uff'
-      ? 'uff.log'
-      : (settings.generator === 'obabel' ? 'obabel.log' : 'crest.out'),
-    inputText: xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
+    // `crest.out` in the folder it ran in. An imported ensemble has no search
+    // log: the block writes the curated `conformers.json` from the input's
+    // record.
+    outputName: settings.source === 'imported'
+      ? 'conformers.json'
+      : (settings.generator === 'uff'
+        ? 'uff.log'
+        : (settings.generator === 'obabel' ? 'obabel.log' : 'crest.out')),
+    inputText: settings.source === 'imported'
+      ? null
+      : xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
     gates: null,
     validity: null,
     checkpointFrom: null,
-    conformers: {
+    generate: {
       ...settings,
       charge,
       multiplicity,
-      argv: settings.generator === 'crest'
-        ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
-        : (settings.generator === 'obabel'
-          ? obabelSearchArgv({
-            inputName,
-            nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
-            ff: settings.ff ?? OBABEL_DEFAULT_FF,
-          })
-          : []),
-      ...(settings.generator === 'uff' && projectBonds ? { bonds: projectBonds } : {}),
+      ...(ensembleFrom ? { ensembleFrom } : {}),
+      argv: settings.source === 'imported'
+        ? []
+        : (settings.generator === 'crest'
+          ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
+          : (settings.generator === 'obabel'
+            ? obabelSearchArgv({
+              inputName,
+              nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
+              ff: settings.ff ?? OBABEL_DEFAULT_FF,
+            })
+            : [])),
+      ...(projectBonds ? { bonds: projectBonds } : {}),
     },
     ...(record ? {
       record: {

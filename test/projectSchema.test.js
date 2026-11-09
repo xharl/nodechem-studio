@@ -19,8 +19,8 @@ import {
  */
 const hasErrorAt = (result, suffix) => result.errors.some((error) => error.path === suffix || error.path.endsWith(`.${suffix}`));
 
-/** The exact v0.1 project object seeded by src/renderer/app.js (no schemaVersion). */
-function legacyProject() {
+/** The project object seeded by src/renderer/app.js, in the current schema. */
+function seededProject() {
   const settings = (overrides = {}) => ({
     jobType: 'Opt',
     method: 'B3LYP',
@@ -47,7 +47,7 @@ function legacyProject() {
   });
   const calc = (id, kind, title, x, y, options = {}) => ({
     id,
-    type: 'calc',
+    type: 'calculate',
     kind,
     title,
     state: options.state || 'ready',
@@ -58,12 +58,15 @@ function legacyProject() {
     checkpointFrom: options.checkpointFrom || null,
   });
   return {
+    schemaVersion: SCHEMA_VERSION,
     name: 'Diels–Alder TS verification',
     molecule: {
       smiles: 'C=CC=C.C=C',
       charge: 0,
       multiplicity: 1,
       fragments: ['C=CC=C', 'C=C'],
+      coords: [],
+      geometry: { source: 'demo', file: '', format: '' },
     },
     defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
     nodes: [
@@ -134,7 +137,7 @@ function legacyProject() {
 
 /** A minimal valid v1 project with exactly one node of the given kind. */
 function projectWithNode(node) {
-  const base = validateProject(legacyProject()).project;
+  const base = validateProject(seededProject()).project;
   return {
     ...base,
     nodes: [node],
@@ -144,7 +147,7 @@ function projectWithNode(node) {
 
 describe('project schema — the optional wall-clock limit (issue 177)', () => {
   it('leaves an absent runner.timeoutSeconds absent, so an old project is unchanged', () => {
-    const result = validateProject(legacyProject());
+    const result = validateProject(seededProject());
     expect(result.ok).toBe(true);
     expect(result.project.runner).toEqual({ maxParallel: 1 });
     expect(Object.keys(result.project.runner)).not.toContain('timeoutSeconds');
@@ -152,7 +155,7 @@ describe('project schema — the optional wall-clock limit (issue 177)', () => {
 
   it('accepts a project limit and a per-block override, and round-trips them', () => {
     const project = {
-      ...validateProject(legacyProject()).project,
+      ...validateProject(seededProject()).project,
       runner: { maxParallel: 1, timeoutSeconds: 120 },
       nodes: [calcNode({ settings: { ...defaultSettings(), timeoutSeconds: 45 } })],
       edges: [],
@@ -171,7 +174,7 @@ describe('project schema — the optional wall-clock limit (issue 177)', () => {
   it('refuses a limit below one second or above the day cap', () => {
     for (const value of [0, -5, 86401]) {
       const project = {
-        ...validateProject(legacyProject()).project,
+        ...validateProject(seededProject()).project,
         runner: { maxParallel: 1, timeoutSeconds: value },
       };
       const result = validateProject(project);
@@ -190,7 +193,7 @@ describe('project schema — the optional wall-clock limit (issue 177)', () => {
 function calcNode(overrides = {}) {
   return {
     id: 'calc-1',
-    type: 'calc',
+    type: 'calculate',
     kind: 'Opt',
     title: 'Optimization',
     state: 'ready',
@@ -203,20 +206,39 @@ function calcNode(overrides = {}) {
   };
 }
 
-describe('project schema v1 — legacy migration', () => {
-  it('accepts the seeded v0.1 project and stamps the current schemaVersion', () => {
-    const result = validateProject(legacyProject());
-    expect(result.ok).toBe(true);
+describe('project schema v3 — the breaking vocabulary boundary', () => {
+  it('refuses a schemaVersion 2 file instead of half-reading the old type names', () => {
+    const result = validateProject({ ...seededProject(), schemaVersion: 2 });
+    expect(result.ok).toBe(false);
+    expect(result.project).toBeNull();
+    const error = result.errors.find((item) => item.path === 'schemaVersion');
+    expect(error.message).toContain('schema version 2');
+    expect(error.message).toContain('ADR 0001');
+  });
+
+  it('refuses the unversioned v0.1 shape and an explicit version 0', () => {
+    for (const version of [undefined, 0]) {
+      const raw = seededProject();
+      if (version === undefined) delete raw.schemaVersion;
+      else raw.schemaVersion = version;
+      const result = validateProject(raw);
+      expect(result.ok).toBe(false);
+      expect(result.errors.some((item) => item.path === 'schemaVersion')).toBe(true);
+    }
+  });
+
+  it('accepts a v3 project written in the in-memory single-graph shape', () => {
+    const result = validateProject(seededProject());
+    expect(result.ok, JSON.stringify(result.errors)).toBe(true);
     expect(result.errors).toEqual([]);
-    expect(result.migrated).toBe(true);
-    expect(result.schemaVersion).toBe(0);
+    expect(result.migrated).toBe(false);
     expect(result.project.schemaVersion).toBe(SCHEMA_VERSION);
     expect(result.project.nodes).toHaveLength(7);
     expect(result.project.edges).toHaveLength(7);
   });
 
-  it('preserves chemistry-relevant fields through migration', () => {
-    const { project } = validateProject(legacyProject());
+  it('preserves chemistry-relevant fields through normalization', () => {
+    const { project } = validateProject(seededProject());
     const tsFreq = project.nodes.find((node) => node.id === 'ts-freq');
     expect(tsFreq.checkpointFrom).toBe('ts-opt');
     expect(tsFreq.settings.jobType).toBe('Freq');
@@ -245,30 +267,8 @@ describe('project schema v1 — legacy migration', () => {
     });
   });
 
-  it('treats an explicit schemaVersion 0 as legacy', () => {
-    const result = validateProject({ ...legacyProject(), schemaVersion: 0 });
-    expect(result.ok).toBe(true);
-    expect(result.migrated).toBe(true);
-  });
-
-  it('fills missing v0.1 fields with documented defaults instead of failing', () => {
-    const raw = legacyProject();
-    delete raw.defaults;
-    delete raw.molecule.fragments;
-    raw.nodes[1].settings = { jobType: 'Freq' };
-    const result = validateProject(raw);
-    expect(result.ok).toBe(true);
-    expect(result.project.defaults).toEqual({
-      engine: 'gaussian',
-      method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: 4,
-    });
-    expect(result.project.molecule.fragments).toEqual([]);
-    expect(result.project.nodes[1].settings.checkpoint).toBe('');
-    expect(result.project.nodes[1].settings.gates.thermo).toBe(false);
-  });
-
-  it('reports dropped legacy keys as warnings, not errors', () => {
-    const raw = legacyProject();
+  it('reports dropped unknown keys as warnings, not errors', () => {
+    const raw = seededProject();
     raw.legacyOnlyField = { keep: false };
     const result = validateProject(raw);
     expect(result.ok).toBe(true);
@@ -276,9 +276,9 @@ describe('project schema v1 — legacy migration', () => {
   });
 });
 
-describe('project schema v1 — versioning', () => {
+describe('project schema v3 — versioning', () => {
   it('rejects a project from a newer schema version with a clear message', () => {
-    const raw = { ...legacyProject(), schemaVersion: SCHEMA_VERSION + 1 };
+    const raw = { ...seededProject(), schemaVersion: SCHEMA_VERSION + 1 };
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
     expect(result.project).toBeNull();
@@ -288,7 +288,7 @@ describe('project schema v1 — versioning', () => {
   });
 
   it('rejects a non-integer schema version', () => {
-    const result = validateProject({ ...legacyProject(), schemaVersion: 'one' });
+    const result = validateProject({ ...seededProject(), schemaVersion: 'one' });
     expect(result.ok).toBe(false);
     expect(result.errors[0].path).toBe('schemaVersion');
   });
@@ -302,9 +302,9 @@ describe('project schema v1 — versioning', () => {
   });
 });
 
-describe('project schema v1 — canonical serialization', () => {
+describe('project schema v3 — canonical serialization', () => {
   it('is byte-stable across a save/reopen round-trip', () => {
-    const first = stringifyProject(legacyProject());
+    const first = stringifyProject(seededProject());
     expect(first.ok).toBe(true);
     expect(first.text.startsWith(`{\n  "schemaVersion": ${SCHEMA_VERSION},`)).toBe(true);
     expect(first.text.endsWith('\n')).toBe(true);
@@ -319,7 +319,7 @@ describe('project schema v1 — canonical serialization', () => {
   });
 
   it('normalizes numbers and strings once, then leaves them alone', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.defaults.nproc = '8';
     raw.nodes[0].settings.memory = 16;
     const once = validateProject(raw).project;
@@ -330,7 +330,7 @@ describe('project schema v1 — canonical serialization', () => {
   });
 
   it('does not mutate the caller object', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     const snapshot = JSON.parse(JSON.stringify(raw));
     validateProject(raw);
     expect(raw).toEqual(snapshot);
@@ -372,7 +372,7 @@ describe('project schema v1 — canonical serialization', () => {
 
 describe('project schema v1 — graph validation', () => {
   it('rejects duplicate node ids', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.nodes.push({ ...raw.nodes[0] });
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
@@ -380,7 +380,7 @@ describe('project schema v1 — graph validation', () => {
   });
 
   it('rejects ids that are not safe file stems', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.nodes[0].id = 'bad id/../x';
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
@@ -388,7 +388,7 @@ describe('project schema v1 — graph validation', () => {
   });
 
   it('rejects edges to unknown nodes and self edges', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.edges.push({ from: 'r-opt', to: 'ghost', type: 'dependency' });
     raw.edges.push({ from: 'r-opt', to: 'r-opt', type: 'dependency' });
     const result = validateProject(raw);
@@ -398,7 +398,7 @@ describe('project schema v1 — graph validation', () => {
   });
 
   it('requires a branch value on branch edges and rejects duplicates', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.edges = [
       { from: 'r-opt', to: 'r-freq', type: 'branch' },
       { from: 'r-opt', to: 'ts-opt', type: 'dependency' },
@@ -411,7 +411,7 @@ describe('project schema v1 — graph validation', () => {
   });
 
   it('rejects a checkpoint hand-off that points at a non-calculation node', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.nodes.find((node) => node.id === 'ts-freq').checkpointFrom = 'cond';
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
@@ -419,7 +419,7 @@ describe('project schema v1 — graph validation', () => {
   });
 
   it('rejects a loop target that is not a calculation node', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.nodes.find((node) => node.id === 'retry').loop.target = 'cond';
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
@@ -428,7 +428,7 @@ describe('project schema v1 — graph validation', () => {
 
   it('rejects coordinates that are not finite numbers', () => {
     for (const value of [Number.NaN, Number.POSITIVE_INFINITY, 'left', 1e9]) {
-      const raw = legacyProject();
+      const raw = seededProject();
       raw.nodes[0].x = value;
       const result = validateProject(raw);
       expect(result.ok, `x=${value}`).toBe(false);
@@ -437,7 +437,7 @@ describe('project schema v1 — graph validation', () => {
   });
 
   it('enforces the node and connection caps', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.nodes = Array.from({ length: 2001 }, (_, index) => ({ ...raw.nodes[0], id: `n-${index}` }));
     const result = validateProject(raw);
     expect(result.ok).toBe(false);
@@ -461,7 +461,7 @@ describe('project schema v1 — settings and gates', () => {
 
   for (const [field, value, message] of cases) {
     it(`rejects an invalid ${field}`, () => {
-      const raw = legacyProject();
+      const raw = seededProject();
       raw.nodes[0].settings[field] = value;
       const result = validateProject(raw);
       expect(result.ok).toBe(false);
@@ -470,7 +470,7 @@ describe('project schema v1 — settings and gates', () => {
   }
 
   it('rejects negative or non-boolean gate values', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.nodes[1].settings.gates.imaginary = -1;
     raw.nodes[1].settings.gates.termination = 'yes';
     raw.nodes[1].settings.gates.minMagnitude = -5;
@@ -484,7 +484,7 @@ describe('project schema v1 — settings and gates', () => {
   });
 
   it('allows a null imaginary gate (not evaluated)', () => {
-    const raw = legacyProject();
+    const raw = seededProject();
     raw.nodes[0].settings.gates.imaginary = null;
     const result = validateProject(raw);
     expect(result.ok).toBe(true);
@@ -492,11 +492,11 @@ describe('project schema v1 — settings and gates', () => {
   });
 
   it('validates molecule fragments and output bundle names', () => {
-    const badFragments = legacyProject();
+    const badFragments = seededProject();
     badFragments.molecule.fragments = 'C=CC=C';
     expect(validateProject(badFragments).ok).toBe(false);
 
-    const noFragments = legacyProject();
+    const noFragments = seededProject();
     noFragments.molecule.fragments = Array.from({ length: 65 }, () => 'C');
     expect(validateProject(noFragments).ok).toBe(false);
 
@@ -550,7 +550,7 @@ describe('project text parsing', () => {
   });
 
   it('accepts a UTF-8 BOM', () => {
-    const text = `\uFEFF${JSON.stringify(legacyProject())}`;
+    const text = `\uFEFF${JSON.stringify(seededProject())}`;
     const result = parseProjectText(text);
     expect(result.ok).toBe(true);
     expect(result.project.nodes).toHaveLength(7);
@@ -611,7 +611,7 @@ describe('schema helpers', () => {
 
 describe('project molecule geometry', () => {
   const imported = () => {
-    const project = validateProject(legacyProject()).project;
+    const project = validateProject(seededProject()).project;
     project.molecule.coords = [
       { element: 'O', x: 0, y: 0, z: 0.1173 },
       { element: 'H', x: 0, y: 0.7572, z: -0.4692 },
@@ -621,8 +621,8 @@ describe('project molecule geometry', () => {
     return project;
   };
 
-  it('migrates v0.1 projects to the demo geometry', () => {
-    const { project } = validateProject(legacyProject());
+  it('fills an unstated geometry with the demo source', () => {
+    const { project } = validateProject(seededProject());
     expect(project.molecule.coords).toEqual([]);
     expect(project.molecule.geometry).toEqual({ source: 'demo', file: '', format: '' });
   });
@@ -645,7 +645,7 @@ describe('project molecule geometry', () => {
   });
 
   it('rejects imported geometry with no atoms', () => {
-    const project = validateProject(legacyProject()).project;
+    const project = validateProject(seededProject()).project;
     project.molecule.geometry = { source: 'imported', file: 'x.xyz', format: 'xyz' };
     const result = validateProject(project);
     expect(result.ok).toBe(false);
@@ -759,7 +759,7 @@ describe('project schema v1 — engine-specific solvation models (#102)', () => 
     expect(alpb.errors.some((error) => error.message === 'must be one of: PCM, SMD, CPCM.')).toBe(true);
 
     // No `defaults.engine` at all is the historical file shape: Gaussian, as before.
-    const legacy = legacyProject();
+    const legacy = seededProject();
     delete legacy.defaults.engine;
     legacy.nodes[0].settings.solvationModel = 'ALPB';
     const result = validateProject(legacy);
@@ -774,7 +774,7 @@ describe('project schema — an imported drawing keeps its dimension', () => {
   // z = 0 on every atom. The claim has to survive a save, or a project reopened
   // tomorrow offers flat coordinates as a geometry to run on with no notice.
   it('round-trips cdxml as a geometry format', () => {
-    const project = validateProject(legacyProject()).project;
+    const project = validateProject(seededProject()).project;
     project.molecule.coords = [
       { element: 'O', x: 0, y: 0, z: 0 },
       { element: 'H', x: 0.76, y: 0.59, z: 0 },
@@ -791,7 +791,7 @@ describe('project schema — an imported drawing keeps its dimension', () => {
   });
 
   it('accepts a 3d geometry without a dimension note', () => {
-    const project = validateProject(legacyProject()).project;
+    const project = validateProject(seededProject()).project;
     project.molecule.coords = [
       { element: 'O', x: 0, y: 0, z: 0 },
       { element: 'H', x: 0.76, y: 0.59, z: 0 },
@@ -806,7 +806,7 @@ describe('project schema — an imported drawing keeps its dimension', () => {
   });
 
   it('refuses a dimension it does not understand', () => {
-    const project = legacyProject();
+    const project = seededProject();
     project.molecule.geometry = { source: 'imported', file: 'x.cdxml', format: 'cdxml', dimension: '2.5d' };
     const result = validateProject(project);
     expect(hasErrorAt(result, 'molecule.geometry.dimension')).toBe(true);

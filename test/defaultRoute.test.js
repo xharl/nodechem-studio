@@ -150,7 +150,7 @@ describe('issue #17 — existing project files', () => {
       },
       nodes: [{
         id: 'legacy-opt',
-        type: 'calc',
+        type: 'calculate',
         kind: 'Opt',
         title: 'Legacy optimization',
         state: 'ready',

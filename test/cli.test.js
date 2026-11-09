@@ -33,7 +33,7 @@ describe('shared task builder', () => {
     const tasks = buildWorkflowTasks(project);
     expect(tasks.length).toBeGreaterThan(0);
     const calc = tasks.find((task) => task.executable);
-    expect(calc).toMatchObject({ engine: 'gaussian', type: 'calc' });
+    expect(calc).toMatchObject({ engine: 'gaussian', type: 'calculate' });
     expect(calc.inputText).toMatch(/^#p B3LYP\//m);
     expect(calc.inputName).toMatch(/\.gjf$/);
     expect(calc.gates).toHaveProperty('requireFinalEnergy');
@@ -42,7 +42,7 @@ describe('shared task builder', () => {
   it('keeps control-flow nodes as non-executable tasks', () => {
     const project = validateProject(JSON.parse(readFileSync(example('opt-freq.ncs'), 'utf8'))).project;
     const tasks = buildWorkflowTasks(project);
-    for (const task of tasks.filter((entry) => entry.type !== 'calc')) {
+    for (const task of tasks.filter((entry) => entry.type !== 'calculate')) {
       expect(task.executable).toBe(false);
     }
   });
@@ -63,8 +63,8 @@ describe('ncs validate', () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ncs-cli-'));
     const file = path.join(dir, 'broken.ncs');
     const project = JSON.parse(await readFile(example('single-point.ncs'), 'utf8'));
-    for (const node of project.nodes) {
-      if (node.type === 'calc') node.settings.jobType = 'BOGUS';
+    for (const node of project.flows[0].nodes) {
+      if (node.type === 'calculate') node.settings.jobType = 'BOGUS';
     }
     await writeFile(file, JSON.stringify(project), 'utf8');
     const result = await ncs(['validate', file]);
@@ -78,7 +78,7 @@ describe('ncs validate', () => {
 describe('ncs build-input', () => {
   it('writes the input the app would write', async () => {
     const project = JSON.parse(await readFile(example('single-point.ncs'), 'utf8'));
-    const nodeId = project.nodes.find((node) => node.type === 'calc').id;
+    const nodeId = project.flows[0].nodes.find((node) => node.type === 'calculate').id;
     const result = await ncs(['build-input', example('single-point.ncs'), '--node', nodeId]);
     expect(result.code).toBe(0);
     expect(result.stdout).toMatch(/^%Mem=/);
@@ -106,7 +106,7 @@ describe('ncs run', () => {
   it('exits 3 when a gate fails and 4 when the engine cannot run', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ncs-gate-'));
     const project = JSON.parse(await readFile(example('opt-freq.ncs'), 'utf8'));
-    const freq = project.nodes.find((node) => node.type === 'calc' && /Freq/.test(node.settings.jobType));
+    const freq = project.flows[0].nodes.find((node) => node.type === 'calculate' && /Freq/.test(node.settings.jobType));
     freq.settings.gates = { ...freq.settings.gates, imaginary: 2 };
     const file = path.join(dir, 'bad-gate.ncs');
     await writeFile(file, JSON.stringify(project), 'utf8');
@@ -140,8 +140,8 @@ describe('ncs diff and ncs merge', () => {
 
   it('reports structural changes between two projects', async () => {
     const { files } = await divergent((ours, theirs) => {
-      ours.nodes[0].title = 'Renamed by us';
-      theirs.nodes.push({ ...theirs.nodes[0], id: 'extra', title: 'Extra' });
+      ours.flows[0].nodes[0].title = 'Renamed by us';
+      theirs.flows[0].nodes.push({ ...theirs.flows[0].nodes[0], id: 'extra', title: 'Extra' });
     });
     const result = await ncs(['diff', files.ours, files.theirs, '--json']);
     expect(result.code).toBe(0);
@@ -153,15 +153,15 @@ describe('ncs diff and ncs merge', () => {
 
   it('merges non-overlapping edits and writes a valid project', async () => {
     const { dir, files } = await divergent((ours, theirs) => {
-      ours.nodes[0].title = 'Renamed by us';
-      const calc = theirs.nodes.find((node) => node.type === 'calc');
+      ours.flows[0].nodes[0].title = 'Renamed by us';
+      const calc = theirs.flows[0].nodes.find((node) => node.type === 'calculate');
       calc.settings.method = 'M06-2X';
     });
     const out = path.join(dir, 'merged.ncs');
     const result = await ncs(['merge', files.base, files.ours, files.theirs, '--out', out]);
     expect(result.code).toBe(0);
     const merged = JSON.parse(await readFile(out, 'utf8'));
-    // Schema v2 writes `flows[]`; the top-level nodes array is an in-memory alias.
+    // Schema v3 writes `flows[]`; the top-level nodes array is an in-memory alias.
     expect(merged.flows[0].nodes[0].title).toBe('Renamed by us');
     expect(merged.flows[0].nodes.some((node) => node.settings?.method === 'M06-2X')).toBe(true);
     expect(validateProject(merged).ok).toBe(true);
@@ -169,8 +169,8 @@ describe('ncs diff and ncs merge', () => {
 
   it('refuses overlapping edits with exit 5 and writes nothing', async () => {
     const { dir, files } = await divergent((ours, theirs) => {
-      ours.nodes[0].title = 'One';
-      theirs.nodes[0].title = 'Two';
+      ours.flows[0].nodes[0].title = 'One';
+      theirs.flows[0].nodes[0].title = 'Two';
     });
     const out = path.join(dir, 'merged.ncs');
     const result = await ncs(['merge', files.base, files.ours, files.theirs, '--out', out]);
@@ -186,7 +186,7 @@ describe('method ladders end to end', () => {
   it('runs one task per rung and writes a single ladder gate', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ncs-ladder-'));
     const project = JSON.parse(await readFile(example('single-point.ncs'), 'utf8'));
-    const calc = project.nodes.find((node) => node.type === 'calc');
+    const calc = project.flows[0].nodes.find((node) => node.type === 'calculate');
     calc.settings = {
       ...calc.settings,
       ladder: {

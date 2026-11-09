@@ -76,11 +76,11 @@ candidates remain, the whole calculation is refused
 
 ## Running it from a workflow
 
-DP4+ is a **compute block** with `mode: "dp4"` (issue 165), so it is planned, run, recorded and
+DP4+ is an **analyse block** with `mode: "dp4"` (issue 165), so it is planned, run, recorded and
 reported like every other block — there is no separate window to open and no number that lives only
 in a test.
 
-1. Wire the blocks whose runs are the candidates into a Compute block. One **dataset record** is one
+1. Wire the blocks whose runs are the candidates into an Analyse block. One **dataset record** is one
    candidate; a fanned-out conformer ensemble is one candidate with one conformer per member. Two
    isomers in a dataset are two candidates; two calculation blocks are also two candidates.
 2. Open the block and switch **What this block computes** to *DP4+ probabilities over candidate
@@ -117,7 +117,7 @@ never repairs a definition into something computable.
 ### Where the result is recorded
 
 The queue writes `run.json` for the block — `kind: "derived"`, no `parsed` block, the definition and
-the one-line verdict under `compute`, and the whole result under `dp4` (probabilities, per-nucleus
+the one-line verdict under `analyse`, and the whole result under `dp4` (probabilities, per-nucleus
 deviations, the fit each nucleus used, the excluded candidates, the level, the bank and its citation).
 A refused comparison is written down too, with the reason, so the record says *why* rather than
 nothing. The block appears in the Results card and in the workflow report's DP4+ section; a run that

@@ -267,7 +267,7 @@ describe('constraint validation', () => {
 
 describe('constraints in the project schema', () => {
   const project = (settings) => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Constrained',
     molecule: { charge: 0, multiplicity: 1, fragments: [], coords: METHANOL, geometry: { source: 'imported', file: 'm.gjf', format: 'gjf' } },
     defaults: { engine: 'gaussian', method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: 4 },
@@ -278,7 +278,7 @@ describe('constraints in the project schema', () => {
       title: 'Workflow',
       nodes: [{
         id: 'opt-1',
-        type: 'calc',
+        type: 'calculate',
         kind: 'Opt',
         title: 'Constrained optimisation',
         state: 'ready',

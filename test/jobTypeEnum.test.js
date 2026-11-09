@@ -48,7 +48,7 @@ describe('issue 181 — the schema enum covers every engine job type', () => {
   it('saves and reloads a Psi4 TD-DFT block', () => {
     // The reproduction from the issue, through the same validator Save uses.
     const result = validateProject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'TD-DFT save',
       molecule: {
         smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: [],
@@ -61,7 +61,7 @@ describe('issue 181 — the schema enum covers every engine job type', () => {
         id: 'main',
         title: 'TD-DFT',
         nodes: [{
-          id: 'td', type: 'calc', kind: 'SP', title: 'Excited states', state: 'ready', x: 0, y: 0,
+          id: 'td', type: 'calculate', kind: 'SP', title: 'Excited states', state: 'ready', x: 0, y: 0,
           settings: defaultSettings({ engine: 'psi4', jobType: 'TD-DFT', tdStates: 12 }),
           output: null,
           checkpointFrom: null,

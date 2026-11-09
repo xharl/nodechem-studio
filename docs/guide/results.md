@@ -124,7 +124,7 @@ An average is marked **converged** when the largest retained population is at le
 
 A value that came from a ladder or an ensemble is shown with its spread and what the spread is over:
 
-- **Results panel** — a **Method sensitivity** card shows the ladder rungs, the spread, the CBS estimate (or `CBS not reported` and why), the population table and the ensemble-averaged observables with `spread … over N retained conformers`. A run expanded from a conformer block also shows its population and the retained-ensemble spread.
+- **Results panel** — a **Method sensitivity** card shows the ladder rungs, the spread, the CBS estimate (or `CBS not reported` and why), the population table and the ensemble-averaged observables with `spread … over N retained conformers`. A run expanded from a Generate block also shows its population and the retained-ensemble spread.
 - **Workflow report** — the ladder section prints the CBS form, pair and ladder spread; the conformer section prints the population column and the ensemble-averaged table with weighted SD and the unweighted column.
 - **Dataset export** — appended columns: `conformer_ensemble_spread_kcal`, `conformer_ensemble_temperature_k`, `ladder_spread_kcal`, `ladder_spread_over`, `ladder_cbs_hartree`, `ladder_cbs_spread_kcal`, `ladder_cbs_form`. A missing block is an empty cell; an unavailable CBS estimate never writes a number.
 
@@ -300,7 +300,7 @@ A run whose output carries those constants gets a **Thermochemistry** card with 
 - an itemised table whose footer is `Σ correction to G` in kcal/mol and the resulting `G` in hartree;
 - **Export CSV**, generated from the same data object as the table, so the file and the screen cannot
   disagree (three decimals, same term labels, plus T, p and the standard state);
-- a **Conformer ensemble** picker: select two or more finished runs that report a free energy and get
+- a **Generate** picker: select two or more finished runs that report a free energy and get
   Boltzmann populations and the ensemble free energy at the current temperature.
 
 Two statements stay on the card wherever the numbers go: the standard state of the *printed* table

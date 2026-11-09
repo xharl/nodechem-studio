@@ -45,7 +45,7 @@ const molecule = {
 };
 
 const project = (nodes, edges = []) => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'Conformer groups',
   molecule,
   defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -54,8 +54,22 @@ const project = (nodes, edges = []) => ({
 });
 
 const conformersNode = (id, settings = {}, output = null) => ({
-  id, type: 'conformers', title: `Ensemble ${id}`, state: 'ready', x: 0, y: 0, settings, output,
+  id, type: 'generate', title: `Ensemble ${id}`, state: 'ready', x: 0, y: 0, settings, output,
 });
+
+// ADR 0001: an imported ensemble is an input block plus a generate block.
+const importedPair = (id, settings = {}, output = null, input = {}) => [
+  {
+    id: `ens-${id}`, type: 'input', kind: 'Ensemble input', title: `Input ${id}`, state: 'ready', x: -160, y: 0,
+    input: {
+      kind: 'ensemble', path: input.path || 'conf.xyz', format: 'xyz',
+      energyUnit: input.energyUnit || 'hartree', energyMethod: input.energyMethod || '',
+      origin: input.origin || { program: '', version: '', method: '' },
+    },
+  },
+  conformersNode(id, { source: 'imported', ...settings }, output),
+];
+const importedEdge = (id) => [{ from: `ens-${id}`, to: id, type: 'dependency' }];
 
 const summary = (overrides = {}) => ({
   generator: 'import',
@@ -90,13 +104,14 @@ describe('#132 a group id round-trips through the schema', () => {
   });
 
   it('stores a group id on the block and in the ensemble summary', () => {
-    const result = validateProject(project([
-      conformersNode('conf1', { generator: 'import', importPath: 'a.xyz', group: 'tautomer-study' }, summary({ group: 'tautomer-study' })),
-    ]));
+    const result = validateProject(project(
+      importedPair('conf1', { group: 'tautomer-study' }, summary({ group: 'tautomer-study' }), { path: 'a.xyz' }),
+      importedEdge('conf1'),
+    ));
     expect(result.ok).toBe(true);
     const reloaded = parseProjectText(stringifyProject(result.project).text);
     expect(reloaded.ok).toBe(true);
-    const node = reloaded.project.nodes[0];
+    const node = reloaded.project.nodes.find((entry) => entry.type === 'generate');
     expect(node.settings.group).toBe('tautomer-study');
     expect(node.output.group).toBe('tautomer-study');
   });
@@ -158,14 +173,15 @@ describe('#132 the group is per block, never per member', () => {
 
   it('passes the block group into the task the queue receives', () => {
     const validated = validateProject(project([
-      conformersNode('conf1', { generator: 'import', importPath: 'conf.xyz', group: 'study-1' }),
-    ])).project;
-    const task = conformerSearchTask(validated, validated.nodes[0]);
-    expect(task.conformers.group).toBe('study-1');
-    const ungrouped = validateProject(project([
-      conformersNode('conf2', { generator: 'import', importPath: 'conf.xyz' }),
-    ])).project;
-    expect(conformerSearchTask(ungrouped, ungrouped.nodes[0]).conformers.group).toBe('');
+      ...importedPair('conf1', { group: 'study-1' }, null, { path: 'conf.xyz' }),
+    ], importedEdge('conf1'))).project;
+    const task = conformerSearchTask(validated, validated.nodes.find((entry) => entry.type === 'generate'));
+    expect(task.generate.group).toBe('study-1');
+    const ungrouped = validateProject(project(
+      importedPair('conf2', {}, null, { path: 'conf.xyz' }),
+      importedEdge('conf2'),
+    )).project;
+    expect(conformerSearchTask(ungrouped, ungrouped.nodes.find((entry) => entry.type === 'generate')).generate.group).toBe('');
   });
 });
 
@@ -214,36 +230,36 @@ const reportQueue = ({
   projectName: 'Tautomer study',
   status: 'completed',
   tasks: [
-    { nodeId: 'confA', title: titleA, type: 'conformers', status: 'completed', conformers: { temperature: 298.15, group: groupA } },
-    { nodeId: 'confB', title: titleB, type: 'conformers', status: 'completed', conformers: { temperature: 298.15, group: groupB } },
-    { nodeId: 'confC', title: titleC, type: 'conformers', status: 'completed', conformers: { temperature: 298.15, group: groupC } },
+    { nodeId: 'confA', title: titleA, type: 'generate', status: 'completed', generate: { temperature: 298.15, group: groupA } },
+    { nodeId: 'confB', title: titleB, type: 'generate', status: 'completed', generate: { temperature: 298.15, group: groupB } },
+    { nodeId: 'confC', title: titleC, type: 'generate', status: 'completed', generate: { temperature: 298.15, group: groupC } },
     {
-      nodeId: 'optA~c1', title: `${titleA} — c1`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-a1',
+      nodeId: 'optA~c1', title: `${titleA} — c1`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-a1',
       conformer: { nodeId: 'confA', title: titleA, id: 'c1', relativeKcal: 0, population: 0.9, protomer: 'A' },
       fanOut: { conformerId: 'confA', memberId: 'c1' },
     },
     {
-      nodeId: 'optA~c2', title: `${titleA} — c2`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-a2',
+      nodeId: 'optA~c2', title: `${titleA} — c2`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-a2',
       conformer: { nodeId: 'confA', title: titleA, id: 'c2', relativeKcal: 1.0, population: 0.1, protomer: 'A' },
       fanOut: { conformerId: 'confA', memberId: 'c2' },
     },
     {
-      nodeId: 'optB~c1', title: `${titleB} — c1`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-b1',
+      nodeId: 'optB~c1', title: `${titleB} — c1`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-b1',
       conformer: { nodeId: 'confB', title: titleB, id: 'c1', relativeKcal: 0, population: 0.8, protomer: 'B' },
       fanOut: { conformerId: 'confB', memberId: 'c1' },
     },
     {
-      nodeId: 'optB~c2', title: `${titleB} — c2`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-b2',
+      nodeId: 'optB~c2', title: `${titleB} — c2`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-b2',
       conformer: { nodeId: 'confB', title: titleB, id: 'c2', relativeKcal: 2.0, population: 0.2, protomer: 'B' },
       fanOut: { conformerId: 'confB', memberId: 'c2' },
     },
     {
-      nodeId: 'optC~c1', title: `${titleC} — c1`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c1',
+      nodeId: 'optC~c1', title: `${titleC} — c1`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-c1',
       conformer: { nodeId: 'confC', title: titleC, id: 'c1', relativeKcal: 0, population: 1, protomer: '' },
       fanOut: { conformerId: 'confC', memberId: 'c1' },
     },
     {
-      nodeId: 'optC~c2', title: `${titleC} — c2`, type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c2',
+      nodeId: 'optC~c2', title: `${titleC} — c2`, type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-c2',
       conformer: { nodeId: 'confC', title: titleC, id: 'c2', relativeKcal: 0.5, population: 0.3, protomer: '' },
       fanOut: { conformerId: 'confC', memberId: 'c2' },
     },
@@ -364,17 +380,16 @@ describe('#132 the queue writes the group into conformers.json', () => {
       ...coords.map((atom) => `${atom.element} ${atom.x} ${atom.y + 0.8} ${atom.z}`),
       '',
     ].join('\n'), 'utf8');
-    const validated = validateProject(project([
-      conformersNode('conf', {
-        generator: 'import', importPath: ensemblePath, rmsdThreshold: 0.05, group: 'study-1',
-      }),
-    ]));
+    const validated = validateProject(project(
+      importedPair('conf', { rmsdThreshold: 0.05, group: 'study-1' }, null, { path: ensemblePath }),
+      importedEdge('conf'),
+    ));
     expect(validated.ok).toBe(true);
-    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'conformers');
+    const plan = buildWorkflowPlan(validated.project);
     const started = await queueManager.start({
       projectName: validated.project.name,
-      tasks: [task],
-      edges: [],
+      tasks: plan.tasks,
+      edges: plan.edges,
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     });
     const done = await waitFor(async () => {
@@ -388,11 +403,12 @@ describe('#132 the queue writes the group into conformers.json', () => {
     expect(written.members.some((member) => 'group' in member)).toBe(false);
     // The summary the project stores carries it too, so save/load keeps the link.
     expect(conformers.ensemble.group).toBe('study-1');
-    const reloaded = parseProjectText(stringifyProject(project([
-      conformersNode('conf', { generator: 'import', importPath: ensemblePath, group: 'study-1' }, conformers.ensemble),
-    ])).text);
+    const reloaded = parseProjectText(stringifyProject(project(
+      importedPair('conf', { group: 'study-1' }, conformers.ensemble, { path: ensemblePath }),
+      importedEdge('conf'),
+    )).text);
     expect(reloaded.ok).toBe(true);
-    expect(reloaded.project.nodes[0].output.group).toBe('study-1');
+    expect(reloaded.project.nodes.find((entry) => entry.type === 'generate').output.group).toBe('study-1');
   });
 
   it('drops a hand-written queue group that is not a plain token instead of storing it', async () => {
@@ -400,9 +416,9 @@ describe('#132 the queue writes the group into conformers.json', () => {
     const started = await queueManager.start({
       projectName: 'bad group',
       tasks: [{
-        nodeId: 'conf', type: 'conformers', title: 'Ensemble', inputName: 'in.xyz',
+        nodeId: 'conf', type: 'generate', title: 'Ensemble', inputName: 'in.xyz',
         inputText: '3\nwater\nO 0 0 0\nH 0.96 0 0\nH -0.24 0.93 0\n',
-        conformers: { generator: 'crest', group: 'two words' },
+        generate: { generator: 'crest', group: 'two words' },
       }],
       edges: [],
       options: { dryRun: true, executable: null, crestExecutable: '', scratchDir: '' },
@@ -413,6 +429,6 @@ describe('#132 the queue writes the group into conformers.json', () => {
       const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
       return queue && queue.status !== 'running' ? queue : null;
     });
-    expect(stored.tasks[0].conformers.group).toBe('');
+    expect(stored.tasks[0].generate.group).toBe('');
   });
 });

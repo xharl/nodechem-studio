@@ -169,6 +169,21 @@ export class ObabelRunner {
     });
   }
 
+  /**
+   * ADR 0001 §2.9: one deterministic conversion — embed3d or an MM relaxation.
+   * No search, no scoring pass: Open Babel writes one structure and this method
+   * returns the process record plus its transcript.
+   */
+  async convert({ executable, argv = [], cwd, outputName = 'obabel.log', timeoutMs = 0, onOutput = () => {} }) {
+    const args = Array.isArray(argv) ? argv.map(String) : [];
+    if (args.length === 0) throw new Error('The Open Babel conversion has no arguments.');
+    if (!executable) throw new Error('No Open Babel executable is configured; set it in the run console.');
+    const version = await ObabelRunner.version(executable);
+    const result = await this.#spawnOnce({ executable, argv: args, cwd, timeoutMs, onOutput, label: 'convert' });
+    await fsp.writeFile(path.join(cwd, outputName), `$ obabel ${args.join(' ')}\n${result.text}\n`, 'utf8');
+    return { ...result, outputText: result.text, version };
+  }
+
   cancel() {
     this.cancelled = true;
     if (this.child) terminateTree(this.child);

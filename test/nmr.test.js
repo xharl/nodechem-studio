@@ -444,7 +444,7 @@ describe('workflow report NMR section', () => {
     status: 'completed',
     createdAt: '2026-11-09T01:00:00.000Z',
     finishedAt: '2026-11-09T01:10:00.000Z',
-    tasks: [{ nodeId: 'nmr', title: 'DVB NMR', type: 'calc', status: 'passed', runId: 'run-nmr' }],
+    tasks: [{ nodeId: 'nmr', title: 'DVB NMR', type: 'calculate', status: 'passed', runId: 'run-nmr' }],
   };
 
   it('prints the coupling pairs, the units, the level and the reference provenance', () => {

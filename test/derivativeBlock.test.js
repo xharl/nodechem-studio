@@ -286,7 +286,7 @@ describe('issue 189 — the guards are the edit engine\'s own refusals', () => {
 
 describe('issue 189 — the schema keeps the edit list and refuses it by name', () => {
   const project = (overrides = {}) => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Derivative fixture',
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: benzeneCoords, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -331,7 +331,7 @@ describe('issue 189 — the schema keeps the edit list and refuses it by name', 
         },
         {
           id: 'sp',
-          type: 'calc',
+          type: 'calculate',
           kind: 'SP',
           title: 'Single point',
           state: 'ready',
@@ -437,7 +437,7 @@ describe('issue 189 — the schema keeps the edit list and refuses it by name', 
 describe('issue 189 — the plan expands one task per edit', () => {
   const planProject = (nodes) => {
     const result = validateProject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'Derivative plan',
       molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: benzeneCoords, geometry: { source: 'demo', file: '', format: '' } },
       defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -469,7 +469,7 @@ describe('issue 189 — the plan expands one task per edit', () => {
       },
     },
     {
-      id: 'sp', type: 'calc', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
+      id: 'sp', type: 'calculate', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
       settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null,
     },
   ];
@@ -541,7 +541,7 @@ describe('issue 189 — a dry `ncs run` executes every derivative', () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'ncs-derivative-'));
     const file = path.join(dir, 'derivative.ncs');
     const project = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       name: 'Derivative dry run',
       molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: benzeneCoords, geometry: { source: 'demo', file: '', format: '' } },
       defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -568,7 +568,7 @@ describe('issue 189 — a dry `ncs run` executes every derivative', () => {
             },
           },
           {
-            id: 'sp', type: 'calc', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
+            id: 'sp', type: 'calculate', kind: 'SP', title: 'Single point', state: 'ready', x: 200, y: 0,
             settings: defaultSettings({ jobType: 'SP' }), output: null, checkpointFrom: null,
           },
           {

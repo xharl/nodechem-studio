@@ -12,12 +12,13 @@ does not damage a project.
 | Content | canonical JSON (the extension names the product, not the encoding) |
 | Size cap | 8 MB before parsing |
 | Limits | 2 000 blocks, 4 000 connections, 64 fragments, 1 000 atoms |
-| Version | `schemaVersion: 1` |
+| Version | `schemaVersion: 3` |
 
 - **Validation before render.** A malformed file is refused with the failing JSON paths instead of
   half-rendering.
-- **Migration.** An unversioned v0.1 file migrates on open. A file from a *newer* schema version is
-  rejected with an "update the app" message — the reader never guesses at a newer format.
+- **Version boundary.** Schema version 3 is a breaking vocabulary change (ADR 0001): a version 2 or
+  older file is refused by version, not migrated. A file from a *newer* schema version is rejected
+  with an "update the app" message — the reader never guesses at a newer format.
 - **Canonical saves.** Fixed key order, normalized numbers, two-space indent, one trailing newline,
   no BOM written (a BOM is tolerated on read). Saving an unchanged project is byte-identical, so
   `.ncs` files diff cleanly in git.

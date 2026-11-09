@@ -11,7 +11,7 @@ const QUEUE = {
     {
       nodeId: 'opt',
       title: 'Optimise reactant',
-      type: 'calc',
+      type: 'calculate',
       kind: 'Opt',
       status: 'passed',
       attempts: 1,
@@ -22,7 +22,7 @@ const QUEUE = {
     {
       nodeId: 'freq',
       title: 'Reactant frequency',
-      type: 'calc',
+      type: 'calculate',
       kind: 'Freq',
       status: 'failed',
       attempts: 2,
@@ -111,12 +111,12 @@ describe('conformer fan-out in the report (#80)', () => {
     status: 'completed',
     tasks: [
       {
-        nodeId: 'opt~c1', title: 'Optimise — c1', type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c1',
+        nodeId: 'opt~c1', title: 'Optimise — c1', type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-c1',
         conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c1', relativeKcal: 0, population: 0.94, protomer: '' },
         fanOut: { conformerId: 'conf', memberId: 'c1' },
       },
       {
-        nodeId: 'opt~c2', title: 'Optimise — c2', type: 'calc', kind: 'Opt', status: 'passed', runId: 'run-c2',
+        nodeId: 'opt~c2', title: 'Optimise — c2', type: 'calculate', kind: 'Opt', status: 'passed', runId: 'run-c2',
         conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c2', relativeKcal: 3.4, population: 0.06, protomer: '' },
         fanOut: { conformerId: 'conf', memberId: 'c2' },
       },
@@ -216,8 +216,8 @@ describe('method sensitivity in the report (#96)', () => {
     projectName: 'CBS',
     status: 'completed',
     tasks: [
-      { nodeId: 'sp.r1', title: 'MP2 — def2-TZVP', type: 'calc', status: 'completed', runId: 'r1' },
-      { nodeId: 'sp.r2', title: 'MP2 — def2-QZVP', type: 'calc', status: 'completed', runId: 'r2' },
+      { nodeId: 'sp.r1', title: 'MP2 — def2-TZVP', type: 'calculate', status: 'completed', runId: 'r1' },
+      { nodeId: 'sp.r2', title: 'MP2 — def2-QZVP', type: 'calculate', status: 'completed', runId: 'r2' },
     ],
     ladders: {
       sp: {
@@ -283,14 +283,14 @@ describe('method sensitivity in the report (#96)', () => {
     projectName: 'Ensemble',
     status: 'completed',
     tasks: [
-      { nodeId: 'conf', title: 'Conformer ensemble', type: 'conformers', status: 'completed', conformers: { temperature: 298.15 } },
+      { nodeId: 'conf', title: 'Conformer ensemble', type: 'generate', status: 'completed', generate: { temperature: 298.15 } },
       {
-        nodeId: 'opt~c1', title: 'Optimise — c1', type: 'calc', status: 'completed', runId: 'run-c1',
+        nodeId: 'opt~c1', title: 'Optimise — c1', type: 'calculate', status: 'completed', runId: 'run-c1',
         conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c1', relativeKcal: 0, population: 0.94, protomer: '' },
         fanOut: { conformerId: 'conf', memberId: 'c1' },
       },
       {
-        nodeId: 'opt~c2', title: 'Optimise — c2', type: 'calc', status: 'completed', runId: 'run-c2',
+        nodeId: 'opt~c2', title: 'Optimise — c2', type: 'calculate', status: 'completed', runId: 'run-c2',
         conformer: { nodeId: 'conf', title: 'Conformer ensemble', id: 'c2', relativeKcal: 3.4, population: 0.06, protomer: '' },
         fanOut: { conformerId: 'conf', memberId: 'c2' },
       },

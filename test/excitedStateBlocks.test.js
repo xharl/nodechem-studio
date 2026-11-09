@@ -35,7 +35,7 @@ function settings(overrides = {}) {
 function calc(id, overrides = {}) {
   return {
     id,
-    type: 'calc',
+    type: 'calculate',
     kind: kindForJob(overrides.jobType || 'Opt'),
     title: id,
     state: 'ready',
@@ -49,7 +49,7 @@ function calc(id, overrides = {}) {
 
 function rawProject(nodes, edges = []) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Excited-state blocks',
     molecule: {
       charge: 0,

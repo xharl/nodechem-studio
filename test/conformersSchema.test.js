@@ -17,7 +17,7 @@ const molecule = {
 };
 
 const project = (nodes, edges = []) => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'Conformer test',
   molecule: { ...molecule, geometry: { source: 'imported', file: 'water.xyz', format: 'xyz' } },
   defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -25,9 +25,28 @@ const project = (nodes, edges = []) => ({
   edges,
 });
 
+const ensembleInput = (overrides = {}) => ({
+  id: 'ens1',
+  type: 'input',
+  kind: 'Ensemble input',
+  title: 'Imported ensemble',
+  state: 'ready',
+  x: 0,
+  y: 0,
+  input: {
+    kind: 'ensemble',
+    path: 'conf.xyz',
+    format: 'xyz',
+    energyUnit: 'hartree',
+    energyMethod: '',
+    origin: { program: '', version: '', method: '' },
+  },
+  ...overrides,
+});
+
 const conformersNode = (overrides = {}) => ({
   id: 'conf1',
-  type: 'conformers',
+  type: 'generate',
   title: 'Conformer ensemble',
   state: 'ready',
   x: 40,
@@ -42,8 +61,9 @@ describe('conformers node schema', () => {
     const result = validateProject(project([conformersNode()]));
     expect(result.ok).toBe(true);
     const node = result.project.nodes[0];
-    expect(node.type).toBe('conformers');
-    expect(node.kind).toBe('Conformers');
+    expect(node.type).toBe('generate');
+    expect(node.kind).toBe('Generate');
+    expect(node.settings.source).toBe('search');
     expect(node.settings.generator).toBe('crest');
     expect(node.settings.method).toBe('gfn2');
     expect(node.settings.energyWindowKcal).toBe(10);
@@ -60,10 +80,22 @@ describe('conformers node schema', () => {
     expect(result.errors.some((error) => /selectedConformerId/.test(error.path))).toBe(true);
   });
 
-  it('warns when import mode has no file yet, without rejecting the project', () => {
-    const result = validateProject(project([conformersNode({ settings: { generator: 'import' } })]));
+  it('accepts an ensemble input and wires it to an imported generate block', () => {
+    const result = validateProject(project(
+      [ensembleInput(), conformersNode({ settings: { source: 'imported' } })],
+      [{ from: 'ens1', to: 'conf1', type: 'dependency' }],
+    ));
     expect(result.ok).toBe(true);
-    expect(result.warnings.some((warning) => /importPath/.test(warning.path))).toBe(true);
+    const input = result.project.nodes.find((node) => node.type === 'input');
+    expect(input.kind).toBe('Ensemble input');
+    expect(input.input.kind).toBe('ensemble');
+    expect(result.project.nodes.find((node) => node.type === 'generate').settings.source).toBe('imported');
+  });
+
+  it('refuses an imported generate block with no ensemble input wired', () => {
+    const result = validateProject(project([conformersNode({ settings: { source: 'imported' } })]));
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => /settings\.source/.test(error.path))).toBe(true);
   });
 
   it('clamps settings into their documented ranges', () => {

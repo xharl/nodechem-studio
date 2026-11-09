@@ -20,7 +20,7 @@ function exampleProject() {
 
 function sweptProject() {
   const project = exampleProject();
-  const calc = project.nodes.find((node) => node.type === 'calc');
+  const calc = project.flows[0].nodes.find((node) => node.type === 'calculate');
   calc.settings = { ...calc.settings, multiplicity: 3, spinSweep: { enabled: true, multiplicities: [1, 3, 5] } };
   return project;
 }
@@ -47,7 +47,7 @@ describe('spin-state sweep configuration', () => {
 
   it('rejects an invalid multiplicity in the schema', () => {
     const project = exampleProject();
-    const calc = project.nodes.find((node) => node.type === 'calc');
+    const calc = project.flows[0].nodes.find((node) => node.type === 'calculate');
     calc.settings = { ...calc.settings, spinSweep: { enabled: true, multiplicities: [1, 0] } };
     const result = validateProject(project);
     expect(result.ok).toBe(false);
@@ -80,7 +80,7 @@ describe('plan expansion', () => {
 
   it('refuses a block that is both a ladder and a sweep', () => {
     const project = sweptProject();
-    const calc = project.nodes.find((node) => node.type === 'calc');
+    const calc = project.flows[0].nodes.find((node) => node.type === 'calculate');
     calc.settings = {
       ...calc.settings,
       ladder: { enabled: true, toleranceKcal: 3, rungs: [{ method: 'B3LYP' }, { method: 'PBE0' }] },

@@ -89,7 +89,7 @@ const FAKE_OBABEL = [
 
 function projectWith({ settings = {}, coordsOverride = coords } = {}) {
   const raw = {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name: 'Open Babel workflow',
     molecule: {
       charge: 0,
@@ -101,7 +101,7 @@ function projectWith({ settings = {}, coordsOverride = coords } = {}) {
     defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
     nodes: [
       {
-        id: 'conf', type: 'conformers', title: 'Open Babel search', state: 'ready', x: 0, y: 0,
+        id: 'conf', type: 'generate', title: 'Open Babel search', state: 'ready', x: 0, y: 0,
         settings: { generator: 'obabel', nconf: 3, ff: 'mmff94', ...settings }, output: null,
       },
     ],
@@ -158,8 +158,8 @@ describe.skipIf(onWindows)('the Open Babel route through the queue', () => {
     const project = projectWith();
     const plan = buildWorkflowPlan(project);
     const task = plan.tasks.find((entry) => entry.nodeId === 'conf');
-    expect(task.conformers.generator).toBe('obabel');
-    expect(task.conformers.argv).toEqual([
+    expect(task.generate.generator).toBe('obabel');
+    expect(task.generate.argv).toEqual([
       'conf.xyz', '-O', 'obabel_conformers.xyz',
       '--conformer', '--nconf', '3', '--ff', 'MMFF94',
       '--score', 'energy', '--writeconformers',

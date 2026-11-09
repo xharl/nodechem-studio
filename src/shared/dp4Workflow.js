@@ -19,7 +19,7 @@
  * ## The definition a block carries
  *
  * ```json
- * "compute": {
+ * "analyse": {
  *   "mode": "dp4",
  *   "dp4": {
  *     "level": "mPW1PW91/6-31+G(d,p)",

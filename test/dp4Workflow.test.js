@@ -51,7 +51,7 @@ const molecule = () => ({
 });
 
 const calc = (id, title = id) => ({
-  id, type: 'calc', kind: 'SP', title, state: 'ready', x: 0, y: 0,
+  id, type: 'calculate', kind: 'SP', title, state: 'ready', x: 0, y: 0,
   settings: defaultSettings({ jobType: 'SP' }), output: null,
 });
 
@@ -76,14 +76,14 @@ function dp4Definition(extra = {}) {
 }
 
 const dp4Node = (definition = dp4Definition(), extra = {}) => ({
-  id: 'dp4', type: 'compute', kind: 'Compute', title: 'DP4+ ranking', state: 'ready', x: 0, y: 0,
-  compute: { mode: DP4_COMPUTE_MODE, dp4: definition },
+  id: 'dp4', type: 'analyse', kind: 'Compute', title: 'DP4+ ranking', state: 'ready', x: 0, y: 0,
+  analyse: { mode: DP4_COMPUTE_MODE, dp4: definition },
   ...extra,
 });
 
 function projectWith(nodes, edges, { datasets = [] } = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'DP4+ protocol',
     molecule: molecule(),
     defaults: { method: fixture.level.method, basis: fixture.level.basis, memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -147,7 +147,7 @@ describe('issue 165 — the DP4+ definition is checked where it is written', () 
       [{ from: 'nmr', to: 'dp4', type: 'dependency' }],
     ));
     expect(result.ok).toBe(false);
-    const problem = result.errors.find((entry) => entry.path.includes('compute.dp4.level'));
+    const problem = result.errors.find((entry) => entry.path.includes('analyse.dp4.level'));
     expect(problem).toBeDefined();
     // The bank's own sentence: it names the level and says it is not estimated.
     expect(problem.message).toContain('GFN2-xTB/def2-TZVP');
@@ -161,7 +161,7 @@ describe('issue 165 — the DP4+ definition is checked where it is written', () 
       [{ from: 'nmr', to: 'dp4', type: 'dependency' }],
     ));
     expect(result.ok).toBe(false);
-    expect(result.errors.some((entry) => entry.path.endsWith('compute.dp4.variant')
+    expect(result.errors.some((entry) => entry.path.endsWith('analyse.dp4.variant')
       && /classic DP4/.test(entry.message))).toBe(true);
   });
 
@@ -192,18 +192,18 @@ describe('issue 165 — the DP4+ definition is checked where it is written', () 
 
   it('saves the definition it validated, with the level and the variant named', () => {
     const project = dp4Project();
-    const node = project.flows[0].nodes.find((item) => item.type === 'compute');
-    expect(node.compute.mode).toBe('dp4');
-    expect(node.compute.dp4.level).toBe(LEVEL);
-    expect(node.compute.dp4.solvation).toBe('PCM');
-    expect(node.compute.dp4.solvent).toBe('CHCl3');
-    expect(node.compute.dp4.variant).toBe('full');
-    expect(node.compute.dp4.experimental).toHaveLength(fixture.experimental.length);
-    expect(node.compute.dp4.experimental[0].nucleus).toBe('13C');
+    const node = project.flows[0].nodes.find((item) => item.type === 'analyse');
+    expect(node.analyse.mode).toBe('dp4');
+    expect(node.analyse.dp4.level).toBe(LEVEL);
+    expect(node.analyse.dp4.solvation).toBe('PCM');
+    expect(node.analyse.dp4.solvent).toBe('CHCl3');
+    expect(node.analyse.dp4.variant).toBe('full');
+    expect(node.analyse.dp4.experimental).toHaveLength(fixture.experimental.length);
+    expect(node.analyse.dp4.experimental[0].nucleus).toBe('13C');
     // No expression and no field inputs: a DP4+ block reads records, and a
     // stale expression would be a second, contradictory declaration.
-    expect(node.compute.expression).toBeUndefined();
-    expect(node.compute.inputs).toBeUndefined();
+    expect(node.analyse.expression).toBeUndefined();
+    expect(node.analyse.inputs).toBeUndefined();
   });
 });
 
@@ -218,7 +218,7 @@ describe('issue 165 — a project without the mode saves and plans byte for byte
   const baselinePlan = fs.readFileSync(path.join(ROOT, 'test/fixtures/dp4/byte-identical/compute-plan.json'), 'utf8');
 
   const arithmeticProject = () => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Byte identity',
     molecule: molecule(),
     defaults: { method: 'MP2', basis: 'cc-pVQZ', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -231,8 +231,8 @@ describe('issue 165 — a project without the mode saves and plans byte for byte
         calc('sp2'),
         calc('sp4'),
         {
-          id: 'cbs', type: 'compute', kind: 'Compute', title: 'CBS limit', state: 'ready', x: 0, y: 0,
-          compute: {
+          id: 'cbs', type: 'analyse', kind: 'Compute', title: 'CBS limit', state: 'ready', x: 0, y: 0,
+          analyse: {
             expression: 'fit_cubic_inverse(E4, 4, E2, 2)',
             inputs: [
               { name: 'E4', field: 'finalEnergyHartree', source: 'sp4' },
@@ -264,8 +264,8 @@ describe('issue 165 — a project without the mode saves and plans byte for byte
   it('still says an expression block with no inputs has none', () => {
     const project = validated(projectWith(
       [calc('sp2'), { ...calc('other'), id: 'sp2b' }, {
-        id: 'bad', type: 'compute', title: 'Bad', state: 'ready', x: 0, y: 0,
-        compute: { expression: '1 + 2' },
+        id: 'bad', type: 'analyse', title: 'Bad', state: 'ready', x: 0, y: 0,
+        analyse: { expression: '1 + 2' },
       }],
       [{ from: 'sp2', to: 'bad', type: 'dependency' }],
     ));
@@ -277,25 +277,25 @@ describe('issue 165 — the plan reads the candidate records', () => {
   it('plans one task, not one per record, and computes from the results it was given', () => {
     const project = dp4Project();
     const plan = buildWorkflowPlan(project, { results: resultRows() });
-    const tasks = plan.tasks.filter((task) => task.type === 'compute');
+    const tasks = plan.tasks.filter((task) => task.type === 'analyse');
     expect(tasks).toHaveLength(1);
     const [task] = tasks;
-    expect(task.compute.mode).toBe('dp4');
-    expect(task.compute.status).toBe('computed');
-    expect(task.compute.candidates).toHaveLength(2);
-    expect(task.compute.checks.sumOfProbabilities).toBeCloseTo(1, 12);
+    expect(task.analyse.mode).toBe('dp4');
+    expect(task.analyse.status).toBe('computed');
+    expect(task.analyse.candidates).toHaveLength(2);
+    expect(task.analyse.checks.sumOfProbabilities).toBeCloseTo(1, 12);
     // The winning structure is the one the reference package's manual names.
-    expect(task.compute.candidates[0].id).toBe('01');
-    expect(task.compute.summary).toContain('DP4+');
+    expect(task.analyse.candidates[0].id).toBe('01');
+    expect(task.analyse.summary).toContain('DP4+');
     // The definition travels with the task so the queue can re-evaluate it.
-    expect(task.compute.dp4.level).toBe(LEVEL);
+    expect(task.analyse.dp4.level).toBe(LEVEL);
   });
 
   it('plans the block as waiting, never as a number, before the runs exist', () => {
-    const task = buildWorkflowPlan(dp4Project()).tasks.find((item) => item.type === 'compute');
-    expect(task.compute.status).toBe('pending');
-    expect(task.compute.value).toBeNull();
-    expect(task.compute.notComputed).toContain('waiting for the blocks wired into this DP4+ block');
+    const task = buildWorkflowPlan(dp4Project()).tasks.find((item) => item.type === 'analyse');
+    expect(task.analyse.status).toBe('pending');
+    expect(task.analyse.value).toBeNull();
+    expect(task.analyse.notComputed).toContain('waiting for the blocks wired into this DP4+ block');
   });
 
   it('refuses a block with no upstream block, naming what it needs', () => {
@@ -305,12 +305,12 @@ describe('issue 165 — the plan reads the candidate records', () => {
 
   it('keeps the definition and the probabilities apart from any engine value', () => {
     const task = buildWorkflowPlan(dp4Project(), { results: resultRows() })
-      .tasks.find((item) => item.type === 'compute');
+      .tasks.find((item) => item.type === 'analyse');
     // No `parsed` block and no scalar value: a DP4+ result is a table, and it
     // must not enter an energy column.
     expect(task.parsed).toBeUndefined();
-    expect(task.compute.value).toBeNull();
-    expect(task.compute.candidates[0].nuclei.length).toBeGreaterThan(0);
+    expect(task.analyse.value).toBeNull();
+    expect(task.analyse.candidates[0].nuclei.length).toBeGreaterThan(0);
   });
 });
 
@@ -401,7 +401,7 @@ describe('issue 165 — the queue writes the DP4+ record', () => {
       // eslint-disable-next-line no-await-in-loop
       await fsp.writeFile(path.join(dir, 'run.json'), JSON.stringify(run), 'utf8');
       tasks.push({
-        nodeId: taskId, type: 'calc', title: taskId, status: 'completed', runDir: dir,
+        nodeId: taskId, type: 'calculate', title: taskId, status: 'completed', runDir: dir,
         record: { id: taskId.split('~')[1], label: `record ${taskId.split('~')[1]}` },
       });
       edges.push({ from: taskId, to: planTask.nodeId, type: 'dependency' });
@@ -414,15 +414,15 @@ describe('issue 165 — the queue writes the DP4+ record', () => {
   it('writes a dp4 block whose probabilities sum to one', async () => {
     const project = dp4Project();
     const rows = resultRows();
-    const planTask = buildWorkflowPlan(project, { results: rows }).tasks.find((task) => task.type === 'compute');
+    const planTask = buildWorkflowPlan(project, { results: rows }).tasks.find((task) => task.type === 'analyse');
     const { manager, queue, task } = await queueFor(rows, planTask);
-    await manager.runCompute(queue, task);
+    await manager.runAnalyse(queue, task);
 
     expect(task.status).toBe('completed');
     expect(task.dp4.available).toBe(true);
     const written = JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
     expect(written.kind).toBe('derived');
-    expect(written.compute.mode).toBe('dp4');
+    expect(written.analyse.mode).toBe('dp4');
     expect(written.dp4.available).toBe(true);
     expect(written.dp4.candidates).toHaveLength(2);
     expect(written.dp4.candidates.reduce((sum, candidate) => sum + candidate.probability, 0)).toBeCloseTo(1, 12);
@@ -443,10 +443,10 @@ describe('issue 165 — the queue writes the DP4+ record', () => {
     // by name and still record why, not produce a blank task.
     const project = dp4Project();
     const rows = resultRows();
-    const planTask = buildWorkflowPlan(project, { results: rows }).tasks.find((task) => task.type === 'compute');
-    planTask.compute = { ...planTask.compute, dp4: { ...planTask.compute.dp4, level: 'B97D/6-31G(d)' } };
+    const planTask = buildWorkflowPlan(project, { results: rows }).tasks.find((task) => task.type === 'analyse');
+    planTask.analyse = { ...planTask.analyse, dp4: { ...planTask.analyse.dp4, level: 'B97D/6-31G(d)' } };
     const { manager, queue, task } = await queueFor(rows, planTask);
-    await manager.runCompute(queue, task);
+    await manager.runAnalyse(queue, task);
 
     expect(task.status).toBe('failed');
     expect(task.dp4.available).toBe(false);
@@ -455,7 +455,7 @@ describe('issue 165 — the queue writes the DP4+ record', () => {
     const written = JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
     expect(written.dp4.available).toBe(false);
     expect(written.dp4.reason).toContain('not estimated');
-    expect(written.compute.notComputed).toContain('B97D/6-31G(d)');
+    expect(written.analyse.notComputed).toContain('B97D/6-31G(d)');
   });
 
   it('keeps the definition through the queue’s task sanitiser', async () => {
@@ -472,7 +472,7 @@ describe('issue 165 — the queue writes the DP4+ record', () => {
       runManager: new RunManager({ runsRoot, emit: () => {} }),
       emit: () => {},
     });
-    const planTask = buildWorkflowPlan(dp4Project()).tasks.find((task) => task.type === 'compute');
+    const planTask = buildWorkflowPlan(dp4Project()).tasks.find((task) => task.type === 'analyse');
     const started = await manager.start({
       projectName: 'DP4+', tasks: [planTask], edges: [], options: { executable: '', scratchDir: '' },
     });
@@ -488,24 +488,24 @@ describe('issue 165 — the queue writes the DP4+ record', () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     expect(task).not.toBeNull();
-    expect(task.compute.mode).toBe('dp4');
-    expect(task.compute.dp4.level).toBe(LEVEL);
-    expect(task.compute.dp4.experimental).toHaveLength(fixture.experimental.length);
+    expect(task.analyse.mode).toBe('dp4');
+    expect(task.analyse.dp4.level).toBe(LEVEL);
+    expect(task.analyse.dp4.experimental).toHaveLength(fixture.experimental.length);
     // No upstream block produced a record, so the block is waiting — blocked,
     // not failed, and not computed as zero.
     expect(task.status).toBe('blocked');
     expect(task.dp4.status).toBe('pending');
     const stored = JSON.parse(await fsp.readFile(path.join(queuesRoot, queueId, 'queue.json'), 'utf8'));
-    expect(stored.tasks[0].compute.mode).toBe('dp4');
+    expect(stored.tasks[0].analyse.mode).toBe('dp4');
   });
 
   it('blocks, rather than refuses, when no upstream result has been written yet', async () => {
     const project = dp4Project();
-    const planTask = buildWorkflowPlan(project).tasks.find((task) => task.type === 'compute');
+    const planTask = buildWorkflowPlan(project).tasks.find((task) => task.type === 'analyse');
     const { manager, queue, task } = await queueFor(new Map(), planTask);
     // No upstream tasks at all: the block is waiting, not wrong.
     queue.edges = [];
-    await manager.runCompute(queue, task);
+    await manager.runAnalyse(queue, task);
     expect(task.status).toBe('blocked');
     expect(task.dp4.status).toBe('pending');
   });
@@ -518,7 +518,7 @@ describe('issue 165 — the card and the report show what was computed', () => {
     const result = computed();
     const html = resultsPanelHtml({
       id: 'dp4', title: 'DP4+ ranking', kind: 'derived',
-      compute: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes },
+      analyse: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes },
       dp4: result,
     });
     expect(html).toContain('data-field="dp4-probabilities"');
@@ -536,7 +536,7 @@ describe('issue 165 — the card and the report show what was computed', () => {
     expect(result.available).toBe(false);
     const html = resultsPanelHtml({
       id: 'dp4', title: 'DP4+ ranking', kind: 'derived',
-      compute: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes, notComputed: result.notComputed },
+      analyse: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes, notComputed: result.notComputed },
       dp4: result,
     });
     expect(html).toContain('data-field="dp4-refusal"');
@@ -551,8 +551,8 @@ describe('issue 165 — the card and the report show what was computed', () => {
       id: 'q1', projectName: 'DP4+', status: 'completed',
       createdAt: '2026-01-01T00:00:00Z', finishedAt: '2026-01-01T01:00:00Z',
       tasks: [{
-        nodeId: 'dp4', type: 'compute', title: 'DP4+ ranking', kind: 'Compute', status: 'completed',
-        compute: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes, status: 'computed' },
+        nodeId: 'dp4', type: 'analyse', title: 'DP4+ ranking', kind: 'Compute', status: 'completed',
+        analyse: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes, status: 'computed' },
         dp4: result,
       }],
       edges: [],
@@ -573,8 +573,8 @@ describe('issue 165 — the card and the report show what was computed', () => {
       id: 'q1', projectName: 'DP4+', status: 'completed',
       createdAt: '2026-01-01T00:00:00Z', finishedAt: '2026-01-01T01:00:00Z',
       tasks: [{
-        nodeId: 'dp4', type: 'compute', title: 'DP4+ ranking', kind: 'Compute', status: 'failed',
-        compute: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes, status: 'refused' },
+        nodeId: 'dp4', type: 'analyse', title: 'DP4+ ranking', kind: 'Compute', status: 'failed',
+        analyse: { mode: 'dp4', expression: result.expression, inputs: [], value: null, unit: null, notes: result.notes, status: 'refused' },
         dp4: result,
       }],
       edges: [],

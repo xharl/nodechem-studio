@@ -1,7 +1,7 @@
 # Example projects
 
 Three `.ncs` files, one per built-in workflow template. They are ordinary
-schema-v1 projects: open one with **Open** in the top bar, or double-click the
+schema-v3 projects: open one with **Open** in the top bar, or double-click the
 file once the desktop build is associated with `.ncs`.
 
 | File | Template | Blocks |

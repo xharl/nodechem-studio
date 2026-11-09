@@ -26,14 +26,14 @@ async function ncs(args, options = {}) {
 /** A project with an IRC path that declares a reactant block, from ts-search. */
 async function ircProject(dir) {
   const project = JSON.parse(await readFile(path.join(root, 'examples', 'ts-search.ncs'), 'utf8'));
-  const template = project.nodes.find((node) => node.id === 'ts-freq');
-  project.nodes.push({
+  const template = project.flows[0].nodes.find((node) => node.id === 'ts-freq');
+  project.flows[0].nodes.push({
     ...JSON.parse(JSON.stringify(template)),
     id: 'irc-path',
     title: 'IRC',
     settings: { ...template.settings, jobType: 'IRC', referenceNodeId: 'ts-react-opt' },
   });
-  project.edges.push({ from: 'ts-freq', to: 'irc-path', type: 'checkpoint', fromPort: 'bottom', toPort: 'top' });
+  project.flows[0].edges.push({ from: 'ts-freq', to: 'irc-path', type: 'checkpoint', fromPort: 'bottom', toPort: 'top' });
   const file = path.join(dir, 'irc.ncs');
   await writeFile(file, JSON.stringify(project), 'utf8');
   return file;

@@ -17,7 +17,7 @@ const water = [
 
 const calc = (id, title, jobType, extra = {}) => ({
   id,
-  type: 'calc',
+  type: 'calculate',
   kind: 'Opt',
   title,
   state: 'ready',
@@ -44,7 +44,7 @@ const dataset = (overrides = {}) => ({
 
 function project({ nodes, edges, datasets = [dataset()], runner = { maxParallel: 1 } }) {
   const result = validateProject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'RFC 0001 fixture',
     molecule: { smiles: '', charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'demo', file: '', format: '' } },
     defaults: { method: 'B3LYP', basis: 'def2-SVP', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -202,7 +202,7 @@ describe('RFC 0001 — refusals', () => {
       ],
       edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
     });
-    expect(buildWorkflowPlan(filtered).tasks.filter((task) => task.type === 'calc').map((task) => task.nodeId))
+    expect(buildWorkflowPlan(filtered).tasks.filter((task) => task.type === 'calculate').map((task) => task.nodeId))
       .toEqual(['opt~m2']);
 
     const byCharge = project({
@@ -212,14 +212,14 @@ describe('RFC 0001 — refusals', () => {
       ],
       edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
     });
-    expect(buildWorkflowPlan(byCharge).tasks.filter((task) => task.type === 'calc').map((task) => task.nodeId))
+    expect(buildWorkflowPlan(byCharge).tasks.filter((task) => task.type === 'calculate').map((task) => task.nodeId))
       .toEqual(['opt~m2']);
 
     const all = project({
       nodes: [input(), calc('opt', 'Optimise', 'Opt')],
       edges: [{ from: 'in1', to: 'opt', type: 'dependency' }],
     });
-    expect(buildWorkflowPlan(all).tasks.filter((task) => task.type === 'calc').map((task) => task.nodeId))
+    expect(buildWorkflowPlan(all).tasks.filter((task) => task.type === 'calculate').map((task) => task.nodeId))
       .toEqual(['opt~m1', 'opt~m2']);
   });
 

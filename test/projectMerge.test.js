@@ -10,7 +10,7 @@ import {
 
 const node = (id, extra = {}) => ({
   id,
-  type: 'calc',
+  type: 'calculate',
   kind: 'Opt',
   title: id,
   settings: { jobType: 'Opt', method: 'B3LYP', basis: 'def2-SVP' },
@@ -22,7 +22,7 @@ const edge = (from, to) => ({ from, to, type: 'dependency' });
 
 function project(nodes, edges = []) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     name: 'Test project',
     defaults: { engine: 'gaussian' },
     molecule: { charge: 0, multiplicity: 1, coords: [] },

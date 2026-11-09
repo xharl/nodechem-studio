@@ -21,6 +21,7 @@ import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js
 import { sha256File } from './hashing.js';
 import { CrestRunner } from './crestRunner.js';
 import { ObabelRunner } from './obabelRunner.js';
+import { ScorerRunner } from './scorerRunner.js';
 import {
   ensembleSummary,
   fixtureConformerFrames,
@@ -38,7 +39,16 @@ import {
   obabelForceFieldKeyword,
   obabelSearchSummary,
 } from '../../src/shared/obabelConformers.js';
-import { generateUffEnsemble, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
+import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
+import { optimizeUff } from '../../src/shared/uff.js';
+import { relaxWithForces } from '../../src/shared/mlRelax.js';
+import {
+  SCORER_SPECS,
+  framesForScorerRanking,
+  normalizeScorerResult,
+  scorerDomainFindings,
+  scorerModel,
+} from '../../src/shared/scorer.js';
 
 // `~` joins a block id to the conformer member it was expanded for (#80); it
 // is not a path separator and is legal inside a file name on every target OS.
@@ -80,7 +90,7 @@ function timeoutSecondsFrom(value) {
   return Math.min(seconds, LIMITS.timeoutSeconds);
 }
 
-const TASK_TYPES = new Set(['input', 'calc', 'conformers', 'condition', 'loop', 'merge', 'output', 'compute', 'note']);
+const TASK_TYPES = new Set(['input', 'calculate', 'generate', 'condition', 'loop', 'merge', 'output', 'analyse', 'note']);
 
 function queueIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -280,29 +290,38 @@ function routeSettings(raw) {
 }
 
 function conformerTaskRecord(raw, nodeId) {
+  const conf = raw?.generate && typeof raw.generate === 'object' ? raw.generate : {};
+  // ADR 0001: a generate block either searches or ranks an imported ensemble.
+  // The import route needs no starting geometry: the upstream input owns it.
+  const source = conf.source === 'imported' ? 'imported' : 'search';
+  const ensembleFrom = source === 'imported' && SAFE_ID.test(String(conf.ensembleFrom || ''))
+    ? String(conf.ensembleFrom) : '';
+  if (source === 'imported' && !ensembleFrom) {
+    throw new Error(`Generate task "${nodeId}" is imported but names no ensemble input.`);
+  }
   const inputName = String(raw?.inputName || '');
-  if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
-    throw new Error(`Conformer task "${nodeId}" must have a safe .xyz input name.`);
-  }
   const inputText = String(raw?.inputText || '');
-  if (!inputText.trim()) throw new Error(`Conformer task "${nodeId}" has no starting geometry.`);
-  if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
-    throw new Error(`Conformer task "${nodeId}" input is larger than 2 MiB.`);
+  if (source === 'search') {
+    if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
+      throw new Error(`Generate task "${nodeId}" must have a safe .xyz input name.`);
+    }
+    if (!inputText.trim()) throw new Error(`Generate task "${nodeId}" has no starting geometry.`);
+    if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
+      throw new Error(`Generate task "${nodeId}" input is larger than 2 MiB.`);
+    }
   }
-  const conf = raw?.conformers && typeof raw.conformers === 'object' ? raw.conformers : {};
-  // Issue 144: three routes, three sources of geometry. Anything else is
+  // Issue 144: two search routes, two sources of geometry. Anything else is
   // treated as CREST, which is the historical default.
-  const generator = conf.generator === 'import'
-    ? 'import'
+  const generator = source === 'imported'
+    ? ''
     : (conf.generator === 'uff' ? 'uff' : (conf.generator === 'obabel' ? 'obabel' : 'crest'));
-  const importPath = oneLine(conf.importPath, 500);
   // A fanned-out member task (#80) carries one member of an ensemble that is
   // already stored in the project. It does not search, so it needs neither a
   // generator nor an import path — only the member row it stands for.
   const rawMember = conf.member && typeof conf.member === 'object' ? conf.member : null;
   const memberId = rawMember ? String(rawMember.id || '') : '';
   if (rawMember && !/^c\d+$/.test(memberId)) {
-    throw new Error(`Conformer task "${nodeId}" names an invalid member id.`);
+    throw new Error(`Generate task "${nodeId}" names an invalid member id.`);
   }
   const member = rawMember ? {
     id: memberId,
@@ -332,9 +351,6 @@ function conformerTaskRecord(raw, nodeId) {
     spreadKcal: Number.isFinite(Number(rawMember.spreadKcal)) ? Number(rawMember.spreadKcal) : null,
     temperature: Number.isFinite(Number(rawMember.temperature)) ? Number(rawMember.temperature) : null,
   } : null;
-  if (generator === 'import' && !importPath && !member) {
-    throw new Error(`Conformer task "${nodeId}" has no ensemble file to import.`);
-  }
   const number = (value, fallback, min, max) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
@@ -350,9 +366,9 @@ function conformerTaskRecord(raw, nodeId) {
     : null;
   return {
     nodeId,
-    type: 'conformers',
+    type: 'generate',
     title: oneLine(raw?.title, 120) || nodeId,
-    kind: oneLine(raw?.kind, 32) || 'Conformers',
+    kind: oneLine(raw?.kind, 32) || 'Generate',
     executable: true,
     engine: null,
     argv: null,
@@ -362,7 +378,9 @@ function conformerTaskRecord(raw, nodeId) {
     runId: null,
     runDir: null,
     inputName,
-    outputName: /^[A-Za-z0-9._-]+\.(xyz|out|log)$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out',
+    outputName: source === 'imported'
+      ? 'conformers.json'
+      : (/^[A-Za-z0-9._-]+\.(xyz|out|log)$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out'),
     settings: null,
     gates: {},
     validity: null,
@@ -392,27 +410,18 @@ function conformerTaskRecord(raw, nodeId) {
     ensemble: null,
     ensembleFile: null,
     inputText,
-    conformers: {
+    generate: {
+      source,
       generator,
-      method: conf.method === 'gfnff' ? 'gfnff' : 'gfn2',
+      rankBy: typeof conf.rankBy === 'string' ? conf.rankBy : '',
+      method: source === 'imported' ? '' : (conf.method === 'gfnff' ? 'gfnff' : 'gfn2'),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
       maxConformers: Math.round(number(conf.maxConformers, 20, 1, 200)),
       temperature: number(conf.temperature, 298.15, 1, 1000),
       spreadThresholdKcal: number(conf.spreadThresholdKcal, 2, 0, 50),
       selectedConformerId: /^c\d+$/.test(String(conf.selectedConformerId || '')) ? String(conf.selectedConformerId) : '',
-      importPath,
-      // Issues #129/#130: declared provenance and unit of the imported file.
-      // Bounded here so a hand-written queue payload cannot smuggle in an
-      // unbounded string, and never inferred from the generator.
-      energyUnit: conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
-      energyMethod: oneLine(conf.energyMethod, 40),
-      origin: {
-        program: oneLine(conf.origin?.program, 40),
-        version: oneLine(conf.origin?.version, 40),
-        method: oneLine(conf.origin?.method, 60),
-        sourceSha256: oneLine(conf.origin?.sourceSha256, 64),
-      },
+      ...(ensembleFrom ? { ensembleFrom } : {}),
       charge: Math.round(number(conf.charge, 0, -10, 10)),
       multiplicity: Math.round(number(conf.multiplicity, 1, 1, 10)),
       // Issue #132: the study the block belongs to, if any. Bounded here like
@@ -447,6 +456,114 @@ function conformerTaskRecord(raw, nodeId) {
 }
 
 /**
+ * ADR 0001 §2.10: the atoms a scorer task carries. Bounded like every other
+ * renderer-supplied list; an element is a token, a coordinate is a finite number.
+ */
+function taskAtomList(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, LIMITS.atoms).map((atom) => ({
+    element: oneLine(atom?.element, 3),
+    x: Number(atom?.x),
+    y: Number(atom?.y),
+    z: Number(atom?.z),
+  })).filter((atom) => /^[A-Z][a-z]?$/.test(atom.element)
+    && Number.isFinite(atom.x) && Number.isFinite(atom.y) && Number.isFinite(atom.z));
+}
+
+/**
+ * ADR 0001 §2.9: the trust boundary for a prepare task.
+ *
+ * One structure in, one out, no engine. The input text is required and bounded
+ * like every other task's; the SMILES is bounded and only read by embed3d.
+ */
+function prepareTaskRecord(raw, nodeId) {
+  const prep = raw?.prepare && typeof raw.prepare === 'object' ? raw.prepare : {};
+  const kind = prep.kind === 'embed3d' ? 'embed3d' : 'relax';
+  const converter = kind === 'embed3d'
+    ? 'openbabel'
+    : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff');
+  const inputName = String(raw?.inputName || '');
+  const inputText = String(raw?.inputText || '');
+  if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
+    throw new Error(`Prepare task "${nodeId}" must have a safe .xyz input name.`);
+  }
+  if (!inputText.trim()) throw new Error(`Prepare task "${nodeId}" has no structure to prepare.`);
+  if (Buffer.byteLength(inputText, 'utf8') > MAX_INPUT_BYTES) {
+    throw new Error(`Prepare task "${nodeId}" input is larger than 2 MiB.`);
+  }
+  const number = (value, fallback, min, max) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+  };
+  const smiles = oneLine(prep.smiles, 1000);
+  if (kind === 'embed3d' && !smiles) {
+    throw new Error(`Prepare task "${nodeId}" is embed3d but names no SMILES.`);
+  }
+  return {
+    nodeId,
+    type: 'prepare',
+    title: oneLine(raw?.title, 120) || nodeId,
+    kind: oneLine(raw?.kind, 32) || 'Prepare',
+    executable: true,
+    engine: null,
+    argv: null,
+    route: null,
+    status: 'pending',
+    attempts: 0,
+    runId: null,
+    runDir: null,
+    inputName,
+    outputName: 'prepare.json',
+    settings: null,
+    gates: {},
+    validity: null,
+    checkpointName: '',
+    checkpointFrom: null,
+    condition: null,
+    loop: null,
+    merge: null,
+    ladder: null,
+    spin: null,
+    reaction: null,
+    conformer: null,
+    fanOut: null,
+    timeoutSeconds: timeoutSecondsFrom(raw?.settings?.timeoutSeconds),
+    loopAttempts: 0,
+    conditionResult: null,
+    summary: null,
+    history: [],
+    gateVerdict: null,
+    parsedSummary: null,
+    error: null,
+    reason: null,
+    previousError: null,
+    startedAt: null,
+    finishedAt: null,
+    inputText,
+    prepared: null,
+    prepare: {
+      kind,
+      converter,
+      forceField: prep.forceField === 'MMFF94' || prep.forceField === 'AIMNet2'
+        ? prep.forceField : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
+      smiles,
+      charge: Math.round(number(prep.charge, 0, -10, 10)),
+      multiplicity: Math.round(number(prep.multiplicity, 1, 1, 10)),
+      ...(Array.isArray(prep.bonds)
+        ? {
+          bonds: prep.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
+            a: Number(bond?.a),
+            b: Number(bond?.b),
+            order: [1, 1.5, 2, 3].includes(Number(bond?.order)) ? Number(bond.order) : 1,
+          })).filter((bond) => Number.isInteger(bond.a) && Number.isInteger(bond.b)
+            && bond.a > 0 && bond.b > 0 && bond.a !== bond.b),
+        }
+        : {}),
+    },
+  };
+}
+
+/**
  * RFC 0001: the flow and record a task belongs to, plus the dataset payload an
  * input block carries. Kept in one place so the conformer path cannot forget it.
  */
@@ -461,16 +578,30 @@ function scopeRecord(raw) {
     }
     : null;
   const input = raw?.input && typeof raw.input === 'object'
-    ? {
-      datasetId: text(raw.input.datasetId) || '',
-      datasetTitle: oneLine(raw.input.datasetTitle, 160) || '',
-      records: Array.isArray(raw.input.records)
-        ? raw.input.records.slice(0, LIMITS.records).map((entry) => ({
-          id: text(entry?.id) || '',
-          label: oneLine(entry?.label, 200) || text(entry?.id) || '',
-        })).filter((entry) => entry.id)
-        : [],
-    }
+    ? (raw.input.kind === 'ensemble'
+      ? {
+        kind: 'ensemble',
+        path: oneLine(raw.input.path, 500),
+        format: raw.input.format === 'xyz' ? 'xyz' : 'xyz',
+        energyUnit: raw.input.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
+        energyMethod: oneLine(raw.input.energyMethod, 40),
+        origin: {
+          program: oneLine(raw.input.origin?.program, 40),
+          version: oneLine(raw.input.origin?.version, 40),
+          method: oneLine(raw.input.origin?.method, 60),
+        },
+        ...(oneLine(raw.input.sourceSha256, 64) ? { sourceSha256: oneLine(raw.input.sourceSha256, 64) } : {}),
+      }
+      : {
+        datasetId: text(raw.input.datasetId) || '',
+        datasetTitle: oneLine(raw.input.datasetTitle, 160) || '',
+        records: Array.isArray(raw.input.records)
+          ? raw.input.records.slice(0, LIMITS.records).map((entry) => ({
+            id: text(entry?.id) || '',
+            label: oneLine(entry?.label, 200) || text(entry?.id) || '',
+          })).filter((entry) => entry.id)
+          : [],
+      })
     : null;
   return {
     flowId: text(raw?.flowId),
@@ -543,14 +674,14 @@ function outputRecord(raw) {
 }
 
 /**
- * Issue 175: the declaration a compute task carries, sanitised.
+ * Issue 175: the declaration an analyse task carries, sanitised.
  *
  * `taskRecord` is the queue's trust boundary — every field on a task came from
- * the renderer — so a compute declaration is reduced to the fields the
+ * the renderer — so an analyse declaration is reduced to the fields the
  * evaluator reads, each bounded, and anything that is not an identifier or a
  * safe block id is dropped rather than evaluated.
  */
-function computeTaskPayload(raw) {
+function analyseTaskPayload(raw) {
   const declared = (Array.isArray(raw?.declared) ? raw.declared : [])
     .filter((entry) => entry && typeof entry === 'object')
     .slice(0, 24)
@@ -622,8 +753,11 @@ function taskRecord(raw, index) {
   const nodeId = String(raw?.nodeId || '');
   if (!SAFE_ID.test(nodeId)) throw new Error(`Task ${index + 1} has an invalid node id.`);
   const executable = Boolean(raw?.executable);
-  if (TASK_TYPES.has(raw?.type) && raw.type === 'conformers') {
+  if (TASK_TYPES.has(raw?.type) && raw.type === 'generate') {
     return { ...conformerTaskRecord(raw, nodeId), ...scopeRecord(raw) };
+  }
+  if (raw?.type === 'prepare') {
+    return { ...prepareTaskRecord(raw, nodeId), ...scopeRecord(raw) };
   }
   const engineId = String(raw?.engine || 'gaussian');
   const engine = engineFor(engineId);
@@ -660,7 +794,7 @@ function taskRecord(raw, index) {
   if (checkpointName && !isSafeCheckpointName(engine, checkpointName)) {
     throw new Error(`Task "${nodeId}" has an unsafe checkpoint name.`);
   }
-  const type = TASK_TYPES.has(raw?.type) ? raw.type : (executable ? 'calc' : 'note');
+  const type = TASK_TYPES.has(raw?.type) ? raw.type : (executable ? 'calculate' : 'note');
   const condition = type === 'condition'
     ? {
       expression: oneLine(raw?.condition?.expression, 4000),
@@ -680,9 +814,9 @@ function taskRecord(raw, index) {
   const merge = type === 'merge'
     ? { policy: ['all', 'any'].includes(raw?.merge?.policy) ? raw.merge.policy : 'all' }
     : null;
-  // Issue 175: a compute block's expression and declared inputs.
-  const compute = type === 'compute' && raw?.compute && typeof raw.compute === 'object'
-    ? computeTaskPayload(raw.compute) : null;
+  // Issue 175: an analyse block's expression and declared inputs.
+  const analyse = type === 'analyse' && raw?.analyse && typeof raw.analyse === 'object'
+    ? analyseTaskPayload(raw.analyse) : null;
   const rawReaction = raw?.reaction && typeof raw.reaction === 'object' ? raw.reaction : null;
   const reaction = rawReaction
     ? {
@@ -717,6 +851,21 @@ function taskRecord(raw, index) {
   // ensemble did not exist when the workflow was queued. Carry the reason so the
   // scheduler can fail the task with it instead of building an input from the
   // project geometry (the silent substitution the conformer stage exists to stop).
+  const rawScorer = raw?.scorer && typeof raw.scorer === 'object' ? raw.scorer : null;
+  const scorerSpec = rawScorer ? String(rawScorer.spec || '') : '';
+  const scorerAtoms = rawScorer ? taskAtomList(rawScorer.atoms) : [];
+  const scorer = rawScorer && SCORER_SPECS.includes(scorerSpec) && scorerAtoms.length > 0
+    ? {
+      spec: scorerSpec,
+      atoms: scorerAtoms,
+      charge: Number.isInteger(Number(rawScorer.charge)) ? Math.min(10, Math.max(-10, Number(rawScorer.charge))) : 0,
+      multiplicity: Number.isInteger(Number(rawScorer.multiplicity))
+        ? Math.min(10, Math.max(1, Number(rawScorer.multiplicity))) : 1,
+    }
+    : null;
+  const rawPrepareFrom = raw?.prepareFrom && typeof raw.prepareFrom === 'object' ? raw.prepareFrom : null;
+  const prepareFrom = rawPrepareFrom && SAFE_ID.test(String(rawPrepareFrom.nodeId || ''))
+    ? { nodeId: String(rawPrepareFrom.nodeId) } : null;
   const rawPending = raw?.pendingInput && typeof raw.pendingInput === 'object' ? raw.pendingInput : null;
   const pendingInput = rawPending
     ? {
@@ -749,7 +898,7 @@ function taskRecord(raw, index) {
     nodeId,
     type,
     title: oneLine(raw?.title, 120) || nodeId,
-    kind: oneLine(raw?.kind, 32) || 'Calc',
+    kind: oneLine(raw?.kind, 32) || 'Calculate',
     executable,
     engine: engine.id,
     argv,
@@ -770,7 +919,9 @@ function taskRecord(raw, index) {
     condition,
     loop,
     merge,
-    compute,
+    prepareFrom,
+    scorer,
+    analyse,
     ladder,
     spin,
     reaction,
@@ -1054,19 +1205,25 @@ export class QueueManager {
     // start payload means the generous default, never "no limit".
     const timeoutSeconds = timeoutSecondsFrom(options.timeoutSeconds) ?? DEFAULT_TIMEOUT_SECONDS;
     const calcEngines = [...new Set(tasks
-      .filter((task) => task.executable && task.type === 'calc')
+      .filter((task) => task.executable && task.type === 'calculate' && !task.scorer)
       .map((task) => String(task.engine || 'gaussian')))];
     const needsCalcEngine = calcEngines.length > 0;
     // A fanned-out member task carries an ensemble that is already stored in the
     // project; no CREST binary is needed to materialise it (#80).
-    const needsCrest = tasks.some((task) => task.type === 'conformers'
-      && task.conformers?.generator === 'crest'
-      && !task.conformers?.member);
+    const needsCrest = tasks.some((task) => task.type === 'generate'
+      && task.generate?.generator === 'crest'
+      && !task.generate?.member);
     // The Open Babel route is external too, so it needs its own binary; a
     // fanned-out member carries its ensemble already and needs nothing.
-    const needsObabel = tasks.some((task) => task.type === 'conformers'
-      && task.conformers?.generator === 'obabel'
-      && !task.conformers?.member);
+    const needsObabel = tasks.some((task) => (task.type === 'generate'
+      && task.generate?.generator === 'obabel'
+      && !task.generate?.member)
+      || (task.type === 'prepare' && task.prepare?.converter === 'openbabel'));
+    // ADR 0001 §2.10: a scorer is optional, but a block that asks for one
+    // cannot run without its sidecar.
+    const needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
+      || (task.type === 'calculate' && task.scorer)
+      || (task.type === 'prepare' && task.prepare?.converter === 'aimnet2'));
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1082,9 +1239,15 @@ export class QueueManager {
         if (!stat?.isFile()) throw new Error(`CREST executable not found: ${crestExecutable}`);
       }
       if (needsObabel) {
-        if (!obabelExecutable) throw new Error('Choose the Open Babel executable before running an Open Babel conformer search (or change the block to CREST, UFF or an import).');
+        if (!obabelExecutable) throw new Error('Choose the Open Babel executable before running an Open Babel search, embed3d or relax (or change the block to CREST, UFF, or a different prepare converter).');
         const stat = await fsp.stat(obabelExecutable).catch(() => null);
         if (!stat?.isFile()) throw new Error(`Open Babel executable not found: ${obabelExecutable}`);
+      }
+      if (needsScorer) {
+        const scorerExecutable = String(options.scorerExecutable || '').trim();
+        if (!scorerExecutable) throw new Error('Choose the ML scorer sidecar before running a block with rankBy set.');
+        const stat = await fsp.stat(scorerExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`ML scorer sidecar not found: ${scorerExecutable}`);
       }
     }
 
@@ -1110,6 +1273,7 @@ export class QueueManager {
         executables: dryRun ? null : executables,
         crestExecutable: dryRun ? null : crestExecutable,
         obabelExecutable: dryRun ? null : obabelExecutable,
+        scorerExecutable: dryRun ? null : String(options.scorerExecutable || '').trim(),
         scratchDir,
         // A relative conformer `importPath` resolves against this folder, so it
         // travels with the queue and a replay resolves it the same way.
@@ -1134,10 +1298,14 @@ export class QueueManager {
     await fsp.mkdir(path.join(this.queueDir(id), 'inputs'), { recursive: true });
     for (const task of tasks) {
       if (!task.executable) continue;
-      const inputPath = task.type === 'conformers'
+      const inputPath = (task.type === 'generate' || task.type === 'prepare')
         ? this.conformerInputPath(id, task.nodeId)
         : this.inputPath(id, task.nodeId);
-      await fsp.writeFile(inputPath, task.inputText, 'utf8');
+      // ADR 0001: an imported generate task reads its upstream input's record
+      // and has no starting geometry of its own; nothing to stage.
+      if (task.inputText !== null && task.inputText !== undefined) {
+        await fsp.writeFile(inputPath, task.inputText, 'utf8');
+      }
     }
     await this.writeRecordFiles(queue);
     this.queues.set(id, queue);
@@ -1312,7 +1480,9 @@ export class QueueManager {
       this.publish(queue);
       return;
     }
-    if (task.type === 'conformers') return this.runConformers(queue, task);
+    if (task.type === 'generate') return this.runConformers(queue, task);
+    if (task.type === 'prepare') return this.runPrepare(queue, task);
+    if (task.type === 'calculate' && task.scorer) return this.runScorerPoint(queue, task);
     return this.runTask(queue, task);
   }
 
@@ -1366,7 +1536,7 @@ export class QueueManager {
       .map((edge) => queue.tasks.find((entry) => entry.nodeId === edge.from))
       .filter(Boolean);
     if (sources.length > 0) return sources.every((source) => terminal.has(String(source.status)));
-    const runs = queue.tasks.filter((entry) => entry.type === 'calc' || entry.type === 'conformers');
+    const runs = queue.tasks.filter((entry) => entry.type === 'calculate' || entry.type === 'generate');
     return runs.every((entry) => terminal.has(String(entry.status)));
   }
 
@@ -1533,7 +1703,7 @@ export class QueueManager {
       throw new Error(`The starting geometry for "${task.nodeId}" is larger than 2 MiB; a conformer search input is limited to 2 MiB.`);
     }
     await fsp.writeFile(path.join(dir, CONFORMER_STAGED_INPUT), inputText, 'utf8');
-    return conformerArgvFor(task.conformers.argv, CONFORMER_STAGED_INPUT);
+    return conformerArgvFor(task.generate.argv, CONFORMER_STAGED_INPUT);
   }
 
   /**
@@ -1545,8 +1715,8 @@ export class QueueManager {
    * block's output so the project can build downstream inputs offline.
    */
   async runConformers(queue, task) {
-    const conf = task.conformers;
-    const dir = path.join(this.queueDir(queue.id), 'conformers', task.nodeId);
+    const conf = task.generate;
+    const dir = path.join(this.queueDir(queue.id), 'generate', task.nodeId);
     await fsp.mkdir(dir, { recursive: true });
 
     task.status = 'running';
@@ -1569,50 +1739,58 @@ export class QueueManager {
       }
       let ensembleText = '';
       let energies = [];
-      let source = conf.generator;
+      let source = conf.source === 'imported' ? 'imported' : conf.generator;
       let origin = null;
       // Issue 144: what an in-app UFF search did, kept beside the numbers.
       let search = null;
       // Its caveats (perceived bonds, truncated grid, unconverged trials) must
       // travel with the summary, not only into the run log.
       let searchWarnings = [];
-      // Issue #130: a CREST search writes Hartree energies; only an imported
-      // file can carry another unit, and only if the block says so. A UFF
-      // search writes kcal/mol force-field energies and nothing else.
-      let energyUnit = conf.generator === 'import'
-        ? (conf.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree')
+      // ADR 0001 §2.10: the scorer, when the block asked for one.
+      let scorerProvenance = null;
+      const scorerWarnings = [];
+      // Issue #130: a CREST search writes Hartree energies; a UFF/Open Babel
+      // search writes kcal/mol. ADR 0001 moves the imported file's unit,
+      // method and provenance to the input block, which is read below.
+      let energyUnit = conf.source === 'imported'
+        ? 'hartree'
         : (conf.generator === 'uff' || conf.generator === 'obabel' ? 'kcal/mol' : 'hartree');
-      let energyMethod = conf.generator === 'import'
-        ? conf.energyMethod
+      let energyMethod = conf.source === 'imported'
+        ? ''
         : (conf.generator === 'uff'
           ? 'UFF'
           : (conf.generator === 'obabel' ? (obabelForceFieldKeyword(conf.ff) || 'MMFF94') : ''));
-      if (conf.generator === 'import') {
-        // Reading an ensemble is a file operation, not an engine call, so a dry
-        // run must use the real ensemble. It used to drop straight to the
-        // three-member fixture and then fail downstream on "no selected
-        // conformer": the dry run hid the data it exists to check.
-        const importPath = this.resolveImportPath(queue, conf.importPath);
-        const imported = await CrestRunner.readImport(importPath);
-        ensembleText = imported.ensembleText;
-        energies = imported.energies;
-        // Issue #129: the hash is of the bytes on disk, not of the parsed
-        // numbers, so a re-export that changes the file changes the digest.
-        const sourceSha256 = await sha256File(importPath).catch(() => '');
+      if (conf.source === 'imported') {
+        // ADR 0001: the input block already read, hashed and wrote the file.
+        // This block only ranks what that record contains; it never opens the
+        // user's path again.
+        const inputTask = queue.tasks.find((entry) => entry.nodeId === conf.ensembleFrom);
+        if (!inputTask) {
+          throw new Error(`The ensemble input "${conf.ensembleFrom}" is not part of this workflow.`);
+        }
+        if (inputTask.status !== 'completed' || !inputTask.runDir) {
+          throw new Error(`The ensemble input "${inputTask.title || conf.ensembleFrom}" has not produced its record.`);
+        }
+        const sourceDir = inputTask.runDir;
+        const record = JSON.parse(await fsp.readFile(path.join(sourceDir, 'ensemble.json'), 'utf8'));
+        ensembleText = await fsp.readFile(path.join(sourceDir, 'ensemble.xyz'), 'utf8');
+        energies = Array.isArray(record.energies) ? record.energies : [];
+        energyUnit = record.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree';
+        energyMethod = String(record.energyMethod || '');
         origin = {
-          program: conf.origin?.program || '',
-          version: conf.origin?.version || '',
-          method: conf.origin?.method || '',
-          sourceSha256,
+          program: String(record.origin?.program || ''),
+          version: String(record.origin?.version || ''),
+          method: String(record.origin?.method || ''),
+          sourceSha256: String(record.origin?.sourceSha256 || record.sourceSha256 || ''),
         };
+        source = origin.program || 'imported';
         this.emit({
           type: 'queue-output',
           queueId: queue.id,
           nodeId: task.nodeId,
-          // The origin is printed once, next to the file it describes: a reader
-          // of the log then knows what the numbers are before seeing them.
-          text: `Imported ensemble ${imported.ensemblePath} (${energyUnit}${energyMethod ? `, ${energyMethod}` : ''}${sourceSha256 ? `, sha256 ${sourceSha256.slice(0, 12)}…` : ''})`
-            + (origin.program ? ` from ${origin.program}${origin.version ? ` ${origin.version}` : ''}` : '; origin not recorded'),
+          text: `Ranking imported ensemble from input "${inputTask.title || conf.ensembleFrom}"`
+            + ` (${energyUnit}${energyMethod ? `, ${energyMethod}` : ''}`
+            + `${origin.sourceSha256 ? `, sha256 ${origin.sourceSha256.slice(0, 12)}…` : ''})`,
         });
       } else if (conf.generator === 'uff') {
         // Issue 144: the in-app route. It spawns nothing, so a dry run runs it
@@ -1805,6 +1983,50 @@ export class QueueManager {
       if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
       const merged = withEnergies(parsed.frames, energies);
       if (merged.error) throw new Error(merged.error);
+      // ADR 0001 §2.10: rank a searched or imported ensemble by a scorer when
+      // the block asks for one. Domain guard first, by name; then the sidecar;
+      // then the explicit eV conversions, never silently mixed with MMFF94.
+      if (conf.rankBy) {
+        const domain = scorerDomainFindings({
+          spec: conf.rankBy,
+          atoms: merged.frames[0]?.atoms || [],
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+        });
+        if (domain.errors.length > 0) throw new Error(domain.errors.join(' '));
+        scorerWarnings.push(...domain.warnings);
+        const model = scorerModel(conf.rankBy);
+        const framesWithIds = merged.frames.map((frame, index) => ({ ...frame, id: `c${index + 1}` }));
+        const raw = await new ScorerRunner().score({
+          executable: queue.options.scorerExecutable,
+          model: model.id,
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+          frames: framesWithIds,
+          cwd: dir,
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const scored = normalizeScorerResult(raw, {
+          spec: conf.rankBy,
+          frameIds: framesWithIds.map((frame) => frame.id),
+        });
+        if (scored.error) throw new Error(scored.error);
+        merged.frames = framesForScorerRanking(framesWithIds, scored);
+        energyUnit = 'hartree';
+        energyMethod = scored.provenance.label;
+        origin = {
+          program: scored.provenance.label,
+          version: scored.provenance.version,
+          method: `ML potential · ${scored.provenance.dtype} · ${scored.provenance.device}`,
+          sourceSha256: origin?.sourceSha256 || '',
+        };
+        scorerProvenance = {
+          ...scored.provenance,
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+        };
+      }
       const ranked = rankEnsemble({
         frames: merged.frames,
         energyWindowKcal: conf.energyWindowKcal,
@@ -1829,10 +2051,15 @@ export class QueueManager {
       };
       const summary = ensembleSummary(ranked, {
         generator: source,
-        // Issue 144: a UFF search has no xTB method, and recording the block's
-        // `method` (gfn2 by default) beside a UFF ensemble would be a false
-        // provenance claim.
-        method: conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method,
+        // Issue 144: a UFF or Open Babel search has no xTB method, and
+        // recording the block's `method` beside its ensemble would be a false
+        // provenance claim. ADR 0001: an imported ensemble keeps the method its
+        // producing input declared.
+        method: scorerProvenance
+          ? scorerProvenance.label
+          : (conf.source === 'imported'
+            ? (origin?.method || energyMethod || '')
+            : (conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method)),
         origin: recordedOrigin,
         energyUnit,
         energyMethod,
@@ -1842,7 +2069,14 @@ export class QueueManager {
         // Issue 144: absent for every other route, so their summary is
         // unchanged. Carries the grid, the dedupe threshold and the trials.
         search,
+        ...(scorerProvenance ? { scorer: scorerProvenance } : {}),
       });
+      if (scorerWarnings.length > 0) {
+        summary.warnings = [
+          ...summary.warnings,
+          ...scorerWarnings.map((message) => ({ id: 'scorer-domain', status: 'warn', message })),
+        ];
+      }
       if (search && searchWarnings.length > 0) {
         summary.warnings = [
           ...summary.warnings,
@@ -1909,8 +2143,8 @@ export class QueueManager {
       mixedEnergies: false,
       // Issue #132: the fanned-out branch repeats its parent's study id, so the
       // one-member summary in a branch folder does not lose the relationship.
-      group: isConformerGroupId(String(task.conformers?.group ?? ''))
-        ? String(task.conformers.group) : '',
+      group: isConformerGroupId(String(task.generate?.group ?? ''))
+        ? String(task.generate.group) : '',
       count: 1,
       total: 1,
       spreadKcal: Number.isFinite(member.spreadKcal) ? member.spreadKcal : null,
@@ -2067,6 +2301,36 @@ export class QueueManager {
 
     try {
       let inputText = await fsp.readFile(this.inputPath(queue.id, task.nodeId), 'utf8');
+      // ADR 0001 §2.9: a calculate block downstream of prepare runs on the
+      // prepared structure, read from the prepare task's own run folder.
+      if (task.prepareFrom) {
+        const prepareTask = queue.tasks.find((entry) => entry.nodeId === task.prepareFrom.nodeId);
+        if (!prepareTask || prepareTask.status !== 'completed' || !prepareTask.runDir) {
+          task.status = 'failed';
+          task.error = `Prepare source "${prepareTask?.title || task.prepareFrom.nodeId}" has not produced a structure.`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
+        const preparedText = await fsp.readFile(path.join(prepareTask.runDir, 'prepared.xyz'), 'utf8');
+        const prepared = parseMultiXyz(preparedText);
+        if (prepared.errors.length > 0 || prepared.frames.length !== 1) {
+          task.status = 'failed';
+          task.error = `Prepare source "${prepareTask.title || prepareTask.nodeId}" did not write one readable structure.`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
+        inputText = applyGeometryHandoff(inputText, prepared.frames[0].atoms);
+        task.geometryHandoff = {
+          from: prepareTask.nodeId,
+          fromEngine: 'prepare',
+          toEngine: task.engine,
+          atoms: prepared.frames[0].atoms.length,
+        };
+      }
       const upstreamTask = task.checkpointFrom
         ? queue.tasks.find((entry) => entry.nodeId === task.checkpointFrom.nodeId) || null
         : null;
@@ -2272,7 +2536,7 @@ export class QueueManager {
    * its own flow — an empty artifact would hide the family that actually ran.
    */
   artifactEntries(queue, task) {
-    const collects = (entry) => entry && (entry.type === 'calc' || entry.type === 'conformers');
+    const collects = (entry) => entry && (entry.type === 'calculate' || entry.type === 'generate');
     const seen = new Set();
     const stack = queue.edges
       .filter((edge) => edge.to === task.nodeId && edge.type !== 'loop')
@@ -2499,9 +2763,13 @@ export class QueueManager {
   }
 
   async runControl(queue, task) {
-    // RFC 0001: an input block is a declaration, not work. It completes at once
-    // and records how many records the flow is iterating over; its geometry and
-    // chemistry already travelled with every downstream task.
+    // RFC 0001: an input block is a declaration, not work. An ensemble input
+    // is the exception ADR 0001 introduces: it materialises the external file
+    // once, so the generate block downstream ranks a record instead of a path.
+    if (task.type === 'input' && task.input?.kind === 'ensemble') {
+      await this.runEnsembleInput(queue, task);
+      return;
+    }
     if (task.type === 'input') {
       const count = Array.isArray(task.input?.records) ? task.input.records.length : 0;
       this.setTaskOutcome(task, 'completed',
@@ -2519,9 +2787,9 @@ export class QueueManager {
       await this.runLoop(queue, task);
       return;
     }
-    if (task.type === 'compute') {
+    if (task.type === 'analyse') {
       // Issue 175: arithmetic over the results of the blocks wired into this one.
-      await this.runCompute(queue, task);
+      await this.runAnalyse(queue, task);
       return;
     }
     if (task.type === 'note') {
@@ -2544,7 +2812,392 @@ export class QueueManager {
   }
 
   /**
-   * One compute block (issue 175): arithmetic over upstream results.
+   * ADR 0001 §2.10: a calculate block with a scorer provider.
+   *
+   * The block stays `calculate`; it does not spawn the engine. One structure is
+   * scored, the run record carries the model's provenance and the explicit eV
+   * conversions, and no gate is invented — a scorer has no termination record.
+   */
+  async runScorerPoint(queue, task) {
+    const dir = path.join(this.queueDir(queue.id), 'scorer', task.nodeId);
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.runDir = dir;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+    try {
+      const domain = scorerDomainFindings({
+        spec: task.scorer.spec,
+        atoms: task.scorer.atoms,
+        charge: task.scorer.charge,
+        multiplicity: task.scorer.multiplicity,
+      });
+      if (domain.errors.length > 0) throw new Error(domain.errors.join(' '));
+      const model = scorerModel(task.scorer.spec);
+      const raw = await new ScorerRunner().score({
+        executable: queue.options.scorerExecutable,
+        model: model.id,
+        charge: task.scorer.charge,
+        multiplicity: task.scorer.multiplicity,
+        frames: [{ id: 'point', atoms: task.scorer.atoms }],
+        cwd: dir,
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      });
+      const scored = normalizeScorerResult(raw, { spec: task.scorer.spec, frameIds: ['point'] });
+      if (scored.error) throw new Error(scored.error);
+      const point = scored.results[0];
+      const inputName = 'point.xyz';
+      const inputText = xyzText(task.scorer.atoms, `${task.title} · scorer`);
+      await fsp.writeFile(path.join(dir, inputName), inputText, 'utf8');
+      await writeJsonAtomic(path.join(dir, 'scorer.json'), {
+        ...scored.provenance,
+        energyEv: point.energyEv,
+        energyKcal: point.energyKcal,
+        energyHartree: point.energyHartree,
+      });
+      const runId = `scorer-${String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_')}-${Date.now().toString(36)}`;
+      const startedAt = task.startedAt;
+      const finishedAt = new Date().toISOString();
+      const parsed = {
+        finalEnergy: { hartree: point.energyHartree },
+        scf: { energyHartree: point.energyHartree },
+        energyEv: point.energyEv,
+        energyKcal: point.energyKcal,
+        energyKind: scored.provenance.energyKind,
+        comparableWithQuantumChemistry: false,
+      };
+      const record = {
+        schemaVersion: 1,
+        id: runId,
+        status: 'completed',
+        engine: model.id,
+        argv: ['--model', model.id],
+        dryRun: false,
+        title: task.title,
+        inputName,
+        outputName: 'scorer.json',
+        outputFile: null,
+        outputSource: null,
+        truncated: false,
+        outputBytes: null,
+        executable: queue.options.scorerExecutable || null,
+        scratchDir: null,
+        checkpointHandoff: null,
+        inputSha256: await sha256File(path.join(dir, inputName)).catch(() => ''),
+        outputSha256: await sha256File(path.join(dir, 'scorer.json')).catch(() => ''),
+        provenance: {
+          kind: 'scorer',
+          jobType: 'SP',
+          method: { scorer: model.id, label: model.label, version: scored.provenance.version },
+          input: { name: inputName, bytes: Buffer.byteLength(inputText, 'utf8') },
+          output: null,
+        },
+        startedAt,
+        finishedAt,
+        exitCode: 0,
+        parsed,
+        gates: null,
+        scorer: scored.provenance,
+        error: null,
+      };
+      await writeJsonAtomic(path.join(dir, 'run.json'), record);
+      task.runId = runId;
+      task.parsedSummary = parsed;
+      task.scorerResult = scored.provenance;
+      task.gateVerdict = null;
+      task.status = 'completed';
+      task.finishedAt = finishedAt;
+      task.summary = `${model.label} single point · ${point.energyHartree.toFixed(8)} Ha`
+        + ` (${point.energyEv.toFixed(4)} eV, ML — not QM)`;
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: task.summary });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Scorer failed: ${task.error}` });
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * ADR 0001 §2.9: prepare one structure.
+   *
+   * `embed3d` runs the Open Babel converter; `relax` minimises with the in-app
+   * UFF engine or asks Open Babel for an MMFF94 relaxation. Either way the block
+   * writes `prepared.xyz` and a `prepare.json` record, and a downstream
+   * calculate reads that geometry — never the structure it was planned with.
+   */
+  async runPrepare(queue, task) {
+    const dir = path.join(this.queueDir(queue.id), 'prepare', task.nodeId);
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+    try {
+      const conf = task.prepare || {};
+      const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+      const parsed = parseMultiXyz(inputText);
+      if (parsed.errors.length > 0 || parsed.frames.length !== 1) {
+        throw new Error(parsed.errors[0]?.message || 'The prepare input must be one structure.');
+      }
+      let atoms = parsed.frames[0].atoms;
+      let summary;
+      if (conf.kind === 'embed3d') {
+        const outName = 'prepared.xyz';
+        const result = await new ObabelRunner().convert({
+          executable: queue.options.obabelExecutable,
+          argv: ['-:' + String(conf.smiles || ''), '-O', outName, '--gen3d'],
+          cwd: dir,
+          outputName: 'obabel.log',
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        if (result.timedOut || result.cancelled) throw new Error('The Open Babel 3D embedding was stopped.');
+        if (Number(result.exitCode) !== 0) throw new Error(`Open Babel exited with code ${result.exitCode}; see obabel.log.`);
+        const prepared = parseMultiXyz(await fsp.readFile(path.join(dir, outName), 'utf8'));
+        if (prepared.errors.length > 0 || prepared.frames.length !== 1) {
+          throw new Error('Open Babel wrote no readable 3D structure.');
+        }
+        atoms = prepared.frames[0].atoms;
+        summary = {
+          kind: 'embed3d',
+          converter: 'openbabel',
+          forceField: 'MMFF94',
+          energyKcal: null,
+          converged: true,
+          reason: 'converter-completed',
+          iterations: 0,
+          atomCount: atoms.length,
+          origin: { program: 'Open Babel', version: result.version || '', method: '--gen3d' },
+        };
+      } else if (conf.converter === 'aimnet2') {
+        // ADR 0001 §2.10: relax one structure with a scorer's forces. The
+        // domain guard runs once here, before the first spawn; each evaluation
+        // carries the same provenance back.
+        const spec = `ml:${String(conf.forceField || 'AIMNet2').toLowerCase() === 'aimnet2' ? 'aimnet2' : String(conf.forceField || '').toLowerCase()}`;
+        const domain = scorerDomainFindings({
+          spec, atoms, charge: conf.charge, multiplicity: conf.multiplicity,
+        });
+        if (domain.errors.length > 0) throw new Error(domain.errors.join(' '));
+        const relaxed = await relaxWithForces({
+          atoms,
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+          evaluate: async (trialAtoms) => {
+            const raw = await new ScorerRunner().score({
+              executable: queue.options.scorerExecutable,
+              model: 'aimnet2',
+              charge: conf.charge,
+              multiplicity: conf.multiplicity,
+              frames: [{ id: 'point', atoms: trialAtoms }],
+              cwd: dir,
+              timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+              onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+            });
+            const scored = normalizeScorerResult(raw, { spec, frameIds: ['point'] });
+            if (scored.error) throw new Error(scored.error);
+            return {
+              energyEv: scored.results[0].energyEv,
+              forces: scored.results[0].forces,
+              provenance: scored.provenance,
+            };
+          },
+          onProgress: ({ iteration }) => this.emit({
+            type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `ML relax · step ${iteration}`,
+          }),
+        });
+        if (relaxed.error) throw new Error(relaxed.error);
+        atoms = relaxed.atoms;
+        summary = {
+          kind: 'relax',
+          converter: 'aimnet2',
+          forceField: 'AIMNet2',
+          energyKcal: relaxed.energyKcal,
+          converged: relaxed.converged,
+          reason: relaxed.reason || '',
+          iterations: relaxed.iterations,
+          atomCount: atoms.length,
+          origin: {
+            program: relaxed.provenance?.label || 'AIMNet2',
+            version: relaxed.provenance?.version || '',
+            method: 'ML potential · forces + L-BFGS',
+          },
+          ...(relaxed.provenance ? { scorer: relaxed.provenance } : {}),
+        };
+      } else if (conf.converter === 'openbabel') {
+        const outName = 'prepared.xyz';
+        // Open Babel reads a file in its own working directory; the staged task
+        // input lives under queue/inputs, so it is copied beside the run.
+        await fsp.writeFile(path.join(dir, 'input.xyz'), inputText, 'utf8');
+        const result = await new ObabelRunner().convert({
+          executable: queue.options.obabelExecutable,
+          argv: ['input.xyz', '-O', outName, '--minimize', '--ff', conf.forceField === 'UFF' ? 'UFF' : 'MMFF94', '--steps', '500'],
+          cwd: dir,
+          outputName: 'obabel.log',
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        if (result.timedOut || result.cancelled) throw new Error('The Open Babel relaxation was stopped.');
+        if (Number(result.exitCode) !== 0) throw new Error(`Open Babel exited with code ${result.exitCode}; see obabel.log.`);
+        const prepared = parseMultiXyz(await fsp.readFile(path.join(dir, outName), 'utf8'));
+        if (prepared.errors.length > 0 || prepared.frames.length !== 1) {
+          throw new Error('Open Babel wrote no readable relaxed structure.');
+        }
+        atoms = prepared.frames[0].atoms;
+        summary = {
+          kind: 'relax',
+          converter: 'openbabel',
+          forceField: conf.forceField === 'UFF' ? 'UFF' : 'MMFF94',
+          energyKcal: null,
+          converged: false,
+          reason: 'converter-did-not-report-convergence',
+          iterations: 500,
+          atomCount: atoms.length,
+          origin: { program: 'Open Babel', version: result.version || '', method: '--minimize' },
+        };
+      } else {
+        const bonds = Array.isArray(conf.bonds) && conf.bonds.length > 0 ? conf.bonds : perceiveBonds(atoms);
+        const relaxed = optimizeUff({ atoms, bonds }, { maxIterations: 500 });
+        atoms = relaxed.atoms;
+        summary = {
+          kind: 'relax',
+          converter: 'uff',
+          forceField: 'UFF',
+          energyKcal: relaxed.energyKcal,
+          converged: relaxed.converged,
+          reason: relaxed.reason || '',
+          iterations: relaxed.iterations,
+          atomCount: atoms.length,
+          origin: { program: 'NodeChem Studio', version: '', method: 'UFF' },
+        };
+      }
+      summary.generatedAt = new Date().toISOString();
+      await fsp.writeFile(path.join(dir, 'prepared.xyz'), xyzText(atoms, `${task.title} · ${summary.kind}`), 'utf8');
+      await writeJsonAtomic(path.join(dir, 'prepare.json'), summary);
+      task.status = 'completed';
+      task.prepared = summary;
+      task.outputName = 'prepared.xyz';
+      task.finishedAt = new Date().toISOString();
+      task.summary = `${summary.kind === 'embed3d' ? '3D embedded' : 'relaxed'} · ${summary.converter}`
+        + `${Number.isFinite(summary.energyKcal) ? ` · ${summary.energyKcal.toFixed(3)} kcal/mol` : ''}`
+        + (summary.kind === 'relax' && !summary.converged ? ' · not converged' : '');
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Prepared structure: ${task.summary}.` });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Prepare failed: ${task.error}` });
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * ADR 0001: materialise an input(ensemble).
+   *
+   * The file is read once, hashed, and written to the input's own run folder as
+   * `ensemble.xyz` + `ensemble.json` (metadata and the energy list, not a second
+   * copy of the atoms). The generate block downstream reads that record; no
+   * later block ever touches the original path, so a file edited mid-run cannot
+   * change what the graph consumed.
+   */
+  async runEnsembleInput(queue, task) {
+    const dir = path.join(this.queueDir(queue.id), 'ensemble', task.nodeId);
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+    try {
+      const declaredPath = String(task.input?.path || '');
+      if (!declaredPath) throw new Error('The ensemble input names no file.');
+      const ensemblePath = this.resolveImportPath(queue, declaredPath);
+      const imported = await CrestRunner.readImport(ensemblePath);
+      const parsed = parseMultiXyz(imported.ensembleText);
+      if (parsed.errors.length > 0) throw new Error(parsed.errors[0].message);
+      const merged = withEnergies(parsed.frames, imported.energies);
+      if (merged.error) throw new Error(merged.error);
+      // Issue #129: the digest is of the bytes on disk. The input block owns
+      // it now, so every downstream record can name the exact artifact.
+      const sourceSha256 = await sha256File(ensemblePath).catch(() => '');
+      const energyUnit = task.input?.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree';
+      const summary = {
+        kind: 'ensemble',
+        path: ensemblePath,
+        format: 'xyz',
+        energyUnit,
+        energyMethod: String(task.input?.energyMethod || ''),
+        origin: {
+          program: String(task.input?.origin?.program || ''),
+          version: String(task.input?.origin?.version || ''),
+          method: String(task.input?.origin?.method || ''),
+          sourceSha256,
+        },
+        ...(sourceSha256 ? { sourceSha256 } : {}),
+        frameCount: merged.frames.length,
+      };
+      await fsp.writeFile(path.join(dir, 'ensemble.xyz'), imported.ensembleText, 'utf8');
+      await writeJsonAtomic(path.join(dir, 'ensemble.json'), {
+        ...summary,
+        // The raw numbers, in the input's declared unit. withEnergies() and
+        // rankEnsemble() apply the unit together downstream; converting here
+        // would make an MM energy look like a Hartree total.
+        energies: merged.frames.map((frame) => frame.energyEh),
+      });
+      task.status = 'completed';
+      task.ensemble = summary;
+      task.ensembleFile = 'ensemble.json';
+      task.finishedAt = new Date().toISOString();
+      task.summary = `ensemble · ${summary.frameCount} frame${summary.frameCount === 1 ? '' : 's'}`
+        + (sourceSha256 ? ` · sha256 ${sourceSha256.slice(0, 12)}…` : '');
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `Ensemble input ${path.basename(ensemblePath)}: ${summary.frameCount} frame(s), ${energyUnit}`
+          + `${summary.energyMethod ? `, ${summary.energyMethod}` : ''}`
+          + (sourceSha256 ? `, sha256 ${sourceSha256.slice(0, 12)}…` : ''),
+      });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `Ensemble input failed: ${task.error}`,
+      });
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * One analyse block (issue 175): arithmetic over upstream results.
    *
    * The plan cannot know these numbers — they do not exist until the upstream
    * blocks have run — so the evaluation happens here, from the `run.json` of
@@ -2557,18 +3210,18 @@ export class QueueManager {
    * written to its own `run.json` as `kind: 'derived'` — it carries no `parsed`
    * block, so no report column can present it as an engine result.
    */
-  async runCompute(queue, task) {
-    const compute = task.compute && typeof task.compute === 'object' ? task.compute : {};
-    // Issue 165: a DP4+ block is a compute block with a definition instead of
+  async runAnalyse(queue, task) {
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    // Issue 165: a DP4+ block is an analyse block with a definition instead of
     // an expression. It reads whole run records (candidates) rather than named
     // fields, so it has its own reader below but the same record contract.
-    if (compute.mode === 'dp4') {
+    if (analyse.mode === 'dp4') {
       await this.runDp4(queue, task);
       return;
     }
-    const declared = Array.isArray(compute.declared) ? compute.declared : [];
+    const declared = Array.isArray(analyse.declared) ? analyse.declared : [];
     if (declared.length === 0) {
-      this.setTaskOutcome(task, 'failed', 'the compute block declares no inputs to read');
+      this.setTaskOutcome(task, 'failed', 'the analyse block declares no inputs to read');
       await this.persist(queue);
       this.publish(queue);
       this.announce(queue, task);
@@ -2604,22 +3257,22 @@ export class QueueManager {
 
     let evaluation;
     try {
-      evaluation = evaluateCompute({ expression: compute.expression, inputs: declared }, {
+      evaluation = evaluateCompute({ expression: analyse.expression, inputs: declared }, {
         recordId,
         resolveSource,
         allRecords,
       });
     } catch (error) {
       if (!(error instanceof ComputeError)) throw error;
-      task.compute = { ...compute, status: 'refused', value: null, notes: [error.message], notComputed: error.message };
+      task.analyse = { ...analyse, status: 'refused', value: null, notes: [error.message], notComputed: error.message };
       this.setTaskOutcome(task, 'failed', oneLine(error.message, 400));
       await this.persist(queue);
       this.publish(queue);
       this.announce(queue, task);
       return;
     }
-    task.compute = { ...compute, ...evaluation };
-    const dir = path.join(this.queueDir(queue.id), 'compute', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    task.analyse = { ...analyse, ...evaluation };
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
     try {
       await fsp.mkdir(dir, { recursive: true });
       await writeJsonAtomic(path.join(dir, 'run.json'), {
@@ -2628,11 +3281,11 @@ export class QueueManager {
         nodeId: task.nodeId,
         title: task.title,
         createdAt: new Date().toISOString(),
-        provenance: { kind: 'derived', jobType: 'Compute', method: {}, basis: null },
+        provenance: { kind: 'derived', jobType: 'Analyse', method: {}, basis: null },
         // The whole point of the record: the expression, the numbers it read and
         // the refusal, if there was one. `parsed` stays absent — this is not a
         // calculation result.
-        compute: {
+        analyse: {
           expression: evaluation.expression,
           inputs: evaluation.inputs,
           value: evaluation.value,
@@ -2640,14 +3293,14 @@ export class QueueManager {
           functionCalls: evaluation.functionCalls,
           notes: evaluation.notes,
           notComputed: evaluation.notComputed,
-          sources: compute.sources || [],
+          sources: analyse.sources || [],
           ...(recordId ? { recordId } : {}),
         },
       });
       task.runDir = dir;
       task.runId = task.nodeId;
     } catch (error) {
-      task.compute = { ...task.compute, ...evaluation, notes: [...evaluation.notes, `the derived record could not be written: ${error.message}`] };
+      task.analyse = { ...task.analyse, ...evaluation, notes: [...evaluation.notes, `the derived record could not be written: ${error.message}`] };
     }
     if (evaluation.status === 'computed') {
       this.setTaskOutcome(task, 'completed', oneLine(describeCompute(evaluation), 400));
@@ -2677,7 +3330,7 @@ export class QueueManager {
    * names the reason rather than no record at all.
    */
   async runDp4(queue, task) {
-    const compute = task.compute && typeof task.compute === 'object' ? task.compute : {};
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
     const sources = this.incomingSources(queue, task.nodeId);
     const rows = [];
     for (const source of sources) {
@@ -2698,14 +3351,14 @@ export class QueueManager {
         run,
       });
     }
-    const evaluation = evaluateDp4(compute.dp4, { rows });
+    const evaluation = evaluateDp4(analyse.dp4, { rows });
     const summary = dp4Summary(evaluation);
     task.dp4 = evaluation;
     // The task keeps the verdict and the refusal, not a second copy of the
-    // table: `dp4` is the result, `compute` is the block that produced it, and
+    // table: `dp4` is the result, `analyse` is the block that produced it, and
     // a queue snapshot should not carry 27 nuclei twice.
-    task.compute = {
-      ...compute,
+    task.analyse = {
+      ...analyse,
       status: evaluation.status,
       expression: evaluation.expression,
       available: evaluation.available,
@@ -2716,7 +3369,7 @@ export class QueueManager {
       summary,
     };
 
-    const dir = path.join(this.queueDir(queue.id), 'compute', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
     try {
       await fsp.mkdir(dir, { recursive: true });
       await writeJsonAtomic(path.join(dir, 'run.json'), {
@@ -2738,7 +3391,7 @@ export class QueueManager {
         // The block's own declaration: which mode, which variant, which level,
         // which measured shifts, and the one-line verdict or refusal. A reader
         // of the record can see the experiment without opening the project.
-        compute: {
+        analyse: {
           mode: 'dp4',
           expression: evaluation.expression,
           inputs: (evaluation.candidates || []).map((candidate) => ({
@@ -2752,7 +3405,7 @@ export class QueueManager {
           functionCalls: [],
           notes: evaluation.notes || [],
           notComputed: evaluation.notComputed,
-          sources: compute.sources || [],
+          sources: analyse.sources || [],
           ...(task.recordId ? { recordId: task.recordId } : {}),
         },
         // The whole result: probabilities, per-nucleus deviations, the fit each
@@ -2763,7 +3416,7 @@ export class QueueManager {
       task.runDir = dir;
       task.runId = task.nodeId;
     } catch (error) {
-      task.compute = { ...task.compute, notes: [...(evaluation.notes || []), `the DP4+ record could not be written: ${error.message}`] };
+      task.analyse = { ...task.analyse, notes: [...(evaluation.notes || []), `the DP4+ record could not be written: ${error.message}`] };
     }
     if (evaluation.status === 'computed') {
       this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
@@ -2945,7 +3598,7 @@ export class QueueManager {
       if (task.status === 'running' && task.runId) {
         await this.runManager.cancel(task.runId).catch(() => {});
       }
-      if (task.status === 'running' && task.type === 'conformers') {
+      if (task.status === 'running' && task.type === 'generate') {
         this.conformersRunner?.cancel();
       }
     }

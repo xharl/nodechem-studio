@@ -58,7 +58,7 @@ const ensemble = (overrides = {}) => ({
 
 const calc = (id, title, jobType, extra = {}) => ({
   id,
-  type: 'calc',
+  type: 'calculate',
   kind: 'Opt',
   title,
   state: 'ready',
@@ -71,7 +71,7 @@ const calc = (id, title, jobType, extra = {}) => ({
 
 const conformers = (id, title, { fanOut = true, output = ensemble() } = {}) => ({
   id,
-  type: 'conformers',
+  type: 'generate',
   kind: 'Conformers',
   title,
   state: 'ready',
@@ -92,7 +92,7 @@ const dataset = (records) => ({
 
 function project({ nodes, edges, datasets = [], activeFlowId = 'main' }) {
   const result = validateProject({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Fan-out chain fixture',
     molecule: {
       charge: 0,

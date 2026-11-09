@@ -183,14 +183,14 @@ the executable the way the app does:
 ncs run my-project.ncs --out ./runs --executable /opt/g16/g16
 ```
 
-If the workflow contains a conformer block, `ncs run` also needs CREST unless the block imports its
+If the workflow contains a Generate block, `ncs run` also needs CREST unless the block imports its
 ensemble or uses the in-app `uff` route (which spawns nothing):
 
 ```
 ncs run my-project.ncs --out ./runs --executable /opt/g16/g16 --crest /opt/crest/crest --obabel /usr/local/bin/obabel
 ```
 
-Cluster export refuses a project that contains a conformer block — the export would otherwise build
+Cluster export refuses a project that contains a Generate block — the export would otherwise build
 its first calculation from the project geometry rather than the member you chose.
 
 ## Scripting from a shell or a notebook

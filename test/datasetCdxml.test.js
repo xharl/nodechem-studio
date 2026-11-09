@@ -70,20 +70,20 @@ function rawProject(records, jobType, { second = null } = {}) {
       input: { datasetId: 'drawings', recordFilter: { field: '', equals: '' } },
     },
     {
-      id: 'first', type: 'calc', kind: 'Calc', title: jobType === 'Freq' ? 'Frequency' : 'Single point',
+      id: 'first', type: 'calculate', kind: 'Calc', title: jobType === 'Freq' ? 'Frequency' : 'Single point',
       state: 'ready', x: 200, y: 0, settings: defaultSettings({ jobType }), output: null, checkpointFrom: null,
     },
   ];
   const edges = [{ id: 'e1', from: 'in', to: 'first', type: 'dependency' }];
   if (second) {
     nodes.push({
-      id: 'second', type: 'calc', kind: 'Calc', title: second.title, state: 'ready', x: 400, y: 0,
+      id: 'second', type: 'calculate', kind: 'Calc', title: second.title, state: 'ready', x: 400, y: 0,
       settings: defaultSettings({ jobType: second.jobType }), output: null, checkpointFrom: null,
     });
     edges.push({ id: 'e2', from: 'first', to: 'second', type: second.edge || 'checkpoint' });
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'Drawings',
     molecule: {
       charge: 0,
@@ -216,7 +216,7 @@ describe('issue 139 — the 2D drawing run gate', () => {
   it('refuses a drawing record at the first frequency, naming the record and the block', () => {
     const project = validated(rawProject(imported(), 'Freq'));
     const plan = buildWorkflowPlan(project);
-    const tasks = plan.tasks.filter((task) => task.type === 'calc');
+    const tasks = plan.tasks.filter((task) => task.type === 'calculate');
 
     expect(tasks).toHaveLength(2);
     // Neither dropped nor run: the record keeps its task, refused.
@@ -238,7 +238,7 @@ describe('issue 139 — the 2D drawing run gate', () => {
 
   it('refuses the same record at a single point', () => {
     const project = validated(rawProject(imported(), 'SP'));
-    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calc');
+    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calculate');
     expect(tasks.map((task) => task.drawingRefusal?.jobType)).toEqual(['SP', 'SP']);
   });
 
@@ -249,7 +249,7 @@ describe('issue 139 — the 2D drawing run gate', () => {
     expect(project.datasets[0].records.map((record) => record.drawingConfirmed)).toEqual([true, true]);
     expect(project.datasets[0].records[0].geometry).toEqual({ dimension: '2d' });
 
-    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calc');
+    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calculate');
     expect(tasks.map((task) => task.executable)).toEqual([true, true]);
     expect(tasks.map((task) => task.drawingRefusal)).toEqual([undefined, undefined]);
     expect(tasks[0].inputText).toContain('sodium');
@@ -259,7 +259,7 @@ describe('issue 139 — the 2D drawing run gate', () => {
     const project = validated(rawProject(imported(), 'Opt', {
       second: { title: 'Frequency after optimisation', jobType: 'Freq' },
     }));
-    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calc');
+    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calculate');
     expect(tasks.some((task) => task.drawingRefusal)).toBe(false);
   });
 
@@ -267,7 +267,7 @@ describe('issue 139 — the 2D drawing run gate', () => {
     const project = validated(rawProject(imported(), 'Freq', {
       second: { title: 'Second frequency', jobType: 'Freq', edge: 'checkpoint' },
     }));
-    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calc');
+    const tasks = buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calculate');
     // The first frequency is refused for both records. The second reads a
     // checkpoint, so the drawing's own coordinates never reach it and it is not
     // asked; it fails later as blocked on the block that never ran.
@@ -282,6 +282,6 @@ describe('issue 139 — the 2D drawing run gate', () => {
     const project = validated(rawProject(records, 'Freq'));
     const gate = drawingGateFor(project, project.flows[0].nodes[1], project.datasets[0].records[0]);
     expect(gate).toBeNull();
-    expect(buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calc')[0].executable).toBe(true);
+    expect(buildWorkflowPlan(project).tasks.filter((task) => task.type === 'calculate')[0].executable).toBe(true);
   });
 });

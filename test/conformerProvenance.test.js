@@ -58,7 +58,7 @@ const IMPORT_ORIGIN = {
 const molecule = { charge: 0, multiplicity: 1, fragments: [], coords, geometry: { source: 'imported', file: 'water.xyz', format: 'xyz' } };
 
 const project = (nodes, edges = []) => ({
-  schemaVersion: 1,
+  schemaVersion: 3,
   name: 'Conformer provenance',
   molecule,
   defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
@@ -67,8 +67,27 @@ const project = (nodes, edges = []) => ({
 });
 
 const conformersNode = (settings = {}, output = null) => ({
-  id: 'conf', type: 'conformers', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0, settings, output,
+  id: 'conf', type: 'generate', title: 'Conformer ensemble', state: 'ready', x: 0, y: 0, settings, output,
 });
+
+const ensembleInput = (overrides = {}) => ({
+  id: 'ens', type: 'input', kind: 'Ensemble input', title: 'Imported ensemble', state: 'ready', x: 0, y: 0,
+  input: {
+    kind: 'ensemble',
+    path: 'conf.xyz',
+    format: 'xyz',
+    energyUnit: 'hartree',
+    energyMethod: '',
+    origin: { program: '', version: '', method: '' },
+    ...overrides,
+  },
+});
+
+/** ADR 0001: an imported generate block is always paired with its input. */
+const importedProject = (settings = {}, output = null, input = {}) => project(
+  [ensembleInput(input), conformersNode({ source: 'imported', ...settings }, output)],
+  [{ from: 'ens', to: 'conf', type: 'dependency' }],
+);
 
 const kcalMember = (id, rank, energyKcal, extra = {}) => ({
   id, rank, energyKcal, energyEh: null, energyUnit: 'kcal/mol', energyMethod: 'MMFF94',
@@ -99,33 +118,40 @@ const kcalSummary = (overrides = {}) => ({
 
 describe('#129 an imported ensemble keeps its origin', () => {
   it('survives a save/load round trip with the hash of the file it came from', () => {
-    const saved = validateProject(project([conformersNode({ generator: 'import', importPath: 'spartan_conf.xyz', energyUnit: 'kcal/mol', energyMethod: 'MMFF94', origin: { ...IMPORT_ORIGIN, sourceSha256: '' } }, kcalSummary())]));
+    const saved = validateProject(importedProject({ energyWindowKcal: 10 }, kcalSummary(), {
+      path: 'spartan_conf.xyz',
+      energyUnit: 'kcal/mol',
+      energyMethod: 'MMFF94',
+      origin: { ...IMPORT_ORIGIN, sourceSha256: '' },
+    }));
     expect(saved.ok).toBe(true);
     const text = stringifyProject(saved.project).text;
     const reloaded = parseProjectText(text);
     expect(reloaded.ok).toBe(true);
-    const node = reloaded.project.nodes[0];
+    const node = reloaded.project.nodes.find((entry) => entry.type === 'generate');
+    const input = reloaded.project.nodes.find((entry) => entry.type === 'input');
     expect(node.output.origin).toEqual(IMPORT_ORIGIN);
     expect(node.output.energyUnit).toBe('kcal/mol');
     expect(node.output.energyMethod).toBe('MMFF94');
-    expect(node.settings.origin.program).toBe('SyntheticGaussLike');
-    expect(node.settings.origin.version).toBe('26.1 (test)');
-    expect(node.settings.energyUnit).toBe('kcal/mol');
+    expect(input.input.origin.program).toBe('SyntheticGaussLike');
+    expect(input.input.origin.version).toBe('26.1 (test)');
+    expect(input.input.energyUnit).toBe('kcal/mol');
   });
 
   it('refuses a sourceSha256 that is not a digest instead of storing a claim', () => {
     const bad = kcalSummary({ origin: { ...IMPORT_ORIGIN, sourceSha256: 'not-a-hash' } });
-    const result = validateProject(project([conformersNode({ generator: 'import' }, bad)]));
+    const result = validateProject(importedProject({}, bad));
     expect(result.ok).toBe(false);
     expect(result.errors.some((error) => /sourceSha256/.test(error.path))).toBe(true);
   });
 
   it('keeps a declared origin on the block settings even before a run', () => {
-    const result = validateProject(project([conformersNode({
-      generator: 'import', importPath: 'conf.xyz', origin: { program: 'SyntheticGaussLike', version: '26.1 (test)', method: 'MMFF94' },
-    })]));
+    const result = validateProject(importedProject({}, null, {
+      path: 'conf.xyz',
+      origin: { program: 'SyntheticGaussLike', version: '26.1 (test)', method: 'MMFF94' },
+    }));
     expect(result.ok).toBe(true);
-    expect(result.project.nodes[0].settings.origin).toEqual({
+    expect(result.project.nodes.find((entry) => entry.type === 'input').input.origin).toEqual({
       program: 'SyntheticGaussLike', version: '26.1 (test)', method: 'MMFF94', sourceSha256: '',
     });
   });
@@ -134,9 +160,9 @@ describe('#129 an imported ensemble keeps its origin', () => {
 describe('#130 an energy unit and a method per member', () => {
   it('stores a kcal/mol energy in kcal/mol and leaves energyEh empty', () => {
     const summary = kcalSummary();
-    const result = validateProject(project([conformersNode({ generator: 'import', energyUnit: 'kcal/mol', energyMethod: 'MMFF94' }, summary)]));
+    const result = validateProject(importedProject({}, summary, { energyUnit: 'kcal/mol', energyMethod: 'MMFF94' }));
     expect(result.ok).toBe(true);
-    const member = result.project.nodes[0].output.members[0];
+    const member = result.project.nodes.find((entry) => entry.type === 'generate').output.members[0];
     expect(member.energyUnit).toBe('kcal/mol');
     expect(member.energyMethod).toBe('MMFF94');
     expect(member.energyKcal).toBeCloseTo(-120.4, 6);
@@ -270,14 +296,20 @@ describe('the ensemble summary carries provenance', () => {
   });
 
   it('passes the declared unit and origin into the task the queue receives', () => {
-    const validated = validateProject(project([conformersNode({
-      generator: 'import', importPath: 'conf.xyz', energyUnit: 'kcal/mol', energyMethod: 'MMFF94',
+    const validated = validateProject(importedProject({}, null, {
+      path: 'conf.xyz',
+      energyUnit: 'kcal/mol',
+      energyMethod: 'MMFF94',
       origin: { program: 'SyntheticGaussLike', version: '26.1 (test)', method: 'MMFF94' },
-    })])).project;
-    const built = conformerSearchTask(validated, validated.nodes[0]);
-    expect(built.conformers.energyUnit).toBe('kcal/mol');
-    expect(built.conformers.energyMethod).toBe('MMFF94');
-    expect(built.conformers.origin.program).toBe('SyntheticGaussLike');
+    })).project;
+    const generate = validated.nodes.find((entry) => entry.type === 'generate');
+    const built = conformerSearchTask(validated, generate);
+    expect(built.generate.source).toBe('imported');
+    expect(built.generate.ensembleFrom).toBe('ens');
+    expect(built.generate.argv).toEqual([]);
+    const inputTask = buildWorkflowPlan(validated).tasks.find((entry) => entry.type === 'input');
+    expect(inputTask.input.energyUnit).toBe('kcal/mol');
+    expect(inputTask.input.origin.program).toBe('SyntheticGaussLike');
   });
 });
 
@@ -326,21 +358,19 @@ describe('the queue writes the origin it was given', () => {
     await fsp.writeFile(ensemblePath, frames, 'utf8');
     await fsp.writeFile(path.join(base, 'crest.energies'), '-120.40\n-119.00\n', 'utf8');
 
-    const raw = project([conformersNode({
-      generator: 'import',
-      importPath: ensemblePath,
+    const raw = importedProject({ rmsdThreshold: 0.05 }, null, {
+      path: ensemblePath,
       energyUnit: 'kcal/mol',
       energyMethod: 'MMFF94',
-      rmsdThreshold: 0.05,
       origin: { program: 'SyntheticGaussLike', version: '26.1 (test)', method: 'MMFF94/DLFF03 (test)' },
-    })]);
+    });
     const validated = validateProject(raw);
     expect(validated.ok).toBe(true);
-    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'conformers');
+    const plan = buildWorkflowPlan(validated.project);
     const started = await queueManager.start({
       projectName: validated.project.name,
-      tasks: [task],
-      edges: [],
+      tasks: plan.tasks,
+      edges: plan.edges,
       options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
     });
     const done = await waitFor(async () => {

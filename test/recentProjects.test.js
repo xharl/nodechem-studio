@@ -124,11 +124,11 @@ describe('recent-projects formatting (issue 149)', () => {
     const project = {
       defaults: { engine: 'xtb' },
       nodes: [
-        { type: 'calc', settings: { engine: '' } },
-        { type: 'calc', settings: { engine: 'psi4' } },
-        { type: 'calc', settings: { engine: 'psi4' } },
-        { type: 'conformers', settings: { generator: 'crest' } },
-        { type: 'conformers', settings: { generator: 'import' } },
+        { type: 'calculate', settings: { engine: '' } },
+        { type: 'calculate', settings: { engine: 'psi4' } },
+        { type: 'calculate', settings: { engine: 'psi4' } },
+        { type: 'generate', settings: { generator: 'crest' } },
+        { type: 'generate', settings: { source: 'imported' } },
         { type: 'note' },
       ],
     };

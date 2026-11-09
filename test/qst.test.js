@@ -202,7 +202,7 @@ describe('QST refusals', () => {
 
 describe('QST in the project file', () => {
   const project = (settings, coords = REACTANT) => ({
-    schemaVersion: 2,
+    schemaVersion: 3,
     name: 'QST',
     molecule: {
       charge: 0,
@@ -219,7 +219,7 @@ describe('QST in the project file', () => {
       title: 'Workflow',
       nodes: [{
         id: 'qst-1',
-        type: 'calc',
+        type: 'calculate',
         kind: 'TS',
         title: 'QST2 search',
         state: 'ready',

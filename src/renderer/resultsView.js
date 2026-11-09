@@ -2295,19 +2295,19 @@ function trajectoryCard(parsed, flags) {
  * replaced by the statement that the table is the result. A run that was
  * refused still prints its refusal, because the refusal *is* the outcome.
  */
-function computeCard(compute, dp4) {
-  const inputs = Array.isArray(compute?.inputs) ? compute.inputs : [];
-  const value = finite(compute?.value);
-  const unit = text(compute?.unit);
+function analyseCard(analyse, dp4) {
+  const inputs = Array.isArray(analyse?.inputs) ? analyse.inputs : [];
+  const value = finite(analyse?.value);
+  const unit = text(analyse?.unit);
   const analysis = isObject(dp4) ? dp4 : null;
   const rows = [
-    fieldValue('Expression', `<code data-field="compute-expression">${esc(text(compute?.expression) ?? MISSING_TEXT)}</code>`, 'compute-expression'),
+    fieldValue('Expression', `<code data-field="compute-expression">${esc(text(analyse?.expression) ?? MISSING_TEXT)}</code>`, 'compute-expression'),
     ...(analysis
       ? [fieldValue('Result', '<span data-field="compute-dp4-result">the probability table below — DP4+ has no single value</span>', 'compute-dp4-result')]
       : [fieldValue('Value', value === null ? missingHtml() : `${esc(numberText(value, 9))}${unit ? ` ${esc(unit)}` : ''}`, 'compute-value')]),
     fieldValue('Kind', '<span class="results-chip">derived quantity</span>', 'compute-kind'),
   ];
-  const notes = Array.isArray(compute?.notes) ? compute.notes.filter((note) => text(note)) : [];
+  const notes = Array.isArray(analyse?.notes) ? analyse.notes.filter((note) => text(note)) : [];
   const inputRows = inputs.length
     ? `<table class="results-table"><thead><tr><th>Record</th><th>Field</th><th>Value</th><th>Unit</th></tr></thead><tbody>`
       + inputs.map((input) => `<tr data-role="compute-input">`
@@ -2338,8 +2338,8 @@ function computeCard(compute, dp4) {
  */
 export function resultsPanelHtml(record, options = {}) {
   if (!isObject(record)) return emptyStateHtml();
-  // Issue 175: a compute block's record carries `compute` and no `parsed` block.
-  if (isObject(record.compute)) return computeCard(record.compute, record.dp4);
+  // Issue 175: an analyse block's record carries `analyse` and no `parsed` block.
+  if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
   const flags = flagsFor(record);
@@ -2903,22 +2903,22 @@ export function installResultsView({
   };
 
   /**
-   * A compute task's record, from the queue that produced it.
+   * An analyse task's record, from the queue that produced it.
    *
    * Issue 165: a derived record is written under the queue's `compute/` folder,
    * not the run root, so `desktop.listRuns()` never lists it and clicking its
    * queue row used to report the run as unloadable. The task already carries the
-   * same `compute` (and `dp4`) block the record holds, so the card renders from
+   * same `analyse` (and `dp4`) block the record holds, so the card renders from
    * the queue when the run folder cannot supply it. Nothing is recomputed.
    */
   const recordFromQueue = (runId) => {
     const task = queueTasksByRunId.get(String(runId ?? ''));
-    if (!task || !isObject(task.compute)) return null;
+    if (!task || !isObject(task.analyse)) return null;
     return {
       id: text(task.runId) || text(task.nodeId),
       title: text(task.title) || text(task.nodeId),
       kind: 'derived',
-      compute: task.compute,
+      analyse: task.analyse,
       ...(isObject(task.dp4) ? { dp4: task.dp4 } : {}),
     };
   };

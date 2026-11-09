@@ -22,7 +22,7 @@ function loadedProject(raw = exampleText) {
 }
 
 function calcNode(project) {
-  return project.nodes.find((node) => node.type === 'calc');
+  return project.nodes.find((node) => node.type === 'calculate');
 }
 
 describe('the inspector asks for a sweep (issue 186)', () => {

@@ -10,7 +10,7 @@ import {
 
 const node = (id, overrides = {}) => ({
   id,
-  type: 'calc',
+  type: 'calculate',
   kind: 'Opt',
   title: id,
   state: 'passed',

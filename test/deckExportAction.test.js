@@ -23,8 +23,8 @@ function waterProject(overrides = {}) {
   const project = JSON.parse(readFileSync('examples/single-point.ncs', 'utf8'));
   project.molecule.coords = WATER;
   project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
-  for (const node of project.nodes) {
-    if (node.type === 'calc') {
+  for (const node of project.flows[0].nodes) {
+    if (node.type === 'calculate') {
       node.settings.basis = '6-31G*';
       node.settings.dispersion = '';
       node.settings.population = '';
@@ -34,7 +34,7 @@ function waterProject(overrides = {}) {
   return project;
 }
 
-const nodeOf = (project) => project.nodes.find((node) => node.type === 'calc');
+const nodeOf = (project) => project.flows[0].nodes.find((node) => node.type === 'calculate');
 
 describe('the window\'s deck export action', () => {
   it('writes the same text the CLI writes for the same block', async () => {

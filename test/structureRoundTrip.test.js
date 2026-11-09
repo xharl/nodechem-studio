@@ -20,7 +20,7 @@ function projectWithStructure(structure, engine) {
   project.molecule.multiplicity = structure.multiplicity;
   if (structure.bonds?.length) project.molecule.bonds = structure.bonds.map((bond) => ({ ...bond }));
   project.defaults.engine = engine;
-  const node = project.nodes.find((item) => item.type === 'calc');
+  const node = project.nodes.find((item) => item.type === 'calculate');
   // Charge and multiplicity are per-block settings; the molecule carries the
   // project-wide values the block snapshots.
   node.engine = engine;

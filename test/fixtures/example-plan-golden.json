@@ -3,43 +3,43 @@
     "tasks": [
       {
         "id": "apn-opt",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "9804c162f2a2aca9"
       },
       {
         "id": "apn-freq",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "fe9304d110ff8758"
       },
       {
         "id": "apn-td-toluene",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "6dc3e93ea36bd484"
       },
       {
         "id": "apn-td-thf",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "f1d3ba6836581836"
       },
       {
         "id": "apn-td-dcm",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "c96f864b062717f5"
       },
       {
         "id": "apn-td-dmso",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "9511dd71e0794efe"
       },
       {
         "id": "apn-td-meoh",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "2c4e5ca4ae6f303c"
       },
@@ -63,13 +63,13 @@
     "tasks": [
       {
         "id": "em-s1-opt",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "5f2ff95a504e103c"
       },
       {
         "id": "em-td",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "c652cf0d1224e49b"
       },
@@ -88,13 +88,13 @@
     "tasks": [
       {
         "id": "of-opt",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "619000a46cae8ce7"
       },
       {
         "id": "of-freq",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "2ca5d040a9af831b"
       }
@@ -107,7 +107,7 @@
     "tasks": [
       {
         "id": "sp-energy",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "51a4291c2a5afc75"
       }
@@ -118,19 +118,19 @@
     "tasks": [
       {
         "id": "ts-react-opt",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "619000a46cae8ce7"
       },
       {
         "id": "ts-opt",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "c604816e356a1f9c"
       },
       {
         "id": "ts-freq",
-        "type": "calc",
+        "type": "calculate",
         "executable": true,
         "inputHash": "1bf6a09f79f8f2a9"
       },

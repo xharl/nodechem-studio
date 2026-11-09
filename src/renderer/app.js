@@ -76,8 +76,10 @@ import {
   outputOf,
   outputPathError,
 } from './outputFields.js';
+import { SCORER_MODELS } from '../shared/scorer.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
+  DEFAULT_ENSEMBLE_INPUT,
   conformerEnergyLabel,
   conformerGroupLabel,
   conformerGroups,
@@ -234,7 +236,7 @@ const MEMORY_UNITS = [['GB', 'GB'], ['MB', 'MB'], ['MW', 'MW']];
 function calcNode(id, kind, title, x, y, options = {}) {
   return {
     id,
-    type: 'calc',
+    type: 'calculate',
     kind,
     title,
     state: options.state || 'ready',
@@ -440,7 +442,7 @@ const inputName = (id) => `${id.replace(/-/g, '_')}.gjf`;
 const outputName = (id) => `${id.replace(/-/g, '_')}.log`;
 
 function gateChips(node) {
-  if (node.type !== 'calc') return [];
+  if (node.type !== 'calculate') return [];
   const gates = node.settings.gates;
   const parts = [];
   if (gates.thermo) parts.push('thermo');
@@ -543,7 +545,7 @@ function inputRecordCounts(node) {
 }
 
 function nodeDetail(node) {
-  if (node.type === 'calc') {
+  if (node.type === 'calculate') {
     // The card must describe the engine this block actually runs: with a mixed
     // project the project default is not the block's engine.
     const engine = engineForNode(state.project, node);
@@ -559,16 +561,16 @@ function nodeDetail(node) {
     return routeShort(node.settings);
   }
   if (node.type === 'condition') return node.condition.expression.replace(/\s*\n\s*/g, ' · ');
-  if (node.type === 'compute') {
+  if (node.type === 'analyse') {
     // The card names the expression and the inputs it reads (issue 175): a
     // derived number must never look like a route a block ran.
-    const expression = String(node.compute?.expression || '').trim();
-    const names = (Array.isArray(node.compute?.inputs) ? node.compute.inputs : [])
+    const expression = String(node.analyse?.expression || '').trim();
+    const names = (Array.isArray(node.analyse?.inputs) ? node.analyse.inputs : [])
       .map((input) => String(input?.name || '').trim()).filter(Boolean);
     if (!expression) return 'no expression yet';
     return names.length ? `${expression} · ${names.join(', ')}` : expression;
   }
-  if (node.type === 'conformers') {
+  if (node.type === 'generate') {
     const output = node.output;
     if (!output) {
       // Issue 144: the footer says which route is waiting to run, including the
@@ -624,12 +626,12 @@ function nodeDetail(node) {
 function conformerGroupCount(group) {
   const id = String(group || '');
   if (!id) return 0;
-  return state.project.nodes.filter((item) => item.type === 'conformers'
+  return state.project.nodes.filter((item) => item.type === 'generate'
     && String(item.settings?.group || '') === id).length;
 }
 
 function nodeFoot(node) {
-  if (node.type === 'calc') {
+  if (node.type === 'calculate') {
     const familyDone = (state.queue?.tasks || []).some((task) => String(task.nodeId || '').startsWith(`${node.id}~`) && task.status === 'completed');
     const output = node.parsed || familyDone ? 'parsed' : node.state === 'ready' ? 'ready to run' : 'no output';
     // Issue 186: a sweeping block says so on its own card — this block queues
@@ -638,7 +640,7 @@ function nodeFoot(node) {
     return { left: [gateChips(node).join(' · '), sweep].filter(Boolean).join(' · '), right: output };
   }
   if (node.type === 'condition') return { left: `unknown → ${node.condition.unknown.replace('-', ' ')}`, right: '2 branches' };
-  if (node.type === 'conformers') {
+  if (node.type === 'generate') {
     // Issue 129: the footer names what produced the ensemble — an imported
     // file's declared program, or the CREST method that ran here.
     const origin = node.output && typeof node.output === 'object'
@@ -698,8 +700,8 @@ function nodeFoot(node) {
     };
   }
   if (node.type === 'note') return { left: 'annotation', right: '' };
-  if (node.type === 'compute') {
-    const inputs = Array.isArray(node.compute?.inputs) ? node.compute.inputs : [];
+  if (node.type === 'analyse') {
+    const inputs = Array.isArray(node.analyse?.inputs) ? node.analyse.inputs : [];
     return { left: 'derived', right: `${inputs.length} input${inputs.length === 1 ? '' : 's'}` };
   }
   return { left: '', right: '' };
@@ -707,8 +709,9 @@ function nodeFoot(node) {
 
 function kindCode(node) {
   if (node.type === 'condition') return 'IF';
-  if (node.type === 'compute') return 'fx';
-  if (node.type === 'conformers') return 'CF';
+  if (node.type === 'analyse') return 'fx';
+  if (node.type === 'prepare') return 'PR';
+  if (node.type === 'generate') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
   if (node.type === 'input') return node.input?.complex ? '⊕' : node.input?.edits?.length ? 'Δ' : node.input?.series ? 'n×' : 'IN';
@@ -719,14 +722,15 @@ function kindCode(node) {
 
 function kindLabel(node) {
   if (node.type === 'condition') return 'Control';
-  if (node.type === 'compute') return 'Derived';
-  if (node.type === 'conformers') return 'Structure';
+  if (node.type === 'analyse') return 'Analyse';
+  if (node.type === 'prepare') return 'Prepare';
+  if (node.type === 'generate') return 'Generate';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
   if (node.type === 'input') return node.input?.complex ? 'Complex' : node.input?.edits?.length ? 'Derivative' : node.input?.series ? 'Series' : 'Data';
   if (node.type === 'output') return 'Data';
   if (node.type === 'note') return 'Note';
-  return 'Calculation';
+  return 'Calculate';
 }
 
 /* ── Graph rendering ──────────────────────────────────────── */
@@ -792,7 +796,7 @@ function resultFacts(node) {
       tone: 'warn',
     };
   }
-  if (node.type === 'calc') {
+  if (node.type === 'calculate') {
     // A block downstream of a dataset runs once per record: there is no single
     // energy to show, so the card reports how many records finished and passed.
     const family = (state.queue?.tasks || []).filter((task) => String(task.nodeId || '').startsWith(`${node.id}~`));
@@ -857,7 +861,7 @@ function resultFacts(node) {
       tone,
     };
   }
-  if (node.type === 'conformers') {
+  if (node.type === 'generate') {
     const output = node.output && typeof node.output === 'object' ? node.output : null;
     if (!output || !Number.isFinite(output.count)) return null;
     const spread = Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(2)}` : '';
@@ -960,14 +964,14 @@ function costCardText(entry) {
  * card prices the one run the block would queue, so the two do not disagree.
  */
 function costEntryForNode(node) {
-  if (!node || node.type !== 'calc' || !state.project) return null;
+  if (!node || node.type !== 'calculate' || !state.project) return null;
   try {
     const engine = engineForNode(state.project, node);
     const entry = estimateCost(state.project, {
       tasks: [{
         taskId: node.id,
         nodeId: node.id,
-        type: 'calc',
+        type: 'calculate',
         title: node.title,
         engine: engine.id,
         settings: node.settings,
@@ -1002,7 +1006,7 @@ function renderNodeCard(node) {
       ? cost.notEstimated
       : `${cost.procs} cores · ${cost.confidence} (${cost.calibrationPoints} pts)`)
     : '';
-  const checkpointBadge = node.type === 'calc' && node.checkpointFrom
+  const checkpointBadge = node.type === 'calculate' && node.checkpointFrom
     ? '<span class="chk-badge">chk</span>'
     : '';
   return `
@@ -1768,7 +1772,7 @@ function renderProjectInspector() {
   // id and each block's own protomer label. An ungrouped block is absent — it
   // is not listed under a null group.
   const conformerGroupList = conformerGroups(nodes
-    .filter((node) => node.type === 'conformers')
+    .filter((node) => node.type === 'generate')
     .map((node) => ({
       id: node.id,
       title: node.title,
@@ -1970,7 +1974,7 @@ function qstStructureRow(node, s, index) {
   const structure = qstStructuresFor(s)[index] || { label: '', source: 'copy', nodeId: '', path: '', atoms: [] };
   const atoms = moleculeForNode(node)?.coords || [];
   const status = qstStructureStatus(structure, atoms);
-  const blocks = state.project.nodes.filter((entry) => entry.type === 'calc'
+  const blocks = state.project.nodes.filter((entry) => entry.type === 'calculate'
     && Array.isArray(entry.parsed?.geometry?.final?.atoms)
     && entry.parsed.geometry.final.atoms.length > 0);
   const position = index + 2;
@@ -2152,6 +2156,12 @@ function calcInspector(node) {
       ['', `Project default (${engineOrDefault(state.project?.defaults?.engine).label})`],
       ...Object.values(ENGINES).map((entry) => [entry.id, entry.label]),
     ], s.engine ?? ''),
+    // ADR 0001 §2.10: a scorer provider keeps this a calculate block but
+    // bypasses the engine. Empty means "run the engine".
+    selectField('Provider', 'provider', [
+      ['', 'Engine (default)'],
+      ...Object.values(SCORER_MODELS).map((model) => [`ml:${model.id}`, `${model.label} (ML scorer)`]),
+    ], s.provider ?? ''),
     selectField('Job type', 'jobType', isPsi4 ? PSI4_JOB_TYPES.map((id) => [id, id === 'Freq' ? 'Frequency' : id === 'Opt' ? 'Optimization' : id === 'SP' ? 'Single point' : id]) : JOB_TYPES, s.jobType),
     !isXtb && !isPsi4 && s.jobType === 'IRC' ? selectField('IRC direction', 'ircDirection', IRC_DIRECTIONS, s.ircDirection) : '',
     !isXtb && !isPsi4 && isOptJob(s.jobType)
@@ -2495,7 +2505,7 @@ function calcInspector(node) {
       <option value="">None</option>
       ${ins.map((edge) => {
         const source = nodeById(edge.from);
-        const artifact = source && source.type === 'calc' ? checkpointNameFor(source) : '';
+        const artifact = source && source.type === 'calculate' ? checkpointNameFor(source) : '';
         return source ? `<option value="${source.id}"${node.checkpointFrom === source.id ? ' selected' : ''}>${esc(source.title)}${artifact ? ` · ${esc(artifact)}` : ''}</option>` : '';
       }).join('')}
     </select><span class="inspector-note" style="display:block;margin-top:4px">${checkpointHandoffNote(engine.id)}</span></div>` : '',
@@ -2599,12 +2609,12 @@ function computePreviewOf(node) {
       // can only see the blocks' attached parsed results (a fresh project has
       // no run folders), so it names what it has and refuses rather than guess.
       const rows = dp4RowsFromSources(context.sources, context.rowsFor);
-      return { error: null, mode: 'dp4', result: evaluateDp4(node.compute?.dp4, { rows }) };
+      return { error: null, mode: 'dp4', result: evaluateDp4(node.analyse?.dp4, { rows }) };
     }
     return {
       error: null,
       mode: 'expression',
-      result: evaluateCompute(node.compute || { expression: '', inputs: [] }, {
+      result: evaluateCompute(node.analyse || { expression: '', inputs: [] }, {
         recordId: null,
         resolveSource: context.resolveSource,
         allRecords: context.allRecords,
@@ -2654,7 +2664,7 @@ function refreshComputePreview() {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
   const slot = $('#compute-preview-slot');
-  if (!node || node.type !== 'compute' || !slot) return;
+  if (!node || node.type !== 'analyse' || !slot) return;
   slot.innerHTML = computePreviewHtml(node);
 }
 
@@ -2677,11 +2687,11 @@ function computeInputRow(input, index, upstream) {
  * needs filled in — never a number that has not been chosen.
  */
 function dp4DefinitionOf(node) {
-  if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
-  if (!node.compute.dp4 || typeof node.compute.dp4 !== 'object') {
-    node.compute.dp4 = { level: '', solvation: 'gas', solvent: '', variant: 'full', temperature: 298.15, experimental: [] };
+  if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
+  if (!node.analyse.dp4 || typeof node.analyse.dp4 !== 'object') {
+    node.analyse.dp4 = { level: '', solvation: 'gas', solvent: '', variant: 'full', temperature: 298.15, experimental: [] };
   }
-  const definition = node.compute.dp4;
+  const definition = node.analyse.dp4;
   if (!Array.isArray(definition.experimental)) definition.experimental = [];
   return definition;
 }
@@ -2759,8 +2769,8 @@ function dp4InspectorBody(definition) {
 function computeInspector(node) {
   const upstream = computeUpstreamBlocks(node);
   const ins = incoming(node.id);
-  const definition = node.compute && typeof node.compute === 'object'
-    ? node.compute : { expression: '', inputs: [] };
+  const definition = node.analyse && typeof node.analyse === 'object'
+    ? node.analyse : { expression: '', inputs: [] };
   const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
   const dp4 = mode === 'dp4' ? dp4DefinitionOf(node) : null;
   const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
@@ -2768,12 +2778,12 @@ function computeInspector(node) {
     ? inputs.map((input, index) => computeInputRow(input, index, upstream)).join('')
     : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
   const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
-  return `${inspectorHead(mode === 'dp4' ? 'Derived · DP4+' : 'Derived · compute', node.title, `${upstream.length} upstream · ${mode === 'dp4' ? 'candidate comparison' : 'derived quantity'}`)}
+  return `${inspectorHead(mode === 'dp4' ? 'Derived · DP4+' : 'Derived · analyse', node.title, `${upstream.length} upstream · ${mode === 'dp4' ? 'candidate comparison' : 'derived quantity'}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · evaluated from upstream records</span></div>
     <div class="callout"><strong>Derived, not measured.</strong> This block computes ${mode === 'dp4' ? 'a probability per candidate structure from the committed DP4+ bank' : 'a number from other blocks\' results — a CBS limit, a ΔE, a ratio'}. Its result is never presented as a QM result, and a missing input is a refusal that names it, never a zero.</div>
     ${group('Mode', 'arithmetic or DP4+', true, [
-      `<div class="field full"><label>What this block computes</label><select class="select" data-compute-mode="mode" aria-label="Compute mode">
+      `<div class="field full"><label>What this block computes</label><select class="select" data-compute-mode="mode" aria-label="Analyse mode">
         <option value="expression"${mode === 'expression' ? ' selected' : ''}>Arithmetic expression over upstream fields</option>
         <option value="dp4"${mode === 'dp4' ? ' selected' : ''}>DP4+ probabilities over candidate structures</option>
       </select></div>`,
@@ -2807,14 +2817,14 @@ function computeInspector(node) {
 function addComputeInput() {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'compute') return;
-  if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
-  if (!Array.isArray(node.compute.inputs)) node.compute.inputs = [];
+  if (!node || node.type !== 'analyse') return;
+  if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
+  if (!Array.isArray(node.analyse.inputs)) node.analyse.inputs = [];
   const upstream = computeUpstreamBlocks(node);
-  const used = new Set(node.compute.inputs.map((input) => input.name));
+  const used = new Set(node.analyse.inputs.map((input) => input.name));
   let name = 'E';
   for (let index = 1; used.has(name); index += 1) name = `E${index}`;
-  node.compute.inputs.push({
+  node.analyse.inputs.push({
     name,
     field: 'finalEnergyHartree',
     source: upstream.length === 1 ? upstream[0].id : '',
@@ -2826,7 +2836,7 @@ function addComputeInput() {
 function removeComputeInput(index) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  const inputs = node?.compute?.inputs;
+  const inputs = node?.analyse?.inputs;
   if (!Array.isArray(inputs) || index < 0 || index >= inputs.length) return;
   inputs.splice(index, 1);
   renderGraph();
@@ -2843,7 +2853,7 @@ function removeComputeInput(index) {
 function addDp4Row() {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'compute') return;
+  if (!node || node.type !== 'analyse') return;
   const definition = dp4DefinitionOf(node);
   definition.experimental.push({ nucleus: '13C', shift: null, atoms: [] });
   renderGraph();
@@ -2853,7 +2863,7 @@ function addDp4Row() {
 function removeDp4Row(index) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  const rows = node?.compute?.dp4?.experimental;
+  const rows = node?.analyse?.dp4?.experimental;
   if (!Array.isArray(rows) || !Number.isInteger(index) || index < 0 || index >= rows.length) return;
   rows.splice(index, 1);
   renderGraph();
@@ -2900,7 +2910,7 @@ function loopInspector(node) {
   const ins = incoming(node.id);
   const loopEdge = state.project.edges.find((edge) => edge.from === node.id && edge.type === 'loop');
   const target = nodeById(loop.target);
-  const candidates = state.project.nodes.filter((item) => item.type === 'calc');
+  const candidates = state.project.nodes.filter((item) => item.type === 'calculate');
   return `${inspectorHead('Control · loop', node.title, `retry ×${loop.maxAttempts} · ${target?.title || 'no target'}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · explicit loop edge</span></div>
@@ -2927,6 +2937,63 @@ function loopInspector(node) {
   <div class="inspector-footer">
     <button type="button" class="btn primary" data-action="validate">Validate loop</button>
     <button type="button" class="btn" data-select-node="${loop.target}">Select target</button>
+  </div>`;
+}
+
+function prepareInspector(node) {
+  const s = node.settings || {};
+  const output = node.output && typeof node.output === 'object' ? node.output : null;
+  const kind = s.kind === 'embed3d' ? 'embed3d' : 'relax';
+  const converter = kind === 'embed3d' ? 'openbabel' : (s.converter === 'openbabel' ? 'openbabel' : 'uff');
+  const detail = output
+    ? `${output.kind === 'embed3d' ? '3D embedded' : 'relaxed'} · ${output.converter}`
+      + `${Number.isFinite(output.energyKcal) ? ` · ${output.energyKcal.toFixed(3)} kcal/mol` : ''}`
+      + `${output.kind === 'relax' && !output.converged ? ' · not converged' : ''}`
+    : (kind === 'embed3d' ? 'SMILES → one 3D structure' : 'one structure → one relaxed structure');
+  return `${inspectorHead('Structure · prepare', node.title, detail)}
+  <div class="inspector-scroll">
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">1 structure in, 1 out · no enumeration</span></div>
+    ${group('Method', kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app')), true, [
+      `<div class="field"><label>Kind</label><select class="select" data-prepare-field="kind">
+        <option value="relax"${kind === 'relax' ? ' selected' : ''}>Relax one structure</option>
+        <option value="embed3d"${kind === 'embed3d' ? ' selected' : ''}>Embed SMILES in 3D</option>
+      </select></div>`,
+      `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
+        <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
+        <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel (external)</option>
+        <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>
+      </select></div>`,
+      ...(kind === 'embed3d' ? [
+        `<div class="field full"><label>SMILES</label><input class="input" data-prepare-field="smiles" value="${esc(s.smiles || '')}" placeholder="CCO" spellcheck="false" autocomplete="off"></div>`,
+      ] : [
+        `<div class="field"><label>Force field</label><select class="select" data-prepare-field="forceField">
+          <option value="UFF"${s.forceField !== 'MMFF94' && s.forceField !== 'AIMNet2' ? ' selected' : ''}>UFF</option>
+          <option value="MMFF94"${s.forceField === 'MMFF94' ? ' selected' : ''}>MMFF94</option>
+          <option value="AIMNet2"${s.forceField === 'AIMNet2' || converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML)</option>
+        </select></div>`,
+      ]),
+      `<div class="field"><label>Charge</label><input class="input" type="number" min="-10" max="10" data-prepare-field="charge" value="${esc(s.charge ?? 0)}"></div>`,
+      `<div class="field"><label>Multiplicity</label><input class="input" type="number" min="1" max="10" data-prepare-field="multiplicity" value="${esc(s.multiplicity ?? 1)}"></div>`,
+      `<div class="field full"><span class="inspector-note">Deterministic, 1→1: protonation-state and tautomer enumeration belong to Generate. A calculate block wired from this one runs on <code>prepared.xyz</code>.</span></div>`,
+    ].join(''))}
+    ${group('Result', output ? `${output.atomCount} atoms` : 'not prepared yet', Boolean(output), [
+      output
+        ? `<div class="field full"><div class="card">
+            <div class="kv"><span>Outcome</span><code>${esc(output.kind)} · ${esc(output.converter)} · ${esc(output.forceField)}</code></div>
+            <div class="kv"><span>Energy</span><code>${Number.isFinite(output.energyKcal) ? `${output.energyKcal.toFixed(3)} kcal/mol` : 'not reported'}</code></div>
+            <div class="kv"><span>Converged</span><code>${output.converged ? 'yes' : `no${output.reason ? ` · ${esc(output.reason)}` : ''}`}</code></div>
+            <div class="kv"><span>Iterations</span><code>${esc(output.iterations)}</code></div>
+          </div></div>`
+        : '<div class="field full"><span class="inspector-note">Run the block to write <code>prepared.xyz</code>. A downstream calculate reads that file, not the geometry this block was planned with.</span></div>',
+    ].join(''))}
+    <div class="inspector-actions-row">
+      <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
+      <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
+    </div>
+  </div>
+  <div class="inspector-footer">
+    <button type="button" class="btn primary" data-action="run-workflow">Run workflow</button>
+    <button type="button" class="btn" data-action="validate">Validate</button>
   </div>`;
 }
 
@@ -2966,6 +3033,12 @@ function conformersInspector(node) {
       : '',
     `<div class="field full"><span class="inspector-note">Blocks that share an id belong to the same study. A group is not a protomer or tautomer judgement, and energies across protonation states are not comparable without a proton reference.</span></div>`,
   ].join(''));
+  // ADR 0001: a generate block either searches or ranks the one ensemble input
+  // wired into it. The inspector says which, and never offers a file picker of
+  // its own: the input block owns the path, the unit and the provenance.
+  const sourceKind = s.source === 'imported' ? 'imported' : 'search';
+  const upstream = incoming(node.id).find((entry) => entry.type === 'input' && entry.input?.kind === 'ensemble') || null;
+  const upstreamOutput = upstream?.output && typeof upstream.output === 'object' ? upstream.output : null;
   const rows = members.length
     ? `<table class="batch-table">
         <thead><tr><th>Member</th><th>ΔE (kcal/mol)</th><th>Pop.</th><th>RMSD</th><th></th></tr></thead>
@@ -2979,15 +3052,15 @@ function conformersInspector(node) {
             : `<span class="inspector-note">${esc(member.dropped || 'dropped')}</span>`}</td>
         </tr>`).join('')}</tbody>
       </table>`
-    : `<div class="inspector-note">No ensemble yet. ${s.generator === 'import'
-      ? 'Choose a multi-XYZ file and run the block.'
+    : `<div class="inspector-note">No ensemble yet. ${s.source === 'imported'
+      ? (upstream ? `Run the block to rank the ensemble from "${esc(upstream.title)}".` : 'Wire an ensemble input into this block first.')
       : (s.generator === 'uff'
         ? 'Run the block: the UFF search runs here and needs no external binary.'
         : (s.generator === 'obabel'
           ? 'Run the block with an Open Babel executable configured in the run console.'
           : 'Run the block with a CREST executable configured.'))}</div>`;
 
-  return `${inspectorHead('Structure · conformers', node.title, summaryLine)}
+  return `${inspectorHead('Generate · conformers', node.title, summaryLine)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${selected
       ? `using ${esc(selected.id)} · ${formatRelativeKcal(selected.relativeKcal)} kcal/mol · ${formatPopulation(selected.population)}`
@@ -2998,58 +3071,58 @@ function conformersInspector(node) {
     ${warningBlock}
     ${group('Ensemble', output ? caption : summaryLine, true, [rows])}
     ${groupBlock}
-    ${group('Search', s.generator === 'crest'
-      ? 'CREST'
-      : (s.generator === 'uff' ? 'UFF, in-app' : (s.generator === 'obabel' ? 'Open Babel, external' : 'imported file')), true, [
-      `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
-        <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
-        <option value="import"${s.generator === 'import' ? ' selected' : ''}>Import a multi-XYZ</option>
-        <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
-        <option value="obabel"${s.generator === 'obabel' ? ' selected' : ''}>Open Babel (external, MMFF94)</option>
+    ${group('Source', sourceKind === 'imported'
+      ? 'wired ensemble input'
+      : (s.generator === 'crest'
+        ? 'CREST'
+        : (s.generator === 'uff' ? 'UFF, in-app' : 'Open Babel, external')), true, [
+      `<div class="field full"><label>Candidate source</label><select class="select" data-conformer-field="source">
+        <option value="search"${sourceKind === 'search' ? ' selected' : ''}>Search with a generator</option>
+        <option value="imported"${sourceKind === 'imported' ? ' selected' : ''}>Rank a wired ensemble input</option>
       </select></div>`,
-      ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
+      `<div class="field full"><label>Rank by</label><select class="select" data-conformer-field="rankBy">
+        <option value=""${!s.rankBy ? ' selected' : ''}>Energy from the source (xTB / MMFF94 / file)</option>
+        ${Object.values(SCORER_MODELS).map((model) => `<option value="ml:${esc(model.id)}"${s.rankBy === `ml:${model.id}` ? ' selected' : ''}>${esc(model.label)} (ML scorer)</option>`).join('')}
+      </select>${s.rankBy ? '<p class="field-hint">ML ranking needs the scorer sidecar configured in the run console. Its eV energies are converted explicitly; they are never presented as QM.</p>' : ''}</div>`,
+      ...(sourceKind === 'imported' ? [
+        upstream
+          ? `<div class="field full"><div class="card">
+              <div class="kv"><span>Input block</span><code>${esc(upstream.title)}</code></div>
+              <div class="kv"><span>File</span><code>${esc(upstream.input?.path || '—')}</code></div>
+              <div class="kv"><span>Energies</span><code>${esc((upstreamOutput?.energyUnit || upstream.input?.energyUnit) === 'kcal/mol' ? 'kcal/mol' : 'hartree')}${(upstreamOutput?.energyMethod || upstream.input?.energyMethod) ? ` · ${esc(upstreamOutput?.energyMethod || upstream.input?.energyMethod)}` : ''}</code></div>
+              <div class="kv"><span>Produced by</span><code>${esc(upstreamOutput?.origin?.program || upstream.input?.origin?.program || 'not recorded')}${upstreamOutput?.sourceSha256 ? ` · sha256 ${esc(String(upstreamOutput.sourceSha256).slice(0, 12))}…` : ''}</code></div>
+            </div></div>`
+          : '<div class="field full"><div class="callout red"><strong>No ensemble input wired.</strong> Drag a dependency edge from an Ensemble input block into this one.</div></div>',
+        `<div class="field full"><span class="inspector-note">Ranking is a generate-block job: the energy window, RMSD and protomer policy below act on the input's frames. The input block owns the path, the energy unit and the provenance, so this block never opens the file.</span></div>`,
+      ] : [
+        `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
+          <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
+          <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
+          <option value="obabel"${s.generator === 'obabel' ? ' selected' : ''}>Open Babel (external, MMFF94)</option>
+        </select></div>`,
+        ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
             <option value="gfn2"${s.method === 'gfn2' ? ' selected' : ''}>GFN2-xTB</option>
             <option value="gfnff"${s.method === 'gfnff' ? ' selected' : ''}>GFN-FF</option>
           </select></div>`] : []),
-      ...(s.generator === 'obabel' ? [
-        `<div class="field"><label>Force field</label><select class="select" data-conformer-field="ff">
-          <option value="mmff94"${s.ff === undefined || s.ff === 'mmff94' ? ' selected' : ''}>MMFF94</option>
-          <option value="mmff94s"${s.ff === 'mmff94s' ? ' selected' : ''}>MMFF94s (static)</option>
-        </select></div>`,
-        `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
-        `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on MMFF94 energy, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name.</span></div>`,
-      ] : []),
-      ...(s.generator === 'import' ? [`<div class="field full"><label>Ensemble file</label>
-            <div style="display:flex;gap:6px">
-              <input class="input" data-conformer-field="importPath" value="${esc(s.importPath || '')}" placeholder="C:\\path\\to\\conformers.xyz">
-              <button type="button" class="btn small" data-action="pick-ensemble">Choose…</button>
-            </div>
-          </div>`] : []),
-      // Issue 144: the in-app route's own two knobs, and the statement of what
-      // the search is. Absent from a CREST or import block.
-      ...(s.generator === 'uff' ? [
-        `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
-          <option value="60"${Number(s.torsionStepDegrees) === 60 ? ' selected' : ''}>60°</option>
-          <option value="90"${Number(s.torsionStepDegrees) === 90 ? ' selected' : ''}>90°</option>
-          <option value="120"${s.torsionStepDegrees === undefined || Number(s.torsionStepDegrees) === 120 ? ' selected' : ''}>120°</option>
-          <option value="180"${Number(s.torsionStepDegrees) === 180 ? ' selected' : ''}>180°</option>
-        </select></div>`,
-        `<div class="field"><label>Max trials</label><input class="input" type="number" min="1" max="2000" step="1" data-conformer-field="maxTrials" value="${esc(s.maxTrials ?? 200)}"></div>`,
-        `<div class="field full"><span class="inspector-note" data-conformer-uff-note>Torsional grid plus UFF relaxation, run in this app: not a Monte-Carlo or CREST search. Every member is a UFF force-field structure, and its kcal/mol energy is not comparable with a Hartree value. UFF here has no electrostatics term and does not sample ring conformers; a molecule with no rotatable bonds yields one relaxed structure.</span></div>`,
-      ] : []),
-      // Issues 129/130: an imported file carries energies this app did not
-      // compute, in a unit it did not choose. Both are recorded, not guessed:
-      // an MM energy in kcal/mol is never stored or shown as a Hartree total.
-      ...(s.generator === 'import' ? [
-        `<div class="field"><label>Energies are in</label><select class="select" data-conformer-field="energyUnit">
-          <option value="hartree"${s.energyUnit !== 'kcal/mol' ? ' selected' : ''}>Hartree</option>
-          <option value="kcal/mol"${s.energyUnit === 'kcal/mol' ? ' selected' : ''}>kcal/mol</option>
-        </select></div>`,
-        `<div class="field"><label>Energy method</label><input class="input" data-conformer-field="energyMethod" value="${esc(s.energyMethod || '')}" placeholder="MMFF94" maxlength="40"></div>`,
-        `<div class="field"><label>Produced by</label><input class="input" data-conformer-field="originProgram" value="${esc(s.origin?.program || '')}" placeholder="program name" maxlength="40"></div>`,
-        `<div class="field"><label>Program version</label><input class="input" data-conformer-field="originVersion" value="${esc(s.origin?.version || '')}" placeholder="e.g. 26.1" maxlength="40"></div>`,
-        `<div class="field full"><label>Producing method / settings</label><input class="input" data-conformer-field="originMethod" value="${esc(s.origin?.method || '')}" placeholder="e.g. MMFF94, 15 kJ/mol window" maxlength="60"></div>`,
-      ] : []),
+        ...(s.generator === 'obabel' ? [
+          `<div class="field"><label>Force field</label><select class="select" data-conformer-field="ff">
+            <option value="mmff94"${s.ff === undefined || s.ff === 'mmff94' ? ' selected' : ''}>MMFF94</option>
+            <option value="mmff94s"${s.ff === 'mmff94s' ? ' selected' : ''}>MMFF94s (static)</option>
+          </select></div>`,
+          `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
+          `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on MMFF94 energy, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name.</span></div>`,
+        ] : []),
+        ...(s.generator === 'uff' ? [
+          `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
+            <option value="60"${Number(s.torsionStepDegrees) === 60 ? ' selected' : ''}>60°</option>
+            <option value="90"${Number(s.torsionStepDegrees) === 90 ? ' selected' : ''}>90°</option>
+            <option value="120"${s.torsionStepDegrees === undefined || Number(s.torsionStepDegrees) === 120 ? ' selected' : ''}>120°</option>
+            <option value="180"${Number(s.torsionStepDegrees) === 180 ? ' selected' : ''}>180°</option>
+          </select></div>`,
+          `<div class="field"><label>Max trials</label><input class="input" type="number" min="1" max="2000" step="1" data-conformer-field="maxTrials" value="${esc(s.maxTrials ?? 200)}"></div>`,
+          `<div class="field full"><span class="inspector-note" data-conformer-uff-note>Torsional grid plus UFF relaxation, run in this app: not a Monte-Carlo or CREST search. Every member is a UFF force-field structure, and its kcal/mol energy is not comparable with a Hartree value. UFF here has no electrostatics term and does not sample ring conformers; a molecule with no rotatable bonds yields one relaxed structure.</span></div>`,
+        ] : []),
+      ]),
       `<div class="field"><label>Energy window (kcal/mol)</label><input class="input" type="number" min="0" max="100" step="0.5" data-conformer-field="energyWindowKcal" value="${esc(s.energyWindowKcal)}"></div>`,
       `<div class="field"><label>RMSD threshold (Å)</label><input class="input" type="number" min="0.01" max="10" step="0.05" data-conformer-field="rmsdThreshold" value="${esc(s.rmsdThreshold)}"></div>`,
       `<div class="field"><label>Keep at most</label><input class="input" type="number" min="1" max="200" data-conformer-field="maxConformers" value="${esc(s.maxConformers)}"></div>`,
@@ -3795,7 +3868,60 @@ function derivativeCard(node, dataset) {
     </div>`;
 }
 
+function ensembleInputInspector(node) {
+  const input = node.input || {};
+  const output = node.output && typeof node.output === 'object' ? node.output : null;
+  const fileLabel = input.path ? String(input.path).split(/[\\/]/).pop() : 'no file chosen';
+  const digest = output?.sourceSha256 || input.sourceSha256 || '';
+  const origin = output?.origin || input.origin || {};
+  return `${inspectorHead('Data · input', node.title,
+    output ? `${output.frameCount} frame${output.frameCount === 1 ? '' : 's'} · ${output.energyUnit}` : fileLabel)}
+  <div class="inspector-scroll">
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">Runs once, before the generate block that ranks it</span></div>
+    ${group('Ensemble file', input.path ? fileLabel : 'required', true, [
+      `<div class="field full"><label>File</label>
+        <div style="display:flex;gap:6px">
+          <input class="input" data-ensemble-field="path" value="${esc(input.path || '')}" placeholder="path/to/conformers.xyz" spellcheck="false">
+          <button type="button" class="btn small" data-action="pick-ensemble">Choose…</button>
+        </div>
+        <p class="field-hint">One or more XYZ frames. Relative paths resolve against the project file.</p>
+      </div>`,
+      `<div class="field"><label>Format</label><select class="select" data-ensemble-field="format">
+        <option value="xyz"${input.format !== 'xyz' ? '' : ' selected'}>Multi-XYZ</option>
+      </select></div>`,
+      `<div class="field"><label>Energies are in</label><select class="select" data-ensemble-field="energyUnit">
+        <option value="hartree"${input.energyUnit !== 'kcal/mol' ? ' selected' : ''}>Hartree</option>
+        <option value="kcal/mol"${input.energyUnit === 'kcal/mol' ? ' selected' : ''}>kcal/mol</option>
+      </select></div>`,
+      `<div class="field"><label>Energy method</label><input class="input" data-ensemble-field="energyMethod" value="${esc(input.energyMethod || '')}" placeholder="MMFF94" maxlength="40"></div>`,
+      `<div class="field"><label>Produced by</label><input class="input" data-ensemble-field="originProgram" value="${esc(origin.program || '')}" placeholder="program name" maxlength="40"></div>`,
+      `<div class="field"><label>Program version</label><input class="input" data-ensemble-field="originVersion" value="${esc(origin.version || '')}" placeholder="e.g. 26.1" maxlength="40"></div>`,
+      `<div class="field full"><label>Producing method / settings</label><input class="input" data-ensemble-field="originMethod" value="${esc(origin.method || '')}" placeholder="e.g. MMFF94, 15 kJ/mol window" maxlength="60"></div>`,
+      `<div class="field full"><span class="inspector-note">The input block owns the file, the energy unit and the provenance. Ranking stays in the generate block that consumes it; the digest is recorded from the bytes read at run time, not typed in.</span></div>`,
+    ].join(''))}
+    ${group('Read record', output ? `${output.frameCount} frames` : 'not read yet', Boolean(output), [
+      output
+        ? `<div class="field full"><div class="card">
+            <div class="kv"><span>Frames</span><code>${esc(output.frameCount)}</code></div>
+            <div class="kv"><span>Energies</span><code>${esc(output.energyUnit)}${output.energyMethod ? ` · ${esc(output.energyMethod)}` : ''}</code></div>
+            <div class="kv"><span>SHA-256</span><code>${digest ? `${esc(digest.slice(0, 16))}…` : 'not recorded'}</code></div>
+            <div class="kv"><span>Read</span><code>${esc(output.origin?.program || 'origin not recorded')}</code></div>
+          </div></div>`
+        : '<div class="field full"><span class="inspector-note">Run the block to read, hash and store the ensemble. Every downstream block reads that record, not the original path.</span></div>',
+    ].join(''))}
+    <div class="inspector-actions-row">
+      <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
+      <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
+    </div>
+  </div>
+  <div class="inspector-footer">
+    <button type="button" class="btn primary" data-action="validate">Validate</button>
+    <button type="button" class="btn" data-action="delete-node">Delete</button>
+  </div>`;
+}
+
 function inputInspector(node) {
+  if (node.input?.kind === 'ensemble') return ensembleInputInspector(node);
   const datasets = Array.isArray(state.project.datasets) ? state.project.datasets : [];
   const dataset = datasetForInputNode(node);
   const records = dataset ? recordsOf(dataset) : [];
@@ -3993,10 +4119,11 @@ function renderInspector() {
   if (state.selected.type === 'node') {
     const node = nodeById(state.selected.id);
     if (!node) { el.innerHTML = renderProjectInspector(); return; }
-    if (node.type === 'calc') { el.innerHTML = calcInspector(node); mountStructureViewer(el, node); return; }
-    if (node.type === 'conformers') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
+    if (node.type === 'calculate') { el.innerHTML = calcInspector(node); mountStructureViewer(el, node); return; }
+    if (node.type === 'prepare') { el.innerHTML = prepareInspector(node); return; }
+    if (node.type === 'generate') { el.innerHTML = conformersInspector(node); mountStructureViewer(el, node); return; }
     if (node.type === 'condition') { el.innerHTML = conditionInspector(node); return; }
-    if (node.type === 'compute') { el.innerHTML = computeInspector(node); return; }
+    if (node.type === 'analyse') { el.innerHTML = computeInspector(node); return; }
     if (node.type === 'loop') { el.innerHTML = loopInspector(node); return; }
     if (node.type === 'input') { el.innerHTML = inputInspector(node); return; }
     el.innerHTML = simpleInspector(node);
@@ -4020,16 +4147,18 @@ const BLOCKS = [
     { type: 'nto', icon: 'NTO', title: 'NTO analysis', note: 'second job of the Pop=NTO chain' },
   ] },
   { group: 'Structure', items: [
-    { type: 'conformers', icon: 'CF', title: 'Conformer ensemble', note: 'rank + prune conformers' },
+    { type: 'prepare', icon: 'PR', title: 'Prepare structure', note: 'embed 3D or MM-relax one structure' },
+    { type: 'generate', icon: 'CF', title: 'Generate structures', note: 'conformer search or rank a wired input' },
   ] },
   { group: 'Control flow', items: [
     { type: 'condition', icon: 'IF', title: 'Condition', note: 'TRUE / FALSE branches' },
     { type: 'loop', icon: '↻', title: 'Loop', note: 'retry with max attempts' },
     { type: 'merge', icon: '⋈', title: 'Join', note: 'merge branches' },
-    { type: 'compute', icon: 'fx', title: 'Compute', note: 'derived arithmetic: CBS, ΔE, ratios' },
+    { type: 'analyse', icon: 'fx', title: 'Analyse', note: 'derived arithmetic: CBS, ΔE, ratios' },
   ] },
   { group: 'Data', items: [
     { type: 'input', icon: 'IN', title: 'Dataset input', note: 'run the graph once per record' },
+    { type: 'ensemble', icon: 'XYZ', title: 'Ensemble input', note: 'rank an external multi-XYZ ensemble' },
     { type: 'output', icon: 'OUT', title: 'Output file', note: 'csv / json / html / zip' },
   ] },
   { group: 'Project', items: [
@@ -4106,14 +4235,24 @@ function addBlock(type) {
       id, type: 'loop', kind: 'Loop', title: 'Retry loop', state: 'ready', ...position,
       loop: { maxAttempts: 3, mode: 'retry', target: '', until: 'condition is false' },
     };
-  } else if (type === 'conformers') {
+  } else if (type === 'prepare') {
     node = {
-      id, type: 'conformers', kind: 'Conformers', title: 'Conformer ensemble', state: 'ready', ...position,
+      id, type: 'prepare', kind: 'Relax', title: 'Prepare structure', state: 'ready', ...position,
+      settings: {
+        kind: 'relax',
+        converter: 'uff',
+        forceField: 'UFF',
+        smiles: '',
+        charge: state.project.molecule.charge,
+        multiplicity: state.project.molecule.multiplicity,
+      },
+      output: null,
+    };
+  } else if (type === 'generate') {
+    node = {
+      id, type: 'generate', kind: 'Generate', title: 'Generate structures', state: 'ready', ...position,
       settings: {
         ...DEFAULT_CONFORMER_SETTINGS,
-        // A fresh origin per block: the default is one frozen object, and two
-        // blocks must not share the provenance they declare.
-        origin: { ...DEFAULT_CONFORMER_SETTINGS.origin },
         charge: state.project.molecule.charge,
         multiplicity: state.project.molecule.multiplicity,
       },
@@ -4124,12 +4263,24 @@ function addBlock(type) {
       id, type: 'merge', kind: 'Merge', title: 'Join branches', state: 'ready', ...position,
       merge: { policy: 'all', notes: '' },
     };
-  } else if (type === 'compute') {
+  } else if (type === 'analyse') {
     // Issue 175: one input named `E` reading the upstream final energy, so a
     // new block previews a real number the moment it is wired.
     node = {
-      id, type: 'compute', kind: 'Compute', title: 'Compute', state: 'ready', ...position,
-      compute: { expression: 'E', inputs: [{ name: 'E', field: 'finalEnergyHartree', source: '' }] },
+      id, type: 'analyse', kind: 'Analyse', title: 'Analyse', state: 'ready', ...position,
+      analyse: { expression: 'E', inputs: [{ name: 'E', field: 'finalEnergyHartree', source: '' }] },
+    };
+  } else if (type === 'ensemble') {
+    node = {
+      id, type: 'input', kind: 'Ensemble input', title: 'Ensemble input', state: 'ready', ...position,
+      input: {
+        kind: 'ensemble',
+        ...DEFAULT_ENSEMBLE_INPUT,
+        // A fresh origin per block: the default is one frozen object, and two
+        // blocks must not share the provenance they declare.
+        origin: { ...DEFAULT_ENSEMBLE_INPUT.origin },
+      },
+      output: null,
     };
   } else if (type === 'input') {
     const dataset = Array.isArray(state.project.datasets) ? state.project.datasets[0] : null;
@@ -4173,7 +4324,7 @@ function addBlock(type) {
       nto: {
         jobType: 'SP', title: 'NTO analysis', nto: true, dispersion: '', gates: { finalEnergy: true },
       },
-    }[type] || { jobType: 'Opt', title: 'Calculation' };
+    }[type] || { jobType: 'Opt', title: 'Calculate' };
     node = calcNode(id, kindForJob(template.jobType), template.title, position.x, position.y, {
       state: 'ready',
       settings: {
@@ -4205,7 +4356,7 @@ function addBlock(type) {
 function inspectorCalcNode() {
   if (state.selected.type !== 'node') return null;
   const node = nodeById(state.selected.id);
-  return node && node.type === 'calc' ? node : null;
+  return node && node.type === 'calculate' ? node : null;
 }
 
 function addConstraint() {
@@ -4574,7 +4725,7 @@ function duplicateNode(id) {
   copy.x = position.x;
   copy.y = position.y;
   copy.state = 'ready';
-  if (copy.type === 'calc') copy.settings.checkpoint = `${copy.id.replace(/-/g, '_')}.chk`;
+  if (copy.type === 'calculate') copy.settings.checkpoint = `${copy.id.replace(/-/g, '_')}.chk`;
   state.project.nodes.push(copy);
   state.selected = { type: 'node', id: copy.id };
   renderGraph();
@@ -4604,13 +4755,13 @@ function setCheckpoint(edgeIdValue, enabled) {
     }
     edge.type = 'checkpoint';
     const to = nodeById(edge.to);
-    if (to?.type === 'calc') to.checkpointFrom = edge.from;
+    if (to?.type === 'calculate') to.checkpointFrom = edge.from;
     state.selected = { type: 'edge', id: edgeId(edge) };
     toast('Checkpoint hand-off enabled.');
   } else {
     edge.type = 'dependency';
     const to = nodeById(edge.to);
-    if (to?.type === 'calc' && to.checkpointFrom === edge.from) to.checkpointFrom = null;
+    if (to?.type === 'calculate' && to.checkpointFrom === edge.from) to.checkpointFrom = null;
     state.selected = { type: 'edge', id: edgeId(edge) };
     toast('Checkpoint hand-off cleared.');
   }
@@ -5439,7 +5590,7 @@ function validateGraph() {
   const conditions = state.project.nodes.filter((node) => node.type === 'condition').length;
   const loops = state.project.edges.filter((edge) => edge.type === 'loop').length;
   const findings = state.project.nodes
-    .filter((node) => node.type === 'calc')
+    .filter((node) => node.type === 'calculate')
     .map((node) => {
       // The force-constant and convergence rules are Gaussian route rules;
       // xTB rejects unsupported job types when the input is built.
@@ -5533,11 +5684,11 @@ function selectedCalcNode({ conformers = false } = {}) {
   if (state.selected.type !== 'node') return null;
   const node = nodeById(state.selected.id);
   if (!node) return null;
-  if (node.type === 'calc') return node;
+  if (node.type === 'calculate') return node;
   // Issue 101: a conformer block is runnable on its own (its search), so the
   // run paths that pass `conformers: true` accept it; export still asks for a
   // calculation and keeps refusing it.
-  return conformers && node.type === 'conformers' ? node : null;
+  return conformers && node.type === 'generate' ? node : null;
 }
 
 function gatesForNode(node) {
@@ -5796,7 +5947,7 @@ function configuredTimeoutSeconds() {
  * nobody measured one.
  */
 function longRunReason(node) {
-  if (!node || (node.type !== 'calc' && node.type !== 'conformers')) return '';
+  if (!node || (node.type !== 'calculate' && node.type !== 'generate')) return '';
   const s = node.settings || {};
   const atoms = Number(state.project?.molecule?.coords?.length) || 0;
   const states = Number(s.tdStates) || 0;
@@ -5807,7 +5958,7 @@ function longRunReason(node) {
   if (jobType === 'Opt=TS' || jobType === 'Opt=QST2' || jobType === 'Opt=QST3') reasons.push('a transition-state search');
   if (Number(s.counterpoise) > 1) reasons.push(`counterpoise over ${Number(s.counterpoise)} fragments`);
   if (/Freq/.test(jobType) && atoms >= 30) reasons.push(`a frequency job on ${atoms} atoms`);
-  if (node.type === 'conformers' && s.generator === 'crest' && !s.member) {
+  if (node.type === 'generate' && s.generator === 'crest' && !s.member) {
     reasons.push(`a CREST search for up to ${Number(s.maxConformers) || 20} conformers`);
   }
   return reasons.join(', ');
@@ -6057,7 +6208,7 @@ function storedExecutables() {
 /** The engine whose executable the console's single field is editing. */
 function activeRunEngineId() {
   const selected = state.selected?.type === 'node' ? nodeById(state.selected.id) : null;
-  if (selected && selected.type === 'calc') return engineForNode(state.project, selected).id;
+  if (selected && selected.type === 'calculate') return engineForNode(state.project, selected).id;
   return engineOrDefault(state.project?.defaults?.engine).id;
 }
 
@@ -6077,6 +6228,7 @@ function readRunConfig() {
   const saved = storedRunConfig();
   if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
   if (saved.obabelExecutable) $('#run-obabel').value = saved.obabelExecutable;
+  if (saved.scorerExecutable) $('#run-scorer').value = saved.scorerExecutable;
   if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
   if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
   const field = $('#run-exe');
@@ -6089,6 +6241,7 @@ function saveRunConfig() {
       executables: runExecutables(),
       crestExecutable: $('#run-crest').value.trim(),
       obabelExecutable: $('#run-obabel').value.trim(),
+      scorerExecutable: $('#run-scorer')?.value.trim() || '',
       scratchDir: $('#run-scratch').value.trim(),
       dryRun: $('#run-dry').checked,
     }));
@@ -6148,7 +6301,7 @@ async function pickCrest() {
 function selectConformer(id) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'conformers' || !node.output) return;
+  if (!node || node.type !== 'generate' || !node.output) return;
   const member = (node.output.members || []).find((entry) => entry.id === id);
   if (!member || !member.kept) return;
   if (!Array.isArray(member.atoms) || member.atoms.length === 0) {
@@ -6198,7 +6351,11 @@ async function pickEnsembleFile() {
   if (!desktop?.pickEnsembleFile) { toast('Open the Electron app to choose an ensemble file.'); return; }
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'conformers') return;
+  const isInput = node?.type === 'input' && node.input?.kind === 'ensemble';
+  if (!isInput) {
+    toast('Choose the ensemble file on the Ensemble input block, not on the generate block.');
+    return;
+  }
   try {
     const file = await desktop.pickEnsembleFile();
     if (!file) return;
@@ -6206,14 +6363,13 @@ async function pickEnsembleFile() {
     // it: a project that ships with its data must not be pinned to the machine
     // that wrote the absolute path. Outside the project folder the absolute
     // path stays, because there is nothing to anchor it to.
-    node.settings.importPath = portableImportPath(file, state.projectPath);
-    node.settings.generator = 'import';
+    node.input.path = portableImportPath(file, state.projectPath);
     node.output = null;
     node.state = 'ready';
     refreshDirty();
     renderGraph();
     renderInspector();
-    toast('Ensemble file selected. Run the block to rank it.');
+    toast('Ensemble file selected. Run the workflow to read and hash it.');
   } catch (error) {
     toast(`Could not choose the ensemble file: ${error.message}`);
   }
@@ -6251,9 +6407,9 @@ async function preflightRun({ quiet = false } = {}) {
       const tasks = shared.buildWorkflowPlan(state.project).tasks;
       // A fanned-out member task carries a stored ensemble, so it does not need
       // the CREST binary (#80).
-      needsCrest = tasks.some((task) => task.type === 'conformers'
-        && task.conformers?.generator === 'crest'
-        && !task.conformers?.member);
+      needsCrest = tasks.some((task) => task.type === 'generate'
+        && task.generate?.generator === 'crest'
+        && !task.generate?.member);
     } catch {
       // An unbuildable plan is reported by the queue's own error; nothing to add.
     }
@@ -6276,9 +6432,9 @@ async function preflightRun({ quiet = false } = {}) {
     let needsObabel = false;
     try {
       const tasks = shared.buildWorkflowPlan(state.project).tasks;
-      needsObabel = tasks.some((task) => task.type === 'conformers'
-        && task.conformers?.generator === 'obabel'
-        && !task.conformers?.member);
+      needsObabel = tasks.some((task) => task.type === 'generate'
+        && task.generate?.generator === 'obabel'
+        && !task.generate?.member);
     } catch {
       // An unbuildable plan is reported by the queue's own error.
     }
@@ -6298,6 +6454,31 @@ async function preflightRun({ quiet = false } = {}) {
         ],
       };
     }
+    let needsScorer = false;
+    try {
+      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
+        || (task.type === 'calculate' && task.scorer)
+        || (task.type === 'prepare' && task.prepare?.converter === 'aimnet2'));
+    } catch {
+      // An unbuildable plan is reported by the queue's own error.
+    }
+    if (needsScorer) {
+      const scorer = $('#run-scorer')?.value.trim() || '';
+      result = {
+        ...result,
+        ok: result.ok && Boolean(scorer),
+        checks: [
+          ...(Array.isArray(result.checks) ? result.checks : []),
+          {
+            id: 'scorer',
+            label: 'ML scorer sidecar',
+            ok: Boolean(scorer),
+            detail: scorer || 'not chosen — a block that asks for ML ranking or a scorer provider cannot run',
+          },
+        ],
+      };
+    }
   }
   // A mixed flow launches one binary per engine, so preflight every engine the
   // plan needs, not only the selected block's. The queue enforces this too; the
@@ -6306,7 +6487,7 @@ async function preflightRun({ quiet = false } = {}) {
     try {
       const plan = shared.buildWorkflowPlan(state.project);
       const others = [...new Set(plan.tasks
-        .filter((task) => task.executable && task.type === 'calc')
+        .filter((task) => task.executable && task.type === 'calculate')
         .map((task) => String(task.engine || 'gaussian')))]
         .filter((engineId) => engineId !== config.engine);
       const map = runExecutables();
@@ -6345,7 +6526,7 @@ async function startSelectedRun() {
   if (!desktop) { toast(BROWSER_PREVIEW_RUN_MESSAGE); return; }
   // A conformer block is a queue task (CREST is not a calculation engine), so
   // it runs through a one-task queue rather than the single-run bridge.
-  if (node.type === 'conformers') { await startSelectedConformerRun(node); return; }
+  if (node.type === 'generate') { await startSelectedConformerRun(node); return; }
 
   openRunConsole();
   saveRunConfig();
@@ -6391,6 +6572,7 @@ async function startSelectedRun() {
       executable: runExecutables()[built.engine] || '',
       crestExecutable: $('#run-crest').value.trim(),
       obabelExecutable: $('#run-obabel').value.trim(),
+      scorerExecutable: $('#run-scorer')?.value.trim() || '',
       scratchDir: $('#run-scratch').value.trim(),
       dryRun,
       gates: gatesForNode(node),
@@ -6436,7 +6618,7 @@ async function startSelectedConformerRun(node) {
   }
   // Only the generator this block actually uses needs a binary. The UFF route
   // spawns nothing, and an imported ensemble is read from disk.
-  const generator = task.conformers?.generator;
+  const generator = task.generate?.generator;
   if (!dryRun && generator === 'crest' && !crestExecutable) {
     toast('Choose the CREST executable before running a conformer search.');
     return;
@@ -6834,6 +7016,7 @@ async function startWorkflowUnlocked() {
         executables: runExecutables(),
         crestExecutable: $('#run-crest').value.trim(),
         obabelExecutable: $('#run-obabel').value.trim(),
+        scorerExecutable: $('#run-scorer')?.value.trim() || '',
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue
@@ -6906,7 +7089,7 @@ async function cancelWorkflow() {
 function attachParsedRun(record, nodeId) {
   if (!record?.parsed || !nodeId) return;
   const node = nodeById(nodeId);
-  if (!node || node.type !== 'calc') return;
+  if (!node || node.type !== 'calculate') return;
   node.parsed = record.parsed;
   // The card carries the result now, so it has to be redrawn when one arrives.
   renderGraph();
@@ -6923,7 +7106,7 @@ async function attachQueueParsed(queue) {
     if (!task?.runId || !task?.nodeId) continue;
     const record = byId.get(task.runId);
     const node = nodeById(task.nodeId);
-    if (!record?.parsed || !node || node.type !== 'calc') continue;
+    if (!record?.parsed || !node || node.type !== 'calculate') continue;
     node.parsed = record.parsed;
     changed = true;
   }
@@ -6941,9 +7124,31 @@ async function attachQueueParsed(queue) {
 function attachQueueEnsembles(queue) {
   let changed = false;
   for (const task of queue?.tasks || []) {
-    if (task?.type !== 'conformers' || task.status !== 'completed' || !task.ensemble) continue;
+    // ADR 0001 §2.9: a prepare block's summary is the only result it has.
+    if (task?.type === 'prepare' && task.status === 'completed' && task.prepared) {
+      const prepareNode = nodeById(task.nodeId);
+      if (prepareNode && prepareNode.type === 'prepare') {
+        prepareNode.output = task.prepared;
+        prepareNode.state = task.prepared.converged === false ? 'review' : 'passed';
+        changed = true;
+      }
+      continue;
+    }
+    // ADR 0001: an ensemble input's run records how many frames were read and
+    // the digest of the exact file. The frames stay in the run folder.
+    if (task?.type === 'input' && task.input?.kind === 'ensemble'
+      && task.status === 'completed' && task.ensemble) {
+      const inputNode = nodeById(task.nodeId);
+      if (inputNode && inputNode.type === 'input' && inputNode.input?.kind === 'ensemble') {
+        inputNode.output = task.ensemble;
+        inputNode.state = 'passed';
+        changed = true;
+      }
+      continue;
+    }
+    if (task?.type !== 'generate' || task.status !== 'completed' || !task.ensemble) continue;
     const node = nodeById(task.nodeId);
-    if (!node || node.type !== 'conformers') continue;
+    if (!node || node.type !== 'generate') continue;
     if (node.output && node.output.generatedAt === task.ensemble.generatedAt) continue;
     node.output = task.ensemble;
     node.settings.selectedConformerId = task.ensemble.selectedId || '';
@@ -7690,7 +7895,7 @@ function validationErrorCountForDiagnostics() {
   const engineId = engineOrDefault(state.project?.defaults?.engine).id;
   const blocking = new Set(VALIDITY_CHECKS.filter((check) => check.blocking).map((check) => check.id));
   return nodes
-    .filter((node) => node.type === 'calc')
+    .filter((node) => node.type === 'calculate')
     .reduce((count, node) => {
       const ts = engineId === 'xtb' ? { errors: [] } : tsForceConstantIssues(node);
       const validity = runValidityChecks({
@@ -8232,7 +8437,7 @@ async function exportMenuGroups() {
       },
     ]);
   }
-  const hasCalc = (state.project?.nodes || []).some((item) => item.type === 'calc');
+  const hasCalc = (state.project?.nodes || []).some((item) => item.type === 'calculate');
   if (hasCalc) {
     groups.push([
       { label: 'SLURM script set…', attrs: 'data-action="cluster" data-cluster-op="export" data-cluster-format="slurm"' },
@@ -8567,6 +8772,14 @@ function onDocumentChange(event) {
     applyTimeout(target.value);
     return;
   }
+  if (target.dataset.prepareField) {
+    applyPrepareField(target);
+    return;
+  }
+  if (target.dataset.ensembleField) {
+    applyEnsembleInputField(target);
+    return;
+  }
   if (target.dataset.inputField) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
@@ -8659,7 +8872,7 @@ function onDocumentChange(event) {
       renderInspector();
       return;
     }
-    if (node.type !== 'calc') return;
+    if (node.type !== 'calculate') return;
     updateNodeField(node, key, value);
     renderGraph();
     renderInspector();
@@ -8668,7 +8881,7 @@ function onDocumentChange(event) {
   if (target.dataset.nodeGate) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'calc') return;
+    if (!node || node.type !== 'calculate') return;
     updateGate(node, target.dataset.nodeGate, target.checked);
     renderGraph();
     renderInspector();
@@ -8677,7 +8890,7 @@ function onDocumentChange(event) {
   if (target.dataset.validityCheck) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'calc') return;
+    if (!node || node.type !== 'calculate') return;
     updateValidityCheck(node, target.dataset.validityCheck, target.checked);
     renderInspector();
     return;
@@ -8687,7 +8900,7 @@ function onDocumentChange(event) {
   if (target.dataset.spinState) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'calc') return;
+    if (!node || node.type !== 'calculate') return;
     updateSpinSweepState(node, Number(target.dataset.spinState), target.checked);
     renderGraph();
     renderInspector();
@@ -8696,9 +8909,9 @@ function onDocumentChange(event) {
   if (target.dataset.computeField) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
-    if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
-    node.compute[target.dataset.computeField] = target.value;
+    if (!node || node.type !== 'analyse') return;
+    if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
+    node.analyse[target.dataset.computeField] = target.value;
     refreshDirty();
     // Only the preview redraws: re-rendering the inspector on every keystroke
     // would take the caret out of the expression field.
@@ -8710,8 +8923,8 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     const index = Number(target.dataset.computeInput);
     const key = target.dataset.computeInputField;
-    const input = node?.compute?.inputs?.[index];
-    if (!node || node.type !== 'compute' || !input || !key) return;
+    const input = node?.analyse?.inputs?.[index];
+    if (!node || node.type !== 'analyse' || !input || !key) return;
     input[key] = target.value;
     refreshDirty();
     refreshComputePreview();
@@ -8720,19 +8933,19 @@ function onDocumentChange(event) {
   if (target.dataset.computeMode) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
-    if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
+    if (!node || node.type !== 'analyse') return;
+    if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
     const mode = target.value === 'dp4' ? 'dp4' : 'expression';
     if (mode === 'dp4') {
       // Switching modes creates the DP4+ definition with no level chosen: a
       // block that quietly inherited the first bank level would be computing a
       // level the user never picked.
-      node.compute.mode = 'dp4';
+      node.analyse.mode = 'dp4';
       dp4DefinitionOf(node);
       // The arithmetic declaration is kept until the file is saved, so flipping
       // the mode back does not lose an expression the user typed.
     } else {
-      delete node.compute.mode;
+      delete node.analyse.mode;
     }
     refreshDirty();
     renderGraph();
@@ -8742,7 +8955,7 @@ function onDocumentChange(event) {
   if (target.dataset.dp4Field) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
+    if (!node || node.type !== 'analyse') return;
     const definition = dp4DefinitionOf(node);
     const key = target.dataset.dp4Field;
     if (key === 'level') {
@@ -8777,7 +8990,7 @@ function onDocumentChange(event) {
   if (target.dataset.dp4Row !== undefined) {
     if (state.selected.type !== 'node') return;
     const node = nodeById(state.selected.id);
-    if (!node || node.type !== 'compute') return;
+    if (!node || node.type !== 'analyse') return;
     const definition = dp4DefinitionOf(node);
     const index = Number(target.dataset.dp4Row);
     const key = target.dataset.dp4RowField;
@@ -8919,10 +9132,69 @@ function onDocumentChange(event) {
  * listeners come here, so typing a number and picking from a select behave the
  * same way.
  */
+/**
+ * ADR 0001 §2.9: one writer for a prepare block. The kind decides which
+ * converter is legal, exactly as the schema does; switching kind clears the
+ * prepared record because it no longer describes the same operation.
+ */
+function applyPrepareField(target) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'prepare') return;
+  const key = target.dataset.prepareField;
+  if (['charge', 'multiplicity'].includes(key)) {
+    const bounds = key === 'charge' ? [-10, 10] : [1, 10];
+    const value = Number(target.value);
+    if (!Number.isFinite(value)) return;
+    node.settings[key] = clamp(value, bounds[0], bounds[1]);
+  } else if (key === 'kind') {
+    node.settings.kind = target.value === 'embed3d' ? 'embed3d' : 'relax';
+    node.settings.converter = node.settings.kind === 'embed3d' ? 'openbabel' : 'uff';
+    node.kind = node.settings.kind === 'embed3d' ? '3D embed' : 'Relax';
+    node.output = null;
+    node.state = 'ready';
+  } else if (key === 'converter' || key === 'forceField' || key === 'smiles') {
+    node.settings[key] = String(target.value || '');
+    node.output = null;
+    node.state = 'ready';
+  } else {
+    return;
+  }
+  refreshDirty();
+  renderGraph();
+  renderInspector();
+}
+
+/**
+ * ADR 0001: one writer for an ensemble input's fields. The path and the energy
+ * declaration live on `input`; the provenance is nested, so it needs its own
+ * branch like the conformer block's origin.
+ */
+function applyEnsembleInputField(target) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return;
+  const key = target.dataset.ensembleField;
+  const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
+  if (originField) {
+    node.input.origin = { ...(node.input.origin || {}), [originField]: String(target.value || '') };
+  } else if (key === 'path' || key === 'format' || key === 'energyUnit' || key === 'energyMethod') {
+    node.input[key] = String(target.value || '');
+  } else {
+    return;
+  }
+  // Any change to what the file is voids the record read from the old one.
+  node.output = null;
+  node.state = 'ready';
+  refreshDirty();
+  renderGraph();
+  renderInspector();
+}
+
 function applyConformerField(target) {
   if (state.selected.type !== 'node') return;
   const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'conformers') return;
+  if (!node || node.type !== 'generate') return;
   const key = target.dataset.conformerField;
   const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity', 'torsionStepDegrees', 'maxTrials', 'nconf'];
   // Issue 129: the declared provenance lives in a nested `origin` object, so
@@ -8945,9 +9217,21 @@ function applyConformerField(target) {
   } else {
     // A switch writes its checked state, not the string "on".
     node.settings[key] = target.type === 'checkbox' ? target.checked : target.value;
+    if (key === 'source') {
+      // ADR 0001: search and imported are exclusive. A stored generator on an
+      // imported block would be a claim that no search will honour.
+      node.settings.generator = node.settings.source === 'imported' ? '' : 'crest';
+      node.output = null;
+      node.state = 'ready';
+    }
     if (key === 'generator' && node.output && node.output.generator !== target.value) {
-      // An imported table is not what CREST would produce, and a CREST run is
-      // not the file that was imported: switching the source voids the choice.
+      // A CREST table is not what UFF would produce, and a UFF run is not the
+      // CREST search that was chosen: switching the generator voids the choice.
+      node.output = null;
+      node.state = 'ready';
+    }
+    if (key === 'rankBy' && node.output) {
+      // A table ranked by one method cannot stand after choosing another.
       node.output = null;
       node.state = 'ready';
     }
@@ -8959,6 +9243,14 @@ function applyConformerField(target) {
 
 function onDocumentInput(event) {
   const target = event.target;
+  if (target.dataset.prepareField) {
+    applyPrepareField(target);
+    return;
+  }
+  if (target.dataset.ensembleField) {
+    applyEnsembleInputField(target);
+    return;
+  }
   if (target.dataset.conformerField) {
     applyConformerField(target);
     return;

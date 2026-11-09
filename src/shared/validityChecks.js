@@ -937,7 +937,7 @@ export function checkConformerSpread({ conformer = null } = {}) {
   };
   if (!memberId) {
     return finding(id, CHECK_STATUS.FAIL,
-      `"${evidence.source || 'The conformer block'}" has no selected conformer${conformer.requiresSelection ? '; its protomers must be chosen explicitly' : ''}.`,
+      `"${evidence.source || 'The Generate block'}" has no selected conformer${conformer.requiresSelection ? '; its protomers must be chosen explicitly' : ''}.`,
       evidence);
   }
   if (Number.isFinite(spread) && Number.isFinite(threshold) && spread > threshold) {

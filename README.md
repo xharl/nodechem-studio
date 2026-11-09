@@ -55,12 +55,12 @@ driving the same job from the app's own run console remains unverified. Read
   `barrier` connection holds a stage until every record has finished it. Output blocks write HTML,
   CSV, JSON or ZIP artifacts with a SHA-256 manifest, and every flow gets its own HTML report plus a
   combined one.
-- **Conformer and protomer ensembles** — a Structure block runs CREST (GFN2 or GFN-FF), an in-app
+- **Conformer and protomer ensembles** — a Generate block runs CREST (GFN2 or GFN-FF), an in-app
   UFF torsion search, an Open Babel MMFF94 genetic-algorithm search, or imports a
   multi-XYZ, ranks the members by energy, prunes by energy window and RMSD, and refuses to choose a
   protomer for you. MM ensembles record their force field and kcal/mol unit, so a force-field number
   is never read as a Hartree one. A downstream block runs the member you picked, and `run.json` records which one
-  it was. Fan-out follows the branch, so `conformers → opt → freq` runs once per retained member,
+  it was. Fan-out follows the branch, so `generate → calculate → calculate` runs once per retained member,
   each reading its own checkpoint. CREST and Open Babel are not bundled.
 - **Results you can defend** — gates answer "did it run", validity checks answer "is it
   defensible", an offline signature table explains known engine failures, and any two finished runs

@@ -219,7 +219,7 @@ function tokenize(source) {
 export function parseExpression(source) {
   const text = String(source ?? '').trim();
   if (!text) {
-    throw new ComputeError('the expression is empty; a compute block needs at least one term.', { code: 'empty' });
+    throw new ComputeError('the expression is empty; an analyse block needs at least one term.', { code: 'empty' });
   }
   if (text.length > COMPUTE_EXPRESSION_MAX) {
     throw new ComputeError(`the expression is ${text.length} characters; the limit is ${COMPUTE_EXPRESSION_MAX}.`,
@@ -607,7 +607,7 @@ export function missingFieldMessage(field, recordId) {
 }
 
 /**
- * Declared inputs of a compute block, normalised.
+ * Declared inputs of an analyse block, normalised.
  *
  * Each entry is `{ name, field, source, scope }`: `name` is the identifier the
  * expression uses, `field` a `COMPUTE_FIELDS` key, `source` the upstream block
@@ -630,7 +630,7 @@ export function computeInputsOf(definition) {
     seen.add(name);
     const field = String(entry?.field ?? '').trim();
     if (!FIELD_BY_KEY.has(field)) {
-      throw new ComputeError(`input "${name}" reads "${field}", which is not a field a compute block can read;`
+      throw new ComputeError(`input "${name}" reads "${field}", which is not a field an analyse block can read;`
         + ` use one of ${COMPUTE_FIELD_KEYS.join(', ')}.`, { code: 'unknown-field' });
     }
     return {

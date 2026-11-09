@@ -14,6 +14,12 @@ QCSchema, Molden, WFN/WFX, JCAMP-DX and ChemDraw CDXML readers; the workbench's 
 conformer provenance, energy units and groups; and an `imported` result that cannot be mistaken for a
 run performed here.
 
+After 0.4.0, **ADR 0001** replaced the block vocabulary with `schemaVersion: 3`
+(input · prepare · generate · calculate · analyse · output, plus control and annotation axes).
+Steps 2–6 have landed: the behaviour-neutral rename, import as `input(ensemble)`, `prepare`,
+the optional ML scorer role (generate `rankBy`, calculate `provider`, prepare relax) and the
+declarative block-contract table. Version 2 and older files are refused rather than migrated.
+
 ## 1. Product target
 
 A desktop application for Windows, Linux and macOS, installed on a machine that has a licensed
@@ -294,6 +300,7 @@ Linux/macOS Gaussian job has been run.
 | Item | Status | Where |
 | --- | --- | --- |
 | Tag and publish 0.3.0 | **Done** 2026-11-08 — tag `v0.3.0` → `699ae18`, prerelease with the Windows and Linux installers, milestone 3 closed | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
+| Block taxonomy, schemaVersion 3 (ADR 0001) | **Implemented** — rename, `input(ensemble)`, `prepare`, the optional scorer role and the declarative block-contract table; v2 and older refused | `docs/adr/0001-block-taxonomy.md`, `src/shared/projectSchema.js` |
 | Tag and publish 0.4.0 | **Done** 2026-11-08 — tag `v0.4.0` → `36d36e1`, published as the current release (GitHub leaves the Latest badge on the newest non-prerelease, so 0.3.0 and 0.4.0 are not flagged prerelease) with both installers, `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations, both verified with `gh attestation verify` | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
 | GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
 | Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |
@@ -303,7 +310,7 @@ Linux/macOS Gaussian job has been run.
 | Code signing | **Open** — no certificate; both installers are unsigned | §5 Phase 6 |
 | Conformer fan-out into sibling calculations (#80) | **Shipped after 0.3** — one task per retained member, member-paired edges and checkpoints, per-member `run.json`, report grouping. The fan now follows the branch (#87), so `conformers → opt → freq` runs per member with `opt~c1.chk` / `freq~c1` pairing. A block that mixes fanned and unfanned branches, or receives two ensembles, is refused (#86) | §4b, `src/shared/workflowTasks.js` |
 | Engine abstraction + ORCA (#31) | **Shipped after 0.3** — engine interface, ORCA input builder, log parser, preflight and a stdout-capturing runner that imports logs and hands off `.gbw` (#98); Psi4 shipped the same way (#111). Validity and renderer copy still assume Gaussian in places | `src/shared/engines/` |
-| Multi-flow projects, dataset inputs, barrier stages and artifact outputs (RFC 0001) | **Merged to `main`** (#112) — schema v2 (`flows[]`, `datasets[]`, `runner.maxParallel`, `reports[]`), `input` blocks with per-record expansion (`opt~m1`), `barrier` edges, parallel drain, `partial` verdict, artifact outputs (CSV/JSON/HTML/ZIP with a hashed manifest), per-flow and combined HTML reports, and the flow tabs / dataset import in the UI. v1 files migrate with byte-identical plans (pinned by `test/v1PlanIdentity.test.js`); groups, nested iteration, per-record method overrides and PDF are out of scope | `docs/PROJECT-FORMAT.md` §4, `docs/guide/flows.md`, `src/shared/flows.js` |
+| Multi-flow projects, dataset inputs, barrier stages and artifact outputs (RFC 0001) | **Merged to `main`** (#112) — schema v2 (`flows[]`, `datasets[]`, `runner.maxParallel`, `reports[]`), `input` blocks with per-record expansion (`opt~m1`), `barrier` edges, parallel drain, `partial` verdict, artifact outputs (CSV/JSON/HTML/ZIP with a hashed manifest), per-flow and combined HTML reports, and the flow tabs / dataset import in the UI. v1 files migrated with byte-identical plans under schema v2 (that path was removed by ADR 0001; behaviour neutrality is pinned by `test/examplePlanIdentity.test.js`); groups, nested iteration, per-record method overrides and PDF are out of scope | `docs/PROJECT-FORMAT.md` §4, `docs/guide/flows.md`, `src/shared/flows.js` |
 | Molecular builder (#58) | Backlog, no milestone yet | GitHub issue |
 | Wavefunction analysis (#59) | **Ingest half shipped** — cube and fchk parsers, derived values, export columns; orbital rendering, QTAIM, NCI and the attach flow remain | `src/shared/wavefunction.js` |
 | Composite methods and counterpoise (#77) | **Shipped** — composite job types with a gate that refuses a component energy, counterpoise/BSSE, docs; per-link expansion is not implemented | `src/shared/gaussianOutput.js` |

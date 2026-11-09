@@ -22,7 +22,7 @@ function calcTask(nodeId, settingsOverrides = {}, extra = {}) {
   });
   return {
     nodeId,
-    type: 'calc',
+    type: 'calculate',
     title: extra.title || `Task ${nodeId}`,
     kind: 'Calc',
     executable: true,
@@ -91,7 +91,7 @@ describe('planClusterExport — file set and staged inputs', () => {
     const scriptNames = plan.files.filter((file) => file.name.endsWith('.slurm')).map((file) => file.name);
     expect(scriptNames.sort()).toEqual(['freq.slurm', 'opt.slurm', 'sp.slurm']);
 
-    for (const task of tasks.filter((entry) => entry.type === 'calc')) {
+    for (const task of tasks.filter((entry) => entry.type === 'calculate')) {
       expect(fileNamed(plan, task.inputName)).toBe(task.inputText);
     }
     expect(fileNamed(plan, 'manifest.json')).toContain('"kind": "nodechem-studio-cluster-export"');
@@ -102,11 +102,11 @@ describe('planClusterExport — file set and staged inputs', () => {
   it('refuses to export a plan that contains a conformer block', () => {
     const { tasks, edges } = slurmProject();
     const withConformers = [
-      { nodeId: 'conf', type: 'conformers', title: 'Conformer ensemble', executable: false },
+      { nodeId: 'conf', type: 'generate', title: 'Conformer ensemble', executable: false },
       ...tasks,
     ];
     expect(() => planClusterExport({ format: 'slurm', tasks: withConformers, edges }))
-      .toThrow(/does not include conformer blocks.*Conformer ensemble/);
+      .toThrow(/does not include Generate blocks.*Conformer ensemble/);
   });
 
   it('does not export control-flow nodes as jobs', () => {

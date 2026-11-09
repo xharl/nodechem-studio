@@ -43,7 +43,7 @@ describe('workbench state follows the queue', () => {
 
   const calcNode = (id, extra = {}) => ({
     id,
-    type: 'calc',
+    type: 'calculate',
     kind: 'Calculation',
     title: id,
     state: 'ready',

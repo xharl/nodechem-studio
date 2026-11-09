@@ -54,7 +54,7 @@ function baseProject(nodes, edges = []) {
 function calcNode(id, title, settings = {}, extra = {}) {
   return {
     id,
-    type: 'calc',
+    type: 'calculate',
     kind: kindForJob(settings.jobType || 'Opt'),
     title,
     state: 'ready',
@@ -241,6 +241,7 @@ describe('issue #15 — project validation', () => {
 
   it('migrates an older TS block that has no stored choice to CalcFC', () => {
     const legacy = {
+      schemaVersion: 3,
       name: 'Old TS project',
       molecule: {
         smiles: 'C=CC=C.C=C',
@@ -248,11 +249,12 @@ describe('issue #15 — project validation', () => {
         multiplicity: 1,
         fragments: ['C=CC=C', 'C=C'],
         coords: [],
+        geometry: { source: 'demo', file: '', format: '' },
       },
       defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: 4 },
       nodes: [{
         id: 'ts-opt',
-        type: 'calc',
+        type: 'calculate',
         kind: 'TS',
         title: 'TS guess optimization',
         state: 'ready',
@@ -288,7 +290,7 @@ describe('issue #15 — project validation', () => {
 
     const result = validateProject(legacy);
     expect(result.ok).toBe(true);
-    expect(result.migrated).toBe(true);
+    expect(result.migrated).toBe(false);
     const node = result.project.nodes[0];
     expect(node.settings.forceConstants).toBe('CalcFC');
     expect(routeFor(node.settings)).toBe('#p B3LYP/6-31G(d) Opt=(TS,CalcFC,NoEigenTest)');
