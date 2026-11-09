@@ -1,0 +1,10 @@
+molecule water {
+0 1
+O 0.000000 0.000000 0.117300
+H 0.000000 0.757000 -0.469200
+H 0.000000 -0.757000 -0.469200
+}
+set basis def2-svp
+set reference rhf
+set scf_type df
+energy('ccsd')

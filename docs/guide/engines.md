@@ -411,6 +411,13 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
 - **SAPT0** on a dimer, with the interaction energy split into electrostatics, exchange, induction
   and dispersion.
 
+**Which energy is reported.** A correlated Psi4 job prints several totals in the same log, and the
+result is the one the job asked for: the `CCSD(T)` total when that is the method, else the `CCSD`
+total, else the canonical (unprefixed) `Total Energy` of the MP2 module. Psi4 1.11 also prints a
+spin-component-scaled `SCS Total Energy` beside the MP2 total; the SCS number is **not** reported as
+an MP2 result — the two are different methods, 3.8 mEh apart on water/def2-SVP. If you want SCS-MP2
+as a method of its own it needs its own method key, and that is not in this build.
+
 Psi4's input is **code** (Psithon, a Python dialect), which is why this engine's builder is stricter
 than the others: every line of the script is written by the app, and a project field is never
 interpolated as a statement. A title containing a quote lands in a `#` comment, not in a call.
