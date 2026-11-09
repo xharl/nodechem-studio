@@ -18,6 +18,11 @@ node_modules
 !test/fixtures/real/*.log
 !test/fixtures/real/*.out
 
+# Real Psi4 outputs (see test/fixtures/psi4-energy/README.md): the blanket *.log
+# rule above would drop them from a commit without a word, which is how a fixture
+# test passed locally and failed in CI.
+!test/fixtures/psi4-energy/*.log
+
 # Dry-run output written by `ncs run` in the working directory
 ncs-runs/
 

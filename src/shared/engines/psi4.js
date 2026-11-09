@@ -65,6 +65,53 @@ function lastNumber(text, pattern) {
   return value;
 }
 
+/**
+ * The last `Total Energy =` line that carries no method prefix.
+ *
+ * Psi4 1.11 prints an MP2 job's canonical total under a `DF-MP2 Energies`
+ * banner and a spin-component-scaled total under a `DF-SCS-MP2 Energies` banner
+ * whose line also contains the words "Total Energy". A plain last-match on the
+ * string therefore reports SCS-MP2 as the result of an MP2 job — a different
+ * method's number, 3.8 mEh away on water/def2-SVP and with a basis-dependent
+ * sign. Only a bare `Total Energy =` is the canonical one.
+ */
+function lastUnprefixedTotal(text) {
+  let value = null;
+  for (const line of text.split('\n')) {
+    const match = new RegExp(String.raw`^(.*?)Total Energy\s*=\s*(${NUMBER})`).exec(line.trimStart());
+    if (!match) continue;
+    if (match[1].trim() !== '') continue;
+    const candidate = toNumber(match[2]);
+    if (candidate !== null) value = candidate;
+  }
+  return value;
+}
+
+/**
+ * The canonical total inside the LAST `<METHOD> Energies` banner.
+ *
+ * A job that prints several banners (an optimisation prints one per step) is
+ * reporting the last one as its result.
+ */
+function bannerTotal(text, banner) {
+  const pattern = new RegExp(banner.source, 'gi');
+  let at = -1;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    at = match.index;
+    if (pattern.lastIndex === match.index) pattern.lastIndex += 1;
+  }
+  if (at === -1) return null;
+  for (const line of text.slice(at).split('\n')) {
+    const found = new RegExp(String.raw`^\s*Total Energy\s*=\s*(${NUMBER})`).exec(line);
+    if (found) {
+      const candidate = toNumber(found[1]);
+      if (candidate !== null) return candidate;
+    }
+  }
+  return null;
+}
+
 /* ── Capabilities ─────────────────────────────────────────── */
 
 /**
@@ -664,9 +711,19 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   const reference = new RegExp(String.raw`@(?:DF-)?((?:RO|U|R)(?:HF|KS))\s+Final Energy:`).exec(body)?.[1] || null;
 
   const sapt = saptResults(body);
-  const mp2 = lastNumber(body, String.raw`MP2 Total Energy \(a\.u\.\)\s*:\s*(${NUMBER})`);
-  const ccsd = lastNumber(body, String.raw`Total\s+CCSD\s+energy\s*=\s*(${NUMBER})`);
-  const total = lastNumber(body, String.raw`Total Energy\s*=\s*(${NUMBER})`);
+  // Three spellings of the same quantity across Psi4 versions: the old
+  // `MP2 Total Energy (a.u.) :` line, the 1.11 `DF-MP2 Energies` banner, and —
+  // for CCSD — `Total CCSD energy (file100) =`, which the older regex missed
+  // because of the parenthesised file tag.
+  const mp2 = lastNumber(body, String.raw`MP2 Total Energy \(a\.u\.\)\s*:\s*(${NUMBER})`)
+    ?? bannerTotal(body, /=(?:=)+>\s*(?:DF-)?MP2 Energies\s*<=/)
+    ?? lastNumber(body, String.raw`^\s*\*\s*MP2\s+total\s+energy\s*=\s*(${NUMBER})`)
+    ?? lastNumber(body, String.raw`@(?:DF-)?MP2 Final Energy:\s*(${NUMBER})`);
+  const ccsdT = lastNumber(body, String.raw`CCSD\(T\)\s+total\s+energy\s*=\s*(${NUMBER})`);
+  // Two spellings, both real: 1.9 prints `Total CCSD energy (file100) =` and
+  // 1.11's summary prints `* CCSD total energy =`.
+  const ccsd = lastNumber(body, String.raw`(?:Total\s+CCSD\s+energy|\bCCSD\s+total\s+energy)(?:\s*\([^)]*\))?\s*=\s*(${NUMBER})`);
+  const total = lastUnprefixedTotal(body);
   // A frequency job prints `Total Energy =` once per displaced geometry, so the
   // last one is a displaced point, not the reference. The thermochemistry block
   // states the electronic energy at the well bottom; that is the number the job
@@ -681,6 +738,11 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
     // molecular energy.
     finalEnergy = null;
     finalSource = 'sapt-interaction-energy-not-a-total';
+  } else if (ccsdT !== null) {
+    // A CCSD(T) job prints the CCSD energy too; the result is the one the job
+    // was asked for.
+    finalEnergy = ccsdT;
+    finalSource = 'ccsd(t)';
   } else if (ccsd !== null) {
     finalEnergy = ccsd;
     finalSource = 'ccsd';
