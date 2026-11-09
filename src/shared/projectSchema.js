@@ -141,6 +141,11 @@ export const JOB_TYPES = Object.freeze([
   // together so an engine job type cannot be added without landing here.
   'TD-DFT',
 ]);
+/**
+ * Issue 174: core correlation. `auto` writes no `freeze_core` line at all, so a
+ * project that never chose keeps emitting exactly the input it did before.
+ */
+export const FREEZE_CORE_CHOICES = Object.freeze(['auto', 'true', 'false']);
 export const IRC_DIRECTIONS = Object.freeze(['forward', 'reverse', 'both']);
 export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3', 'D4']);
 export const SCF_OPTIONS = Object.freeze(['', 'Tight', 'VeryTight']);
@@ -255,6 +260,10 @@ const SETTINGS_KEYS = new Set([
   // Issue 177: a per-block wall-clock limit. Also not in the defaults: a project
   // that never set one must serialise exactly as it did before.
   'timeoutSeconds',
+  // Issue 173: the opt-in that makes a Psi4 TD block record transition-dipole
+  // vectors. Not in the defaults, so an existing project is unchanged; listed
+  // here so an explicit value is not read as a typo.
+  'recordTransitionDipoles',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
@@ -1241,6 +1250,18 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     : readOptionalInteger(c, source.timeoutSeconds, `${path}.timeoutSeconds`, {
       fallback: null, min: 1, max: LIMITS.timeoutSeconds,
     });
+  // Issue 174: the core-correlation choice. `auto` (or absent) means "write
+  // nothing", which is why the builder treats null as no opinion; an explicit
+  // value must survive a save or the block quietly runs all-electron.
+  const freezeCore = source.freezeCore === undefined || source.freezeCore === null || source.freezeCore === ''
+    ? null
+    : readEnum(c, source.freezeCore, FREEZE_CORE_CHOICES, `${path}.freezeCore`, { legacy, fallback: '' }) || null;
+  // Issue 173: record the transition-dipole vector. Without it a coupling cannot
+  // be computed — the direction is not recoverable from the oscillator strength.
+  // Absent means off, and no key is written.
+  const recordTransitionDipoles = source.recordTransitionDipoles === undefined || source.recordTransitionDipoles === null
+    ? null
+    : readBoolean(c, source.recordTransitionDipoles, `${path}.recordTransitionDipoles`, { legacy: true, optional: true, fallback: false });
   return {
     // Per-block engine override. Empty means "use the project default", which is
     // what every .ncs written before this setting existed says.
@@ -1284,6 +1305,7 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // Raman activities (#76): a flag on the frequency keyword, off by default so
     // an existing project keeps emitting exactly the route it did before.
     raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),
+
     vcd: readBoolean(c, source.vcd, `${path}.vcd`, { legacy, fallback: false, optional: true }),
     orbitals: readBoolean(c, source.orbitals, `${path}.orbitals`, { legacy, fallback: false, optional: true }),
     // Which excited state an accompanying Opt follows (#75). 0 = not stated.
@@ -1310,6 +1332,14 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // Issue 177: only when the block declared one. A block that never did keeps
     // no key, so a project from before this setting is byte-identical.
     ...(timeoutSeconds !== null ? { timeoutSeconds } : {}),
+    // Being a `SETTINGS_KEYS` member only silences the unknown-key warning — the
+    // value still has to be READ here or it is silently dropped on save, and the
+    // block runs without the setting the user made. Both of these shipped in that
+    // state (issue 174's core-correlation choice and issue 173's dipole opt-in),
+    // which is the same defect as issue 181 in a different list. Absent by
+    // default, so a project that never set them serialises exactly as before.
+    ...(freezeCore !== null ? { freezeCore } : {}),
+    ...(recordTransitionDipoles !== null ? { recordTransitionDipoles } : {}),
   };
 }
 

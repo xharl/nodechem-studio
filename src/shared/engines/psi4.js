@@ -354,6 +354,16 @@ export function psi4SettingsOffenders(settings = {}) {
       message: 'Custom Gaussian route keywords do not map to Psithon, and are not written as code.',
     });
   }
+  // Issue 173: the transition-dipole record is a read of the TD wavefunction, so
+  // it exists only on a TD-DFT block. Asking for it elsewhere would be a line
+  // that never runs.
+  if (settings.recordTransitionDipoles === true && jobTypeOf(settings) !== 'TD-DFT') {
+    offenders.push({
+      field: 'recordTransitionDipoles',
+      message: 'Recording transition dipoles reads the TD wavefunction, so it needs a TD-DFT block: '
+        + 'set the job type to TD-DFT, or turn the setting off.',
+    });
+  }
   if (text(settings.jobType) && PSI4_UNSUPPORTED_JOB_TYPES.includes(text(settings.jobType))) {
     offenders.push({
       field: 'jobType',
@@ -392,6 +402,41 @@ export function assertPsi4Settings(settings = {}) {
 }
 
 /* ── Input builder ────────────────────────────────────────── */
+
+/**
+ * Issue 173: the reversible transition-dipole record for a TD-DFT block.
+ *
+ * The TDSCF table Psi4 prints carries energies and oscillator strengths but no
+ * transition-dipole *vector*: |μ| follows from f, its direction does not, and the
+ * direction is what an exciton coupling is made of. The vector does exist on the
+ * returned wavefunction, as one array variable per root named
+ * `TD-<method> ROOT 0 (<irrep>) -> ROOT <n> (<irrep>) ELECTRIC TRANSITION DIPOLE
+ * MOMENT (LEN)`. `set tdscf_print` does not print it (measured at level 3 on
+ * Psi4 1.11), so this block reads the wavefunction and prints one line per root:
+ *
+ *     NCS-TDM ROOT <n> <irrep> <x> <y> <z> a.u.
+ *
+ * The unit is on every line as well as in the header, because a bare triple of
+ * numbers is a number in the wrong unit waiting to happen. Ten decimals of an
+ * atomic-unit value round-trip the double Psi4 holds. Written only when the
+ * block opts in, so a TD block that does not produces exactly the input it did
+ * before.
+ */
+function transitionDipoleLines(fn) {
+  return [
+    '# NCS-TDM: the TDSCF table has no transition-dipole vector, so the wavefunction',
+    '# is read instead. One line per root below, values in atomic units (a.u.).',
+    `_ncs_energy, _ncs_wfn = energy('td-${fn}', return_wfn=True)`,
+    'for _ncs_name in _ncs_wfn.array_variables():',
+    "    if 'ELECTRIC TRANSITION DIPOLE MOMENT (LEN)' not in _ncs_name:",
+    '        continue',
+    "    _ncs_tail = _ncs_name.split('-> ROOT ')[-1]",
+    '    _ncs_v = _ncs_wfn.get_array(_ncs_name).to_array().flatten()',
+    "    print('NCS-TDM ROOT %s %s %.10f %.10f %.10f a.u.' % (",
+    "        _ncs_tail.split(' ')[0], _ncs_tail.split('(')[1].split(')')[0],",
+    '        float(_ncs_v[0]), float(_ncs_v[1]), float(_ncs_v[2])))',
+  ];
+}
 
 function coordinateLine(atom) {
   const element = oneLine(atom?.element);
@@ -522,7 +567,13 @@ export function buildPsi4Input({
     // f = 0.4183. The card and the docs state this rather than implying a
     // selection the engine did not make.
     lines.push(`set tdscf_states ${Number(settings.tdStates)}`);
-    lines.push(`energy('td-${fn}')`);
+    if (settings.recordTransitionDipoles === true) {
+      // Opt-in (issue 173): the dipole vector is not in the table Psi4 prints,
+      // so it is read from the wavefunction and written back as NCS-TDM lines.
+      lines.push(...transitionDipoleLines(fn));
+    } else {
+      lines.push(`energy('td-${fn}')`);
+    }
   } else if (jobType === 'SP') lines.push(`energy('${fn}')`);
   else if (jobType === 'Opt') lines.push(`optimize('${fn}')`);
   else if (jobType === 'Freq') lines.push(`frequencies('${fn}')`);
@@ -848,12 +899,43 @@ function parsePsi4Excitations(body, lines) {
     states.push(current);
   }
   if (states.length === 0) return null;
+
+  // Issue 173: the transition-dipole record the builder writes when the block
+  // opts in. `NCS-TDM ROOT <n> <irrep> <x> <y> <z> a.u.` — one line per root, in
+  // atomic units, which is what the wavefunction holds and what
+  // `exciton.transitionDipoleOf` converts (once) to debye. A state with no line
+  // gets no `transitionDipoleAu` field at all: absent, not zero, because a zero
+  // dipole and an unrecorded one mean different things to a coupling.
+  const dipoles = new Map();
+  const tdmRow = new RegExp(String.raw`^\s*NCS-TDM\s+ROOT\s+(\d+)\s+(\S+)\s+(${NUMBER})\s+(${NUMBER})\s+(${NUMBER})(?:\s+(\S+))?\s*$`);
+  for (const line of lines) {
+    const match = tdmRow.exec(line);
+    if (!match) continue;
+    // A unit token is optional — the builder always writes `a.u.` — but when one
+    // is present and is not atomic units, the numbers are not this quantity and
+    // are refused rather than converted by guesswork.
+    const unit = match[6];
+    if (unit && !/^(au|a\.u\.?)$/i.test(unit)) continue;
+    const vector = { x: toNumber(match[3]), y: toNumber(match[4]), z: toNumber(match[5]) };
+    if (![vector.x, vector.y, vector.z].every((value) => Number.isFinite(value))) continue;
+    dipoles.set(Number(match[1]), vector);
+  }
+  if (dipoles.size > 0) {
+    for (const state of states) {
+      const vector = dipoles.get(state.index);
+      if (vector) state.transitionDipoleAu = { ...vector };
+    }
+  }
+
   return {
     count: states.length,
     requested: split.reduce((sum, entry) => sum + entry.count, 0) || null,
     perIrrep: split,
     states,
     source: 'tdscf',
+    // Number of states that carry a recorded dipole vector. Zero is a fact
+    // about the run (the block did not opt in), not a parse failure.
+    transitionDipoleCount: states.filter((state) => state.transitionDipoleAu).length,
     // The table is a documented Psi4 layout and these fixtures are real runs, so
     // unlike the Gaussian Opt-TD parser this one is verified.
     verified: true,

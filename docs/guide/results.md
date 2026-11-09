@@ -569,6 +569,88 @@ today is the Raman card's single `.jdx` slot, which draws an energy-axis trace a
 figure (see [Spectra](spectra.md)). A time-resolved trace shares no axis with the excitation table,
 so it needs its own surface rather than a reused slot — and this card does not pretend otherwise.
 
+## Exciton coupling of a dimer (Psi4, route A)
+
+A dimer's UV-Vis spectrum is not the sum of its monomers: two transition dipoles couple, the
+monomer states split (Davydov), and a donor/acceptor pair can show a charge-transfer band that has no
+monomer analogue. The app computes the first two — the cheapest half of issue 173 — from two
+recorded transition dipoles and the geometry that places them.
+
+**What it needs, in order:**
+
+1. A **complex** block (issue 188) whose two members are the chromophores. Its members become
+   fragments 1 and 2, and each member's atom count travels with the run.
+2. A **Psi4 TD-DFT** block on that complex, with the opt-in that records transition dipoles
+   (`recordTransitionDipoles`; not in the block inspector yet, and see the note below).
+3. The run itself: the results panel then shows an **Exciton coupling** card beside *Excited states*.
+
+**Why an opt-in at all.** Psi4's TDSCF table carries energies, oscillator strengths and rotatory
+strengths but **no transition-dipole vector**. |μ| can be recovered from f; its *direction* cannot,
+and the direction is what a coupling is made of. The vector does exist on the returned
+wavefunction, so the opt-in adds this to the deck after the energy call:
+
+```
+_ncs_energy, _ncs_wfn = energy('td-b3lyp', return_wfn=True)
+for _ncs_name in _ncs_wfn.array_variables():
+    if 'ELECTRIC TRANSITION DIPOLE MOMENT (LEN)' not in _ncs_name:
+        continue
+    …
+    print('NCS-TDM ROOT %s %s %.10f %.10f %.10f a.u.' % (…))
+```
+
+`set tdscf_print` does **not** print the dipole (tried at level 3 on Psi4 1.11), which is why the
+wavefunction is read instead. A block that does not opt in produces exactly the input it did before,
+and its log gains no line.
+
+**What the card prints**, all units explicit:
+
+| quantity | meaning |
+|---|---|
+| Chromophore 1 / 2 | the paired state, its energy in eV, f, and \|μ\| in debye |
+| Separation r | the centre-of-mass distance between the two members, in ångström |
+| Coupling J | `J = 5030.0 · (μ̂₁·μ̂₂ − 3(μ̂₁·r̂)(μ̂₂·r̂)) · \|μ₁\|\|μ₂\| / r³`, in cm⁻¹, sign kept |
+| Davydov split 2\|J\| | the two components, below and above the monomer energy |
+| Validity r/extent | the ratio, the threshold (3), the larger chromophore extent, and a verdict |
+
+The card states the approximation on every run, including the part that matters most: **point-dipole
+coupling does not describe charge-transfer character.** A CT band has no monomer analogue, so a model
+built from two monomer-like dipoles cannot produce one; that is route B (supersystem transition
+densities), which is not built.
+
+**The pairing rule.** Only states that carry **both** a recorded dipole vector and a non-zero
+oscillator strength can couple, and the card pairs the two lowest such states. A dark state (f = 0)
+is never paired and no dipole is reconstructed from f. When fewer than two states qualify the card
+says so, and prints no J.
+
+The two dipoles are states of **this run**, which for a complex TD job are the supersystem's states.
+When each is localised on one chromophore the pair is the two chromophore transitions and J is a
+prediction; when a state is delocalised over both fragments the pair is not two chromophore
+transitions and the number is a consistency check. Separately computed monomer states (the issue's
+original route A) would remove that ambiguity and are not wired: no run record links a dimer to its
+two monomer runs yet.
+
+**Refusals instead of numbers:**
+
+- a plain monomer run (no complex record) — `not modelled: no dimer geometry`, because there is no
+  second chromophore and no separation vector;
+- a zero dipole vector, a complex whose atom counts disagree with the geometry it was built from, or
+  two chromophores at the same point — the module's refusal, quoted on the card;
+- a complex of three or more members couples fragments 1 and 2 only, and says which members are not
+  part of the number;
+- a run reopened from disk: the member provenance reaches the card from the queue task, and `run.json`
+  does not carry it yet, so a saved dimer run shows `not modelled: no dimer geometry` until that
+  identity is written into the record.
+
+Below `r/extent = 3` the number is still printed, but the verdict is *estimate only* and the note
+names the supersystem route: at that separation the multipole expansion has no small parameter.
+
+**Opt-in availability.** The builder reads `recordTransitionDipoles` from the block's settings and
+refuses it on a job that is not TD-DFT. The project schema lists the key so a value is not reported
+as a typo, but it does not yet round-trip it through the block inspector; a saved project drops the
+key until that one-line change lands. Recorded dipoles are therefore visible today for a block whose
+settings carry the flag (hand-edited project, or a builder call), and absent — never guessed — for
+every other run.
+
 ## Natural transition orbitals
 
 `Pop=NTO` is the second job of a two-job chain. Gaussian needs the transition density from a TD job

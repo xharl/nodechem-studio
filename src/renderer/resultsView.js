@@ -42,6 +42,7 @@ import {
 import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 import { IMPORTED_BADGE_TEXT, importedBadgeHtml, importedSummary } from '../shared/importedRecord.js';
 import { UNVERIFIED_ESOPT_NOTE, excitedStateGate } from '../shared/excitedStates.js';
+import { excitonReport } from '../shared/exciton.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -953,6 +954,88 @@ function radiativeKineticsHtml(kinetics) {
     + 'No observed lifetime, fluorescence quantum yield or phosphorescence rate is predicted from '
     + 'this calculation.</p>';
 }
+
+/**
+ * Exciton coupling of a dimer (issue 173, route A).
+ *
+ * The two chromophores come from the block's `complex` record and the geometry
+ * from the run itself: a complex places its members as contiguous atom runs, so
+ * each member's centre of mass and extent follow from the parsed geometry and
+ * the member atom counts. The coupling maths lives in `shared/exciton.js`; this
+ * card only prints what that module returns, including its refusal.
+ *
+ * Nothing here is inferred: a monomer run has no second chromophore and says
+ * `not modelled: no dimer geometry`; a dark state or a state without a recorded
+ * dipole cannot be paired; and a pair whose separation is below the validity
+ * ratio still prints J, with the warning the module returns.
+ */
+function excitonCouplingCard(parsed, flags, record = null, options = {}) {
+  const states = Array.isArray(parsed?.excitedStates?.states)
+    ? parsed.excitedStates.states.filter(isObject)
+    : [];
+  if (states.length === 0) return '';
+  const complex = isObject(options.complex) ? options.complex : (isObject(record?.complex) ? record.complex : null);
+  const coords = Array.isArray(parsed?.extras?.finalGeometry) ? parsed.extras.finalGeometry : null;
+  const report = excitonReport({
+    states,
+    complex,
+    coords,
+    pair: isObject(options.excitonPair) ? options.excitonPair : null,
+    levelOfTheory: methodSummary(record?.provenance?.method),
+  });
+  const approximation = '<p class="results-note" data-field="exciton-approximation">'
+    + `${esc('This is point-dipole (Kasha) coupling between two transition dipoles. It is valid only '
+      + 'when the chromophore separation is much larger than the chromophore extent, and it does not '
+      + 'describe charge-transfer character: a CT band has no monomer analogue and this model cannot '
+      + 'produce one. A supersystem transition-density treatment is the honest route for that.')}</p>`;
+
+  if (!report.modelled) {
+    return card('Exciton coupling',
+      `<p class="results-missing" data-field="exciton-coupling">${esc(report.reason)}</p>`
+      + (report.detail ? `<p class="results-note" data-field="exciton-detail">${esc(report.detail)}</p>` : '')
+      + approximation
+      + caveatHtml(flags, 'This coupling'),
+      'is-wide');
+  }
+
+  const stateText = (state) => {
+    const label = state.label ? ` (${state.label})` : '';
+    const energy = finite(state.energyEv) === null ? 'energy not reported' : `${state.energyEv.toFixed(3)} eV`;
+    const strength = finite(state.oscillatorStrength) === null ? 'f not reported' : `f = ${state.oscillatorStrength.toFixed(4)}`;
+    return `${esc(`State ${state.index}${label} · ${state.fragmentLabel}`)} · ${esc(energy)} · `
+      + `${esc(strength)} · ${esc(`|μ| = ${state.magnitudeDebye.toFixed(3)} D`)}`;
+  };
+  const validity = isObject(report.validity) ? report.validity : null;
+  const rows = [
+    fieldValue('Chromophore 1', stateText(report.state1), 'exciton-state-1'),
+    fieldValue('Chromophore 2', stateText(report.state2), 'exciton-state-2'),
+    fieldValue('Separation r', `${esc(report.distanceAngstrom.toFixed(3))} Å between the two centres of mass`,
+      'exciton-separation'),
+    fieldValue('Coupling J', `${esc(report.couplingCm.toFixed(2))} cm⁻¹`, 'exciton-j'),
+    fieldValue('Davydov split 2|J|',
+      `${esc(report.splitCm.toFixed(2))} cm⁻¹ · lower component ${esc(report.lowerComponentCm.toFixed(2))} cm⁻¹, `
+      + `upper ${esc(report.upperComponentCm.toFixed(2))} cm⁻¹`, 'exciton-split'),
+    fieldValue('Validity r/extent', validity
+      ? `${validity.valid ? '<span class="results-chip is-gates-pass">valid</span>' : '<span class="results-chip is-gates-unknown">estimate only</span>'} `
+        + `${esc(validity.note)}<br>Threshold: r/extent ≥ ${esc(validity.threshold)}; the larger extent is `
+        + `${esc(Math.max(...report.fragments.map((fragment) => fragment.extentAngstrom)).toFixed(3))} Å.`
+      : missingHtml(), 'exciton-validity'),
+  ];
+  const pairs = 'The pair is the two lowest states that carry both a recorded transition dipole and a '
+    + 'non-zero oscillator strength; a dark state (f = 0) is never paired, and no dipole is '
+    + 'reconstructed from f. The dipoles are the states this run computed; when a state is '
+    + 'delocalised over both fragments, the pair is not two chromophore transitions and the number '
+    + 'is a consistency check rather than a prediction.';
+  return card('Exciton coupling',
+    kv(rows)
+    + `<p class="results-note">${esc(pairs)}${report.membersNotCoupled.length
+      ? ` ${esc(`Members ${report.membersNotCoupled.join(', ')} are not part of this coupling: it is a two-chromophore model.`)}`
+      : ''}</p>`
+    + approximation
+    + caveatHtml(flags, 'This coupling'),
+    'is-wide');
+}
+
 
 /**
  * Simulated UV-Vis curve, drawn by the shared figure module so the panel and the
@@ -1925,6 +2008,7 @@ export function resultsPanelHtml(record, options = {}) {
       methodsCard(record),
       frequenciesCard(parsed, flags),
       excitedStatesCard(parsed, flags, record, spectrumOverlay, spectrumOverlayNote),
+      excitonCouplingCard(parsed, flags, record, options),
       emissionCard(parsed, flags, emission),
       ntoCard(flags, nto),
       excitedStateOptimizationCard(parsed, flags, jobSettings),
@@ -2039,6 +2123,10 @@ export function installResultsView({
             .map((entry) => ({ multiplicity: entry.spin.multiplicity, status: entry.status, error: entry.error })),
         }
         : {}),
+      // Issue 173: a complex block's member provenance travels on the queue
+      // task, and it is what tells the coupling card which atoms belong to
+      // which chromophore.
+      ...(isObject(task.complex) ? { complex: task.complex } : {}),
     };
     const reaction = queueReactions[task.nodeId] || null;
     if (!reaction) return base;
