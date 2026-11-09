@@ -220,6 +220,9 @@ const SETTINGS_KEYS = new Set([
   // Issue #93: coordinate constraints and the extra QST2/QST3 structures.
   'constraints', 'qst',
   'xtbMethod', 'xtbOptLevel', 'xtbThreads', 'engine',
+  // Issue 174: the core-correlation choice. Not in the defaults, so an existing
+  // project is unchanged; listed here so an explicit value is not read as a typo.
+  'freezeCore',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
