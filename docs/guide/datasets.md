@@ -212,6 +212,11 @@ acceptor side from every copy that uses its acceptor (all but the last). The fir
 therefore keep their outer leaving groups, the chain is capped at both ends, and **n = 1 is the unit
 unchanged**.
 
+Each member's own run folder records the derivation, not just the generated structure:
+`series: { parentId, n, count, linkage }` in `run.json` says which unit it repeats, which member it
+is and the junction rule that joined it. That is what makes an archived member auditable after the
+task id (`sp~ethene-n3`) and the file name have both moved on.
+
 ### Refused by name
 
 Nothing is generated unless the whole series can be built. The message names the atoms:

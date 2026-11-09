@@ -42,7 +42,7 @@ const v1Schema = loadRecordSchema(1);
  * produce. Each one is exercised below; anything else missing from a fixture
  * would mean the schema describes a record the app does not write.
  */
-const OPTIONAL_TOP_LEVEL = new Set(['conformer']);
+const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series']);
 
 describe('run-record schema — publication', () => {
   it('is a draft 2020-12 schema with a version and an id', () => {
@@ -129,6 +129,26 @@ describe('run-record schema — field coverage', () => {
     expect(validateRecord(record).errors).toEqual([]);
     delete record.conformer.spreadKcal;
     expect(validateRecord(record).errors).not.toEqual([]);
+  });
+
+  it('validates the record and series blocks the runner can add, and refuses a null', () => {
+    const record = JSON.parse(JSON.stringify(fixtures[0].record));
+    record.record = { id: 'm3', label: 'molecule 3', datasetId: 'monomers' };
+    record.series = {
+      parentId: 'ethene',
+      n: 3,
+      count: 6,
+      linkage: { donor: 1, acceptor: 2, bondLengthAngstrom: 1.5, leaving: [3, 6] },
+    };
+    expect(validateRecord(record).errors).toEqual([]);
+    // A member without a number is not a derivation: n and count are required.
+    const bare = JSON.parse(JSON.stringify(record));
+    delete bare.series.count;
+    expect(validateRecord(bare).errors.some((error) => error.path === '/series/count')).toBe(true);
+    // Absent, not null: the writers never emit a null identity.
+    const nulled = JSON.parse(JSON.stringify(fixtures[0].record));
+    nulled.record = null;
+    expect(validateRecord(nulled).ok).toBe(false);
   });
 
   it('requires every envelope field, and accepts a record without schemaVersion', () => {

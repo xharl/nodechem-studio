@@ -98,6 +98,15 @@ It contains:
   dispersion, solvation and the exact argv used;
 - `provenance.kind: "fixture"` on a dry run, so a synthetic record cannot be mistaken for a
   calculation.
+- **which record it ran**, when the block was fed by a dataset: `record: { id, label, datasetId }`.
+  A dataset fan-out therefore leaves one run folder per record that names its own input instead of
+  six indistinguishable folders.
+- **how that record was derived**, when it came from a series block:
+  `series: { parentId, n, count, linkage }` — the repeat unit, which member this is and the bond
+  rule that joined it, so "the 3-mer of *ethene*" survives a rename of the task or the file.
+- a single-structure block has **no** `record` and **no** `series` key. The keys are absent, never
+  `null`, and no id is invented for a block that ran the project molecule. A run folder written
+  before these fields existed still reads and re-exports unchanged.
 
 **Verify input** in the run console recomputes the input hash and reports a mismatch if the input
 file changed after the run.
