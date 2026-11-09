@@ -16,9 +16,9 @@ run performed here.
 
 After 0.4.0, **ADR 0001** replaced the block vocabulary with `schemaVersion: 3`
 (input · prepare · generate · calculate · analyse · output, plus control and annotation axes).
-Step 2 — the behaviour-neutral rename — has landed; version 2 and older files are refused rather
-than migrated. Steps 3–6 (import as `input(ensemble)`, `prepare`, the ML scorer role, declarative
-validation) remain.
+Step 2 — the behaviour-neutral rename — and step 3 — import as `input(ensemble)` — have landed;
+version 2 and older files are refused rather than migrated. Steps 4–6 (`prepare`, the ML scorer
+role, declarative validation) remain.
 
 ## 1. Product target
 
@@ -300,7 +300,7 @@ Linux/macOS Gaussian job has been run.
 | Item | Status | Where |
 | --- | --- | --- |
 | Tag and publish 0.3.0 | **Done** 2026-11-08 — tag `v0.3.0` → `699ae18`, prerelease with the Windows and Linux installers, milestone 3 closed | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
-| Block taxonomy, schemaVersion 3 (ADR 0001) | **Step 2 shipped** — behaviour-neutral rename, examples/docs rewritten, v2 and older refused; steps 3–6 remain | `docs/adr/0001-block-taxonomy.md`, `src/shared/projectSchema.js` |
+| Block taxonomy, schemaVersion 3 (ADR 0001) | **Steps 2–3 shipped** — behaviour-neutral rename, import as `input(ensemble)` with a run-time ensemble record and `generate.source`, physical queue folders renamed; steps 4–6 remain | `docs/adr/0001-block-taxonomy.md`, `src/shared/projectSchema.js` |
 | Tag and publish 0.4.0 | **Done** 2026-11-08 — tag `v0.4.0` → `36d36e1`, published as the current release (GitHub leaves the Latest badge on the newest non-prerelease, so 0.3.0 and 0.4.0 are not flagged prerelease) with both installers, `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations, both verified with `gh attestation verify` | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
 | GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
 | Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |

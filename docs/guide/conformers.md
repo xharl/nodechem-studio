@@ -23,14 +23,18 @@ calculation: it has no route, no gates and no termination record, and it is deli
 engine. A calculation block downstream of it runs the selected member's geometry instead of the
 project geometry.
 
-## Four sources
+## Sources
 
-| `generator` | What happens |
+A Generate block either searches (`settings.source = "search"`) or ranks an ensemble that an
+**Ensemble input** block read (`settings.source = "imported"`). The input owns the file, its energy
+unit and its provenance; the generate block owns ranking and selection.
+
+| Source | What happens |
 | --- | --- |
-| `crest` | The app runs the CREST executable you chose in the run console, with `--gfn2` (or `--gfnff`) and `--nci`, plus `--chrg`/`--uhf` when charge or multiplicity are non-default. Each search runs in its own folder under the queue directory: the starting geometry is staged there as `ensemble.xyz`, so `crest_conformers.xyz`, `crest.energies` and `crest.out` land beside the file CREST was given. |
-| `import` | The app reads a multi-XYZ file you point it at. Use this when CREST ran elsewhere, or when a collaborator sent the ensemble. A `crest.energies` file beside it (or `<stem>.energies`) supplies the energies for frames whose comment does not carry one. |
-| `uff` | The app generates the ensemble here, with UFF, and needs no external binary. See [Generating with UFF](#generating-with-uff-in-app) for what it does and does not claim. |
-| `obabel` | The app runs the Open Babel executable you chose in the run console: `obabel ensemble.xyz -O obabel_conformers.xyz --conformer --nconf N --ff MMFF94 --score energy --writeconformers`, then a second pass (`--energy --append Energy`) that attaches one MMFF94 energy to every frame. The search log and the scored ensemble stay in the queue folder. Open Babel is not bundled. |
+| `crest` (search) | The app runs the CREST executable you chose in the run console, with `--gfn2` (or `--gfnff`) and `--nci`, plus `--chrg`/`--uhf` when charge or multiplicity are non-default. Each search runs in its own folder under the queue directory: the starting geometry is staged there as `ensemble.xyz`, so `crest_conformers.xyz`, `crest.energies` and `crest.out` land beside the file CREST was given. |
+| `uff` (search) | The app generates the ensemble here, with UFF, and needs no external binary. See [Generating with UFF](#generating-with-uff-in-app) for what it does and does not claim. |
+| `obabel` (search) | The app runs the Open Babel executable you chose in the run console: `obabel ensemble.xyz -O obabel_conformers.xyz --conformer --nconf N --ff MMFF94 --score energy --writeconformers`, then a second pass (`--energy --append Energy`) that attaches one MMFF94 energy to every frame. The search log and the scored ensemble stay in the queue folder. Open Babel is not bundled. |
+| `imported` (input) | Wire an **Ensemble input** block into the generate block and set the source to *Rank a wired ensemble input*. The input reads the multi-XYZ once; the generate block ranks that record. A `crest.energies` file beside it (or `<stem>.energies`) supplies energies for frames whose comment does not carry one. |
 
 The app never bundles CREST. If the generator is `crest` and no executable is configured, the
 queue refuses to start and says so; it does not fabricate an ensemble.
@@ -108,17 +112,19 @@ route cannot do, it does not pretend to do:
   0.1–0.5 Å; the deliverable is "reproducible, documented, different".
 
 
-## Imported ensembles: what the block records
+## Imported ensembles: what the blocks record
 
-An imported ensemble is not a result this app computed. The block therefore records where it came
-from, and says so on the card, in the inspector and in the ensemble table's caption:
+An imported ensemble is not a result this app computed. The **Ensemble input** block therefore
+records where it came from, and says so on the card, in the inspector and in the ensemble table's
+caption:
 
-- **origin** — `program`, `version` and `method` as declared on the block, plus `sourceSha256`, the
-  SHA-256 digest of the file's bytes taken when the block ran. The declared fields are written by
-  you; the hash is written by the queue and cannot be typed in.
-- the ensemble summary in the project carries the same origin, so the claim survives save/load and
-  does not depend on the queue folder. The ensemble's own `generator` is `import`; a CREST search
-  records `crest` (and a dry run `fixture`) instead.
+- **origin** — `program`, `version` and `method` as declared on the input block, plus
+  `sourceSha256`, the SHA-256 digest of the file's bytes taken when the input ran. The declared
+  fields are written by you; the hash is written by the queue and cannot be typed in.
+- the input's summary carries that origin, so the claim survives save/load and does not depend on
+  the queue folder. The generate block that ranks it records `generator` as the declared program
+  when there is one (`imported` otherwise); a CREST search records `crest` (and a dry run
+  `fixture`) instead.
 
 What it proves: *this file, with these bytes, produced this table*, and that you have stated which
 program and method produced the file. What it does **not** prove: that the file is what you say it
@@ -127,9 +133,9 @@ and the app has no way to check a file written by another program. The hash is a
 re-exporting the same conformers changes it. Report the origin as the source's claim, not as this
 app's verification.
 
-An imported ensemble keeps `gfn2` out of its provenance: `method` on the block is the conformer
-*search* method and applies to CREST only. The method that produced an imported file's energies is
-`energyMethod` (free text, e.g. `MMFF94`), and it is shown next to the unit.
+An imported ensemble keeps `gfn2` out of its provenance: `method` on the generate block is the
+conformer *search* method and applies to CREST only. The method that produced an imported file's
+energies is the input's `energyMethod` (free text, e.g. `MMFF94`), and it is shown next to the unit.
 
 ## Energy units (Hartree vs kcal/mol)
 
@@ -311,8 +317,8 @@ checked against central finite differences (worst relative error below 1e-5 on w
 peroxide, formamide, butane and benzene), and a minimiser that reports `converged: false` with its
 reason instead of presenting a partial relaxation as a minimum.
 
-It is an engine, not a generator: the block still offers `crest` and `import` only, and no
-conformer in the table above came from UFF.
+It is a search route, not a separate program: the block selects it with `generator: "uff"`.
+Imported ensembles come through an ensemble input, not a generator.
 
 What a UFF result is, stated here rather than in a footnote:
 

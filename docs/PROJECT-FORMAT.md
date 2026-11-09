@@ -116,7 +116,7 @@ Type-specific payloads:
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
 | `merge` | `merge { policy, notes }` |
-| `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2) |
+| `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2). An **ensemble** input is `input { kind: "ensemble", path, format: "xyz", energyUnit, energyMethod, origin { program, version, method }, sourceSha256? }` — it reads an external multi-XYZ at run time (ADR 0001, 4.3.3) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
 | `analyse` | `analyse { mode?, expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block. `mode` is `expression` (the default, and absent when never set) or `dp4`, the DP4+ probability comparison whose definition lives under `dp4` (issue 165) |
 | `note` | `note { text }` |
@@ -217,14 +217,19 @@ must have the same atoms in the same order as the block geometry — a mismatch 
 naming the first differing index, and nothing is reordered automatically.
 
 `generate.settings` is a separate key space — route keys cannot leak into a conformer search:
-`generator` (`crest`, `import` or `uff`), `method` (`gfn2` or `gfnff`, CREST only),
-`energyWindowKcal`, `rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`,
-`selectedConformerId`, `importPath`, `charge`, `multiplicity`, `fanOut`, `group` (an optional study
-id shared by blocks that belong together, 1–32 letters, digits, `.`, `_` or `-`; empty means no
-group), plus the imported-file fields `energyUnit` (`hartree` or `kcal/mol`, default `hartree`),
-`energyMethod` (free text, e.g. `MMFF94`) and `origin` (`{ program, version, method }`, what the user
-says produced the imported file). Defaults: energy window 10 kcal/mol, RMSD 0.5 Å, at most 20
-conformers, 298.15 K, spread warning at 2 kcal/mol, fan-out off, unit Hartree, no origin, no group.
+`source` (`search` or `imported`, default `search`), `generator` (`crest`, `uff` or `obabel`,
+search only), `method` (`gfn2` or `gfnff`, CREST only), `energyWindowKcal`, `rmsdThreshold`,
+`maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`, `charge`,
+`multiplicity`, `fanOut`, `group` (an optional study id shared by blocks that belong together,
+1–32 letters, digits, `.`, `_` or `-`; empty means no group). Defaults: source `search`, generator
+`crest`, energy window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K, spread warning at
+2 kcal/mol, fan-out off, no group.
+
+`source` is the ADR 0001 split: a `search` block runs `generator` on one structure; an `imported`
+block ranks the ensemble of the single `input` block wired into it and owns **no** file path, energy
+unit or provenance. Validation refuses an imported block with zero or several ensemble inputs.
+`importPath`, `energyUnit`, `energyMethod` and `origin` are not generate settings any more; they
+belong to the ensemble input.
 
 The in-app `uff` route adds two optional keys, present only when the block states them so a project
 that never chose the route serialises as before: `torsionStepDegrees` (15–360, default 120) and
@@ -239,7 +244,7 @@ be compared or averaged — a group is a heading, not a result.
 
 | Key | Notes |
 | --- | --- |
-| `generator`, `method` | `crest`, `import`, `uff`, or `fixture` for a dry run |
+| `generator`, `method` | `crest`, `uff`, `obabel`, `imported`, or `fixture` for a dry run. An imported ensemble records the producer's program when declared (`origin.program`), else `imported` |
 | `group` | the block's study id, copied from `generate.settings.group`; empty means no group. Per block, never per member |
 | `origin { program, version, method, sourceSha256 }` | what produced the ensemble; `crest`/`fixture` for a search run here, the declared program plus the digest of the imported file otherwise. Empty `program` means **not recorded**, never "computed here" |
 | `energyUnit`, `energyMethod` | the unit and producing method of the ensemble's absolute energies (`hartree` by default) |
@@ -452,6 +457,28 @@ atom; a substitution past the element's valence; `add` to an atom with no free v
 isotope; `protonate`/`deprotonate` without a charge or a multiplicity; two edits that produce the
 same structure; a record without 3D coordinates. All of them come from the edit engine in
 `src/shared/derivative.js` — the schema does not restate them.
+
+### 4.3.3 An ensemble input (`input.kind: "ensemble"`)
+
+ADR 0001 moves external files out of `generate`. An ensemble input names the artifact:
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `kind` | `"ensemble"` | the discriminator; dataset inputs omit it |
+| `path` | string | multi-XYZ file; relative paths resolve against the project file |
+| `format` | `"xyz"` | the only external ensemble format this build reads |
+| `energyUnit` | `hartree` or `kcal/mol` | what the file's numbers are; default `hartree` |
+| `energyMethod` | string | what produced them, e.g. `MMFF94`; free text |
+| `origin { program, version, method }` | object | the producer's declared provenance |
+| `sourceSha256` | hex string? | **written by the queue**, not typed in; the digest of the bytes actually read |
+
+The block runs once, before the generate block wired downstream. It writes
+`queue/<id>/ensemble/<node>/ensemble.xyz` (the bytes read) and `ensemble.json`
+(`{ kind, path, format, energyUnit, energyMethod, origin, sourceSha256,
+frameCount, energies[] }`), and stores the summary on the block. The generate
+block reads that record; it never opens the original path. A calculate block
+may not consume an ensemble input directly — a generate block must rank and
+select first.
 
 ### 4.4 `output` blocks
 
