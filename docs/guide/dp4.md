@@ -74,6 +74,59 @@ nucleus instead would compare each candidate against a different experiment. If 
 candidates remain, the whole calculation is refused
 (`fewer-than-two-scorable-candidates`) rather than reporting a one-candidate "probability".
 
+## Running it from a workflow
+
+DP4+ is a **compute block** with `mode: "dp4"` (issue 165), so it is planned, run, recorded and
+reported like every other block — there is no separate window to open and no number that lives only
+in a test.
+
+1. Wire the blocks whose runs are the candidates into a Compute block. One **dataset record** is one
+   candidate; a fanned-out conformer ensemble is one candidate with one conformer per member. Two
+   isomers in a dataset are two candidates; two calculation blocks are also two candidates.
+2. Open the block and switch **What this block computes** to *DP4+ probabilities over candidate
+   structures*.
+3. Choose the level and its solvation from the 24 the bank carries, the variant, and the temperature.
+4. Enter each measured shift with its nucleus, its value in ppm, and the **atom numbers** it belongs
+   to (1-based, as the log prints them; several atoms on one row are averaged, which is how a methyl
+   or a symmetry-equivalent pair is entered). A diastereotopic pair shares a label in `Exchange`.
+5. Read the preview. It runs the same `dp4.js` the queue runs, over the results the blocks currently
+   carry.
+
+The block is planned **once** per workflow, not once per record: a probability is only defined
+against the other candidates, so five records are one comparison, not five.
+
+A candidate can number its atoms differently from another — they are different structures — so
+`candidateAssignments` overrides the shared table per candidate id. Leaving it out is the normal
+case when every record is the same molecule.
+
+### What is refused, and where
+
+| Refusal | When it is caught |
+| --- | --- |
+| a level the bank does not carry (`GFN2-xTB`, `B3LYP/cc-pVTZ`, …) | **saving the project**, naming the level and listing the 24 that exist |
+| classic DP4 as the variant | saving the project: a DP4+ number is never relabelled DP4 |
+| a measured shift with no atom, or in a unit other than ppm | saving the project, by row |
+| a candidate whose run carries no GIAO shielding block | running the block, naming the run |
+| a candidate whose declared level differs from the block's | running the block (`differing-levels`) |
+| a candidate missing a measured nucleus | running the block: the candidate is **excluded** and named, as described above; if fewer than two remain, the whole comparison is refused |
+| no run records yet | the block is **blocked** (waiting), not failed |
+
+The refusals are `dp4.js`'s own sentences, passed through; the workflow layer never rephrases them and
+never repairs a definition into something computable.
+
+### Where the result is recorded
+
+The queue writes `run.json` for the block — `kind: "derived"`, no `parsed` block, the definition and
+the one-line verdict under `compute`, and the whole result under `dp4` (probabilities, per-nucleus
+deviations, the fit each nucleus used, the excluded candidates, the level, the bank and its citation).
+A refused comparison is written down too, with the reason, so the record says *why* rather than
+nothing. The block appears in the Results card and in the workflow report's DP4+ section; a run that
+computed nothing shows its refusal in both.
+
+The `dp4` property is declared in the published record schemas (`run-record.v1.schema.json` and the
+run branch of v2), so `ncs export` accepts a record that carries it — an undeclared top-level field
+would make the export refuse every record in the folder.
+
 ## Reading the card
 
 The DP4+ card and the workflow report print, for one analysis:

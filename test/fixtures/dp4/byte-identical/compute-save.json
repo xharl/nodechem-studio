@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 2,
+  "name": "Byte identity",
+  "molecule": {
+    "smiles": "",
+    "charge": 0,
+    "multiplicity": 1,
+    "fragments": [],
+    "coords": [
+      {
+        "element": "O",
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      {
+        "element": "H",
+        "x": 0.9572,
+        "y": 0,
+        "z": 0
+      },
+      {
+        "element": "H",
+        "x": -0.24,
+        "y": 0.927,
+        "z": 0
+      }
+    ],
+    "geometry": {
+      "source": "demo",
+      "file": "",
+      "format": ""
+    }
+  },
+  "defaults": {
+    "engine": "gaussian",
+    "method": "MP2",
+    "basis": "cc-pVQZ",
+    "memory": "4",
+    "memoryUnit": "GB",
+    "nproc": 4
+  },
+  "runner": {
+    "maxParallel": 1
+  },
+  "datasets": [],
+  "flows": [
+    {
+      "id": "main",
+      "title": "Byte identity",
+      "nodes": [
+        {
+          "id": "sp2",
+          "type": "calc",
+          "kind": "SP",
+          "title": "sp2",
+          "state": "ready",
+          "x": 0,
+          "y": 0,
+          "settings": {
+            "engine": "",
+            "jobType": "SP",
+            "method": "B3LYP",
+            "basis": "def2-SVP",
+            "memory": "4",
+            "memoryUnit": "GB",
+            "nproc": 4,
+            "checkpoint": "",
+            "charge": 0,
+            "multiplicity": 1,
+            "dispersion": "GD3BJ",
+            "scf": "",
+            "grid": "",
+            "population": "",
+            "verbosity": "",
+            "solvation": false,
+            "solvationModel": "PCM",
+            "solvent": "Water",
+            "customKeywords": "",
+            "ircDirection": "forward",
+            "tdStates": 0,
+            "tdTriplets": "",
+            "xtbMethod": "gfn2",
+            "xtbOptLevel": "normal",
+            "xtbThreads": "",
+            "optConvergence": "",
+            "forceConstants": "CalcFC",
+            "stableOpt": false,
+            "raman": false,
+            "vcd": false,
+            "orbitals": false,
+            "tdRoot": 0,
+            "emission": false,
+            "nto": false,
+            "ntoTransition": 0,
+            "spinSweep": null,
+            "counterpoise": 0,
+            "counterpoiseChargeStates": [],
+            "constraints": [],
+            "qst": null,
+            "referenceNodeId": "",
+            "gates": {
+              "termination": true,
+              "scf": true,
+              "imaginary": null,
+              "minMagnitude": 50,
+              "thermo": false,
+              "finalEnergy": false
+            },
+            "ladder": null,
+            "disabledChecks": []
+          },
+          "output": null,
+          "checkpointFrom": null
+        },
+        {
+          "id": "sp4",
+          "type": "calc",
+          "kind": "SP",
+          "title": "sp4",
+          "state": "ready",
+          "x": 0,
+          "y": 0,
+          "settings": {
+            "engine": "",
+            "jobType": "SP",
+            "method": "B3LYP",
+            "basis": "def2-SVP",
+            "memory": "4",
+            "memoryUnit": "GB",
+            "nproc": 4,
+            "checkpoint": "",
+            "charge": 0,
+            "multiplicity": 1,
+            "dispersion": "GD3BJ",
+            "scf": "",
+            "grid": "",
+            "population": "",
+            "verbosity": "",
+            "solvation": false,
+            "solvationModel": "PCM",
+            "solvent": "Water",
+            "customKeywords": "",
+            "ircDirection": "forward",
+            "tdStates": 0,
+            "tdTriplets": "",
+            "xtbMethod": "gfn2",
+            "xtbOptLevel": "normal",
+            "xtbThreads": "",
+            "optConvergence": "",
+            "forceConstants": "CalcFC",
+            "stableOpt": false,
+            "raman": false,
+            "vcd": false,
+            "orbitals": false,
+            "tdRoot": 0,
+            "emission": false,
+            "nto": false,
+            "ntoTransition": 0,
+            "spinSweep": null,
+            "counterpoise": 0,
+            "counterpoiseChargeStates": [],
+            "constraints": [],
+            "qst": null,
+            "referenceNodeId": "",
+            "gates": {
+              "termination": true,
+              "scf": true,
+              "imaginary": null,
+              "minMagnitude": 50,
+              "thermo": false,
+              "finalEnergy": false
+            },
+            "ladder": null,
+            "disabledChecks": []
+          },
+          "output": null,
+          "checkpointFrom": null
+        },
+        {
+          "id": "cbs",
+          "type": "compute",
+          "kind": "Compute",
+          "title": "CBS limit",
+          "state": "ready",
+          "x": 0,
+          "y": 0,
+          "compute": {
+            "expression": "fit_cubic_inverse(E4, 4, E2, 2)",
+            "inputs": [
+              {
+                "name": "E4",
+                "field": "finalEnergyHartree",
+                "source": "sp4"
+              },
+              {
+                "name": "E2",
+                "field": "finalEnergyHartree",
+                "source": "sp2"
+              }
+            ]
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "sp2",
+          "to": "cbs",
+          "type": "dependency"
+        },
+        {
+          "from": "sp4",
+          "to": "cbs",
+          "type": "dependency"
+        }
+      ]
+    }
+  ],
+  "reports": [],
+  "activeFlowId": "main"
+}

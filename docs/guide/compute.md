@@ -19,6 +19,15 @@ convergence study expressible inside the graph instead of in a shell script afte
 A derived value is **never** presented as a quantum-chemical result. It has no parsed output block,
 it never enters an energy column, and every card and report row names the values it was built from.
 
+The block has two modes (issue 165), chosen with **What this block computes** in the inspector:
+
+| `compute.mode` | Computes |
+| --- | --- |
+| absent, or `"expression"` (the default) | the arithmetic this page describes — one value per record |
+| `"dp4"` | DP4+ probabilities over candidate structures, from the NMR shields of the wired blocks' runs; see [DP4 and DP4+ probabilities](dp4.md) |
+
+A project that never asks for `"dp4"` saves and plans exactly as it did before the mode existed.
+
 ## Wiring a compute block
 
 1. Wire the blocks whose results it reads into the compute block with ordinary dependency edges.

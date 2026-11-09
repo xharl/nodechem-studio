@@ -42,7 +42,7 @@ const v1Schema = loadRecordSchema(1);
  * produce. Each one is exercised below; anything else missing from a fixture
  * would mean the schema describes a record the app does not write.
  */
-const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay', 'timeout']);
+const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay', 'timeout', 'dp4']);
 
 describe('run-record schema — publication', () => {
   it('is a draft 2020-12 schema with a version and an id', () => {
@@ -178,6 +178,30 @@ describe('run-record schema — field coverage', () => {
       mutate(bad);
       expect(validateRecord(bad).ok, JSON.stringify(bad.timeout)).toBe(false);
     }
+  });
+
+  it('validates the DP4+ block a compute block records, and refuses an empty one (issue 165)', () => {
+    const record = JSON.parse(JSON.stringify(fixtures[0].record));
+    record.dp4 = {
+      available: true,
+      status: 'computed',
+      expression: 'DP4+ full (unscaled × scaled) over 27 measured shifts',
+      code: null,
+      reason: null,
+      variant: 'full',
+      level: { id: 'mPW1PW91/6-31+G(d,p)', solvation: 'PCM', solvent: 'CHCl3' },
+      candidates: [{ id: '01', percent: 99.999203, conformerCount: 15 }],
+      excluded: [],
+      checks: { sumOfProbabilities: 1 },
+    };
+    expect(validateRecord(record).errors).toEqual([]);
+    expect(validateRecord(record, { version: 1 }).errors).toEqual([]);
+    // The block is a table, but `available` is the one thing a reader needs to
+    // tell a comparison from an empty object: the schema requires it.
+    const empty = JSON.parse(JSON.stringify(record));
+    empty.dp4 = {};
+    expect(validateRecord(empty).ok).toBe(false);
+    expect(validateRecord(empty).errors.some((error) => error.path.startsWith('/dp4'))).toBe(true);
   });
 
   it('requires every envelope field, and accepts a record without schemaVersion', () => {

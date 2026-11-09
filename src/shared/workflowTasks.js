@@ -26,6 +26,7 @@ import {
   recordsForInput,
   flowById,
   nodesOfFlow,
+  parseTaskId,
   scopeFor,
   taskIdFor,
 } from './flows.js';
@@ -35,6 +36,7 @@ import {
   describeCompute,
   evaluateCompute,
 } from './compute.js';
+import { dp4RowsFromSources, dp4Summary, evaluateDp4 } from './dp4Workflow.js';
 
 export const safeBase = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
 
@@ -970,9 +972,22 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       // run records (`results`, keyed by task id) — and otherwise plans it as a
       // task that is waiting, never as a value of zero. One task per record of
       // the scope, so a dataset family gets one derived value per record.
+      //
+      // Issue 165: in `dp4` mode the block compares whole candidate records, so
+      // it is planned once — one comparison, not one per record, because the
+      // probability of a candidate is only defined against its rivals.
       const context = computeContext(project, node, { results, edges: projectEdges });
       const { sources, declared, definition } = context;
       const ids = [];
+      if (context.mode === 'dp4') {
+        const taskId = taskIdFor(node.id, null);
+        const rows = dp4RowsFromSources(sources, context.rowsFor);
+        const evaluation = evaluateDp4(definition.dp4, { rows });
+        pushTask(computeTask(node, { taskId, record: null, recordId: null, evaluation, sources, declared }), null);
+        ids.push(taskId);
+        idsFor.set(node.id, ids);
+        continue;
+      }
       for (const record of records) {
         const recordId = record?.id || null;
         const taskId = taskIdFor(node.id, recordId);
@@ -1420,13 +1435,17 @@ export function computeContext(project, node, { results = null, edges = null } =
   const sources = orderingSourceIds(nodeEdges, node.id);
   const definition = node.compute && typeof node.compute === 'object'
     ? node.compute : { expression: '', inputs: [] };
-  const declared = computeInputsOf(definition);
-  if (declared.length === 0) {
+  // Issue 165: a DP4+ block reads whole run records (candidates), not named
+  // fields, so it declares no inputs of its own — the upstream blocks are the
+  // candidate sources. Every other mode is the arithmetic block unchanged.
+  const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
+  const declared = mode === 'dp4' ? [] : computeInputsOf(definition);
+  if (mode !== 'dp4' && declared.length === 0) {
     throw new ComputeError(`"${node.title}" declares no inputs; a compute block reads at least one field`
       + ' from an upstream block.');
   }
   if (sources.length === 0) {
-    throw new ComputeError(`"${node.title}" has no upstream block; wire the blocks whose results it computes from.`);
+    throw new ComputeError(`"${node.title}" has no upstream block; wire the blocks whose results it ${mode === 'dp4' ? 'compares' : 'computes from'}.`);
   }
   for (const input of declared) {
     if (input.source && !sources.includes(input.source)) {
@@ -1474,7 +1493,36 @@ export function computeContext(project, node, { results = null, edges = null } =
     if (rows.length === 0 && source?.parsed) rows.push({ recordId: null, run: source.parsed });
     return rows;
   };
-  return { sources, declared, definition, resolveSource, allRecords };
+  // Issue 165: the rows a DP4+ block compares, one per upstream task, with the
+  // record and member split back out of the task id. `allRecords()` keeps only
+  // the record, which is right for a field read and loses which conformer a run
+  // was — and a candidate's conformers are exactly what DP4+ averages over.
+  const rowsFor = (blockId) => {
+    const id = blockId || fallbackSource;
+    if (!id) return [];
+    const rows = [];
+    for (const key of resultKeys()) {
+      const name = String(key);
+      const parsed = parseTaskId(name);
+      if (parsed.nodeId !== id) continue;
+      const run = lookup(key);
+      if (!run) continue;
+      rows.push({
+        taskId: name,
+        recordId: parsed.recordId,
+        memberId: parsed.memberId,
+        run,
+      });
+    }
+    if (rows.length === 0) {
+      const source = nodeById(project, id);
+      if (source?.parsed) {
+        rows.push({ taskId: id, recordId: null, memberId: null, label: source.title || id, run: source.parsed });
+      }
+    }
+    return rows;
+  };
+  return { mode, sources, declared, definition, resolveSource, allRecords, rowsFor };
 }
 
 /**
@@ -1489,6 +1537,8 @@ export function computeContext(project, node, { results = null, edges = null } =
  * number an engine printed.
  */
 function computeTask(node, { taskId, record = null, recordId = null, evaluation, sources, declared }) {
+  const dp4 = node.compute?.mode === 'dp4' && node.compute?.dp4 && typeof node.compute.dp4 === 'object'
+    ? node.compute.dp4 : null;
   return {
     nodeId: taskId,
     type: 'compute',
@@ -1497,10 +1547,14 @@ function computeTask(node, { taskId, record = null, recordId = null, evaluation,
     executable: false,
     compute: {
       ...evaluation,
+      // Issue 165: the DP4+ definition travels with the task so the queue can
+      // re-evaluate from the run.json files it finds, exactly as the arithmetic
+      // block carries its expression and declared inputs.
+      ...(dp4 ? { mode: 'dp4', dp4, value: null, unit: null } : {}),
       declared,
       sources,
       ...(recordId ? { recordId } : {}),
-      summary: describeCompute(evaluation),
+      summary: dp4 ? dp4Summary(evaluation) : describeCompute(evaluation),
     },
     ...(record ? {
       record: {

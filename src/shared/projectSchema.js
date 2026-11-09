@@ -82,6 +82,11 @@ import {
   identifiersOf,
   parseExpression,
 } from './compute.js';
+import {
+  DP4_COMPUTE_MODE,
+  dp4DefinitionForFile,
+  validateDp4Definition,
+} from './dp4Workflow.js';
 
 const XTB_METHOD_IDS = XTB_METHODS.map((method) => method.id);
 
@@ -1879,8 +1884,35 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     // Issue 175: a compute block is arithmetic over other blocks' results. Its
     // expression is parsed at save time, so a project that cannot be evaluated
     // is refused here rather than at the end of a queue.
+    //
+    // Issue 165: the same block carries DP4+ probabilities when `mode` is
+    // `dp4`. Absent `mode` is the expression block byte for byte, so every
+    // project written before this existed saves exactly as it did.
     const source = requiredObject(c, raw.compute, `${path}.compute`, legacy, {});
-    warnUnknown(c, source, new Set(['expression', 'inputs', 'notes']), `${path}.compute`);
+    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4']), `${path}.compute`);
+    const mode = source.mode === 'dp4' ? DP4_COMPUTE_MODE : 'expression';
+    if (source.mode !== undefined && source.mode !== 'dp4' && source.mode !== 'expression') {
+      c.error(`${path}.compute.mode`, 'must be "expression" (the default) or "dp4".');
+    }
+    if (mode === 'dp4') {
+      const checked = validateDp4Definition(source.dp4);
+      for (const problem of checked.errors) {
+        c.error(`${path}.compute.dp4${problem.path ? `.${problem.path}` : ''}`, problem.message);
+      }
+      if (Array.isArray(source.inputs) && source.inputs.length) {
+        c.error(`${path}.compute.inputs`, 'a DP4+ block reads whole run records, not fields; wire the blocks whose candidates it compares and leave the input list empty.');
+      }
+      if (String(source.expression ?? '').trim()) {
+        c.warn(`${path}.compute.expression`, 'is not saved or evaluated by a DP4+ block: DP4+ reads candidate run records, not an expression.');
+      }
+      return {
+        ...common,
+        compute: {
+          mode: 'dp4',
+          dp4: dp4DefinitionForFile(source.dp4),
+        },
+      };
+    }
     const expression = readString(c, source.expression, `${path}.compute.expression`,
       { legacy, fallback: '', max: COMPUTE_EXPRESSION_MAX });
     const rawInputs = Array.isArray(source.inputs) ? source.inputs : [];

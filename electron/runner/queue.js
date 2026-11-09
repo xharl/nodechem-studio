@@ -14,6 +14,7 @@ import { ladderVerdict } from '../../src/shared/methodLadder.js';
 import { spinSweepVerdict } from '../../src/shared/spinSweep.js';
 import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { ComputeError, describeCompute, evaluateCompute } from '../../src/shared/compute.js';
+import { dp4Summary, evaluateDp4 } from '../../src/shared/dp4Workflow.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 import { LIMITS } from '../../src/shared/projectSchema.js';
 import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
@@ -545,12 +546,60 @@ function computeTaskPayload(raw) {
       scope: entry.scope === 'records' ? 'records' : 'record',
     }))
     .filter((entry) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.name) && entry.field);
+  const dp4 = raw?.mode === 'dp4' ? dp4TaskDefinition(raw.dp4) : null;
   return {
     expression: oneLine(raw?.expression, 2000),
     declared,
+    // Issue 165: a DP4+ task carries its definition so the queue can evaluate it
+    // from the run.json files it finds; the arithmetic payload is otherwise
+    // unchanged, and a task without a mode is still exactly an expression.
+    ...(dp4 ? { mode: 'dp4', dp4 } : {}),
     sources: (Array.isArray(raw?.sources) ? raw.sources.map(String) : [])
       .filter((id) => SAFE_ID.test(id)).slice(0, 32),
     ...(raw?.recordId && SAFE_ID.test(String(raw.recordId)) ? { recordId: String(raw.recordId) } : {}),
+  };
+}
+
+/**
+ * Issue 165: the DP4+ definition, reduced to what the evaluator reads.
+ *
+ * A task's fields come from the renderer, so this is a trust boundary like the
+ * arithmetic one: every string is bounded, every number must be finite, and the
+ * atom lists are integers. Nothing is defaulted here beyond the nucleus label
+ * being trimmed — a definition this function cannot read is refused by
+ * `evaluateDp4()` by name rather than repaired into something plausible.
+ */
+function dp4TaskDefinition(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const rows = (Array.isArray(raw.experimental) ? raw.experimental : [])
+    .slice(0, 400)
+    .map((row) => (row && typeof row === 'object' ? {
+      nucleus: oneLine(row.nucleus, 8),
+      shift: Number.isFinite(Number(row.shift)) ? Number(row.shift) : null,
+      ...(row.sp2 === true ? { sp2: true } : {}),
+      ...(oneLine(row.exchange, 16) ? { exchange: oneLine(row.exchange, 16) } : {}),
+      atoms: (Array.isArray(row.atoms) ? row.atoms : []).slice(0, 64)
+        .map(Number).filter((index) => Number.isInteger(index) && index > 0),
+    } : null))
+    .filter(Boolean);
+  const assignments = {};
+  if (raw.candidateAssignments && typeof raw.candidateAssignments === 'object') {
+    for (const [id, list] of Object.entries(raw.candidateAssignments)) {
+      const key = oneLine(id, 64);
+      if (!key) continue;
+      assignments[key] = (Array.isArray(list) ? list : []).slice(0, 400)
+        .map((atoms) => (Array.isArray(atoms) ? atoms : []).slice(0, 64)
+          .map(Number).filter((index) => Number.isInteger(index) && index > 0));
+    }
+  }
+  return {
+    level: oneLine(raw.level, 120),
+    solvation: oneLine(raw.solvation, 16),
+    solvent: oneLine(raw.solvent, 40),
+    variant: oneLine(raw.variant, 16),
+    temperature: Number.isFinite(Number(raw.temperature)) ? Number(raw.temperature) : null,
+    experimental: rows,
+    ...(Object.keys(assignments).length ? { candidateAssignments: assignments } : {}),
   };
 }
 
@@ -2399,6 +2448,13 @@ export class QueueManager {
    */
   async runCompute(queue, task) {
     const compute = task.compute && typeof task.compute === 'object' ? task.compute : {};
+    // Issue 165: a DP4+ block is a compute block with a definition instead of
+    // an expression. It reads whole run records (candidates) rather than named
+    // fields, so it has its own reader below but the same record contract.
+    if (compute.mode === 'dp4') {
+      await this.runDp4(queue, task);
+      return;
+    }
     const declared = Array.isArray(compute.declared) ? compute.declared : [];
     if (declared.length === 0) {
       this.setTaskOutcome(task, 'failed', 'the compute block declares no inputs to read');
@@ -2488,6 +2544,122 @@ export class QueueManager {
       this.setTaskOutcome(task, 'blocked', oneLine(evaluation.notComputed, 400));
     } else {
       this.setTaskOutcome(task, 'failed', oneLine(evaluation.notComputed, 400));
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * One DP4+ block (issue 165).
+   *
+   * The candidates are the run records of the blocks wired into this one: one
+   * candidate per dataset record, one conformer per fanned-out member. Nothing
+   * is re-derived here — `evaluateDp4()` does the same conversion the plan and
+   * the inspector use, and `dp4Probabilities()` computes the probabilities from
+   * the committed bank. The record is written as `kind: 'derived'` with the
+   * whole DP4+ result under `dp4` (and no `parsed` block), so the card, the
+   * report and `ncs export` read one place.
+   *
+   * A refusal is written down too: a project whose level the bank does not
+   * carry, or whose candidate lacks a shielding block, produces a record that
+   * names the reason rather than no record at all.
+   */
+  async runDp4(queue, task) {
+    const compute = task.compute && typeof task.compute === 'object' ? task.compute : {};
+    const sources = this.incomingSources(queue, task.nodeId);
+    const rows = [];
+    for (const source of sources) {
+      const segments = String(source.nodeId).split('~');
+      let run = null;
+      if (source.runDir) {
+        try {
+          run = JSON.parse(await fsp.readFile(path.join(source.runDir, 'run.json'), 'utf8'));
+        } catch {
+          run = null; // an unreadable upstream record is "no result", not a zero
+        }
+      }
+      rows.push({
+        taskId: String(source.nodeId),
+        source: segments[0],
+        recordId: segments.length > 1 ? segments[1] : null,
+        memberId: segments.length > 2 ? segments.slice(2).join('~') : null,
+        run,
+      });
+    }
+    const evaluation = evaluateDp4(compute.dp4, { rows });
+    const summary = dp4Summary(evaluation);
+    task.dp4 = evaluation;
+    // The task keeps the verdict and the refusal, not a second copy of the
+    // table: `dp4` is the result, `compute` is the block that produced it, and
+    // a queue snapshot should not carry 27 nuclei twice.
+    task.compute = {
+      ...compute,
+      status: evaluation.status,
+      expression: evaluation.expression,
+      available: evaluation.available,
+      notes: evaluation.notes || [],
+      notComputed: evaluation.notComputed,
+      value: null,
+      unit: null,
+      summary,
+    };
+
+    const dir = path.join(this.queueDir(queue.id), 'compute', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    try {
+      await fsp.mkdir(dir, { recursive: true });
+      await writeJsonAtomic(path.join(dir, 'run.json'), {
+        schemaVersion: 1,
+        kind: 'derived',
+        nodeId: task.nodeId,
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        provenance: {
+          kind: 'derived',
+          jobType: 'DP4+',
+          method: {
+            ...(evaluation.level?.method ? { functional: evaluation.level.method } : {}),
+            ...(evaluation.level?.basis ? { basis: evaluation.level.basis } : {}),
+            ...(evaluation.level?.solvation ? { solvation: evaluation.level.solvation } : {}),
+          },
+          basis: evaluation.level?.basis ?? null,
+        },
+        // The block's own declaration: which mode, which variant, which level,
+        // which measured shifts, and the one-line verdict or refusal. A reader
+        // of the record can see the experiment without opening the project.
+        compute: {
+          mode: 'dp4',
+          expression: evaluation.expression,
+          inputs: (evaluation.candidates || []).map((candidate) => ({
+            recordId: candidate.id,
+            field: 'parsed.nmr.atoms',
+            value: Array.isArray(candidate.nuclei) ? candidate.nuclei.length : null,
+            unit: 'nuclei',
+          })),
+          value: null,
+          unit: null,
+          functionCalls: [],
+          notes: evaluation.notes || [],
+          notComputed: evaluation.notComputed,
+          sources: compute.sources || [],
+          ...(task.recordId ? { recordId: task.recordId } : {}),
+        },
+        // The whole result: probabilities, per-nucleus deviations, the fit each
+        // nucleus used, the excluded candidates and the bank's provenance. This
+        // is the block the card and the report already render.
+        dp4: evaluation,
+      });
+      task.runDir = dir;
+      task.runId = task.nodeId;
+    } catch (error) {
+      task.compute = { ...task.compute, notes: [...(evaluation.notes || []), `the DP4+ record could not be written: ${error.message}`] };
+    }
+    if (evaluation.status === 'computed') {
+      this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
+    } else if (evaluation.status === 'pending') {
+      this.setTaskOutcome(task, 'blocked', oneLine(summary, 400));
+    } else {
+      this.setTaskOutcome(task, 'failed', oneLine(summary, 400));
     }
     await this.persist(queue);
     this.publish(queue);
