@@ -15,6 +15,7 @@ to match the parser.
 | `scan-relaxed.log` | `cclib/cclib-data`, `Gaussian/Gaussian09/relaxed_PES_testCO2.log` | `Opt=ModRedundant` relaxed scan over R1 |
 | `scan-unrelaxed.log` | `cclib/cclib`, `data/Gaussian/basicGaussian16/dvb_scan_unrelaxed.log` | rigid scan over the D7 dihedral |
 | `g09-*.{log,out}` | `cclib/cclib`, `data/Gaussian/basicGaussian09/` | Gaussian 09: `Freq`, `SP`, `TD`, MP2, CCSD, CIS |
+| `g09-dvb-nmr.log` | complete Gaussian 09 Rev D.01 log added in #61; its header names `/home/osl/test/Benzene/NMR/G09/dvb_nmr.log` and no public source repository was recorded then | `NMR=(SpinSpin)` at B3LYP/sto-3g on divinylbenzene (C₁₀H₁₀, 20 atoms): shieldings, the four J contributions and both coupling totals |
 | `g16-*.{log,out}` | `cclib/cclib`, `data/Gaussian/basicGaussian16/` | Gaussian 16: `Opt`, `Freq`, `SP`, `TD` |
 | `g16-h4s2-irc.log` | `CQPES/Model-Zoo`, `H4S2-CC-2024/gau/ts-1-irc.log` | full IRC job (Gaussian 16) |
 | `g09-dvb-gopt-unconverged.log` | `cclib/cclib-data`, `Gaussian/Gaussian09/` | optimisation that ran out of steps and exited with an epigraph |

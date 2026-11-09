@@ -320,8 +320,7 @@ A barrier taken from a ΔE rather than a ΔG is labelled **electronic-energy est
 
 Missing reference, missing solvent, a solvent mismatch, or a species without a frequency job gives `not reported` with the missing block named — never a pKa or an E° from an electronic energy alone.
 
-## NMR shieldings
-
+## NMR: shieldings, shifts and couplings
 
 An `NMR` job produces an **NMR** card with every atom's isotropic shielding, anisotropy and tensor
 eigenvalues, the gauge Gaussian used (GIAO), and a simulated spectrum.
@@ -335,6 +334,61 @@ used. Without one, the figure says *absolute shielding*, because it is not a spe
 Broadening is a Lorentzian with a FWHM you set in the card (default 0.10 ppm) and the caption always
 states it, along with the number of nuclei in the trace. VCD/ROA rotational strengths and
 conformer-weighted spectra are not implemented; see the Raman section below for what is.
+
+### Referencing: a shift carries its source
+
+`src/shared/nmrReferences.js` holds the rule, `src/data/nmrReferences.json` the data: **a shift exists
+only when a reference for that exact method and basis exists.** Anything else returns `δ = null` with
+the reason `no reference for ωB97X-D/def2-TZVP` — a level is never borrowed from a neighbouring one,
+and an absent shielding or reference is never read as zero.
+
+Two modes, both explicit:
+
+- **single** — `δ = σ_ref − σ`, with σ_ref the reference nucleus (TMS, CFCl₃, H₃PO₄, …) computed at
+  the same level of theory.
+- **linear** — `δ = a·σ + b`, with `a` and `b` fitted at the level they are stored with. The fit is
+  not extrapolated to another level.
+
+`shiftFor({ level, nucleus, sigma, references })` returns `{ delta, mode, citation, reason }`, so a
+shift cannot be obtained without the mode and the citation that produced it. An entry without a
+citation is refused **by name** when the dataset loads; so is an entry missing its level, its
+retrieved date or a finite coefficient, and so is an entry whose nucleus this app does not read — only
+¹H, ¹³C, ¹⁵N, ¹⁹F, ³¹P and ²⁹Si are supported.
+
+The shipped dataset is **empty on purpose**. A reference shielding is a run at a level, not a
+constant: computing σ(TMS) for every supported functional and basis is a campaign of its own, and
+shipping a number borrowed from another level — or from a paper that does not state one — would be
+exactly the fabricated quantity this app refuses. Adding an entry requires a citation; the JSON file
+says so at the top.
+
+### Spin–spin couplings
+
+`NMR=(GIAO,SpinSpin)` asks Gaussian for the coupling tables. Gaussian allows the option for
+**Hartree–Fock and DFT only**, and its cost is roughly **twice a frequency job** at the same level — a
+run to plan for, not a checkbox to tick by habit.
+
+The log prints the four contributions to J (Fermi contact, spin–dipole, paramagnetic and diamagnetic
+spin–orbit), then two totals: `Total nuclear spin-spin coupling K (Hz)` and `... J (Hz)`. J is the
+coupling in hertz; K is the reduced constant, the same numbers with the two nuclear moments divided
+out. `parseCouplings` reads both tables and never converts one into the other: the conversion needs
+the gyromagnetic ratios of the two nuclei, which the log does not print. For one pair of elements the
+J/K ratio is fixed, and that is what the module keeps — two printed quantities, not one derived
+number.
+
+Each table is **lower-triangular** and printed in five-column chunks: within a chunk, a row carries
+only the columns of that chunk that are ≤ the row number, so nothing above the diagonal exists in the
+file. The matrix is filled symmetrically from those printed values, and the diagonal is 0 only
+because the log prints it as 0. A pair the log does not print stays **absent** — `NaN` in the
+`Float64Array`, `null` from `couplingAt()` — never 0, because a 0 would claim a computed coupling the
+run never produced. `verified` reports whether the printed rows matched their column headers and
+every printed diagonal was zero; `complete` reports whether the J matrix covers every pair. A partial
+table is never presented as a whole molecule's coupling network.
+
+Units and sign travel with the result: `units: 'Hz'` and a `convention` string that states the sign is
+as printed by Gaussian and never normalised, so a table cannot show the numbers without them.
+
+The coupling table and the dataset-backed reference picker are read by these two modules; the results
+panel does not draw them yet, so a shift today still comes from a σ_ref typed by hand.
 
 ## Raman activities
 
