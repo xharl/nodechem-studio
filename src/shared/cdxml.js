@@ -438,13 +438,14 @@ function parseFragment(fragment, index, context) {
     bonds.push(bond);
   });
 
-  let name = collapse(fragment.attributes.name);
-  if (!name) name = context.caption(atoms);
-  if (!name) {
-    name = context.fragmentCount === 1 && context.documentName
-      ? context.documentName
-      : `${context.documentName || context.baseName || 'CDXML'} fragment ${index + 1}`;
-  }
+  // Issue 139: the drawing's own text for this fragment — its `Name` attribute,
+  // or a text block drawn beside it — kept apart from `name` (which always has
+  // to be displayable). A dataset labels its record from this, and falls back to
+  // the fragment's index only when the drawing names nothing.
+  let label = collapse(fragment.attributes.name);
+  if (!label) label = context.caption(atoms);
+  if (!label && context.fragmentCount === 1) label = context.documentName;
+  const name = label || `${context.documentName || context.baseName || 'CDXML'} fragment ${index + 1}`;
 
   if (aromatic > 0) warnings.push(`${aromatic} aromatic bond${aromatic === 1 ? '' : 's'} kept as order 1.5.`);
   if (cues > 0) {
@@ -459,6 +460,9 @@ function parseFragment(fragment, index, context) {
     charge: totalCharge,
     multiplicity: 1,
     name,
+    // The text the drawing itself gave this fragment, empty when it gave none
+    // (issue 139: a dataset labels the record from this, then from its index).
+    fragmentLabel: label,
     warnings,
     geometry: {
       dimension: '2d',

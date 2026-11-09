@@ -93,7 +93,7 @@ function formatFor(filename, text) {
   return '';
 }
 
-function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, parity = 'error', geometry = null }) {
+function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, parity = 'error', geometry = null, fragmentLabel = '' }) {
   if (atoms.length === 0) throw new StructureError('The structure has no atoms.');
   if (atoms.length > MAX_ATOMS) throw new StructureError(`The structure has ${atoms.length} atoms; the limit is ${MAX_ATOMS}.`);
 
@@ -189,6 +189,9 @@ function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, 
     // A CDXML record says what its coordinates are: a 2D drawing. Everything
     // else here is a geometry a calculation may start from.
     ...(geometry && typeof geometry === 'object' ? { geometry } : {}),
+    // Issue 139: the fragment's own drawn text, when it had any, so a dataset
+    // record can be labelled from it instead of from a position index.
+    ...(fragmentLabel ? { fragmentLabel: String(fragmentLabel).trim().slice(0, 200) } : {}),
   };
 }
 

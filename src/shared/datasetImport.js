@@ -14,6 +14,9 @@
  *   - multi-XYZ (one record per frame; the comment line is the label)
  *   - CSV (header row; one atom per row, or repeated `x1,y1,z1,…` columns)
  *   - JSON (an array of records, or `{ records: [...] }`)
+ *   - CDXML (one record per `<fragment>` of a ChemDraw drawing; the record is
+ *     labelled from the fragment's own text, else `fragment N`, and carries
+ *     `geometry.dimension = '2d'` because a drawing is not a geometry)
  *
  * Record ids become task-id segments (`opt~mol3`), so they are derived from
  * the label slug (or `m1…mN` when a label is missing) and made unique.
@@ -25,9 +28,10 @@
 import { isElementSymbol } from './elements.js';
 import { RECORD_ID_RE } from './flows.js';
 import { LIMITS } from './projectSchema.js';
+import { parseStructureRecords } from './structureImport.js';
 
 const MAX_COORD = 1e6;
-const FORMATS = Object.freeze(['sdf', 'xyz', 'csv', 'json']);
+const FORMATS = Object.freeze(['sdf', 'xyz', 'csv', 'json', 'cdxml']);
 
 function oneLine(value, max) {
   return String(value ?? '')
@@ -91,6 +95,30 @@ function emptyResult(format, message) {
 /* ── Record construction ──────────────────────────────────── */
 
 /**
+ * A record's stated topology, as the schema stores it: 1-based atom indices and
+ * an order of 1, 1.5 (aromatic), 2 or 3. An entry that does not make sense for
+ * this atom count is dropped rather than turned into a bond to a missing atom.
+ */
+function recordBonds(raw, atomCount) {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const bonds = [];
+  const seen = new Set();
+  for (const entry of raw) {
+    const a = asInteger(entry?.a);
+    const b = asInteger(entry?.b);
+    const order = asNumber(entry?.order ?? 1);
+    if (a === null || b === null) continue;
+    if (a < 1 || b < 1 || a > atomCount || b > atomCount || a === b) continue;
+    if (![1, 1.5, 2, 3].includes(order)) continue;
+    const key = `${Math.min(a, b)}-${Math.max(a, b)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    bonds.push({ a: Math.min(a, b), b: Math.max(a, b), order });
+  }
+  return bonds;
+}
+
+/**
  * Turn a raw record (from any parser) into the schema shape. Coordinates are
  * validated here so every format gets the same refusal message.
  */
@@ -150,6 +178,13 @@ function buildRecord(raw, index, seenIds) {
   }
 
   if (errors.length > 0) return { record: null, errors, warnings };
+  // Issue 139: a record from a drawing says so, so the run gate and the report
+  // can describe it without re-reading the file. Anything that states no
+  // dimension (every SDF, XYZ, CSV and JSON import) is left unchanged.
+  const dimension = raw?.geometry?.dimension === '2d' || raw?.geometry?.dimension === '3d'
+    ? raw.geometry.dimension
+    : '';
+  const bonds = recordBonds(raw?.bonds, coords.length);
   return {
     record: {
       id,
@@ -157,6 +192,8 @@ function buildRecord(raw, index, seenIds) {
       charge,
       multiplicity,
       coords,
+      ...(bonds.length ? { bonds } : {}),
+      ...(dimension ? { geometry: { dimension } } : {}),
       enabled: raw?.enabled !== false,
     },
     errors,
@@ -580,18 +617,93 @@ function parseJson(text) {
   return { records, format: 'json', warnings, errors };
 }
 
+/* ── CDXML ────────────────────────────────────────────────── */
+
+/**
+ * A ChemDraw drawing as a dataset (issue 139).
+ *
+ * The drawing is read by the structure reader that already exists (`parseStructureRecords`
+ * → `cdxml.js`), not by a second parser: one `<fragment>` becomes one record, in
+ * document order, so a salt or a host–guest drawing imports as several records
+ * instead of one merged molecule.
+ *
+ * Each record is labelled from the fragment's own text — its `Name` attribute,
+ * or a text block drawn beside it — and from its **index** (`fragment 2`) only
+ * when the drawing gave it none: a caption position is not a name, and inventing
+ * one would make two drawings of the same scheme look like the same records.
+ * Two fragments drawn with the same text keep that same label, and their ids are
+ * made unique with a numeric suffix (`ligand`, `ligand-2`) — the label is what the
+ * user drew, the id is what a task id has to be.
+ *
+ * Every record carries `geometry.dimension = '2d'`: page coordinates with z = 0,
+ * a depiction. The run gate refuses such a record in a flow whose first block is
+ * a frequency or a single point unless the user confirms it.
+ */
+function parseCdxml(text, filename) {
+  let parsed;
+  try {
+    parsed = parseStructureRecords(text, { filename });
+  } catch (error) {
+    return emptyResult('cdxml', error.message);
+  }
+  if (parsed.format !== 'cdxml') {
+    return emptyResult('cdxml', 'This file is not a CDXML drawing: no <CDXML> root element was found.');
+  }
+  if (parsed.records.length > LIMITS.records) {
+    return emptyResult('cdxml', `The drawing contains ${parsed.records.length} fragments; the limit is ${LIMITS.records}.`);
+  }
+
+  const records = [];
+  const warnings = [];
+  const errors = [];
+  const seen = new Set();
+  parsed.records.forEach((entry, index) => {
+    if (entry?.error) {
+      // The reader already names the fragment ("Fragment 2: …"); one unreadable
+      // fragment does not hide the ones that could be read.
+      errors.push(entry.error);
+      return;
+    }
+    const own = oneLine(entry.fragmentLabel || '', 200);
+    const built = buildRecord({
+      label: own || `fragment ${index + 1}`,
+      charge: entry.charge,
+      multiplicity: entry.multiplicity,
+      coords: entry.atoms,
+      bonds: entry.bonds,
+      geometry: entry.geometry,
+    }, index, seen);
+    errors.push(...built.errors);
+    for (const message of [...(entry.warnings || []), ...built.warnings]) {
+      // The reader emits the same "this is a 2D drawing" note per fragment; one
+      // copy is the statement, 660 copies are noise.
+      if (!warnings.includes(message)) warnings.push(message);
+    }
+    if (built.record) records.push(built.record);
+  });
+
+  if (records.length === 0 && errors.length === 0) {
+    errors.push('The CDXML contains no fragment with coordinates.');
+  }
+  return { records, format: 'cdxml', warnings, errors };
+}
+
 /* ── Format detection and public API ──────────────────────── */
 
 function resolvedFormat(text, format, filename) {
   const explicit = String(format || '').trim().toLowerCase();
   if (explicit) return FORMATS.includes(explicit) ? explicit : '';
   const extension = String(filename || '').toLowerCase().split('.').pop();
+  if (extension === 'cdxml') return 'cdxml';
   if (extension === 'sdf' || extension === 'sd' || extension === 'mol') return 'sdf';
   if (extension === 'xyz' || extension === 'trj') return 'xyz';
   if (extension === 'csv') return 'csv';
   if (extension === 'json') return 'json';
 
   const trimmed = text.trim();
+  // A drawing may be pasted under any name; the root element is unambiguous and
+  // is checked before the JSON/SDF tests so an XML declaration cannot be misread.
+  if (/<cdxml[\s>/]/i.test(text.slice(0, 20000))) return 'cdxml';
   if (trimmed.startsWith('[') || trimmed.startsWith('{')) return 'json';
   if (text.includes('$$$$') || /V2000|V3000/.test(text)) return 'sdf';
   const lines = trimmed.split(/\r\n|\n|\r/);
@@ -614,13 +726,14 @@ export function parseDataset(text, { format = '', filename = '' } = {}) {
   }
   const resolved = resolvedFormat(text, format, filename);
   if (!resolved) {
-    return emptyResult('', 'Could not tell the dataset format. Use .sdf, .xyz, .csv or .json, or choose the format explicitly.');
+    return emptyResult('', 'Could not tell the dataset format. Use .sdf, .xyz, .csv, .json or .cdxml, or choose the format explicitly.');
   }
 
   let result;
   if (resolved === 'sdf') result = parseSdf(text);
   else if (resolved === 'xyz') result = parseXyz(text);
   else if (resolved === 'csv') result = parseCsv(text);
+  else if (resolved === 'cdxml') result = parseCdxml(text, filename);
   else result = parseJson(text);
 
   if (result.records.length > LIMITS.records) {

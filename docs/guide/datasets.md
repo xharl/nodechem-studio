@@ -66,7 +66,7 @@ The CSV needs an `element` column (or `element1`, `element2`, … beside the coo
 `x,y,z` but no element column is refused rather than guessed at.
 
 When the file picker is unavailable, the same inspector has a **Paste records instead** field: paste
-the SDF, XYZ, CSV or JSON text, choose a format (or let it detect), and import. This is also what
+the SDF, XYZ, CSV, JSON or CDXML text, choose a format (or let it detect), and import. This is also what
 keeps the browser preview usable without the desktop bridge.
 
 ### ChemDraw drawings (`.cdxml`)
@@ -90,6 +90,23 @@ hydrogens that the drawing leaves implicit are not added. The record therefore c
 planar page coordinates for a conformer. No R/S is assigned: a wedge states which end is narrow, and
 that is all that is kept. The import never embeds, optimises or "cleans up" the drawing.
 
+**Labels and ids.** A record is labelled from the fragment's own text — its `Name` attribute, or a
+text block drawn beside it — and from its **index** (`fragment 2`) only when the drawing gave it none.
+Two fragments drawn with the same text keep that same label, because that is what the drawing says;
+their **ids** are made unique with a numeric suffix (`ligand`, `ligand-2`), because a task id
+(`freq~ligand`) has to name one record. Repeated SDF titles behave the same way.
+
+**The run gate.** A frequency or a single point on a drawing reports on the drawing, not the
+molecule, so a flow whose **first calculation block** is one of those refuses a drawing record until
+you confirm it. The refusal names the record and the block, the record is not dropped, and nothing is
+queued: the run asks once, and **Use the drawings and continue** stores `drawingConfirmed` on those
+records and plans the flow again. An optimisation first, or a block that reads a checkpoint, needs no
+confirmation — it hands over a geometry it built. The record is stored as:
+
+```json
+{ "id": "ligand-2", "label": "ligand", "coords": [ … ], "geometry": { "dimension": "2d" }, "drawingConfirmed": true }
+```
+
 Refused **by name**, with the reason in the message:
 
 - a node label that cannot be reduced to one element (`CO2H`, `SO3H`, a stray word) — it is never
@@ -111,7 +128,8 @@ reader does not guess at one.
 
 The input inspector lists every record with its label, charge, multiplicity and an **on** checkbox.
 Unchecking a record keeps it in the project file but removes it from the next plan; it is not
-deleted. The block card shows `enabled / total` and the dataset's format.
+deleted. The block card shows `enabled / total` and the dataset's format. A record imported from a
+drawing carries a **2D** pill beside its id, and the card counts them.
 
 Importing into a bound input block **replaces** that dataset's records and source in place, so the
 graph keeps pointing at the same dataset id. Importing into an unbound block creates a new dataset

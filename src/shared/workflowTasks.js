@@ -21,6 +21,7 @@ import {
   datasetById,
   datasetsOf,
   edgesOfFlow,
+  orderingEdgesOf,
   orderingSourceIds,
   recordsForInput,
   flowById,
@@ -222,6 +223,121 @@ export function pendingConformerFor(project, node) {
 /** The one refusal message used at plan time and again by the queue. */
 export function noSelectedConformerMessage(conformer, node) {
   return `"${conformer.title}" has no selected conformer. Run the ensemble and choose a member before running "${node.title}".`;
+}
+
+/* ── 2D drawings (issue 139) ──────────────────────────────── */
+
+/**
+ * The job types that report on the coordinates they are handed as they stand.
+ *
+ * A frequency at a flat drawing returns imaginary modes that belong to the page
+ * layout, and a single point returns an energy of that layout — neither is a
+ * statement about the molecule. Every other first block either rebuilds the
+ * geometry (`Opt`, a transition-state search) or reads a checkpoint, so a
+ * drawing may start there.
+ */
+export const DRAWING_JOB_TYPES = Object.freeze(['Freq', 'SP']);
+
+/** A dataset record imported from a CDXML drawing. */
+export function isDrawingRecord(record) {
+  return record?.geometry?.dimension === '2d';
+}
+
+/**
+ * The input blocks for which `block` is the first calculation block.
+ *
+ * The walk goes upstream over the ordering edges and stops at the first
+ * calculation block on each path: whatever ran before it already produced a
+ * geometry, so a later block is not the one that decides whether the record's
+ * own coordinates are used. An empty result means some calculation runs before
+ * this block on every path to an input, so the record reaches it as a result.
+ */
+function firstInputBlocksFor(byId, edges, blockId) {
+  const upstream = new Map();
+  for (const edge of orderingEdgesOf(edges)) {
+    if (!upstream.has(edge.to)) upstream.set(edge.to, []);
+    upstream.get(edge.to).push(edge.from);
+  }
+  const seen = new Set();
+  const found = new Set();
+  const stack = [...(upstream.get(blockId) || [])];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const node = byId.get(id);
+    if (!node) continue;
+    if (node.type === 'input') {
+      found.add(id);
+      continue;
+    }
+    // A calculation block in between is the one that consumes the record's own
+    // coordinates; this block reads its output, so it is not the first.
+    if (node.type === 'calc') continue;
+    for (const next of upstream.get(id) || []) stack.push(next);
+  }
+  return found;
+}
+
+/**
+ * The run gate for a drawing record (issue 139), or null when the record may run.
+ *
+ * A CDXML record is page coordinates with z = 0 — a depiction. In a flow whose
+ * first block is a frequency or a single point, running it as it stands reports
+ * on the drawing, not the molecule, so this returns the refusal that names the
+ * record and the block. The record is neither dropped nor run: the planner
+ * keeps its task, non-executable and carrying `drawingRefusal`, and the
+ * renderer asks for confirmation. `record.drawingConfirmed = true` is the
+ * confirmation, stored on the record so it survives the plan that asked.
+ *
+ * A block that reads a checkpoint, or an optimisation before the frequency,
+ * hands over a computed geometry — the drawing's own coordinates never reach
+ * the job, so nothing is refused.
+ */
+export function drawingGateFor(project, node, record, { nodes = null, edges = null, datasetId = '' } = {}) {
+  if (!isDrawingRecord(record) || record.drawingConfirmed === true) return null;
+  if (!node || node.type !== 'calc') return null;
+  const jobType = String(node.settings?.jobType || '');
+  if (!DRAWING_JOB_TYPES.includes(jobType)) return null;
+
+  const flowNodes = Array.isArray(nodes) ? nodes : nodesOfFlow(activeFlow(project));
+  const flowEdges = Array.isArray(edges) ? edges : edgesOfFlow(activeFlow(project));
+  const byId = new Map(flowNodes.map((entry) => [entry.id, entry]));
+  if (byId.size === 0) return null;
+  if (firstInputBlocksFor(byId, flowEdges, node.id).size === 0) return null;
+
+  const recordLabel = String(record.label || record.id || 'record');
+  const blockTitle = String(node.title || node.id || jobType);
+  return {
+    recordId: String(record.id || ''),
+    recordLabel,
+    datasetId: String(datasetId || ''),
+    blockId: String(node.id || ''),
+    blockTitle,
+    jobType,
+    message: `Record "${recordLabel}" is a 2D drawing (CDXML page coordinates, every atom at z = 0),`
+      + ` and "${blockTitle}" is the first block of this flow (${jobType}): its numbers would describe the drawing,`
+      + ' not the molecule. Optimise the record first, or confirm that the drawing may be used as it is.',
+  };
+}
+
+/**
+ * A planning task refused by the drawing gate: not executable, no input text, and
+ * carrying the message. `pendingInput` is the mechanism the queue already honours
+ * (#101) for a task that may not run as planned, so a queue started without the
+ * renderer's confirmation step fails this task alone with the same words instead
+ * of skipping it in silence.
+ */
+function refusedDrawingTask(task, refusal) {
+  return {
+    ...task,
+    executable: false,
+    inputText: '',
+    argv: null,
+    route: null,
+    drawingRefusal: refusal,
+    pendingInput: { reason: refusal.message, conformerId: null, conformerTitle: null },
+  };
 }
 
 /**
@@ -920,6 +1036,15 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
     for (const record of records) {
       const recordId = record?.id || null;
       const base = taskIdFor(node.id, recordId);
+      // Issue 139: a 2D drawing may not feed a first block that reports on the
+      // coordinates it is given. The record keeps its task, refused, so nothing
+      // is dropped and nothing runs by accident.
+      const drawing = drawingGateFor(project, node, record, {
+        nodes,
+        edges: projectEdges,
+        datasetId: scope?.dataset?.id || '',
+      });
+      const gated = (task) => (drawing ? refusedDrawingTask(task, drawing) : task);
       // The upstream *task* whose artifact this run reads: the member's own run
       // when the fan propagates, otherwise the record's (or primary rung's) run.
       const checkpointTaskFor = (memberId = null) => {
@@ -939,7 +1064,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
         const readsCheckpoint = Boolean(checkpointSource);
         for (const member of fanOut.members) {
           const taskId = taskIdFor(node.id, recordId, member.id);
-          pushTask(calculationTask(project, node, {
+          pushTask(gated(calculationTask(project, node, {
             taskId,
             record,
             conformerMember: readsCheckpoint ? null : fanMemberContext(project, fanOut, member),
@@ -953,7 +1078,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
               count: fanOut.members.length,
               spreadKcal: fanOut.spreadKcal,
             },
-          }), recordId);
+          })), recordId);
           registerFan(taskId, fanOut.nodeId, member.id);
           ids.push(taskId);
         }
@@ -962,24 +1087,24 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       if (spin) {
         spin.multiplicities.forEach((multiplicity, index) => {
           const taskId = `${base}.m${multiplicity}`;
-          pushTask(calculationTask(project, node, {
+          pushTask(gated(calculationTask(project, node, {
             taskId,
             record,
             settingsOverride: { ...settingsForNode(project, node), multiplicity, spinSweep: null },
             checkpointTaskId: checkpointTaskFor(),
             title: `${node.title} — multiplicity ${multiplicity}`,
             spin: { id: node.id, index, multiplicity, count: spin.multiplicities.length },
-          }), recordId);
+          })), recordId);
           ids.push(taskId);
         });
         continue;
       }
       if (!ladder) {
-        pushTask(calculationTask(project, node, {
+        pushTask(gated(calculationTask(project, node, {
           taskId: base,
           record,
           checkpointTaskId: checkpointTaskFor(),
-        }), recordId);
+        })), recordId);
         ids.push(base);
         continue;
       }
@@ -993,7 +1118,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
           dispersion: rung.dispersion || node.settings.dispersion,
           ladder: null,
         };
-        pushTask(calculationTask(project, node, {
+        pushTask(gated(calculationTask(project, node, {
           taskId,
           record,
           settingsOverride: settings,
@@ -1006,7 +1131,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
             count: ladder.rungs.length,
             toleranceKcal: ladder.toleranceKcal,
           },
-        }), recordId);
+        })), recordId);
         ids.push(taskId);
       });
     }
@@ -1142,7 +1267,9 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
     }
   }
 
-  if (!tasks.some((task) => task.executable)) throw new Error('The workflow has no calculation blocks to run.');
+  // Issue 139: a refused drawing task is a calculation block that is present but
+  // waiting on the user, not a flow with nothing to run.
+  if (!tasks.some((task) => task.executable || task.drawingRefusal)) throw new Error('The workflow has no calculation blocks to run.');
 
   // RFC 0001: a family of molecules multiplies every block, so the plan has a
   // ceiling and names the product that hit it. Issue #87 adds the fan-out

@@ -2937,8 +2937,15 @@ function importDatasetText(text, { filename = '', format = '', nodeId = null } =
   renderInspector();
   const skipped = result.errors.length ? ` · ${result.errors.length} record(s) skipped` : '';
   const warnings = result.warnings.length ? ` · ${result.warnings.length} warning(s)` : '';
+  // Issue 139: a CDXML import is a set of drawings, and the run gate will ask
+  // before a frequency or single point uses one. Say so at the moment of import
+  // rather than after the flow is queued.
+  const drawings = result.records.filter((record) => record.geometry?.dimension === '2d').length;
+  const drawingNote = drawings
+    ? ` · ${drawings} 2D drawing${drawings === 1 ? '' : 's'} (a depiction, not a geometry)`
+    : '';
   toast(`${replaced ? 'Replaced' : 'Imported'} ${result.records.length} record${result.records.length === 1 ? '' : 's'}`
-    + ` from ${filename || 'pasted text'}${skipped}${warnings}.`);
+    + ` from ${filename || 'pasted text'}${drawingNote}${skipped}${warnings}.`);
   return dataset;
 }
 
@@ -3609,12 +3616,16 @@ function inputInspector(node) {
   const recordRows = records.length
     ? records.map((record) => `
       <tr class="${record.enabled === false ? 'is-disabled' : ''}">
-        <td><span class="record-label">${esc(record.label || record.id)}</span><span class="record-id">${esc(record.id)}</span></td>
+        <td><span class="record-label">${esc(record.label || record.id)}</span><span class="record-id">${esc(record.id)}</span>${record.geometry?.dimension === '2d' ? ' <span class="status-pill">2D</span>' : ''}</td>
         <td>${esc(record.charge)}</td>
         <td>${esc(record.multiplicity)}</td>
         <td><input type="checkbox" data-dataset-id="${esc(dataset.id)}" data-dataset-record="${esc(record.id)}"${record.enabled === false ? '' : ' checked'} aria-label="Enable ${esc(record.label || record.id)}"></td>
       </tr>`).join('')
     : '';
+  // Issue 139: a drawing is not a geometry. The inspector says which records are
+  // drawings (the 2D pill) and that a frequency or single point on one is
+  // refused at run time until the user confirms it.
+  const drawings = records.filter((record) => record.geometry?.dimension === '2d').length;
   const datasetCard = dataset
     ? `<div class="kv"><span>Source</span><code>${esc(dataset.source?.format || '')}${dataset.source?.path ? ` · ${esc(dataset.source.path)}` : ' · inline'}</code></div>
        <div class="kv"><span>Records</span><code>${counts.enabled} of ${counts.total} enabled</code></div>
@@ -3623,8 +3634,9 @@ function inputInspector(node) {
            <thead><tr><th>Record</th><th>q</th><th>mult</th><th>on</th></tr></thead>
            <tbody>${recordRows}</tbody>
          </table>
-       </div>` : '<div class="callout red"><strong>No records.</strong> This dataset has no geometry to run.</div>'}`
-    : '<div class="callout"><strong>No dataset bound.</strong> Import an SDF, XYZ, CSV or JSON file of geometries, or paste its text below.</div>';
+       </div>` : '<div class="callout red"><strong>No records.</strong> This dataset has no geometry to run.</div>'}
+       ${drawings ? `<div class="callout"><strong>${drawings} 2D drawing${drawings === 1 ? '' : 's'}.</strong> Page coordinates with z = 0, not a geometry. A flow whose first block is a frequency or a single point asks for confirmation before it runs one.</div>` : ''}`
+    : '<div class="callout"><strong>No dataset bound.</strong> Import an SDF, XYZ, CSV, JSON or CDXML file of geometries, or paste its text below.</div>';
 
   const seriesRefused = Boolean(node.input?.series && seriesPreview(node, dataset).error);
   const derivativeRefused = Boolean(node.input?.edits?.length && derivativePreview(node, dataset).error);
@@ -3647,11 +3659,11 @@ function inputInspector(node) {
       `<div class="field full"><label>Dataset</label><select class="select" data-input-field="datasetId">${options}</select></div>`,
       datasetCard,
       '<div class="field full"><button type="button" class="btn" data-action="import-dataset">Import dataset file…</button></div>',
-      '<input type="file" id="dataset-file" accept=".sdf,.sd,.mol,.xyz,.csv,.json" hidden>',
+      '<input type="file" id="dataset-file" accept=".sdf,.sd,.mol,.xyz,.csv,.json,.cdxml" hidden>',
       `<details class="dataset-paste">
         <summary>Paste records instead</summary>
         <div class="field full"><label>Format</label><select class="select" id="dataset-paste-format">
-          <option value="">Detect</option><option value="sdf">SDF</option><option value="xyz">XYZ</option><option value="csv">CSV</option><option value="json">JSON</option>
+          <option value="">Detect</option><option value="sdf">SDF</option><option value="xyz">XYZ</option><option value="csv">CSV</option><option value="json">JSON</option><option value="cdxml">CDXML</option>
         </select></div>
         <div class="field full"><label>Dataset text</label><textarea class="textarea" id="dataset-paste" rows="6" spellcheck="false" placeholder="$$$$&#10;… or a CSV header, or a JSON array"></textarea></div>
         <button type="button" class="btn small" data-action="import-dataset-paste">Import pasted text</button>
@@ -4835,6 +4847,11 @@ function renderDrawer() {
   }
   if (drawer.type === 'replace-confirm') {
     renderReplaceConfirm();
+    placeModal();
+    return;
+  }
+  if (drawer.type === 'drawing-gate') {
+    renderDrawingGate();
     placeModal();
     return;
   }
@@ -6542,6 +6559,16 @@ async function startWorkflowUnlocked() {
     return;
   }
 
+  // Issue 139: a 2D drawing may not be handed to a first frequency or single
+  // point without the user saying so. The plan keeps those tasks and refuses
+  // them; this is the confirmation path, and cancelling queues nothing.
+  const refusedDrawings = tasks.filter((task) => task.drawingRefusal);
+  if (refusedDrawings.length > 0) {
+    appendRunOutput(`Drawing gate: ${refusedDrawings.length} record(s) came from a 2D drawing and the first block would report on the drawing. Confirmation requested.\n`);
+    openDrawingGate(refusedDrawings.map((task) => task.drawingRefusal));
+    return;
+  }
+
   const preflight = await preflightRun({ quiet: true });
   if (!preflight || (!preflight.ok && !dryRun)) {
     toast('Preflight is not ready. Fix the run configuration or use dry run.');
@@ -7082,6 +7109,99 @@ function renderReplaceConfirm() {
       <button type="button" class="btn" data-modal-close>Keep editing</button>
       <button type="button" class="btn primary" data-action="confirm-replace">Discard and continue</button>
     </div>`;
+}
+
+/**
+ * The 2D-drawing run gate (issue 139).
+ *
+ * A CDXML record is page coordinates with z = 0: a depiction. A flow whose first
+ * block is a frequency or a single point would report on the drawing, not the
+ * molecule, so the planner refuses those tasks and this sheet asks. Confirming
+ * writes `drawingConfirmed` on each record — the decision belongs to the record,
+ * not to one queue — and the workflow is planned again from that answer.
+ * Cancelling queues nothing and changes nothing.
+ */
+function openDrawingGate(refusals) {
+  // A block that expands (a spin sweep, a method ladder) produces one refused
+  // task per expansion; the sheet asks once per record and block.
+  const seen = new Set();
+  const unique = [];
+  for (const refusal of Array.isArray(refusals) ? refusals : []) {
+    const key = `${refusal.datasetId}|${refusal.recordId}|${refusal.blockId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(refusal);
+  }
+  state.drawer = {
+    type: 'drawing-gate',
+    refusals: unique,
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  };
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  renderDrawer();
+  requestAnimationFrame(() => {
+    $('#modal')?.querySelector('[data-action="confirm-drawing"]')?.focus();
+  });
+}
+
+function renderDrawingGate() {
+  const modal = $('#modal');
+  if (!modal || state.drawer?.type !== 'drawing-gate') return;
+  const refusals = Array.isArray(state.drawer.refusals) ? state.drawer.refusals : [];
+  const rows = refusals.map((entry) => `
+    <li><strong>${esc(entry.recordLabel || entry.recordId)}</strong> — ${esc(entry.blockTitle || entry.blockId)}
+      <span class="record-id">${esc(entry.jobType)}</span></li>`).join('');
+  modal.innerHTML = `
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">Run gate · 2D drawing</span>
+        <h2 id="modal-title">Run ${refusals.length === 1 ? 'a drawing' : `${refusals.length} drawings`} without building a geometry first?</h2>
+        <p>The first block of this flow reads the coordinates it is given.</p>
+      </div>
+      <button type="button" class="icon-btn" data-modal-close aria-label="Close">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="callout red"><strong>A drawing gives numbers about itself, not the molecule.</strong>
+        These records are ChemDraw page coordinates: bond lengths are typographic, every atom sits at z = 0,
+        and the hydrogens the drawing left implicit are not there. A frequency on that layout reports modes
+        of the layout; a single point reports its energy.</div>
+      <ul class="inspector-note" style="margin:12px 0 0 18px">${rows}</ul>
+      <p class="inspector-note" style="margin-top:12px">Put an optimisation before this block, or confirm here.
+        Confirming is stored on each record, so the next run of this flow does not ask again.</p>
+    </div>
+    <div class="modal-foot">
+      <div class="modal-note">Nothing is queued unless you confirm.</div>
+      <button type="button" class="btn" data-modal-close>Cancel</button>
+      <button type="button" class="btn primary" data-action="confirm-drawing">Use the drawings and continue</button>
+    </div>`;
+}
+
+/** Record the user's answer on the records themselves, then plan again. */
+function confirmDrawingGate() {
+  const refusals = Array.isArray(state.drawer?.refusals) ? state.drawer.refusals : [];
+  const datasets = Array.isArray(state.project?.datasets) ? state.project.datasets : [];
+  let confirmed = 0;
+  for (const refusal of refusals) {
+    const dataset = refusal.datasetId
+      ? datasets.find((entry) => entry.id === refusal.datasetId)
+      : null;
+    const pools = dataset ? [dataset] : datasets;
+    for (const pool of pools) {
+      for (const record of Array.isArray(pool.records) ? pool.records : []) {
+        if (record.id !== refusal.recordId || record.geometry?.dimension !== '2d') continue;
+        record.drawingConfirmed = true;
+        confirmed += 1;
+      }
+    }
+  }
+  closeDrawer();
+  if (confirmed === 0) {
+    toast('The drawing record could not be found; nothing was confirmed.');
+    return;
+  }
+  renderInspector();
+  startWorkflow();
 }
 
 /** Rename is a project field, not a file rename: the next Save writes the name. */
@@ -8043,6 +8163,7 @@ function handleAction(action, element) {
       if (typeof run === 'function') run();
       break;
     }
+    case 'confirm-drawing': confirmDrawingGate(); break;
     case 'about': toast(`NodeChem Studio — the graph is the workspace. The inspector exposes the full job parameter set; the local runner executes one selected block or the whole workflow queue${appVersion ? ` (v${appVersion})` : ''}. Some capabilities are CLI-only by design: ncs export, ncs record import, ncs diff, ncs merge, ncs export-input, ncs qcschema, ncs cache. docs/guide/cli.md lists every command and where it lives.`); break;
     default: break;
   }
