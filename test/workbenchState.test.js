@@ -195,9 +195,28 @@ describe('workbench state follows the queue', () => {
       expect(app.state.project.nodes[0].state).toBe('blocked');
     });
 
+    it('reconciles a restored queue into the blocks and the next action (issue 160)', () => {
+      // The reported build: twelve completed tasks and twelve blocks reading
+      // `Ready`, with the Next Action pointing at work that had already run.
+      setNodes([
+        calcNode('n-a'), calcNode('n-b'), calcNode('n-c'),
+        { ...calcNode('cond-1'), type: 'condition' },
+      ]);
+      setQueue([
+        { nodeId: 'n-a', status: 'completed', gateVerdict: 'pass' },
+        { nodeId: 'n-b', status: 'completed', gateVerdict: 'pass' },
+        { nodeId: 'n-c', status: 'completed', gateVerdict: 'pass' },
+        { nodeId: 'cond-1', status: 'completed' },
+      ]);
+      app.reconcileNodesWithQueue();
+      expect(app.state.project.nodes.map((node) => node.state)).toEqual(['passed', 'passed', 'passed', 'passed']);
+    });
+
     it('does nothing when there is no queue to read', () => {
       setNodes([calcNode('idle')]);
-      expect(app.syncNodeStatesFromQueue({ tasks: [] })).toBeUndefined();
+      // Issue 160: the reconciler reports whether it changed anything so the
+      // caller can re-render only when it did. "No queue" is false, not undefined.
+      expect(app.syncNodeStatesFromQueue({ tasks: [] })).toBe(false);
       expect(app.state.project.nodes[0].state).toBe('ready');
     });
   });

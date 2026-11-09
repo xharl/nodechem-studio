@@ -22,6 +22,7 @@ import {
   normalizeDraft,
 } from '../shared/draft.js';
 import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import { applyQueueToProject, nextAction } from '../shared/queueReconcile.js';
 import {
   attachGraphAliases,
   activeFlow,
@@ -1454,9 +1455,9 @@ function renderProjectInspector() {
   const nodes = state.project.nodes;
   const counts = { passed: 0, ready: 0, review: 0, blocked: 0 };
   nodes.forEach((node) => { if (node.type !== 'note') counts[node.state] += 1; });
-  const next = nodes.find((node) => node.state === 'review')
-    || nodes.find((node) => node.state === 'ready')
-    || null;
+  // One definition of "what next", shared with the start-up reconciliation so
+  // the prompt cannot disagree with the queue it was derived from (issue 160).
+  const next = nextAction(nodes)?.node ?? null;
   const segments = ['passed', 'ready', 'review', 'blocked']
     .filter((key) => counts[key] > 0)
     .map((key) => `<span class="${key}" style="flex:${counts[key]}"></span>`)
@@ -4782,43 +4783,31 @@ function buildWorkflowTasks() {
  * passes only when every record does. Without this the cards, the flow tabs and
  * the status bar kept saying "ready" after a run had already finished.
  */
+/**
+ * Issue 160: the rules live in `src/shared/queueReconcile.js` so the start-up
+ * reconciliation and the live queue updates cannot drift apart, and so they can
+ * be tested without a DOM.
+ */
 function syncNodeStatesFromQueue(queue) {
   const tasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
-  if (tasks.length === 0) return;
-  const byParent = new Map();
-  for (const task of tasks) {
-    const parentId = String(task?.nodeId || '').split('~')[0];
-    if (!parentId) continue;
-    if (!byParent.has(parentId)) byParent.set(parentId, []);
-    byParent.get(parentId).push(task);
-  }
-  let changed = false;
-  for (const [parentId, family] of byParent) {
-    const node = nodeById(parentId);
-    // Control and output blocks complete in the same queue, so their state has
-    // to follow it too — otherwise a finished flow never reads as finished.
-    if (!node) continue;
-    const statuses = family.map((task) => String(task.status || ''));
-    if (statuses.some((status) => status === 'running' || status === 'queued')) continue;
-    const completed = family.filter((task) => task.status === 'completed');
-    const everyCompletedPassed = statuses.every((status) => status === 'completed')
-      // A control/output task carries no gates; completed is its pass.
-      && completed.every((task) => !task.gateVerdict || task.gateVerdict === 'pass');
-    let next = null;
-    // A branch that was not taken is a decision, not pending work: the loop or
-    // condition block has done its job, so it reads as passed rather than ready.
-    if (statuses.every((status) => status === 'skipped')
-      && (node.type === 'loop' || node.type === 'condition')) next = 'passed';
-    else if (statuses.some((status) => status === 'failed')) next = 'review';
-    else if (completed.length > 0 && !everyCompletedPassed) next = 'review';
-    else if (everyCompletedPassed) next = 'passed';
-    else if (statuses.some((status) => status === 'blocked')) next = 'blocked';
-    if (next && node.state !== next) {
-      node.state = next;
-      changed = true;
-    }
-  }
-  return changed;
+  if (tasks.length === 0) return false;
+  return applyQueueToProject(state.project, tasks).changed;
+}
+
+/**
+ * Issue 160: on start up the queue and the project are restored by two separate
+ * calls, and the queue used to arrive first — nothing was there to apply it to,
+ * so twelve completed tasks sat beside twelve `ready` blocks and a Next Action
+ * telling the user to run work that already existed. This runs after both are in
+ * hand and then redraws everything that reads a block state.
+ */
+function reconcileNodesWithQueue() {
+  const changed = syncNodeStatesFromQueue(state.queue);
+  if (!changed) return false;
+  renderGraph();
+  renderInspector();
+  updateCounts();
+  return true;
 }
 
 function applyQueue(queue) {
@@ -4830,7 +4819,7 @@ function applyQueue(queue) {
     tasks: Array.isArray(queue.tasks) ? queue.tasks : [],
     reason: queue.reason || null,
   };
-  syncNodeStatesFromQueue(queue);
+  const reconciled = syncNodeStatesFromQueue(queue);
   renderQueue();
   updateRunProgressChip();
   updateRunTabBadges();
@@ -4846,6 +4835,8 @@ function applyQueue(queue) {
   // numbers. Cheap enough at canvas scale and it keeps the workbench honest
   // while a queue drains.
   renderGraph();
+  // ...and the Next Action is computed from those states, so it follows them.
+  if (reconciled) renderInspector();
 }
 
 function renderQueue() {
@@ -5212,6 +5203,11 @@ function applyOpenedProject(result) {
   }
   state.project = result.project;
   hydrateProject(state.project);
+  // Issue 160: the queue may already be restored — it is read at start up, before
+  // any project file exists — so the verdicts are applied here, where the blocks
+  // finally exist, and before the project is marked saved: otherwise simply
+  // opening a project would immediately read as unsaved.
+  syncNodeStatesFromQueue(state.queue);
   state.selected = { type: 'project', id: null };
   state.history = null;
   markProjectSaved(result.path);
@@ -6680,7 +6676,7 @@ function wireEvents() {
 
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
-export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, resultFacts, runStateOf, simpleInspector, state, syncNodeStatesFromQueue };
+export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, resultFacts, runStateOf, simpleInspector, state, syncNodeStatesFromQueue, reconcileNodesWithQueue };
 
 function applyAppInfo() {
   const chip = $('#app-version-chip');
@@ -6724,10 +6720,12 @@ function init() {
   renderGraph();
   renderInspector();
   renderQueue();
-  restoreQueue();
-  // Offer the draft only after a startup project has had the chance to load,
-  // so the comparison is against the project the user will actually see.
-  openStartupProject().finally(offerDraftRestore);
+  // Issue 160: the project first, then its queue. The other order left the
+  // restored verdicts with nowhere to land.
+  openStartupProject()
+    .then(() => restoreQueue())
+    .then(() => reconcileNodesWithQueue())
+    .finally(offerDraftRestore);
   refreshHistory();
   setZoom(state.zoom);
   wireEvents();
