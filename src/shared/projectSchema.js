@@ -123,6 +123,13 @@ export const JOB_TYPES = Object.freeze([
   // Issue #77: composite methods are job types, not method strings. Each takes
   // no separate method/basis pair and expands to its documented Gaussian links.
   ...COMPOSITE_JOB_TYPES,
+  // Issue 181: Psi4's TD-DFT is an *engine* job type, not a Gaussian keyword —
+  // it is written as `set tdscf_states N` + `energy('td-<method>')`, never as a
+  // route line. It belongs in this enum all the same, because this is the list
+  // the validator reads: without it a project containing a TD-DFT block could
+  // be run but never saved. `test/jobTypeEnum.test.js` holds the two lists
+  // together so an engine job type cannot be added without landing here.
+  'TD-DFT',
 ]);
 export const IRC_DIRECTIONS = Object.freeze(['forward', 'reverse', 'both']);
 export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3', 'D4']);
