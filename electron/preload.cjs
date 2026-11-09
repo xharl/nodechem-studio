@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld('desktop', {
   startupProject: () => ipcRenderer.invoke('project:startup'),
   openProjectPath: (filePath) => ipcRenderer.invoke('project:open-path', filePath),
   saveProject: (project, filePath) => ipcRenderer.invoke('project:save', project, filePath),
+  // Recent projects (issue 149): the list, opening one of its recorded paths, and
+  // forgetting/clearing. Main validates every path against that list.
+  recentProjects: () => ipcRenderer.invoke('project:recent'),
+  openRecentProject: (filePath) => ipcRenderer.invoke('project:open-recent', filePath),
+  forgetRecentProject: (filePath) => ipcRenderer.invoke('project:forget-recent', filePath),
+  clearRecentProjects: () => ipcRenderer.invoke('project:clear-recent'),
+  revealProject: (filePath) => ipcRenderer.invoke('project:reveal', filePath),
   exportInput: (payload) => ipcRenderer.invoke('input:export', payload),
   exportCluster: (payload) => ipcRenderer.invoke('cluster:export', payload),
   importCluster: () => ipcRenderer.invoke('cluster:import'),

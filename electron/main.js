@@ -12,7 +12,8 @@ import { writeClusterExport, importClusterExport } from './runner/clusterFiles.j
 import { writeRunBundle } from './runner/runBundle.js';
 import { isSafeRunId } from '../src/shared/runBundle.js';
 import { fingerprint, writeGuardDecision } from '../src/shared/projectMerge.js';
-import { parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
+import { MAX_PROJECT_BYTES, parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
+import { createRecentStore, enginesForProject, pathKey } from '../src/shared/recentProjects.js';
 import { buildDiagnostics } from '../src/shared/diagnostics.js';
 import { checkForUpdate } from '../src/shared/updateCheck.js';
 import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js';
@@ -146,6 +147,94 @@ app.on('open-file', (event, filePath) => {
 const USER_DATA_DIR = path.join(app.getPath('appData'), 'nodechem-studio');
 fs.mkdirSync(USER_DATA_DIR, { recursive: true });
 app.setPath('userData', USER_DATA_DIR);
+
+/**
+ * Recent projects (issue 149). The renderer never reads or writes this file; it asks
+ * for the list, and main only opens a path that is already in the list. That is
+ * what keeps the menu from becoming a way to make main read an arbitrary file.
+ */
+function canonicalProjectPath(filePath) {
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch {
+    // A path that does not exist yet (a Save As target) has no realpath.
+    return path.resolve(filePath);
+  }
+}
+
+const recentProjects = createRecentStore({
+  filePath: path.join(USER_DATA_DIR, 'recent-projects.json'),
+  fs,
+  platform: process.platform,
+  canonical: canonicalProjectPath,
+});
+
+/**
+ * Refresh one row's name/engines from the file itself, so a project renamed on
+ * disk is not described by a stale menu entry. Parse failures return null and
+ * the recorded values stand; nothing is invented.
+ */
+function readRecentProjectMetadata(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile() || stats.size > MAX_PROJECT_BYTES) return null;
+    const parsed = parseProjectText(fs.readFileSync(filePath, 'utf8'));
+    if (!parsed.ok) return null;
+    return { name: parsed.project.name, engines: enginesForProject(parsed.project) };
+  } catch {
+    return null;
+  }
+}
+
+function recentProjectRows() {
+  return recentProjects.view({ readProject: readRecentProjectMetadata });
+}
+
+/** Record a successful open or save; a failed list write must not fail the open. */
+function rememberRecentProject(target, project) {
+  try {
+    recentProjects.record({
+      path: target,
+      name: project?.name || '',
+      engines: enginesForProject(project),
+      openedAt: Date.now(),
+    });
+  } catch {
+    // The project is open either way; the next successful record repairs the list.
+  }
+}
+
+/**
+ * Open a recent entry. Only a path main itself recorded is accepted — the
+ * renderer cannot turn this channel into an arbitrary file read.
+ */
+async function openRecentProject(filePath) {
+  const requested = typeof filePath === 'string' ? filePath.trim() : '';
+  const known = requested
+    ? recentProjects.entries().some((entry) => pathKey(entry.path, process.platform) === pathKey(requested, process.platform))
+    : false;
+  if (!known) {
+    return { canceled: false, error: { message: 'That project is not in the recent list.' } };
+  }
+  return readProjectFile(requested);
+}
+
+/** Reveal only a project this window opened or saved, not any path asked for. */
+function revealProject(filePath) {
+  const target = typeof filePath === 'string' ? filePath.trim() : '';
+  const recorded = target && (
+    knownProjectHashes.has(target)
+    || recentProjects.entries().some((entry) => pathKey(entry.path, process.platform) === pathKey(target, process.platform))
+  );
+  if (!recorded) {
+    return { ok: false, error: { message: 'Only a project this window opened can be shown in the file manager.' } };
+  }
+  if (!isProjectPath(target) || !fs.existsSync(target)) {
+    return { ok: false, error: { message: 'That project file is no longer on disk.' } };
+  }
+  shell.showItemInFolder(target);
+  return { ok: true, path: target };
+}
 
 let mainWindow = null;
 /**
@@ -394,6 +483,9 @@ async function readProjectFile(filePath) {
     if (!parsed.ok) {
       return { canceled: false, path: target, error: projectFailure(parsed) };
     }
+    // issue 149: a successful read is what "recent" means — the list is not touched
+    // by a failed parse, so it never points at something this app could not open.
+    rememberRecentProject(target, parsed.project);
     return {
       canceled: false,
       path: target,
@@ -459,6 +551,7 @@ async function saveProject(project, filePath) {
   }
   await fsp.writeFile(target, serialized.text, 'utf8');
   knownProjectHashes.set(target, fingerprint(serialized.text));
+  rememberRecentProject(target, serialized.project);
   return {
     canceled: false,
     path: target,
@@ -943,6 +1036,20 @@ app.whenReady().then(async () => {
   ipcMain.handle('project:startup', () => ({ path: startupProjectPath }));
   ipcMain.handle('project:open-path', (_event, filePath) => readProjectFile(filePath));
   ipcMain.handle('project:save', (_event, project, filePath) => saveProject(project, filePath));
+  // issue 149: the recent list. `project:recent` returns entries with existence and
+  // mtime, never a bare path; opening and forgetting are restricted to paths
+  // main already recorded (see openRecentProject / revealProject).
+  ipcMain.handle('project:recent', () => ({ entries: recentProjectRows() }));
+  ipcMain.handle('project:open-recent', (_event, filePath) => openRecentProject(filePath));
+  ipcMain.handle('project:forget-recent', (_event, filePath) => {
+    recentProjects.forget(filePath);
+    return { entries: recentProjectRows() };
+  });
+  ipcMain.handle('project:clear-recent', () => {
+    recentProjects.clear();
+    return { entries: [] };
+  });
+  ipcMain.handle('project:reveal', (_event, filePath) => revealProject(filePath));
   ipcMain.handle('input:export', (_event, payload) => exportGaussianInput(payload));
   ipcMain.handle('cluster:export', (_event, payload) => exportClusterScripts(payload));
   ipcMain.handle('cluster:import', () => importClusterResults());
