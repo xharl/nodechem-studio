@@ -17,7 +17,7 @@ export const HARTREE_KCAL = 627.5094740631;
 /** Boltzmann constant in kcal/mol/K. */
 export const KB_KCAL = 0.00198720425864083;
 
-export const CONFORMER_GENERATORS = Object.freeze(['crest', 'import']);
+export const CONFORMER_GENERATORS = Object.freeze(['crest', 'import', 'uff']);
 export const CONFORMER_METHODS = Object.freeze(['gfn2', 'gfnff']);
 
 /**
@@ -145,6 +145,7 @@ export function conformerMethodLabel(method) {
   const lower = key.toLowerCase();
   if (lower === 'gfn2') return 'GFN2-xTB';
   if (lower === 'gfnff') return 'GFN-FF';
+  if (lower === 'uff') return 'UFF';
   return key;
 }
 
@@ -477,6 +478,7 @@ export function ensembleSummary(result, {
   energyUnit = '',
   energyMethod = '',
   group = '',
+  search = null,
 } = {}) {
   const selected = result.retained?.find((member) => member.id === result.selectedId) || null;
   const unit = normalizeEnergyUnit(result.energyUnit) || normalizeEnergyUnit(energyUnit) || DEFAULT_ENERGY_UNIT;
@@ -520,6 +522,10 @@ export function ensembleSummary(result, {
     warnings: (result.warnings || []).map(({ id, status, message }) => ({ id, status, message })),
     requiresSelection: Boolean(result.requiresSelection),
     protomers: result.protomers || [],
+    // Issue 144: how an in-app UFF ensemble was produced — grid, RMSD
+    // threshold, trials, and what it is not. Absent from a CREST, import or
+    // dry-run summary, so those keep exactly the shape (and bytes) they had.
+    ...(search && typeof search === 'object' ? { search } : {}),
     selectedId: result.selectedId || '',
     autoSelected: Boolean(result.autoSelected),
     selected: selected ? {
@@ -612,6 +618,11 @@ export function conformerOriginShort(ensemble) {
       || conformerMethodLabel(ensembleField(ensemble, 'method'));
     return ['CREST', method].filter(Boolean).join(' ');
   }
+  if (generator === 'uff') {
+    // Issue 144: an in-app search, not an import and not CREST. The word
+    // "computed" belongs to `conformerOriginLabel`; this line names the engine.
+    return 'UFF · in-app torsion grid';
+  }
   if (generator === 'fixture') return 'dry-run fixture';
   if (generator === 'import') {
     const program = originProgramText(origin);
@@ -634,6 +645,11 @@ export function conformerOriginLabel(ensemble) {
     const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim()
       || conformerMethodLabel(ensembleField(ensemble, 'method'));
     return `computed here · ${['CREST', method].filter(Boolean).join(' ')}`;
+  }
+  if (generator === 'uff') {
+    // Issue 144: computed here, by a force field. The label never says "QM"
+    // and never prints a Hartree value beside these numbers.
+    return 'computed here · UFF · torsional grid + relaxation (force field, not QM)';
   }
   const parts = ['imported'];
   const program = originProgramText(origin);
@@ -659,6 +675,18 @@ export function conformerEnergyLabel(ensemble) {
   return `${ENERGY_UNIT_LABEL[unit]} · ${method || 'method not stated'}`;
 }
 
+/** The in-app search facts, as numbers, from an ensemble summary. */
+function uffSearchFacts(ensemble) {
+  const search = ensembleField(ensemble, 'search');
+  const facts = search && typeof search === 'object' ? search : {};
+  return {
+    grid: Number(facts.torsionStepDegrees),
+    rmsd: Number(facts.rmsdThreshold),
+    trials: Number(facts.trials),
+    rotors: Number(facts.rotatableBonds),
+  };
+}
+
 /**
  * The caption above the ensemble table. The table's ΔE column is always
  * kcal/mol relative to the lowest member; this line says what the *absolute*
@@ -670,11 +698,54 @@ export function conformerTableCaption(ensemble) {
     return 'ΔE in kcal/mol · mixed energy units/methods — not averaged';
   }
   const unit = normalizeEnergyUnit(ensembleField(ensemble, 'energyUnit')) || DEFAULT_ENERGY_UNIT;
+  const generator = String(ensembleField(ensemble, 'generator') ?? '').trim().toLowerCase();
   const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim()
-    || (String(ensembleField(ensemble, 'generator') ?? '').toLowerCase() === 'crest'
+    || (generator === 'crest'
       ? conformerMethodLabel(ensembleField(ensemble, 'method'))
       : '');
-  return `ΔE in kcal/mol · absolute energies in ${ENERGY_UNIT_LABEL[unit]}${method ? ` (${method})` : ''}`;
+  // Issue 144: a UFF ensemble's numbers are force-field energies, and the
+  // search that produced them is a stated grid, not an unseen algorithm. Both
+  // go in the caption, above the table, where they are read with the numbers.
+  let uffTail = '';
+  if (generator === 'uff') {
+    const { grid, rmsd, trials } = uffSearchFacts(ensemble);
+    const parts = [];
+    if (Number.isFinite(grid) && grid > 0) parts.push(`${grid}° grid`);
+    if (Number.isFinite(rmsd) && rmsd > 0) parts.push(`${rmsd.toFixed(2)} Å dedupe`);
+    if (Number.isFinite(trials) && trials > 0) parts.push(`${trials} trial${trials === 1 ? '' : 's'}`);
+    uffTail = ` · force-field energies, not QM${parts.length ? ` · ${parts.join(', ')}` : ''}`
+      + ' · torsional grid + UFF relaxation, not a Monte-Carlo search';
+  }
+  return `ΔE in kcal/mol · absolute energies in ${ENERGY_UNIT_LABEL[unit]}${method ? ` (${method})` : ''}${uffTail}`;
+}
+
+/**
+ * Issue 144: what the in-app UFF search actually did, in one line for the
+ * card and the inspector. Empty for every other generator, so this function
+ * cannot put a UFF claim on a CREST or imported ensemble.
+ *
+ * It names the grid resolution, the dedupe threshold and the number of trials,
+ * and it says what the search is not: no Monte-Carlo, no CREST, no
+ * electrostatics, and no QM. A reader who only sees the table still learns all
+ * of that from this line.
+ */
+export function conformerSearchNote(ensemble) {
+  if (!ensemble || typeof ensemble !== 'object') return '';
+  if (String(ensembleField(ensemble, 'generator') ?? '').trim().toLowerCase() !== 'uff') return '';
+  const { grid, rmsd, trials, rotors } = uffSearchFacts(ensemble);
+  const notQuantum = 'Force-field structures and a UFF ranking, not QM: their kcal/mol energies are '
+    + 'not comparable with a Hartree value anywhere in this app.';
+  if (Number.isFinite(rotors) && rotors === 0) {
+    return 'No rotatable bonds: the single member is the input geometry relaxed with UFF, not a '
+      + `conformer search. ${notQuantum}`;
+  }
+  const gridText = Number.isFinite(grid) && grid > 0 ? `${grid}° torsional grid` : 'torsional grid';
+  const trialText = Number.isFinite(trials) && trials > 0 ? `${trials} trial${trials === 1 ? '' : 's'}` : 'trials';
+  const rmsdText = Number.isFinite(rmsd) && rmsd > 0 ? `deduplicated at ${rmsd.toFixed(2)} Å heavy-atom RMSD` : 'deduplicated by heavy-atom RMSD';
+  const rotorText = Number.isFinite(rotors) ? ` over ${rotors} rotatable bond${rotors === 1 ? '' : 's'}` : '';
+  return `UFF in-app search: a ${gridText}${rotorText} (${trialText}), every trial relaxed with UFF, `
+    + `then ${rmsdText}. It is not a Monte-Carlo or CREST search, and UFF here has no electrostatics term. `
+    + notQuantum;
 }
 
 /* ── Boltzmann-weighted observables (issue #96) ─────────────────

@@ -81,6 +81,7 @@ import {
   conformerGroups,
   conformerOriginLabel,
   conformerOriginShort,
+  conformerSearchNote,
   conformerTableCaption,
   formatPopulation,
   formatRelativeKcal,
@@ -566,7 +567,14 @@ function nodeDetail(node) {
   }
   if (node.type === 'conformers') {
     const output = node.output;
-    if (!output) return `${node.settings.generator === 'import' ? 'import' : 'CREST'} · not run`;
+    if (!output) {
+      // Issue 144: the footer says which route is waiting to run, including the
+      // in-app one that needs no external binary.
+      const route = node.settings.generator === 'import'
+        ? 'import'
+        : (node.settings.generator === 'uff' ? 'UFF (in-app)' : 'CREST');
+      return `${route} · not run`;
+    }
     const spread = Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(1)}` : '';
     return `${output.count} of ${output.total} kept${spread}`;
   }
@@ -632,7 +640,7 @@ function nodeFoot(node) {
       ? conformerOriginShort(node.output)
       : (node.settings.generator === 'crest'
         ? `CREST ${node.settings.method === 'gfnff' ? 'GFN-FF' : 'GFN2'}`
-        : 'imported ensemble');
+        : (node.settings.generator === 'uff' ? 'UFF · in-app' : 'imported ensemble'));
     // Issue 132: a grouped block says so, and how many blocks in this flow
     // share the id. An ungrouped block adds nothing — no "group null".
     const groupId = node.settings.group || '';
@@ -2751,7 +2759,7 @@ function conformersInspector(node) {
   const members = Array.isArray(output?.members) ? output.members : [];
   const warnings = Array.isArray(output?.warnings) ? output.warnings : [];
   const warningBlock = warnings.length
-    ? `<div class="code-block" style="margin-bottom:10px">${warnings.map((warning) => `<div>⚠ ${esc(warning.message)}</div>`).join('')}</div>`
+    ? `<div class="code-block" style="margin-bottom:10px">${warnings.map((warning) => `<div>${warning.status === 'info' ? '·' : '⚠'} ${esc(warning.message)}</div>`).join('')}</div>`
     : '';
   const selected = output?.selected;
   const summaryLine = output
@@ -2761,6 +2769,9 @@ function conformersInspector(node) {
   // method, and the provenance line names what produced the ensemble.
   const caption = output ? conformerTableCaption(output) : '';
   const provenanceLine = output ? conformerOriginLabel(output) : '';
+  // Issue 144: what an in-app UFF search did — grid, threshold, trials — and
+  // what it is not. Empty for a CREST or imported ensemble.
+  const searchLine = output ? conformerSearchNote(output) : '';
   // Issue 132: a block may belong to a study with other blocks. The id is
   // typed by hand; the count is read from the flow, and nothing here claims the
   // ensembles are the same molecule or that their energies are comparable.
@@ -2792,7 +2803,9 @@ function conformersInspector(node) {
       </table>`
     : `<div class="inspector-note">No ensemble yet. ${s.generator === 'import'
       ? 'Choose a multi-XYZ file and run the block.'
-      : 'Run the block with a CREST executable configured.'}</div>`;
+      : (s.generator === 'uff'
+        ? 'Run the block: the UFF search runs here and needs no external binary.'
+        : 'Run the block with a CREST executable configured.')}</div>`;
 
   return `${inspectorHead('Structure · conformers', node.title, summaryLine)}
   <div class="inspector-scroll">
@@ -2800,26 +2813,39 @@ function conformersInspector(node) {
       ? `using ${esc(selected.id)} · ${formatRelativeKcal(selected.relativeKcal)} kcal/mol · ${formatPopulation(selected.population)}`
       : 'no member chosen'}</span></div>
     ${provenanceLine ? `<div class="inspector-note" data-conformer-provenance>${esc(provenanceLine)}</div>` : ''}
+    ${searchLine ? `<div class="inspector-note" data-conformer-search>${esc(searchLine)}</div>` : ''}
     ${groupId ? `<div class="inspector-note" data-conformer-group>${esc(groupLine)}</div>` : ''}
     ${warningBlock}
     ${group('Ensemble', output ? caption : summaryLine, true, [rows])}
     ${groupBlock}
-    ${group('Search', s.generator === 'crest' ? 'CREST' : 'imported file', true, [
+    ${group('Search', s.generator === 'crest' ? 'CREST' : (s.generator === 'uff' ? 'UFF, in-app' : 'imported file'), true, [
       `<div class="field"><label>Generator</label><select class="select" data-conformer-field="generator">
         <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
         <option value="import"${s.generator === 'import' ? ' selected' : ''}>Import a multi-XYZ</option>
+        <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
       </select></div>`,
-      s.generator === 'crest'
-        ? `<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
+      ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
             <option value="gfn2"${s.method === 'gfn2' ? ' selected' : ''}>GFN2-xTB</option>
             <option value="gfnff"${s.method === 'gfnff' ? ' selected' : ''}>GFN-FF</option>
-          </select></div>`
-        : `<div class="field full"><label>Ensemble file</label>
+          </select></div>`] : []),
+      ...(s.generator === 'import' ? [`<div class="field full"><label>Ensemble file</label>
             <div style="display:flex;gap:6px">
               <input class="input" data-conformer-field="importPath" value="${esc(s.importPath || '')}" placeholder="C:\\path\\to\\conformers.xyz">
               <button type="button" class="btn small" data-action="pick-ensemble">Choose…</button>
             </div>
-          </div>`,
+          </div>`] : []),
+      // Issue 144: the in-app route's own two knobs, and the statement of what
+      // the search is. Absent from a CREST or import block.
+      ...(s.generator === 'uff' ? [
+        `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
+          <option value="60"${Number(s.torsionStepDegrees) === 60 ? ' selected' : ''}>60°</option>
+          <option value="90"${Number(s.torsionStepDegrees) === 90 ? ' selected' : ''}>90°</option>
+          <option value="120"${s.torsionStepDegrees === undefined || Number(s.torsionStepDegrees) === 120 ? ' selected' : ''}>120°</option>
+          <option value="180"${Number(s.torsionStepDegrees) === 180 ? ' selected' : ''}>180°</option>
+        </select></div>`,
+        `<div class="field"><label>Max trials</label><input class="input" type="number" min="1" max="2000" step="1" data-conformer-field="maxTrials" value="${esc(s.maxTrials ?? 200)}"></div>`,
+        `<div class="field full"><span class="inspector-note" data-conformer-uff-note>Torsional grid plus UFF relaxation, run in this app: not a Monte-Carlo or CREST search. Every member is a UFF force-field structure, and its kcal/mol energy is not comparable with a Hartree value. UFF here has no electrostatics term and does not sample ring conformers; a molecule with no rotatable bonds yields one relaxed structure.</span></div>`,
+      ] : []),
       // Issues 129/130: an imported file carries energies this app did not
       // compute, in a unit it did not choose. Both are recorded, not guessed:
       // an MM energy in kcal/mol is never stored or shown as a Hartree total.
@@ -8409,7 +8435,7 @@ function applyConformerField(target) {
   const node = nodeById(state.selected.id);
   if (!node || node.type !== 'conformers') return;
   const key = target.dataset.conformerField;
-  const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity'];
+  const numeric = ['energyWindowKcal', 'rmsdThreshold', 'maxConformers', 'temperature', 'spreadThresholdKcal', 'charge', 'multiplicity', 'torsionStepDegrees', 'maxTrials'];
   // Issue 129: the declared provenance lives in a nested `origin` object, so
   // the flat `settings[key] = value` path cannot write it.
   const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
@@ -8419,6 +8445,8 @@ function applyConformerField(target) {
     const bounds = {
       energyWindowKcal: [0, 100], rmsdThreshold: [0.01, 10], maxConformers: [1, 200],
       temperature: [1, 1000], spreadThresholdKcal: [0, 50], charge: [-10, 10], multiplicity: [1, 10],
+      // Issue 144: the in-app UFF route's grid resolution and trial cap.
+      torsionStepDegrees: [15, 360], maxTrials: [1, 2000],
     }[key];
     const value = Number(target.value);
     if (!Number.isFinite(value)) return;

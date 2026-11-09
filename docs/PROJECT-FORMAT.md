@@ -198,14 +198,19 @@ must have the same atoms in the same order as the block geometry — a mismatch 
 naming the first differing index, and nothing is reordered automatically.
 
 `conformers.settings` is a separate key space — route keys cannot leak into a conformer search:
-`generator` (`crest` or `import`), `method` (`gfn2` or `gfnff`), `energyWindowKcal`,
-`rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`,
-`importPath`, `charge`, `multiplicity`, `fanOut`, `group` (an optional study id shared by blocks
-that belong together, 1–32 letters, digits, `.`, `_` or `-`; empty means no group), plus the
-imported-file fields `energyUnit` (`hartree` or `kcal/mol`, default `hartree`), `energyMethod` (free
-text, e.g. `MMFF94`) and `origin` (`{ program, version, method }`, what the user says produced the
-imported file). Defaults: energy window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K,
-spread warning at 2 kcal/mol, fan-out off, unit Hartree, no origin, no group.
+`generator` (`crest`, `import` or `uff`), `method` (`gfn2` or `gfnff`, CREST only),
+`energyWindowKcal`, `rmsdThreshold`, `maxConformers`, `temperature`, `spreadThresholdKcal`,
+`selectedConformerId`, `importPath`, `charge`, `multiplicity`, `fanOut`, `group` (an optional study
+id shared by blocks that belong together, 1–32 letters, digits, `.`, `_` or `-`; empty means no
+group), plus the imported-file fields `energyUnit` (`hartree` or `kcal/mol`, default `hartree`),
+`energyMethod` (free text, e.g. `MMFF94`) and `origin` (`{ program, version, method }`, what the user
+says produced the imported file). Defaults: energy window 10 kcal/mol, RMSD 0.5 Å, at most 20
+conformers, 298.15 K, spread warning at 2 kcal/mol, fan-out off, unit Hartree, no origin, no group.
+
+The in-app `uff` route adds two optional keys, present only when the block states them so a project
+that never chose the route serialises as before: `torsionStepDegrees` (15–360, default 120) and
+`maxTrials` (1–2000, default 200). A `uff` ensemble always records `energyUnit: kcal/mol` and
+`energyMethod: UFF`; `method` is left empty because it names the CREST xTB method.
 
 `group` is the only cross-block key a conformer block has: two blocks with the same `group` say they
 belong to the same study. It is not a protomer or tautomer judgement, and it never causes energies to
@@ -215,11 +220,12 @@ be compared or averaged — a group is a heading, not a result.
 
 | Key | Notes |
 | --- | --- |
-| `generator`, `method` | `crest`, `import`, or `fixture` for a dry run |
+| `generator`, `method` | `crest`, `import`, `uff`, or `fixture` for a dry run |
 | `group` | the block's study id, copied from `conformers.settings.group`; empty means no group. Per block, never per member |
 | `origin { program, version, method, sourceSha256 }` | what produced the ensemble; `crest`/`fixture` for a search run here, the declared program plus the digest of the imported file otherwise. Empty `program` means **not recorded**, never "computed here" |
 | `energyUnit`, `energyMethod` | the unit and producing method of the ensemble's absolute energies (`hartree` by default) |
 | `mixedEnergies` | true when the members disagree on unit or method; such an ensemble has no populations and no spread |
+| `search` | present only on an in-app `uff` ensemble: `{ method, engine, torsionStepDegrees, rmsdThreshold, trials, trialsPlanned, truncated, rotatableBonds, rotors[], excluded[], deduplicated, unique, relaxMaxIterations, bondSource, randomized, seed, electrostatics, ringSampling, comparableWithQuantumChemistry, energyKind, note }`. It is the record of a torsional grid plus UFF relaxation — no Monte-Carlo, no seed, no electrostatics |
 | `count`, `total` | retained after pruning / frames read |
 | `spreadKcal` | highest minus lowest retained member, null when one member or when mixed |
 | `selectedId`, `selected { id, energyEh, energyKcal, energyUnit, energyMethod, relativeKcal, population, protomer, atoms[] }` | the member downstream blocks run |
