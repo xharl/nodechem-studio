@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { flowById } from '../src/shared/flows.js';
-import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
+import { buildWorkflowPlan, moleculeForNode, settingsForNode } from '../src/shared/workflowTasks.js';
 import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { parseGaussianOutput, geometryToXyz } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
@@ -44,6 +44,7 @@ import {
   structureFromQcschema,
 } from '../src/shared/qcschema.js';
 import { parseFchk } from '../src/shared/fchk.js';
+import { EXPORT_ENGINE_IDS, exporterFor, parseSmiles, parseSmilesList, renderInput } from '../src/shared/interop/index.js';
 import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
 import { parseCube, writeCube } from '../src/shared/cubeFile.js';
 import {
@@ -92,6 +93,9 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
   ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
       [--out <file>] [--json]
+  ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem>
+      [--out <file>] [--json]
+  ncs smiles <file|string> [--name <label>] [--out <file.json>] [--json]
   ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>]
       [--multiplicity <n>] [--out <file>] [--json]
   ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
@@ -1061,7 +1065,7 @@ async function commandConvert({ positional, flags }) {
         title: path.basename(file, extension),
       });
     } else {
-      const { records } = parseStructureRecords(text, { filename: path.basename(file) });
+      const { records } = parseStructureRecords(text, { filename: path.basename(file), allowDecks: true });
       const first = records[0];
       if (!first) fail('the structure file contained no records.');
       converted = convertStructure({ atoms: first.atoms, bonds: first.bonds }, formatId, { title: first.name });
@@ -1084,6 +1088,164 @@ async function commandConvert({ positional, flags }) {
   }
 }
 
+/**
+ * `ncs export-input` — the deck one block would be for a program the app does
+ * not run.
+ *
+ * NWChem, GAMESS and Q-Chem are **export only**: nothing here stages the file,
+ * builds argv or parses output, because this build cannot run them. What it
+ * can do is write the input from the same settings and geometry a Gaussian
+ * block uses, or refuse with a named reason. A refusal exits 2 and carries
+ * `{ ok: false, code, engine, message }` on stderr, like `ncs qcschema`.
+ */
+async function commandExportInput({ positional, flags }) {
+  const [file] = positional;
+  if (!file) fail('export-input needs a project file.');
+  if (!flags.node) fail('export-input needs --node <id>.');
+  const engineId = String(flags.engine || '').trim().toLowerCase();
+  if (!engineId) fail(`export-input needs --engine <${EXPORT_ENGINE_IDS.join('|')}>.`);
+  const exporter = exporterFor(engineId);
+  if (!exporter) {
+    fail(`export-input does not know an engine "${engineId}". Supported: ${EXPORT_ENGINE_IDS.join(', ')}. `
+      + 'Gaussian, ORCA, Psi4 and xTB are run by the app; these three are exported.', EXIT.usage);
+  }
+  const { result } = await readProject(file);
+  if (!result.ok) {
+    process.stderr.write(`${JSON.stringify(validityJson(file, result), null, 2)}\n`);
+    process.exit(EXIT.invalid);
+  }
+  const project = result.project;
+  const node = project.nodes.find((entry) => entry.id === flags.node);
+  if (!node) fail(`no node "${flags.node}" in ${file}.`, EXIT.invalid);
+
+  // `moleculeForNode` substitutes the demo water molecule when a project has no
+  // coordinates. For a Gaussian dry run that is a documented demo; for a deck
+  // handed to another program it is a file that computes water. Refused here.
+  const coords = project.molecule?.coords;
+  if (!Array.isArray(coords) || coords.length === 0) {
+    const message = 'This project has no geometry: the block would fall back to the demo water molecule, and a deck '
+      + 'full of water is worse than no deck. Import a structure into the project first.';
+    process.stderr.write(`${JSON.stringify({ ok: false, code: 'export-no-geometry', engine: exporter.id, message }, null, 2)}\n`);
+    process.stderr.write(`ncs: ${message}\n`);
+    process.exit(EXIT.invalid);
+  }
+
+  const settings = settingsForNode(project, node);
+  const molecule = moleculeForNode(project, node);
+  const rendered = renderInput({
+    engine: exporter.id,
+    settings,
+    molecule,
+    geometry: project.molecule?.geometry ?? null,
+    title: node.title,
+  });
+  if (!rendered.ok) {
+    process.stderr.write(`${JSON.stringify({ ok: false, code: 'export-refused', engine: exporter.id, message: rendered.refused }, null, 2)}\n`);
+    process.stderr.write(`ncs: ${rendered.refused}\n`);
+    process.exit(EXIT.invalid);
+  }
+
+  const out = flags.out ? path.resolve(String(flags.out)) : null;
+  if (out) await fs.writeFile(out, rendered.text, 'utf8');
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify({
+      ok: true,
+      engine: rendered.engine,
+      out,
+      bytes: Buffer.byteLength(rendered.text),
+      notes: rendered.notes,
+    }, null, 2)}\n`);
+  } else {
+    if (!out) process.stdout.write(rendered.text);
+    for (const note of rendered.notes || []) process.stderr.write(`note: ${note}\n`);
+    if (out) process.stdout.write(`${rendered.engine} deck written to ${out} (${Buffer.byteLength(rendered.text)} bytes)\n`);
+  }
+  process.exit(EXIT.ok);
+}
+
+/**
+ * `ncs smiles` — read a SMILES string or a `.smi` file as a bond graph.
+ *
+ * This is the SMILES *import* surface for #148. It prints the graph, its
+ * formula, its charge and its multiplicity; it never writes coordinates,
+ * because a SMILES string has none to write. `ncs convert` cannot turn it into
+ * `.xyz`/`.sdf` for the same reason — an embedder is a separate program.
+ */
+async function commandSmiles({ positional, flags }) {
+  const [input] = positional;
+  if (!input) fail('smiles needs a file or a SMILES string.');
+  let text = null;
+  let filename = '';
+  try {
+    const resolved = path.resolve(input);
+    const stat = await fs.stat(resolved);
+    if (stat.isFile()) {
+      text = await fs.readFile(resolved, 'utf8');
+      filename = path.basename(resolved);
+    }
+  } catch {
+    // Not a path: the argument is the SMILES string itself.
+  }
+
+  let records;
+  if (text === null) {
+    try {
+      records = [{ ...parseSmiles(input, { name: String(flags.name || '') }), line: 1 }];
+    } catch (error) {
+      process.stderr.write(`${JSON.stringify({ ok: false, code: 'smiles-invalid', message: error.message }, null, 2)}\n`);
+      process.stderr.write(`ncs: ${error.message}\n`);
+      process.exit(EXIT.invalid);
+    }
+  } else {
+    try {
+      records = parseSmilesList(text, { name: String(flags.name || filename.replace(/\.[^.]+$/, '')) }).records;
+    } catch (error) {
+      process.stderr.write(`${JSON.stringify({ ok: false, code: 'smiles-invalid', message: error.message }, null, 2)}\n`);
+      process.stderr.write(`ncs: ${error.message}\n`);
+      process.exit(EXIT.invalid);
+    }
+  }
+
+  const readable = records.filter((record) => !record.error);
+  const failed = records.length - readable.length;
+  const payload = {
+    ok: failed === 0,
+    source: filename || '(string)',
+    records: records.map((record) => (record.error
+      ? { line: record.line, smiles: record.smiles, error: record.error }
+      : {
+        line: record.line,
+        name: record.name,
+        smiles: record.smiles,
+        formula: record.formula,
+        charge: record.charge,
+        multiplicity: record.multiplicity,
+        electrons: record.electrons,
+        atoms: record.atoms,
+        bonds: record.bonds,
+        warnings: record.warnings,
+      })),
+    note: 'A SMILES graph has no coordinates. `ncs convert` refuses it for the same reason; '
+      + 'generate a 3D structure with an embedder (Open Babel --gen3d, RDKit, crest) and import that.',
+  };
+
+  if (flags.out) await fs.writeFile(path.resolve(String(flags.out)), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  } else {
+    for (const record of payload.records) {
+      if (record.error) {
+        process.stderr.write(`${filename || 'SMILES'}: ${record.error}\n`);
+        continue;
+      }
+      process.stdout.write(`${record.name || `record ${record.line}`}: ${record.formula} · ${record.atoms.length} atoms · `
+        + `${record.bonds.length} bonds · charge ${record.charge} · multiplicity ${record.multiplicity}\n`);
+      for (const warning of record.warnings || []) process.stdout.write(`  note: ${warning}\n`);
+    }
+    if (flags.out) process.stdout.write(`${payload.records.length} record(s) written to ${path.resolve(String(flags.out))}\n`);
+  }
+  process.exit(failed === 0 ? EXIT.ok : EXIT.invalid);
+}
 
 /**
  * `ncs qcschema` — QCSchema (MolSSI) in and out.
@@ -1689,6 +1851,8 @@ const handlers = {
   diff: commandDiff,
   merge: commandMerge,
   convert: commandConvert,
+  'export-input': commandExportInput,
+  smiles: commandSmiles,
   qcschema: commandQcschema,
   cache: commandCache,
   cube: commandCube,

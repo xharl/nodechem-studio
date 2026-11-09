@@ -33,6 +33,8 @@ ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv] [--out <file>] [--json]
+ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem> [--out <file>] [--json]
+ncs smiles <file|string> [--name <label>] [--out <file.json>] [--json]
 ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
 ncs cache <file.ncsr> --inspect [--json]
 ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cube> [--grid <angstrom>] [--padding <angstrom>] [--json]
@@ -60,6 +62,18 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   picks the spectrum written from a log (`ir`, `raman` or `uv`, default `ir`); `molden` needs the basis
   and MO coefficients, so it is only offered for a formatted checkpoint. Without `--out` the result
   lands beside the input with the format's extension.
+- `export-input` writes the input one block would be for an engine the app **exports but does not
+  run**: `--engine nwchem`, `gamess` or `qchem`. It uses the block's own settings and the project
+  geometry, and refuses with a named reason (exit 2, `code: "export-refused"`) anything it cannot
+  spell — solvation, TD-DFT, dispersion on GAMESS, a functional outside its table, `Opt Freq` as one
+  deck. A project with no geometry is refused as `export-no-geometry` instead of exporting the demo
+  water molecule. `ncs convert opt1.nw --format xyz` reads the deck back. See
+  [Converters](converters.md#handing-a-job-to-nwchem-gamess-or-q-chem).
+- `smiles` reads a SMILES string or a `.smi` file (the argument is a file when it exists, a string
+  otherwise) as a bond graph: formula, atom and bond counts, charge, multiplicity, per-atom implicit
+  hydrogens. `--json` prints the graph, `--out` writes it. It never writes coordinates, because a
+  SMILES string has none — it exits 2 with `code: "smiles-invalid"` and the offending token and
+  character position for anything outside the OpenSMILES organic subset it reads.
 - `cache <input> --out <file.ncsr>` writes a parsed run or volumetric field as typed arrays, and
   `ncs cache <file.ncsr> --inspect` prints its header (`--precision f64|f32` picks the array width).
   Opening a trajectory then costs what the numbers cost, not what the log's text costs.
