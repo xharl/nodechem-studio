@@ -720,7 +720,11 @@ export function buildWorkflowReport(queue, records = {}, {
     // that names the field. A derived value is not a calculation result, so it
     // is never put in an energy column; it is reported in its own section.
     derived: tasks
-      .filter((task) => task?.compute && typeof task.compute === 'object')
+      // Issue 165: a DP4+ block is a compute block, but its result is a
+      // probability table with no single value, and it is reported in its own
+      // section below. Listing it here would print "derived quantity not
+      // computed" over a comparison that did compute.
+      .filter((task) => task?.compute && typeof task.compute === 'object' && task.compute.mode !== 'dp4')
       .map((task) => derivedModel(task)),
     // One entry per conformer block whose branches were fanned out, with the
     // target-level ΔE the run energies actually support.

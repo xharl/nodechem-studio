@@ -2179,14 +2179,23 @@ function trajectoryCard(parsed, flags) {
  * (record, field, value, unit) it was built from. There is no `parsed` block to
  * show, so it is not rendered as a run at all; a refusal is printed verbatim
  * with the field and record it names.
+ *
+ * Issue 165: a DP4+ block has no single value — its result is a probability
+ * table — so `dp4` (the object `dp4.js` returned, or its refusal) is rendered
+ * by the panel both the card and the report already use, and the "Value" row is
+ * replaced by the statement that the table is the result. A run that was
+ * refused still prints its refusal, because the refusal *is* the outcome.
  */
-function computeCard(compute) {
+function computeCard(compute, dp4) {
   const inputs = Array.isArray(compute?.inputs) ? compute.inputs : [];
   const value = finite(compute?.value);
   const unit = text(compute?.unit);
+  const analysis = isObject(dp4) ? dp4 : null;
   const rows = [
     fieldValue('Expression', `<code data-field="compute-expression">${esc(text(compute?.expression) ?? MISSING_TEXT)}</code>`, 'compute-expression'),
-    fieldValue('Value', value === null ? missingHtml() : `${esc(numberText(value, 9))}${unit ? ` ${esc(unit)}` : ''}`, 'compute-value'),
+    ...(analysis
+      ? [fieldValue('Result', '<span data-field="compute-dp4-result">the probability table below — DP4+ has no single value</span>', 'compute-dp4-result')]
+      : [fieldValue('Value', value === null ? missingHtml() : `${esc(numberText(value, 9))}${unit ? ` ${esc(unit)}` : ''}`, 'compute-value')]),
     fieldValue('Kind', '<span class="results-chip">derived quantity</span>', 'compute-kind'),
   ];
   const notes = Array.isArray(compute?.notes) ? compute.notes.filter((note) => text(note)) : [];
@@ -2199,12 +2208,17 @@ function computeCard(compute) {
         + `<td>${esc(text(input.unit) ?? '—')}</td></tr>`).join('')
       + '</tbody></table>'
     : `<p class="results-note">${esc(MISSING_TEXT)}</p>`;
+  const dp4Body = analysis
+    ? dp4PanelHtml(analysis, { tableClass: 'results-table', heading: analysis.available === true
+      ? 'DP4+ probabilities' : 'DP4+ — refused' })
+    : '';
   return '<div class="results-stack">'
     + '<p class="results-banner" data-role="compute-banner">Derived quantity — computed from other blocks\' results, '
     + 'not a result an engine printed.</p>'
     + card('Derived value', kv(rows) + (notes.length
       ? `<p class="results-note" data-role="compute-notes">${notes.map((note) => esc(note)).join(' ')}</p>`
       : ''))
+    + (dp4Body ? card('DP4+ probabilities', dp4Body, 'is-wide') : '')
     + card('Inputs', inputRows)
     + '</div>';
 }
@@ -2216,7 +2230,7 @@ function computeCard(compute) {
 export function resultsPanelHtml(record, options = {}) {
   if (!isObject(record)) return emptyStateHtml();
   // Issue 175: a compute block's record carries `compute` and no `parsed` block.
-  if (isObject(record.compute)) return computeCard(record.compute);
+  if (isObject(record.compute)) return computeCard(record.compute, record.dp4);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
   const flags = flagsFor(record);
@@ -2778,9 +2792,30 @@ export function installResultsView({
     if (dot) dot.hidden = false;
   };
 
+  /**
+   * A compute task's record, from the queue that produced it.
+   *
+   * Issue 165: a derived record is written under the queue's `compute/` folder,
+   * not the run root, so `desktop.listRuns()` never lists it and clicking its
+   * queue row used to report the run as unloadable. The task already carries the
+   * same `compute` (and `dp4`) block the record holds, so the card renders from
+   * the queue when the run folder cannot supply it. Nothing is recomputed.
+   */
+  const recordFromQueue = (runId) => {
+    const task = queueTasksByRunId.get(String(runId ?? ''));
+    if (!task || !isObject(task.compute)) return null;
+    return {
+      id: text(task.runId) || text(task.nodeId),
+      title: text(task.title) || text(task.nodeId),
+      kind: 'derived',
+      compute: task.compute,
+      ...(isObject(task.dp4) ? { dp4: task.dp4 } : {}),
+    };
+  };
+
   const openRun = async (runId, element) => {
     if (!text(runId)) return;
-    const record = await findRun(desktop, runId);
+    const record = await findRun(desktop, runId) || recordFromQueue(runId);
     if (record) {
       show(record);
       markSelected(element);

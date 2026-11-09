@@ -46,6 +46,8 @@ import {
   evaluateCompute,
   formatComputeNumber,
 } from '../shared/compute.js';
+import { DP4_VARIANTS, DP4_VARIANT_LABELS, dp4Levels } from '../shared/dp4.js';
+import { dp4RowsFromSources, dp4Summary, evaluateDp4 } from '../shared/dp4Workflow.js';
 import {
   COMPLEX_GEOMETRY_NOTE,
   COMPLEX_GEOMETRY_STATUS,
@@ -2587,8 +2589,16 @@ function computeUpstreamBlocks(node) {
 function computePreviewOf(node) {
   try {
     const context = shared.computeContext(state.project, node);
+    if (context.mode === 'dp4') {
+      // Issue 165: the preview reads the same candidate rows the plan does. It
+      // can only see the blocks' attached parsed results (a fresh project has
+      // no run folders), so it names what it has and refuses rather than guess.
+      const rows = dp4RowsFromSources(context.sources, context.rowsFor);
+      return { error: null, mode: 'dp4', result: evaluateDp4(node.compute?.dp4, { rows }) };
+    }
     return {
       error: null,
+      mode: 'expression',
       result: evaluateCompute(node.compute || { expression: '', inputs: [] }, {
         recordId: null,
         resolveSource: context.resolveSource,
@@ -2600,9 +2610,28 @@ function computePreviewOf(node) {
   }
 }
 
+/** The DP4+ inspector preview: the verdict, the table's first column, or the refusal. */
+function dp4PreviewHtml(result) {
+  if (!result) return '<p class="inspector-note" data-role="compute-preview">not computed</p>';
+  if (result.available !== true) {
+    return `<p class="inspector-note" data-role="compute-preview">${esc(result.reason || 'DP4+ not computed')}</p>`;
+  }
+  const rows = (result.candidates || []).map((candidate) => `<tr><td>${esc(candidate.title || candidate.id)}</td>`
+    + `<td class="num">${esc(Number(candidate.percent).toFixed(2))}</td>`
+    + `<td class="num">${esc(String(candidate.conformerCount ?? ''))}</td>`
+    + `<td class="num">${esc(String((candidate.nuclei || []).length))}</td></tr>`).join('');
+  const excluded = (result.excluded || []).map((entry) => `<p class="inspector-note" data-role="dp4-excluded">`
+    + `Excluded ${esc(entry.candidateId)}: ${esc(entry.reason)}</p>`).join('');
+  return `<p data-role="compute-preview"><strong>${esc(dp4Summary(result))}</strong></p>`
+    + '<table class="mini-table"><thead><tr><th>Candidate</th><th class="num">p full / %</th>'
+    + '<th class="num">Conformers</th><th class="num">Nuclei</th></tr></thead>'
+    + `<tbody>${rows}</tbody></table>${excluded}`;
+}
+
 function computePreviewHtml(node) {
-  const { error, result } = computePreviewOf(node);
+  const { error, mode, result } = computePreviewOf(node);
   if (error) return `<p class="inspector-note" data-role="compute-preview">${esc(error)}</p>`;
+  if (mode === 'dp4') return dp4PreviewHtml(result);
   if (result.status === 'computed') {
     return `<div class="code-block" data-role="compute-preview">`
       + `<div>${esc(result.expression)} = ${esc(formatComputeNumber(result.value))}${result.unit ? ` ${esc(result.unit)}` : ''}</div>`
@@ -2638,29 +2667,126 @@ function computeInputRow(input, index, upstream) {
   </tr>`;
 }
 
+/**
+ * The saved DP4+ definition of a compute block, with the defaults a new block
+ * needs filled in — never a number that has not been chosen.
+ */
+function dp4DefinitionOf(node) {
+  if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
+  if (!node.compute.dp4 || typeof node.compute.dp4 !== 'object') {
+    node.compute.dp4 = { level: '', solvation: 'gas', solvent: '', variant: 'full', temperature: 298.15, experimental: [] };
+  }
+  const definition = node.compute.dp4;
+  if (!Array.isArray(definition.experimental)) definition.experimental = [];
+  return definition;
+}
+
+/** The `id|solvation` pair a level select carries, so the two cannot disagree. */
+function dp4LevelValue(definition) {
+  const id = String(definition?.level || '');
+  if (!id) return '';
+  return `${id}|${definition?.solvation || 'gas'}`;
+}
+
+function dp4LevelOptions(definition) {
+  const levels = dp4Levels();
+  const chosen = dp4LevelValue(definition);
+  const head = '<option value="">choose a level the bank carries…</option>';
+  const options = levels.map((entry) => {
+    const value = `${entry.id}|${entry.solvation}`;
+    return `<option value="${esc(value)}"${value === chosen ? ' selected' : ''}>${esc(entry.label)}</option>`;
+  }).join('');
+  // A level the bank does not carry is still shown, selected and named, so a
+  // hand-edited project reads as "this is not in the bank" rather than as blank.
+  const known = levels.some((entry) => `${entry.id}|${entry.solvation}` === chosen);
+  const stale = chosen && !known
+    ? `<option value="${esc(chosen)}" selected>${esc(chosen)} — not in the bank, the block will be refused</option>`
+    : '';
+  return head + stale + options;
+}
+
+function dp4SolventOptions(definition) {
+  if ((definition.solvation || 'gas') === 'gas') {
+    return '<option value="" selected>gas phase — no solvent</option>';
+  }
+  const entry = dp4Levels().find((item) => item.id === definition.level && item.solvation === definition.solvation);
+  const solvents = entry?.solvents || [];
+  return ['<option value="">choose the solvent…</option>']
+    .concat(solvents.map((name) => `<option value="${esc(name)}"${definition.solvent === name ? ' selected' : ''}>${esc(name)}</option>`))
+    .join('');
+}
+
+/** One measured shift: nucleus, value, sp², diastereotopic label, atom numbers. */
+function dp4RowHtml(row, index) {
+  const nucleus = String(row?.nucleus || '13C');
+  const atoms = Array.isArray(row?.atoms) ? row.atoms.join(', ') : '';
+  return `<tr data-role="dp4-row" data-dp4-row="${index}">
+    <td><select class="select" data-dp4-row="${index}" data-dp4-row-field="nucleus" aria-label="Nucleus">
+      ${['13C', '1H'].map((label) => `<option value="${label}"${nucleus === label ? ' selected' : ''}>${label}</option>`).join('')}
+    </select></td>
+    <td><input class="input" type="number" step="0.01" data-dp4-row="${index}" data-dp4-row-field="shift" value="${Number.isFinite(row?.shift) ? row.shift : ''}" aria-label="Measured shift in ppm"></td>
+    <td><input class="input" data-dp4-row="${index}" data-dp4-row-field="atoms" value="${esc(atoms)}" placeholder="e.g. 12, 13" aria-label="Atom numbers"></td>
+    <td><input type="checkbox" data-dp4-row="${index}" data-dp4-row-field="sp2"${row?.sp2 === true ? ' checked' : ''} aria-label="sp2 carbon"></td>
+    <td><input class="input" data-dp4-row="${index}" data-dp4-row-field="exchange" value="${esc(row?.exchange || '')}" placeholder="a" aria-label="Diastereotopic label"></td>
+    <td><button type="button" class="btn small" data-action="dp4-remove-row" data-dp4-index="${index}" aria-label="Remove measured shift">×</button></td>
+  </tr>`;
+}
+
+function dp4InspectorBody(definition) {
+  const rows = definition.experimental.length
+    ? definition.experimental.map((row, index) => dp4RowHtml(row, index)).join('')
+    : '<tr><td colspan="6" class="inspector-note">No measured shifts yet — DP4+ compares a calculation with a measurement.</td></tr>';
+  const variants = DP4_VARIANTS.map((key) => `<option value="${esc(key)}"${definition.variant === key ? ' selected' : ''}>${esc(DP4_VARIANT_LABELS[key])}</option>`).join('');
+  return group('DP4+ comparison', 'level · variant · measured shifts', true, [
+    '<div class="field full"><label>Level of theory</label>'
+      + `<select class="select" data-dp4-field="level" aria-label="Level of theory">${dp4LevelOptions(definition)}</select>`
+      + '<div class="inspector-note">The bank carries 24 DP4+ levels. A level it does not carry is refused by name at save time, never approximated with another level\'s parameters.</div></div>',
+    '<div class="field full"><label>Solvent of the standard</label>'
+      + `<select class="select" data-dp4-field="solvent" aria-label="Solvent">${dp4SolventOptions(definition)}</select></div>`,
+    `<div class="field"><label>Variant</label><select class="select" data-dp4-field="variant" aria-label="DP4+ variant">${variants}</select></div>`,
+    `<div class="field"><label>Temperature / K</label><input class="input" type="number" step="0.01" data-dp4-field="temperature" value="${esc(String(definition.temperature ?? 298.15))}" aria-label="Temperature in kelvin"></div>`,
+    `<div class="full"><table class="mini-table"><thead><tr><th>Nucleus</th><th>δ exp / ppm</th><th>Atoms</th><th>sp²</th><th>Exchange</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`,
+    '<div class="field full"><button type="button" class="btn small" data-action="dp4-add-row">Add measured shift</button></div>',
+    '<div class="field full"><div class="inspector-note">Every measured shift carries its own 1-based atom numbers, as the log prints them; equivalent atoms on one row are averaged, and an atom assigned twice is refused. The candidates are the run records of the blocks wired into this one — one candidate per dataset record, one conformer per fanned-out member.</div></div>',
+  ].join(''));
+}
+
 function computeInspector(node) {
   const upstream = computeUpstreamBlocks(node);
   const ins = incoming(node.id);
   const definition = node.compute && typeof node.compute === 'object'
     ? node.compute : { expression: '', inputs: [] };
+  const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
+  const dp4 = mode === 'dp4' ? dp4DefinitionOf(node) : null;
   const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
   const inputRows = inputs.length
     ? inputs.map((input, index) => computeInputRow(input, index, upstream)).join('')
     : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
   const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
-  return `${inspectorHead('Derived · compute', node.title, `${upstream.length} upstream · derived quantity`)}
+  return `${inspectorHead(mode === 'dp4' ? 'Derived · DP4+' : 'Derived · compute', node.title, `${upstream.length} upstream · ${mode === 'dp4' ? 'candidate comparison' : 'derived quantity'}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · evaluated from upstream records</span></div>
-    <div class="callout"><strong>Derived, not measured.</strong> This block computes a number from other blocks' results — a CBS limit, a ΔE, a ratio. Its value is never presented as a QM result, and a missing field is a refusal that names the field, never a zero.</div>
-    ${group('Expression', 'safe arithmetic', true, [
+    <div class="callout"><strong>Derived, not measured.</strong> This block computes ${mode === 'dp4' ? 'a probability per candidate structure from the committed DP4+ bank' : 'a number from other blocks\' results — a CBS limit, a ΔE, a ratio'}. Its result is never presented as a QM result, and a missing input is a refusal that names it, never a zero.</div>
+    ${group('Mode', 'arithmetic or DP4+', true, [
+      `<div class="field full"><label>What this block computes</label><select class="select" data-compute-mode="mode" aria-label="Compute mode">
+        <option value="expression"${mode === 'expression' ? ' selected' : ''}>Arithmetic expression over upstream fields</option>
+        <option value="dp4"${mode === 'dp4' ? ' selected' : ''}>DP4+ probabilities over candidate structures</option>
+      </select></div>`,
+    ].join(''))}
+    ${mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
       `<div class="field full"><label>Expression</label><textarea class="textarea" rows="3" data-compute-field="expression" data-role="compute-expression" aria-label="Expression">${esc(definition.expression || '')}</textarea></div>`,
       `<div class="field full"><label>Preview</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
     ].join(''))}
-    ${group('Inputs', `${inputs.length}`, true, [
-      `<div class="full"><table class="mini-table"><thead><tr><th>Name</th><th>Field</th><th>From</th><th></th></tr></thead><tbody>${inputRows}</tbody></table></div>`,
-      `<div class="field full"><button type="button" class="btn small" data-action="compute-add-input">Add input</button></div>`,
-    ].join(''))}
-    ${group('Functions', `${COMPUTE_FUNCTIONS.length}`, false, [`<div class="code-block">${functions}</div>`])}
+    ${mode === 'dp4'
+      ? group('Preview', 'the same evaluator the plan uses', true, [
+        `<div class="field full"><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
+        `<div class="field full"><div class="inspector-note">The preview reads the upstream blocks' attached results; the plan counts one candidate per dataset record, so a fanned-out ensemble is one candidate with several conformers.</div></div>`,
+      ].join(''))
+      : group('Inputs', `${inputs.length}`, true, [
+        `<div class="full"><table class="mini-table"><thead><tr><th>Name</th><th>Field</th><th>From</th><th></th></tr></thead><tbody>${inputRows}</tbody></table></div>`,
+        `<div class="field full"><button type="button" class="btn small" data-action="compute-add-input">Add input</button></div>`,
+      ].join(''))}
+    ${mode === 'dp4' ? '' : group('Functions', `${COMPUTE_FUNCTIONS.length}`, false, [`<div class="code-block">${functions}</div>`])}
     ${group('Connections', upstream.length ? `${upstream.length} upstream` : 'not connected', false, [`<div class="full">${incomingList(node.id)}</div>`])}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="validate">Validate</button>
@@ -2698,6 +2824,33 @@ function removeComputeInput(index) {
   const inputs = node?.compute?.inputs;
   if (!Array.isArray(inputs) || index < 0 || index >= inputs.length) return;
   inputs.splice(index, 1);
+  renderGraph();
+  renderInspector();
+}
+
+/**
+ * One more measured shift (issue 165).
+ *
+ * A new row starts as a carbon with no value and no atom: both are things the
+ * user measured or read off the log, and a blank row is refused by name rather
+ * than filled with a plausible number.
+ */
+function addDp4Row() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'compute') return;
+  const definition = dp4DefinitionOf(node);
+  definition.experimental.push({ nucleus: '13C', shift: null, atoms: [] });
+  renderGraph();
+  renderInspector();
+}
+
+function removeDp4Row(index) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  const rows = node?.compute?.dp4?.experimental;
+  if (!Array.isArray(rows) || !Number.isInteger(index) || index < 0 || index >= rows.length) return;
+  rows.splice(index, 1);
   renderGraph();
   renderInspector();
 }
@@ -8068,6 +8221,8 @@ function handleAction(action, element) {
     // Issue 175: the input rows of a compute block.
     case 'compute-add-input': addComputeInput(); break;
     case 'compute-remove-input': removeComputeInput(Number(element?.dataset?.computeIndex)); break;
+    case 'dp4-add-row': addDp4Row(); break;
+    case 'dp4-remove-row': removeDp4Row(Number(element?.dataset?.dp4Index)); break;
     case 'validate': validateGraph(); break;
     case 'zoom-in': setZoom(state.zoom + 0.05); break;
     case 'zoom-out': setZoom(state.zoom - 0.05); break;
@@ -8451,6 +8606,92 @@ function onDocumentChange(event) {
     const input = node?.compute?.inputs?.[index];
     if (!node || node.type !== 'compute' || !input || !key) return;
     input[key] = target.value;
+    refreshDirty();
+    refreshComputePreview();
+    return;
+  }
+  if (target.dataset.computeMode) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'compute') return;
+    if (!node.compute || typeof node.compute !== 'object') node.compute = { expression: '', inputs: [] };
+    const mode = target.value === 'dp4' ? 'dp4' : 'expression';
+    if (mode === 'dp4') {
+      // Switching modes creates the DP4+ definition with no level chosen: a
+      // block that quietly inherited the first bank level would be computing a
+      // level the user never picked.
+      node.compute.mode = 'dp4';
+      dp4DefinitionOf(node);
+      // The arithmetic declaration is kept until the file is saved, so flipping
+      // the mode back does not lose an expression the user typed.
+    } else {
+      delete node.compute.mode;
+    }
+    refreshDirty();
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.dp4Field) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'compute') return;
+    const definition = dp4DefinitionOf(node);
+    const key = target.dataset.dp4Field;
+    if (key === 'level') {
+      const [id, solvation] = String(target.value || '').split('|');
+      definition.level = id || '';
+      definition.solvation = solvation || 'gas';
+      // A level carries the solvents its standard table has; a solvent left over
+      // from the previous level would name a table this level does not carry.
+      const entry = dp4Levels().find((item) => item.id === definition.level && item.solvation === definition.solvation);
+      if (definition.solvation === 'gas' || !(entry?.solvents || []).includes(definition.solvent)) definition.solvent = '';
+      refreshDirty();
+      renderGraph();
+      renderInspector();
+      return;
+    }
+    if (key === 'temperature') {
+      definition.temperature = Number(target.value);
+    } else {
+      definition[key] = target.value;
+    }
+    refreshDirty();
+    // The solvent list depends on the level, so a level change redraws; the
+    // other fields only move the preview.
+    if (key === 'solvent' || key === 'variant') {
+      renderGraph();
+      renderInspector();
+      return;
+    }
+    refreshComputePreview();
+    return;
+  }
+  if (target.dataset.dp4Row !== undefined) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'compute') return;
+    const definition = dp4DefinitionOf(node);
+    const index = Number(target.dataset.dp4Row);
+    const key = target.dataset.dp4RowField;
+    const row = definition.experimental[index];
+    if (!row || !key) return;
+    if (key === 'shift') {
+      row.shift = target.value === '' ? null : Number(target.value);
+    } else if (key === 'sp2') {
+      row.sp2 = target.checked;
+    } else if (key === 'exchange') {
+      if (String(target.value).trim()) row.exchange = String(target.value).trim();
+      else delete row.exchange;
+    } else if (key === 'atoms') {
+      // "12, 13" → [12, 13]; anything that is not a whole number stays as typed
+      // and the validator refuses it by name rather than dropping it.
+      const indices = String(target.value || '').split(/[,\s]+/).filter(Boolean).map(Number);
+      if (indices.length && indices.every((value) => Number.isInteger(value) && value > 0)) row.atoms = indices;
+      else delete row.atoms;
+    } else {
+      row[key] = target.value;
+    }
     refreshDirty();
     refreshComputePreview();
     return;
