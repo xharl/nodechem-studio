@@ -255,6 +255,10 @@ const SETTINGS_KEYS = new Set([
   // Issue 177: a per-block wall-clock limit. Also not in the defaults: a project
   // that never set one must serialise exactly as it did before.
   'timeoutSeconds',
+  // Issue 173: the opt-in that makes a Psi4 TD block record transition-dipole
+  // vectors. Not in the defaults, so an existing project is unchanged; listed
+  // here so an explicit value is not read as a typo.
+  'recordTransitionDipoles',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 

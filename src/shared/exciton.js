@@ -16,6 +16,8 @@
  * `5030.0` is the point-dipole constant in cm⁻¹ per D²·Å⁻³.
  */
 
+import { centreOfMass } from './complex.js';
+
 /** cm⁻¹ per (debye² · ångström⁻³) — the Kasha point-dipole constant. */
 export const POINT_DIPOLE_PREFACTOR_CM = 5030.0;
 
@@ -191,5 +193,185 @@ export function excitonCoupling({ state1, state2, separationAngstrom, extent1Ang
     // Stated so a report cannot present this as the only possible answer.
     approximation: 'point-dipole; valid only when the chromophore separation is much larger than '
       + 'the chromophore extent. Charge-transfer character is not described by this model.',
+  };
+}
+
+/**
+ * Issue 173: the two chromophores of a `complex` record, as geometry.
+ *
+ * A complex record labels its atoms with `fragment = member index + 1`, and
+ * places them contiguously in member order (`complex.js`), so `members[i]` owns
+ * the next `atomCount` atoms of `coords`. Each fragment's centre of mass is the
+ * anchor of its point dipole, and its extent — the largest distance between two
+ * of its own atoms — is what the validity ratio is measured against. Nothing is
+ * inferred from the atom count, and a member whose atoms are not all there is
+ * refused rather than shifted.
+ *
+ * Returns `null` when there is no complex geometry to read at all (a monomer
+ * run); throws only when a complex is present but internally inconsistent, so a
+ * caller can tell "not a dimer" from "this dimer is malformed".
+ */
+export function complexFragments({ complex = null, coords = null } = {}) {
+  const members = Array.isArray(complex?.members) ? complex.members : [];
+  const atoms = Array.isArray(coords) ? coords : [];
+  if (members.length < 2 || atoms.length === 0) return null;
+  const counts = members.map((member) => Number(member?.atomCount));
+  if (!counts.every((count) => Number.isInteger(count) && count > 0)) {
+    throw new Error('the complex does not record how many atoms each member has, so its fragments '
+      + 'cannot be separated without guessing.');
+  }
+  const total = counts.reduce((sum, count) => sum + count, 0);
+  if (total !== atoms.length) {
+    throw new Error(`the complex records ${total} atoms across its members but the geometry carries `
+      + `${atoms.length}: the two do not describe the same system.`);
+  }
+  const fragments = [];
+  let offset = 0;
+  members.forEach((member, position) => {
+    const owned = atoms.slice(offset, offset + counts[position]);
+    offset += counts[position];
+    let extent = 0;
+    for (let a = 0; a < owned.length; a += 1) {
+      for (let b = a + 1; b < owned.length; b += 1) {
+        const distance = Math.hypot(
+          Number(owned[a].x) - Number(owned[b].x),
+          Number(owned[a].y) - Number(owned[b].y),
+          Number(owned[a].z) - Number(owned[b].z),
+        );
+        if (Number.isFinite(distance) && distance > extent) extent = distance;
+      }
+    }
+    const label = member?.label ? String(member.label) : (member?.id ? String(member.id) : `member ${position + 1}`);
+    // Mass-weighted, through the same `centreOfMass` the complex block places
+    // members with: the separation vector must be the one the geometry was
+    // built on, and an element with no tabulated mass is refused there rather
+    // than weighted as zero.
+    const centre = centreOfMass(owned, label);
+    fragments.push({
+      fragment: Number.isInteger(Number(member?.fragment)) ? Number(member.fragment) : position + 1,
+      id: member?.id ? String(member.id) : null,
+      label,
+      atomCount: owned.length,
+      centreAngstrom: { x: centre.x, y: centre.y, z: centre.z },
+      extentAngstrom: extent,
+    });
+  });
+  return fragments;
+}
+
+/**
+ * Issue 173: the exciton analysis of a dimer record, or the reason there is none.
+ *
+ * Two chromophores are coupled through their transition dipoles. The states fed
+ * here are the ones the run recorded; only states that carry **both** a recorded
+ * dipole vector and a non-zero oscillator strength can take part, because a dark
+ * state has no transition to couple and a state without a vector has no
+ * direction. The two leading such states are paired and named in the report —
+ * a selection rule stated on the card, not one hidden in the code.
+ *
+ * `pair` ({ state1, state2 } state indices) overrides that choice when a caller
+ * already knows which two states are the chromophore transitions.
+ *
+ * Returns `{ modelled: true, ... }` or `{ modelled: false, reason }`, where
+ * `reason` is the sentence a card prints. It never returns a number from one
+ * chromophore, from a dark state, or from a geometry that is not a dimer.
+ */
+export function excitonReport({
+  states = [], complex = null, coords = null, pair = null, levelOfTheory = null,
+} = {}) {
+  const list = Array.isArray(states) ? states.filter((state) => state && typeof state === 'object') : [];
+  let fragments;
+  try {
+    fragments = complexFragments({ complex, coords });
+  } catch (error) {
+    return { modelled: false, reason: `not modelled: ${error.message}`, levelOfTheory };
+  }
+  if (!fragments) {
+    // A plain monomer run: one chromophore, so there is no separation vector and
+    // nothing to couple. No number is produced from the single molecule.
+    return {
+      modelled: false,
+      reason: 'not modelled: no dimer geometry',
+      detail: 'This run has one structure and no complex record, so there is no second chromophore '
+        + 'and no separation vector. Coupling needs two chromophores and the geometry that places them.',
+      levelOfTheory,
+    };
+  }
+
+  const usable = list.filter((state) => isNum(state.oscillatorStrength)
+    && state.oscillatorStrength > 0
+    && (state.transitionDipoleAu || state.transitionDipoleDebye));
+  let state1 = null;
+  let state2 = null;
+  if (pair && isNum(pair.state1) && isNum(pair.state2)) {
+    state1 = list.find((state) => Number(state.index) === Number(pair.state1)) || null;
+    state2 = list.find((state) => Number(state.index) === Number(pair.state2)) || null;
+  } else {
+    [state1, state2] = usable;
+  }
+  if (!state1 || !state2) {
+    const bright = usable.length;
+    return {
+      modelled: false,
+      reason: 'not modelled: fewer than two states carry a recorded transition dipole and a non-zero '
+        + 'oscillator strength',
+      detail: `${bright} state${bright === 1 ? '' : 's'} of ${list.length} in this record could couple. `
+        + 'A dark state (f = 0) has no transition to couple, and a state without a dipole vector has no '
+        + 'direction; neither is reconstructed from the oscillator strength.',
+      chromophores: fragments.length,
+      levelOfTheory,
+    };
+  }
+
+  const separation = {
+    x: fragments[1].centreAngstrom.x - fragments[0].centreAngstrom.x,
+    y: fragments[1].centreAngstrom.y - fragments[0].centreAngstrom.y,
+    z: fragments[1].centreAngstrom.z - fragments[0].centreAngstrom.z,
+  };
+  let coupling;
+  try {
+    coupling = excitonCoupling({
+      state1,
+      state2,
+      separationAngstrom: separation,
+      extent1Angstrom: fragments[0].extentAngstrom,
+      extent2Angstrom: fragments[1].extentAngstrom,
+    });
+  } catch (error) {
+    return {
+      modelled: false,
+      reason: `not modelled: ${error.message}`,
+      chromophores: fragments.length,
+      levelOfTheory,
+    };
+  }
+
+  const describe = (state, fragment) => {
+    const dipole = transitionDipoleOf(state);
+    return {
+      index: Number(state.index),
+      label: [state.spin, state.symmetry ?? state.irrep].filter(Boolean).join('-') || null,
+      energyEv: isNum(state.energyEv) ? state.energyEv : null,
+      oscillatorStrength: isNum(state.oscillatorStrength) ? state.oscillatorStrength : null,
+      magnitudeDebye: dipole.magnitudeDebye,
+      fragment: fragment.fragment,
+      fragmentLabel: fragment.label,
+    };
+  };
+
+  return {
+    modelled: true,
+    state1: describe(state1, fragments[0]),
+    state2: describe(state2, fragments[1]),
+    fragments: fragments.map((fragment) => ({
+      fragment: fragment.fragment,
+      label: fragment.label,
+      centreAngstrom: fragment.centreAngstrom,
+      extentAngstrom: fragment.extentAngstrom,
+    })),
+    membersNotCoupled: fragments.length > 2 ? fragments.slice(2).map((fragment) => fragment.label) : [],
+    separationAngstrom: separation,
+    ...coupling,
+    levelOfTheory,
   };
 }

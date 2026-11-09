@@ -22,7 +22,8 @@
  *     frequencies: { count, imaginaryCount, imaginaryValues, minImaginary },
  *     thermochemistry: { freeEnergyHartree, enthalpyHartree, zpeHartree, entropyTreatment },
  *     finalEnergy: { hartree, source },
- *     excitedStates: { count, requested, perIrrep, states, source, verified } | absent,
+ *     excitedStates: { count, requested, perIrrep, states, source, verified,
+ *                      transitionDipoleCount } | absent,
  *     extras: { ... },                            // engine-specific evidence
  *     lineCount
  *   }
@@ -161,6 +162,15 @@ export function canonicalResult({
           source: excitedStates.source ? String(excitedStates.source) : null,
           /** True only when a real log of this layout was parsed (not a guess). */
           verified: excitedStates.verified === true,
+          /**
+           * Issue 173: how many states carry a recorded transition-dipole vector
+           * (`transitionDipoleAu`, atomic units, on each state). The states are
+           * passed through as the engine produced them, so the vector survives
+           * this whitelist; the count is carried beside it because a consumer
+           * deciding whether a coupling is possible must not infer it from the
+           * oscillator strengths.
+           */
+          transitionDipoleCount: integerOrNull(excitedStates.transitionDipoleCount),
         },
       }
       : {}),
