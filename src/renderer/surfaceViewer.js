@@ -300,6 +300,10 @@ export function createSurfaceViewer(host, { doc = globalThis.document, onIsoChan
       };
       gl = context;
       attempt = 'ready';
+      // The row is written when the mesh is built, which is before this runs on
+      // the first mount; without this the numbers keep saying "not started"
+      // while the canvas is already drawing (issue 156).
+      setNumbers();
       return gl;
     } catch (error) {
       attempt = 'failed';
@@ -520,6 +524,10 @@ export function createSurfaceViewer(host, { doc = globalThis.document, onIsoChan
         }
         if (mesh[key] && mesh[key].triangleCount) buffers[key] = upload(mesh[key]);
       }
+      // `ensure()` refreshes the row when it starts the renderer; refresh again
+      // so the mesh counts, isovalue and grid on the same row are the ones just
+      // handed in, not the ones from the previous call.
+      setNumbers();
       draw();
       return { triangles: (mesh.positive?.triangleCount ?? 0) + (mesh.negative?.triangleCount ?? 0) };
     },
