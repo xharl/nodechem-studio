@@ -35,6 +35,7 @@ ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv] [--out <file>] [--json]
 ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
 ncs cache <file.ncsr> --inspect [--json]
+ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cube> [--grid <angstrom>] [--padding <angstrom>] [--json]
 ```
 
 - `validate` prints the schema errors, warnings and the pre-run validity findings as JSON. Every
@@ -62,6 +63,14 @@ ncs cache <file.ncsr> --inspect [--json]
 - `cache <input> --out <file.ncsr>` writes a parsed run or volumetric field as typed arrays, and
   `ncs cache <file.ncsr> --inspect` prints its header (`--precision f64|f32` picks the array width).
   Opening a trajectory then costs what the numbers cost, not what the log's text costs.
+- `cube` evaluates one orbital from a formatted checkpoint, Molden, WFN or WFX file — given directly
+  or found in a run folder — and writes a Gaussian cube without `cubegen`: `--orbital homo|lumo|n=<i>`
+  (1-based, as the file prints them), `--grid` the spacing in Å (default 0.2), `--padding` the margin
+  around the molecule (default 3). It prints the orbital energy, the grid actually used (the
+  four-million-point cap may coarsen it) and ∫|ψ|² over the box, which is close to 1 but is not
+  claimed to be; `--json` carries the same numbers and `--out` is the file to write. A folder with
+  two wavefunction candidates is refused rather than guessed. See
+  [Wavefunctions](wavefunction.md#making-a-cube-without-gaussian).
 - `qcschema export` writes one MolSSI `qcschema_output` (`AtomicResult`) from a finished run, in
   atomic units, validated against the vendored published schema; `qcschema import` reads one back
   and can write its structure as XYZ. Refusals exit 2 with a `qcschema-*` code on stderr. The

@@ -21,9 +21,25 @@ A Gaussian cube is plain text with five parts:
 
 1. two comment lines (a title and, usually, the loop order `OUTER LOOP: X, …`);
 2. `NATOMS OX OY OZ` — the atom count and the grid origin;
-3. one row per atom: `atomicNumber nuclearCharge x y z`;
-4. three rows describing the grid: `count spacing vx vy vz`, one per axis;
+3. three rows describing the grid: `count vx vy vz` — the point count and the step vector itself,
+   four numbers per row, one row per axis;
+4. one row per atom: `atomicNumber nuclearCharge x y z`;
 5. `nx · ny · nz` values, **x varying fastest** (Fortran order).
+
+That is the order `cubegen` and Psi4's `cubeprop` both write (#153). An earlier revision of this
+reader had parts 3 and 4 swapped and expected a five-number grid row (`count spacing vx vy vz`); that
+non-standard dialect is still read, but only when line 4 has five tokens, and the read is marked with
+a warning so the two are never silently confused.
+
+The step vector is what the format states, so it is used as written: a row of `2 0.2 0 0` means two
+points 0.2 bohr apart along x, i.e. a 0.106 Å spacing. Multiplying it by the count again would square
+the spacing (#155), and the Wavefunction view reported 0.2 bohr as 0.021 Å before that was fixed.
+
+One further difference is worth knowing. Gaussian writes the values with x varying fastest; Psi4's
+`cubeprop` writes the same header and then z fastest. A file whose **first line is Psi4's own
+`Psi4 Gaussian Cube File.`** declares its writer, so the reader reorders that file's values to the
+x-fastest contract everything else here uses, and records `valuesOrder: 'c-order'` in the parsed
+result. A cube whose title was edited can be read with `parseCube(text, { valuesOrder: 'fortran' })`.
 
 The units are not written anywhere. They are encoded in the sign of the first grid count: a
 **negative** count means the atom rows, origin and spacing are in **Å**; a **positive** count means
@@ -494,6 +510,73 @@ file has no total charge, multiplicity, partial charges or total energy, so thos
 from its parsed object and named in `missing`; deriving a charge from the geometry would be an
 invention, not a read.
 
+## Making a cube without Gaussian
+
+`ncs cube` evaluates one orbital from a wavefunction the app already reads and writes a cube file —
+no `cubegen`, no Gaussian installation, no network:
+
+```
+ncs cube <run-dir|wavefunction> --orbital homo|lumo|n=<i> --out file.cube
+    [--grid 0.2] [--padding 3] [--json]
+```
+
+- The input is a run folder holding exactly one `.fchk`, `.molden`, `.wfn` or `.wfx` file, or that
+  file directly. A folder with two candidates is refused with both names: the command does not pick.
+- `--orbital homo` is the last orbital with a non-zero occupation, `lumo` the first with none, and
+  `n=<i>` the 1-based index the file's own orbital order prints. Occupations come from the file; a
+  restricted checkpoint that states none gets them from `Number of alpha electrons` (2 each), which
+  is the one derived number in the command and the reason `homo`/`lumo` mean anything there.
+- `--grid` is the spacing in Å (default 0.2) and `--padding` the margin added on every side of the
+  atom bounding box (default 3). If the 4-million-point ceiling forces a coarser grid, the spacing
+  actually used is printed, never the requested one.
+- The values are written in **atomic units**, as the evaluator produced them (an orbital amplitude
+  in bohr^-3/2), in the standard layout above: Å in the header (negative counts), the grid rows
+  first, four numbers each, then the atoms, then the values six per line in `%12.5E` with x fastest.
+
+What the command prints is what the picture should be checked against, and `--json` carries the same
+fields:
+
+| Field | Meaning |
+| --- | --- |
+| `orbital`, `energyEh` | The MO that was evaluated and the energy the file states. No energy in the file means `energyEh: null` and an `energyNote` beginning `not available:` — never a 0 |
+| `grid.spacing`, `grid.points`, `grid.capped`, `grid.note` | The grid actually used, including the coarsening when the cap forced one |
+| `integral.value` | ∫\|ψ\|²dV over the box, in bohr³ — **not** 1.0, and its `note` says why: a finite box does not integrate to exactly 1 because the density outside it is not counted. A value well below 1 means the padding is too small or the grid too coarse |
+
+```
+$ ncs cube dvb-g16-b3lyp-sto3g.fchk --orbital homo --grid 0.2 --padding 3 --out homo.cube
+wavefunction: /…/dvb-g16-b3lyp-sto3g.fchk (fchk)
+orbital: MO 35 (homo), occupation 2.000
+energy: -0.153073 Eh
+grid: 0.200 Å, 78×58×31 = 140244 points
+integral: ∫|ψ|²dV = 0.999992 over 1121.952 Å³ — |psi|^2 over the finite grid box; a finite box does not integrate to exactly 1, because the density outside it is not counted.
+wrote: homo.cube (1824551 bytes)
+```
+
+(That transcript is the DVB fixture in `test/fixtures/fchk/`, run at 0.2 Å. The same orbital at 0.6 Å
+with `--padding 2` integrates to 1.106 and at 0.3 Å with `--padding 3` to 0.997: the coarse grid, not
+the orbital, and the reason the spacing is printed.)
+
+### The Psi4 cross-check
+
+An implementation that disagrees with an independent one draws a wrong picture convincingly, so the
+evaluator and the writer are checked against Psi4 1.11. `test/fixtures/psi4/` holds a water
+B3LYP/6-31G* SCF computed in the official `psi4/psi4:1.11` image (spherical 5D d functions, which is
+what Gaussian uses for Pople bases), the formatted checkpoint `psi4.fchk` wrote, and the HOMO cube
+`psi4.cubeprop` wrote — both verbatim, unmodified. The README beside them states the input, the
+version, the date and the energy.
+
+`test/cubeWriter.test.js` parses that cube, evaluates the same MO from the same checkpoint with
+`src/shared/volume.js` on the grid the cube declares, aligns the arbitrary MO phase, and reports the
+largest disagreement. **Measured: max |Δψ| = 8.5 × 10⁻⁷ a.u.** over 56×41×47 points (the fixture's
+six-digit values alone leave a few 10⁻⁷) against a required bound of **1 × 10⁻³ a.u.** — and the
+overlap of the two fields is 0.9999999, so the comparison is of the same orbital rather than of two
+unrelated ones.
+
+That test is also the proof of the two reader fixes above: the fixture is a stock Psi4 cube, with the
+grid rows before the atoms, four numbers per grid row, and the values in Psi4's order. It cannot be
+read at all by the pre-#153 reader, and it would be read as a transposed field by a reader that
+ignored Psi4's value order.
+
 ## What is not here yet
 
 The ingest half of issue #59 is implemented. The visual half is not, and this page would rather say
@@ -506,8 +589,12 @@ so than show a picture that implies otherwise:
 - **QTAIM/AIM critical points, bond paths and basin charges.** A separate analysis with its own
   numerical requirements.
 - **NCI/RDG surfaces, ELF/LOL, deformation density.** Also separate analyses, not another cube read.
-- **Writing a cube.** The app renders the coefficients it reads, but `ncs cube` and a cube writer do
-  not exist: a cube can be read, not produced.
+- **Cube *density* and ESP cubes from the CLI.** `ncs cube` writes one orbital; the density
+  (`Σ occᵢ|ψᵢ|²`) and an ESP cube need a different evaluator or the density matrix, which `fchk.js`
+  does not parse yet.
+- **Reading a cube whose values are in an unstated order.** Only Psi4's own title triggers the
+  reorder; a cube re-saved with another tool's title is read x-fastest, as the format says, and the
+  reader does not guess further.
 - **Molden's vibrational sections.** `[FREQ]`, `[FR-COORD]`, `[INT]` and `[GEOMETRIES]` are ignored;
   frequencies come from the engine output parsers, not from a Molden file.
 - **Molden in the CLI and the window.** The shared reader is wired into `readWavefunction`, but

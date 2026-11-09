@@ -1,0 +1,303 @@
+
+Scratch directory: /tmp/
+   => Libint2 <=
+
+    Primary   basis highest AM E, G, H:  7, 6, 3
+    Auxiliary basis highest AM E, G, H:  7, 7, 4
+    Onebody   basis highest AM E, G, H:  -, -, -
+    Solid Harmonics ordering:            Gaussian
+
+*** tstart() called on fc681769d851
+*** at Mon Nov  9 00:19:59 2026
+
+   => Loading Basis Set <=
+
+    Name: 6-31G*
+    Role: ORBITAL
+    Keyword: BASIS
+    atoms 1   entry O          line   145 file /opt/conda/share/psi4/basis/6-31gs.gbs 
+    atoms 2-3 entry H          line    44 file /opt/conda/share/psi4/basis/6-31gs.gbs 
+
+
+         ---------------------------------------------------------
+                                   SCF
+               by Justin Turney, Rob Parrish, Andy Simmonett
+                          and Daniel G. A. Smith
+                              RKS Reference
+                        1 Threads,    953 MiB Core
+         ---------------------------------------------------------
+
+  ==> Geometry <==
+
+    Molecular point group: c1
+    Full point group: C2v
+
+    Geometry (in Angstrom), charge = 0, multiplicity = 1:
+
+       Center              X                  Y                   Z               Mass       
+    ------------   -----------------  -----------------  -----------------  -----------------
+         O            0.000000000000     0.000000000000    -0.065582115747    15.994914619570
+         H            0.757000000000     0.000000000000     0.520417884253     1.007825032230
+         H           -0.757000000000     0.000000000000     0.520417884253     1.007825032230
+
+  Running in c1 symmetry.
+
+  Rotational constants: A =     27.42405  B =     14.59451  C =      9.52533 [cm^-1]
+  Rotational constants: A = 822152.21994  B = 437532.48542  C = 285562.17493 [MHz]
+  Nuclear repulsion =    9.193913156279891
+
+  Charge       = 0
+  Multiplicity = 1
+  Electrons    = 10
+  Nalpha       = 5
+  Nbeta        = 5
+
+  ==> Algorithm <==
+
+  SCF Algorithm Type is DF.
+  DIIS enabled.
+  MOM disabled.
+  Fractional occupation disabled.
+  Guess Type is SAD.
+  Energy threshold   = 1.00e-06
+  Density threshold  = 1.00e-06
+  Integral threshold = 1.00e-12
+
+  ==> Primary Basis <==
+
+  Basis Set: 6-31G*
+    Blend: 6-31G*
+    Number of shells: 10
+    Number of basis functions: 18
+    Number of Cartesian functions: 19
+    Spherical Harmonics?: true
+    Max angular momentum: 2
+
+  ==> DFT Potential <==
+
+   => LibXC <=
+
+    Version 7.0.0
+    S. Lehtola, C. Steigemann, M. J.T. Oliveira, and M. A.L. Marques.,  SoftwareX 7, 1–5 (2018) (10.1016/j.softx.2017.11.002)
+
+   => Composite Functional: B3LYP <= 
+
+    B3LYP Hyb-GGA Exchange-Correlation Functional
+
+    P. J. Stephens, F. J. Devlin, C. F. Chabalowski, and M. J. Frisch.,  J. Phys. Chem. 98, 11623 (1994) (10.1021/j100096a001)
+
+    Deriv               =              1
+    GGA                 =           TRUE
+    Meta                =          FALSE
+
+    Exchange Hybrid     =           TRUE
+    MP2 Hybrid          =          FALSE
+
+   => Exchange Functionals <=
+
+    0.0800   Slater exchange
+    0.7200         Becke 88
+
+   => Exact (HF) Exchange <=
+
+    0.2000               HF 
+
+   => Correlation Functionals <=
+
+    0.1900   Vosko, Wilk & Nusair (VWN5_RPA)
+    0.8100   Lee, Yang & Parr
+
+   => LibXC Density Thresholds  <==
+
+    XC_HYB_GGA_XC_B3LYP:  1.00E-15 
+
+   => Molecular Quadrature <=
+
+    Radial Scheme          =       TREUTLER
+    Pruning Scheme         =           NONE
+    Nuclear Scheme         =       TREUTLER
+
+    Blocking Scheme        =         OCTREE
+    BS radius alpha        =              1
+    Pruning alpha          =              1
+    Radial Points          =             75
+    Spherical Points       =            302
+    Total Points           =          65914
+    Total Blocks           =            548
+    Max Points             =            256
+    Max Functions          =             18
+    Weights Tolerance      =       1.00E-15
+
+   => Loading Basis Set <=
+
+    Name: (6-31G* AUX)
+    Role: JKFIT
+    Keyword: DF_BASIS_SCF
+    atoms 1   entry O          line   221 file /opt/conda/share/psi4/basis/cc-pvdz-jkfit.gbs 
+    atoms 2-3 entry H          line    51 file /opt/conda/share/psi4/basis/cc-pvdz-jkfit.gbs 
+
+  ==> Integral Setup <==
+
+  DFHelper Memory: AOs need 0.000 GiB; user supplied 0.664 GiB. 
+  SCF_SUBTYPE=INCORE selected. In-core MEM_DF algorithm will be used.
+  Using in-core AOs.
+
+  ==> MemDFJK: Density-Fitted J/K Matrices <==
+
+    J tasked:                   Yes
+    K tasked:                   Yes
+    wK tasked:                   No
+    OpenMP threads:               1
+    Memory [MiB]:               680
+    Algorithm:                 Core
+    Schwarz Cutoff:           1E-12
+    Mask sparsity (%):       0.0000
+    Fitting Condition:        1E-10
+
+   => Auxiliary Basis Set <=
+
+  Basis Set: (6-31G* AUX)
+    Blend: CC-PVDZ-JKFIT
+    Number of shells: 42
+    Number of basis functions: 116
+    Number of Cartesian functions: 131
+    Spherical Harmonics?: true
+    Max angular momentum: 3
+
+  Cached 100.0% of DFT collocation blocks in 0.034 [GiB].
+
+  Minimum eigenvalue in the overlap matrix is 6.2474131466E-02.
+  Reciprocal condition number of the overlap matrix is 1.8070390141E-02.
+    Using symmetric orthogonalization.
+
+  ==> Pre-Iterations <==
+
+  SCF Guess: Superposition of Atomic Densities via on-the-fly atomic UHF (no occupation information).
+
+   -------------------------
+    Irrep   Nso     Nmo    
+   -------------------------
+     A         18      18 
+   -------------------------
+    Total      18      18
+   -------------------------
+
+  ==> Iterations <==
+
+                           Total Energy        Delta E     RMS |[F,P]|
+
+   @DF-RKS iter SAD:   -76.11485418400169   -7.61149e+01   0.00000e+00 
+   @DF-RKS iter   1:   -76.25987237635584   -1.45018e-01   3.48985e-02 ADIIS/DIIS
+   @DF-RKS iter   2:   -76.11382201508134    1.46050e-01   4.89569e-02 ADIIS/DIIS
+   @DF-RKS iter   3:   -76.40559007232052   -2.91768e-01   3.29919e-03 ADIIS/DIIS
+   @DF-RKS iter   4:   -76.40680819633398   -1.21812e-03   7.28022e-05 DIIS
+   @DF-RKS iter   5:   -76.40680875579487   -5.59461e-07   2.90782e-05 DIIS
+   @DF-RKS iter   6:   -76.40680885343812   -9.76433e-08   4.19379e-07 DIIS
+  Energy and wave function converged.
+
+
+  ==> Post-Iterations <==
+
+   Electrons on quadrature grid:
+      Ntotal   =   10.0000000461 ; deviation = 4.606e-08 
+
+    Orbital Energies [Eh]
+    ---------------------
+
+    Doubly Occupied:                                                      
+
+       1A    -19.127286     2A     -1.001145     3A     -0.522215  
+       4A     -0.369985     5A     -0.290847  
+
+    Virtual:                                                              
+
+       6A      0.068548     7A      0.153047     8A      0.781385  
+       9A      0.870805    10A      0.891782    11A      0.932783  
+      12A      1.070265    13A      1.384523    14A      1.730702  
+      15A      1.744008    16A      1.780026    17A      2.302032  
+      18A      2.598726  
+
+    Final Occupation by Irrep:
+              A 
+    DOCC [     5 ]
+    NA   [     5 ]
+    NB   [     5 ]
+
+  @DF-RKS Final Energy:   -76.40680885343812
+
+   => Energetics <=
+
+    Nuclear Repulsion Energy =              9.1939131562798906
+    One-Electron Energy =                -123.1435222325248731
+    Two-Electron Energy =                  45.1137126415468828
+    DFT Exchange-Correlation Energy =      -7.5709124187400194
+    Empirical Dispersion Energy =           0.0000000000000000
+    VV10 Nonlocal Energy =                  0.0000000000000000
+    Total Energy =                        -76.4068088534381218
+
+Computation Completed
+
+
+Properties will be evaluated at   0.000000,   0.000000,   0.000000 [a0]
+
+Properties computed using the SCF density matrix
+
+
+ Multipole Moments:
+
+ ------------------------------------------------------------------------------------
+     Multipole            Electronic (a.u.)      Nuclear  (a.u.)        Total (a.u.)
+ ------------------------------------------------------------------------------------
+
+ L = 1.  Multiply by 2.5417464519 to convert [e a0] to [Debye]
+ Dipole X            :         -0.0000000            0.0000000           -0.0000000
+ Dipole Y            :          0.0000000            0.0000000            0.0000000
+ Dipole Z            :         -0.1597659            0.9754366            0.8156707
+ Magnitude           :                                                    0.8156707
+
+ ------------------------------------------------------------------------------------
+
+*** tstop() called on fc681769d851 at Mon Nov  9 00:20:01 2026
+Module time:
+	user time   =       1.29 seconds =       0.02 minutes
+	system time =       0.12 seconds =       0.00 minutes
+	total time  =          2 seconds =       0.03 minutes
+Total time:
+	user time   =       1.29 seconds =       0.02 minutes
+	system time =       0.12 seconds =       0.00 minutes
+	total time  =          2 seconds =       0.03 minutes
+  ==> One Electron Grid Properties (v2.0) <==
+
+  ==> CubicScalarGrid <==
+
+    Filepath     = .
+    Total Points =           107912
+    XYZ Blocking =               10
+    X Points     =               56
+    Y Points     =               41
+    Z Points     =               47
+    X Spacing    =        2.000E-01
+    Y Spacing    =        2.000E-01
+    Z Spacing    =        2.000E-01
+    X Minimum    =       -5.500E+00
+    Y Minimum    =       -4.000E+00
+    Z Minimum    =       -4.170E+00
+    X Maximum    =        5.500E+00
+    Y Maximum    =        4.000E+00
+    Z Maximum    =        5.030E+00
+
+  Basis Set: 6-31G*
+    Blend: 6-31G*
+    Number of shells: 10
+    Number of basis functions: 18
+    Number of Cartesian functions: 19
+    Spherical Harmonics?: true
+    Max angular momentum: 2
+
+FCHKWriter: !WARNING! method 'DFT'' renamed to label 'DFT'.
+FCHKWriter: Writing water-b3lyp-631gd.fchk with label ' SCF Density'.
+
+    Psi4 stopped on: Monday, 09 November 2026 12:20AM
+    Psi4 wall time for execution: 0:00:01.69
+
+*** Psi4 exiting successfully. Buy a developer a beer!
