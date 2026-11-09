@@ -102,13 +102,45 @@ export function spectrumFigure({
     .filter((stick) => stick && Number.isFinite(Number(stick.x)) && Number.isFinite(Number(stick.height)));
   if (points.length === 0 && peaks.length === 0) return null;
 
-  const xs = points.map((point) => Number(point.x)).concat(peaks.map((stick) => Number(stick.x)));
+  /**
+   * A measured trace, when one was imported, is drawn on these axes — the same
+   * scale functions, the same plot area — and its values are plotted as given:
+   * no resampling onto the computed grid. The single transform is the one the
+   * caption states, division by the trace's own maximum, so the two curves share
+   * a 0…1 axis without either being silently rescaled twice.
+   */
+  const measured = [];
+  for (const overlay of Array.isArray(overlays) ? overlays : []) {
+    const raw = (Array.isArray(overlay?.points) ? overlay.points : [])
+      .map((point) => ({ x: Number(point?.x), y: Number(point?.y) }))
+      .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    if (raw.length < 2) continue;
+    const peak = maxAbs(raw.map((point) => point.y));
+    const factor = peak > 0 ? 1 / peak : 1;
+    measured.push({
+      points: raw.map((point) => ({ x: point.x, y: point.y * factor })),
+      label: String(overlay.label || overlay.source || 'imported'),
+      sha256: String(overlay.sha256 || ''),
+      note: String(overlay.note || ''),
+      factor,
+    });
+  }
+
+  const xs = points.map((point) => Number(point.x))
+    .concat(peaks.map((stick) => Number(stick.x)))
+    .concat(measured.flatMap((trace) => trace.points.map((point) => point.x)));
   const lo = Array.isArray(range) ? Number(range[0]) : Math.min(...xs);
   const hi = Array.isArray(range) ? Number(range[1]) : Math.max(...xs);
-  const x0 = Math.min(lo, hi);
-  const x1 = Math.max(lo, hi);
+  // A measured trace outside the computed range is not clipped away silently:
+  // the axis grows to hold it and the caption says so.
+  const measuredXs = measured.flatMap((trace) => trace.points.map((point) => point.x));
+  const widened = measuredXs.some((x) => x < Math.min(lo, hi) || x > Math.max(lo, hi));
+  const x0 = measuredXs.length > 0 ? Math.min(lo, hi, ...measuredXs) : Math.min(lo, hi);
+  const x1 = measuredXs.length > 0 ? Math.max(lo, hi, ...measuredXs) : Math.max(lo, hi);
 
-  const ys = points.map((point) => Number(point.y)).concat(peaks.map((stick) => stick.height));
+  const ys = points.map((point) => Number(point.y))
+    .concat(peaks.map((stick) => stick.height))
+    .concat(measured.flatMap((trace) => trace.points.map((point) => point.y)));
   const signed = config.signed || ys.some((value) => value < 0);
   const yMax = Math.max(signed ? Math.max(...ys.map((v) => Math.max(0, v))) : Math.max(...ys, 0), 0.05);
   const yMin = signed ? Math.min(Math.min(...ys, 0), -0.05) : 0;
@@ -165,16 +197,19 @@ export function spectrumFigure({
 
   // A measured trace, if one was imported. It is drawn in the accent colour and
   // dashed so it can never be mistaken for the computed envelope, and the
-  // caption names the scale factor the caller applied.
-  for (const overlay of Array.isArray(overlays) ? overlays : []) {
-    const overlayPoints = (Array.isArray(overlay?.points) ? overlay.points : [])
-      .filter((point) => Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.y)));
-    if (overlayPoints.length < 2) continue;
-    parts.push(`<path class="spectrum-curve is-overlay"`
-      + ` d="${pathOf(overlayPoints.map((point) => [xMap(Number(point.x)), yMap(Number(point.y))]))}"`
-      + ` fill="none" stroke="${PALETTE.accent}" stroke-width="1" stroke-dasharray="4 3" opacity="0.8"`
-      + ` clip-path="url(#${clipId})"/>`);
+  // caption names the file, its digest and the one scaling applied.
+  for (const trace of measured) {
+    parts.push(`<path class="spectrum-curve is-overlay" data-measured="true" clip-path="url(#${clipId})"`
+      + ` d="${pathOf(trace.points.map((point) => [xMap(point.x), yMap(point.y)]))}"`
+      + ` fill="none" stroke="${PALETTE.accent}" stroke-width="1.1" stroke-dasharray="4 3" opacity="0.9"/>`);
   }
+  // The legend, in the plot's own register: a trace nobody can name is a
+  // decoration. The full digest is in the caption; here it is shortened.
+  measured.forEach((trace, index) => {
+    const digest = trace.sha256 ? `, sha256 ${trace.sha256.slice(0, 12)}…` : '';
+    parts.push(`<text x="${padLeft + 4}" y="${bandTop + 10 + index * 10}" font-size="8"`
+      + ` fill="${PALETTE.accent}">measured: ${escapeXml(trace.label)}${escapeXml(digest)}</text>`);
+  });
 
   // Label the three strongest sticks, never more: a spectrum with ten labels is
   // a table drawn badly.
@@ -200,8 +235,23 @@ export function spectrumFigure({
   if (quantity) captionParts.push(quantity);
   if (fwhm) captionParts.push(fwhm);
   captionParts.push(`${points.length || peaks.length} points`);
-  const overlaid = (Array.isArray(overlays) ? overlays : []).filter((overlay) => Array.isArray(overlay?.points) && overlay.points.length > 1);
-  for (const overlay of overlaid) captionParts.push(`measured “${overlay.label || 'imported'}”`);
+  for (const trace of measured) {
+    captionParts.push(
+      `measured “${trace.label}” sha256 ${trace.sha256 || 'not recorded'}, `
+      + `${trace.points.length} points plotted as given (no resampling)`,
+    );
+    captionParts.push(
+      `measured intensity divided by its own maximum (×${fmtNum(trace.factor, 3)}); measured and `
+      + 'computed heights are not comparable',
+    );
+    if (trace.note) captionParts.push(trace.note);
+  }
+  if (widened) {
+    captionParts.push(
+      `x axis widened to ${fmtNum(x0, 1)}–${fmtNum(x1, 1)} to include the measured trace, `
+      + 'which runs outside the computed range',
+    );
+  }
   const caption = captionParts.join(' · ');
 
   return figureResult({
@@ -218,8 +268,15 @@ export function spectrumFigure({
     height,
     caption,
     params: {
-      spectrum: kind, fwhm, points: points.length, sticks: peaks.length, range: [x0, x1], signed,
-      overlays: overlaid.length,
+      spectrum: kind,
+      fwhm,
+      points: points.length,
+      sticks: peaks.length,
+      range: [x0, x1],
+      signed,
+      overlays: measured.length,
+      overlaySources: measured.map((trace) => trace.label),
+      overlayHashes: measured.map((trace) => trace.sha256),
     },
   });
 }
@@ -229,21 +286,25 @@ export function spectrumFigure({
  * ------------------------------------------------------------------ */
 
 /** UV-Vis from `broadenedSpectrum()` — wavelength axis, long to short. */
-export function fromUvVis(spectrum, { title = 'UV-Vis (simulated)' } = {}) {
+export function fromUvVis(spectrum, { title = null, overlays = [] } = {}) {
   if (!spectrum || !Array.isArray(spectrum.points) || spectrum.points.length === 0) return null;
   const sticks = (spectrum.states ?? []).map((state) => ({
     x: state.wavelengthNm,
     height: state.oscillatorStrength ?? 0,
     label: state.index === null || state.index === undefined ? undefined : `S${state.index}`,
   }));
+  const measured = Array.isArray(overlays) ? overlays.filter(Boolean) : [];
   return spectrumFigure({
     kind: 'uvvis',
-    title,
+    // A figure carrying a measured trace is not "simulated"; the default title
+    // says which of the two it is, and the caption names both.
+    title: title || (measured.length > 0 ? 'UV-Vis (computed) with measured trace' : 'UV-Vis (simulated)'),
     curve: spectrum.points.map((point) => ({ x: point.wavelengthNm, y: point.relative })),
     sticks: normaliseSticks(sticks),
     range: [spectrum.maxWavelengthNm, spectrum.minWavelengthNm],
     fwhm: `Gaussian broadening, FWHM ${fmtNum(spectrum.fwhmEv, 2)} eV`,
     quantity: 'oscillator strengths as computed',
+    overlays: measured,
   });
 }
 

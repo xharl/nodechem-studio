@@ -108,6 +108,10 @@
       "$ref": "#/$defs/seriesDerivation",
       "description": "Issue 193: the repeat unit a generated member was expanded from. Absent unless the record came from a series block."
     },
+    "spectrumOverlay": {
+      "$ref": "#/$defs/spectrumOverlay",
+      "description": "Issue 184: the measured trace imported beside this run's computed sticks. Optional, and absent (not null) when no trace was imported."
+    },
     "provenance": { "$ref": "#/$defs/provenance" },
     "startedAt": { "type": "string", "format": "date-time" },
     "finishedAt": {
@@ -128,6 +132,48 @@
     "error": { "type": ["string", "null"] }
   },
   "$defs": {
+    "spectrumOverlay": {
+      "type": "object",
+      "description": "Issue 184: a measured spectrum imported beside the computed sticks. The record carries the file's own points, its sha256, and the column names and units the file declared, so a report can name and redraw exactly the trace it was compared against. Absent when no measured trace was imported — never an empty curve.",
+      "required": ["source", "sha256", "columns", "units", "points"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "columns": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "y": { "type": "string", "minLength": 1, "maxLength": 64 }
+          }
+        },
+        "units": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "string", "minLength": 1, "maxLength": 32 },
+            "y": { "type": "string", "minLength": 1, "maxLength": 32 }
+          }
+        },
+        "points": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 20000,
+          "items": {
+            "type": "object",
+            "required": ["x", "y"],
+            "additionalProperties": false,
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
     "outputBytes": {
       "type": "object",
       "required": ["size", "bytesRead", "truncated", "windows"],

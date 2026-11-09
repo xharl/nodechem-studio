@@ -42,7 +42,7 @@ const v1Schema = loadRecordSchema(1);
  * produce. Each one is exercised below; anything else missing from a fixture
  * would mean the schema describes a record the app does not write.
  */
-const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series']);
+const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay']);
 
 describe('run-record schema — publication', () => {
   it('is a draft 2020-12 schema with a version and an id', () => {
