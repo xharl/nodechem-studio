@@ -94,6 +94,7 @@ import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../sha
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
+import { estimateCost } from '../shared/costEstimate.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS, XTB_SOLVENTS } from '../shared/engines/xtb.js';
 import {
   MODERN_ROUTE_PRESET,
@@ -828,6 +829,80 @@ function runStateOf(node) {
   return null;
 }
 
+/* ── Cost estimate (issue 143) ─────────────────────────────────
+ * The card and Setup pane both read the same module. Neither invents a number:
+ * a block the model cannot price says why, in the same slot.
+ */
+
+const FALLBACK_CORES = 8;
+
+/** Logical cores the browser can see; 8 is the documented fallback. */
+function hostCoreCount() {
+  const value = Number(globalThis.navigator?.hardwareConcurrency);
+  return Number.isInteger(value) && value > 0 ? Math.min(value, 256) : FALLBACK_CORES;
+}
+
+/** A duration a person reads, at the precision the estimate deserves. */
+function formatCostDuration(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return '0 s';
+  const tidy = (number, digits = 1) => String(Number(number.toFixed(digits)));
+  if (value < 10) return `${tidy(value)} s`;
+  if (value < 90) return `${Math.round(value)} s`;
+  const minutes = value / 60;
+  if (value < 3600) return `${Math.round(minutes)} min`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${hours < 10 ? tidy(hours) : Math.round(hours)} h`;
+  return `${tidy(hours / 24)} d`;
+}
+
+function formatCostRange(range) {
+  if (!range) return '';
+  return `${formatCostDuration(range.low)}\u2013${formatCostDuration(range.high)}`;
+}
+
+/** One sentence for a block card or an inspector line. */
+function costCardText(entry) {
+  if (!entry) return '';
+  if (entry.notEstimated) return `no estimate: ${entry.notEstimated}`;
+  const cores = `${entry.procs} core${entry.procs === 1 ? '' : 's'}`;
+  let text = `≈ ${formatCostRange(entry.wallSeconds)} on ${cores}`
+    + ` · ${entry.confidence} confidence (${entry.calibrationPoints} point${entry.calibrationPoints === 1 ? '' : 's'})`;
+  if (entry.exceedsOvernight) text += ' · longer than an overnight (8 h) run';
+  if (entry.timeout?.exceeds) {
+    text += ` · the queue will stop it at the ${formatCostDuration(entry.timeout.limitSeconds)} limit`;
+  }
+  return text;
+}
+
+/**
+ * The estimate for one block as its own task. Setup prices the whole flow; a
+ * card prices the one run the block would queue, so the two do not disagree.
+ */
+function costEntryForNode(node) {
+  if (!node || node.type !== 'calc' || !state.project) return null;
+  try {
+    const engine = engineForNode(state.project, node);
+    const entry = estimateCost(state.project, {
+      tasks: [{
+        taskId: node.id,
+        nodeId: node.id,
+        type: 'calc',
+        title: node.title,
+        engine: engine.id,
+        settings: node.settings,
+        validity: { molecule: moleculeForNode(node) },
+      }],
+      edges: [],
+    }, { cores: hostCoreCount(), maxParallel: 1 });
+    return entry.tasks?.[0] || null;
+  } catch {
+    // A half-edited project has no plan to price; the card stays silent rather
+    // than showing a number for a state that cannot be queued.
+    return null;
+  }
+}
+
 function renderNodeCard(node) {
   const selected = state.selected.type === 'node' && state.selected.id === node.id;
   const chips = nodeFoot(node);
@@ -835,6 +910,18 @@ function renderNodeCard(node) {
   const showStatus = node.type !== 'note';
   const facts = resultFacts(node);
   const runState = runStateOf(node);
+  // Issue 143: a block that has not produced a result yet shows what it is
+  // expected to cost, in the slot the result would occupy. No result and no
+  // estimate (a refused block) is a sentence, not a blank.
+  const cost = facts ? null : costEntryForNode(node);
+  const costMain = cost
+    ? (cost.notEstimated ? 'no estimate' : `≈ ${formatCostRange(cost.wallSeconds)}`)
+    : '';
+  const costSub = cost
+    ? (cost.notEstimated
+      ? cost.notEstimated
+      : `${cost.procs} cores · ${cost.confidence} (${cost.calibrationPoints} pts)`)
+    : '';
   const checkpointBadge = node.type === 'calc' && node.checkpointFrom
     ? '<span class="chk-badge">chk</span>'
     : '';
@@ -846,7 +933,7 @@ function renderNodeCard(node) {
       ${runState === 'running' ? '<span class="node-progress" aria-hidden="true"></span>' : ''}
       <div class="node-head">
         <span class="node-icon">${esc(kindCode(node))}</span>
-        <span class="node-kind">${kindLabel(node)}</span>
+        <span class="node-kind">${esc(kindLabel(node))}</span>
         ${showStatus ? `<span class="node-status"><i></i>${status.label}</span>` : ''}
       </div>
       <div class="node-title">${esc(node.title)}</div>
@@ -854,7 +941,11 @@ function renderNodeCard(node) {
       ${facts ? `<div class="node-result${facts.tone ? ` is-${facts.tone}` : ''}">
         <span class="node-result-main">${esc(facts.main)}</span>
         ${facts.sub ? `<span class="node-result-sub">${esc(facts.sub)}</span>` : ''}
-      </div>` : ''}
+      </div>` : (cost ? `<div class="node-result is-cost" data-cost="${esc(costCardText(cost))}"
+        title="${esc(cost.basis.join(' '))}">
+        <span class="node-result-main">${esc(costMain)}</span>
+        <span class="node-result-sub">${esc(costSub)}</span>
+      </div>` : '')}
       <div class="node-foot">
         <span class="gate">${esc(chips.left)}</span>
         <span class="out${chips.right ? '' : ' empty'}">${esc(chips.right)}</span>
@@ -5174,6 +5265,9 @@ function updateRunProgressChip() {
 function syncRunnerInputs() {
   syncMaxParallelInput();
   syncTimeoutInput();
+  // Issue 143: the estimate depends on both fields, so it is refreshed with
+  // them rather than on a separate control.
+  updateCostEstimate();
 }
 
 function syncMaxParallelInput() {
@@ -5200,6 +5294,7 @@ function applyMaxParallel(value) {
   const input = $('#run-max-parallel');
   if (input) input.value = String(clamped);
   refreshDirty();
+  updateCostEstimate();
   return clamped;
 }
 
@@ -5244,6 +5339,7 @@ function applyTimeout(value) {
     delete state.project.runner.timeoutSeconds;
     if (input) input.value = '';
     refreshDirty();
+    updateCostEstimate();
     return null;
   }
   const seconds = Math.trunc(Number(text));
@@ -5258,6 +5354,7 @@ function applyTimeout(value) {
   if (input) input.value = String(clamped);
   updateTimeoutHint();
   refreshDirty();
+  updateCostEstimate();
   return clamped;
 }
 
@@ -5349,6 +5446,73 @@ function updateTimeoutHint() {
   el.textContent = `${countLabel(long.length, 'block')} ${long.length === 1 ? 'here looks like a long run' : 'here look like long runs'}: ${named}${more}. `
     + `Each task is stopped at ${limit} s${raised.length > 0 ? ' unless its own Time limit is higher' : ''}. `
     + 'Raise the limit or set one on the block before starting.';
+}
+
+/**
+ * Price the active flow before it is queued (issue 143).
+ *
+ * This is the decision the Setup pane is for: how long the whole flow takes,
+ * whether the per-task limit will stop one of its blocks, and whether the run
+ * is longer than an overnight. Refusals are shown with their reason instead of
+ * being left out of a total that would then look smaller than the run.
+ */
+function configuredMaxParallel() {
+  const input = $('#run-max-parallel');
+  const value = input ? Number(input.value) : Number(state.project?.runner?.maxParallel);
+  return Number.isInteger(value) && value >= 1 ? Math.min(value, LIMITS.maxParallel) : 1;
+}
+
+function updateCostEstimate() {
+  const el = $('#run-cost-estimate');
+  if (!el) return;
+  if (!state.project) {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  el.hidden = false;
+  el.classList.remove('is-warn');
+  let plan = null;
+  try {
+    plan = shared.buildWorkflowPlan(state.project);
+  } catch (error) {
+    el.textContent = `No estimate: ${error.message}`;
+    return;
+  }
+  const cores = hostCoreCount();
+  const maxParallel = configuredMaxParallel();
+  const estimate = estimateCost(state.project, plan, {
+    cores,
+    maxParallel,
+    timeoutSeconds: configuredTimeoutSeconds(),
+  });
+  const basis = [...(estimate.total.basis || [])];
+  el.title = basis.join(' ');
+  if (estimate.total.notEstimated) {
+    el.textContent = `No estimate: ${estimate.total.notEstimated}`;
+    return;
+  }
+  const total = estimate.total;
+  const parts = [
+    `Estimated ${formatCostRange(total.wallSeconds)} on ${cores} cores at ${maxParallel} at a time`,
+    `${total.confidence} confidence (${total.calibrationPoints} point${total.calibrationPoints === 1 ? '' : 's'})`,
+    `${total.estimatedTasks} of ${total.estimatedTasks + total.unestimatedTasks} tasks priced`,
+  ];
+  if (total.unestimatedTasks > 0) parts.push(`${total.unestimatedTasks} not priced`);
+  if (total.exceedsAnyTimeout) {
+    const worst = total.exceedingTasks.slice(0, 2)
+      .map((entry) => `${entry.title} (${formatCostDuration(entry.limitSeconds)} limit)`)
+      .join(', ');
+    parts.push(`${worst} will be stopped at the limit`);
+    el.classList.add('is-warn');
+  } else if (total.wallSeconds.high > 8 * 3600 && !total.exceedsOvernight) {
+    parts.push('the upper bound is longer than an overnight (8 h) run');
+  }
+  if (total.exceedsOvernight) {
+    parts.push('longer than an overnight (8 h) run');
+    el.classList.add('is-warn');
+  }
+  el.textContent = `${parts.join(' · ')}.`;
 }
 
 function openRunConsole() {
@@ -8388,7 +8552,7 @@ function wireEvents() {
 
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
-export { calcInspector, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, resultFacts, runStateOf, simpleInspector, state, syncNodeStatesFromQueue, reconcileNodesWithQueue };
+export { calcInspector, costCardText, formatCostDuration, inputInspector, nodeDetail, renderFlowTabs, renderRecordSummary, resultFacts, runStateOf, simpleInspector, state, syncNodeStatesFromQueue, reconcileNodesWithQueue };
 
 function applyAppInfo() {
   const chip = $('#app-version-chip');

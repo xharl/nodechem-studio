@@ -251,6 +251,7 @@
       <div class="run-field"><label for="run-max-parallel">Parallel tasks</label><input id="run-max-parallel" type="number" min="1" max="64" step="1" value="1" title="How many independent tasks may run at once; a barrier still waits for every record"></div>
       <div class="run-field"><label for="run-timeout">Task time limit</label><input id="run-timeout" type="number" min="1" max="86400" step="1" placeholder="3600 (default)" title="Wall-clock seconds one task may run. A longer task is stopped (SIGTERM, then SIGKILL on the whole process tree), recorded as timed out, and the queue moves on. Blank means 3600 s; a block can set its own limit."></div>
       <p class="run-hint run-timeout-hint" id="run-timeout-hint" hidden></p>
+      <p class="run-hint run-cost-estimate" id="run-cost-estimate" hidden></p>
       <details class="run-tools">
         <summary>Tools</summary>
         <div class="run-actions">

@@ -30,6 +30,11 @@ Two questions get answered separately, and that separation is the most important
   cause. The scan is read-only — nothing is imported into the project — and a file over 32 MB or
   one that cannot be read is listed as skipped with the reason.
 
+- **How long will it take?** → the block card and **Run → Setup** show a range in wall time and
+  core-seconds before anything is queued, with the confidence and the number of measured points
+  behind it. A block the model cannot price says why. The estimate adds no key to the project and
+  no key to `run.json`; see [Workflows → Cost estimate](workflow.md#cost-estimate).
+
 A run can execute correctly and still be scientifically unsupported. The record states both, and
 validity findings never change `gates.overall`.
 
