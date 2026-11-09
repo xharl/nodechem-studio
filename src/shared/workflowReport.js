@@ -18,6 +18,9 @@ import { IMPORTED_BADGE_TEXT, importedSummary } from './importedRecord.js';
 import { contentHash } from './figures/primitives.js';
 import { flowGraphFigure } from './figures/dag.js';
 import { taskFigures } from './figures/report.js';
+import { nciFigure } from './figures/nci.js';
+import { nciAnalysis } from './nci.js';
+import { bcpTable, bcpTableHtml, qtaimAnalysis } from './qtaim.js';
 
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
@@ -378,6 +381,37 @@ function derivedParagraph(model) {
 }
 
 /**
+ * The wavefunction half of the report (issue 59): QTAIM bond critical points and
+ * the NCI figure, from a parsed checkpoint the caller supplies.
+ *
+ * A `run.json` carries no density, so this is the caller's data, exactly like the
+ * ESP-coloured surface: `ncs report` does not attach a checkpoint yet and the
+ * section is simply absent then. When it is supplied, a file without a density
+ * block becomes an explicit `no density in this file` line rather than a section
+ * that silently vanishes.
+ */
+function wavefunctionAnalysis({ wavefunction = null, figureBudgetBytes = Infinity } = {}) {
+  if (!wavefunction) return null;
+  const qtaim = qtaimAnalysis({ fchk: wavefunction });
+  if (qtaim.ok === false) {
+    return { qtaim, table: bcpTable(qtaim), nci: null, figure: null };
+  }
+  const table = bcpTable(qtaim);
+  const nci = nciAnalysis({ fchk: wavefunction });
+  const diagram = nci.ok ? nciFigure(nci) : null;
+  const figure = diagram && diagram.svg.length <= figureBudgetBytes
+    ? { key: 'nci', svg: diagram.svg, caption: diagram.caption, hash: contentHash(diagram.svg) }
+    : null;
+  return {
+    qtaim,
+    table,
+    nci: nci.ok ? { grid: nci.grid, counts: nci.counts, parameters: nci.parameters, note: nci.note } : nci,
+    figure,
+    figureDropped: Boolean(diagram) && !figure,
+  };
+}
+
+/**
  * @param {object} queue the queue record written by the queue manager
  * @param {Object<string, object>} records run records keyed by run id (or by node id)
  * @param {object} [options]
@@ -401,6 +435,7 @@ export function buildWorkflowReport(queue, records = {}, {
   volumes = null,
   surfaces = null,
   figureBudgetBytes = FIGURE_BUDGET_BYTES,
+  wavefunction = null,
 } = {}) {
   const source = queue && typeof queue === 'object' ? queue : {};
   const tasks = Array.isArray(source.tasks) ? source.tasks : [];
@@ -592,6 +627,8 @@ export function buildWorkflowReport(queue, records = {}, {
     surfaces,
     budgetBytes: figureBudgetBytes,
   });
+  // Issue 59: the QTAIM table and the NCI figure, when a checkpoint is supplied.
+  const analysis = wavefunctionAnalysis({ wavefunction, figureBudgetBytes });
 
   return {
     schemaVersion: WORKFLOW_REPORT_SCHEMA_VERSION,
@@ -614,6 +651,10 @@ export function buildWorkflowReport(queue, records = {}, {
     verdict,
     tasks: rows,
     figures,
+    // Issue 59: the wavefunction analysis, present only when the caller supplied
+    // a parsed checkpoint. `null` means "no checkpoint was attached", which is
+    // the normal case — a run.json carries no density.
+    analysis,
     // One entry per dataset record (empty for a v1 single-run queue), with the
     // comparison numbers a reader needs between records.
     records: recordModels,
@@ -1208,6 +1249,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + fixtureNote
     + importedNote
     + figuresHtml(model.figures, rows, sectionHeading)
+    + analysisHtml(model.analysis, sectionHeading)
     + `<${sectionHeading}>Outcome</${sectionHeading}>`
     + `<p>${counts.total || 0} task(s): ${counts.passed || 0} passed, ${counts.failed || 0} failed, `
     + `${counts.skipped || 0} skipped, ${counts.cancelled || 0} cancelled, ${counts.notRun || 0} not run. `
@@ -1225,6 +1267,33 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'
     + '<tbody>' + provenanceRows + '</tbody></table>';
+}
+
+/**
+ * The wavefunction analysis section (issue 59): the BCP table and the NCI
+ * figure, or the reason each is absent. Printed only when the model carries an
+ * analysis, so a report built without a checkpoint is unchanged.
+ */
+function analysisHtml(analysis, headingTag = 'h2') {
+  if (!analysis) return '';
+  const heading = `<${headingTag}>Wavefunction analysis</${headingTag}>`;
+  if (!analysis.qtaim || analysis.qtaim.ok === false) {
+    return heading + bcpTableHtml(analysis.qtaim || { ok: false });
+  }
+  const table = bcpTableHtml(analysis.qtaim);
+  const caption = analysis.figure
+    ? figureBlockHtml({ ...analysis.figure, key: 'nci' })
+    : `<p class="fig-missing">nci figure not available: ${
+      analysis.nci && analysis.nci.ok === false
+        ? escapeHtml(analysis.nci.reason || 'no data')
+        : 'the figure is larger than the report budget'
+    }</p>`;
+  return heading
+    + `<p class="note">${escapeHtml(analysis.qtaim.method)}. ρ and ∇²ρ in e/bohr³ and e/bohr⁵; `
+    + `criteria: ${escapeHtml(analysis.qtaim.parameters?.criteria?.sharedShell || '')}; `
+    + `${escapeHtml(analysis.qtaim.parameters?.criteria?.closedShell || '')}.</p>`
+    + table
+    + caption;
 }
 
 /**

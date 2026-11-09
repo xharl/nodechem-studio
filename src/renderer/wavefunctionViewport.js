@@ -31,6 +31,8 @@ import {
   espCardRows,
   potentialRange,
 } from '../shared/esp.js';
+import { nciAnalysis, nciCardRows } from '../shared/nci.js';
+import { qtaimAnalysis, qtaimCardRows } from '../shared/qtaim.js';
 import {
   fieldFromCube,
   fieldOfValues,
@@ -412,6 +414,7 @@ export function mountWavefunctionViewport({
     surface: null,
     disposed: false,
     sourceNote: '',
+    analysisRows: null, // QTAIM + NCI card rows, computed once per checkpoint
   };
   const evaluator = createEvaluator({ doc });
 
@@ -549,6 +552,41 @@ export function mountWavefunctionViewport({
     }
   };
 
+  /**
+   * The card's QTAIM and NCI rows (issue 59).
+   *
+   * Both come from the checkpoint's own density matrix and basis — the same field
+   * the slice and the isosurface are drawn from — and both are computed **once per
+   * parsed checkpoint** and cached: the BCP search is a few milliseconds, and the
+   * NCI grid is the expensive one, so it is sampled at `CARD_NCI_SPACING_BOHR`
+   * (0.3 bohr) here rather than at the figure's 0.2 bohr. The row prints which
+   * grid it used, so the two can never be confused.
+   *
+   * `bondPath: false` on the card: the path integration is two RK4 trajectories
+   * per bond and its length is a report number, not a row that has to survive an
+   * isovalue slider move.
+   *
+   * A checkpoint with no density block gets the same exact words the ESP rows use,
+   * `no density in this file`, and no bond rows at all.
+   */
+  const CARD_NCI_SPACING_BOHR = 0.3;
+
+  const analysisRows = () => {
+    const parsed = record?.parsed;
+    if (!parsed || !Array.isArray(parsed.shellTypes) || !Number.isInteger(parsed.numberOfBasisFunctions)) {
+      return [];
+    }
+    if (state.analysisRows) return state.analysisRows;
+    try {
+      const qtaim = qtaimAnalysis({ fchk: parsed, bondPath: false });
+      const nci = nciAnalysis({ fchk: parsed, spacingBohr: CARD_NCI_SPACING_BOHR });
+      state.analysisRows = [...qtaimCardRows(qtaim), ...nciCardRows(nci)];
+    } catch (error) {
+      state.analysisRows = [['QTAIM', `not computable: ${String(error?.message ?? error)}`]];
+    }
+    return state.analysisRows;
+  };
+
   const describeSurface = (field) => {
     if (!state.surface) return;
     state.surface.setCubeAvailable?.(Boolean(field));
@@ -563,6 +601,7 @@ export function mountWavefunctionViewport({
     setNumbers([
       ...(state.numberRows ?? []),
       ...espRowsFor(mesh),
+      ...analysisRows(),
       ['isovalue', `${state.isovalue.toPrecision(3)}`],
       ['triangles', String(total)],
     ]);
@@ -701,6 +740,10 @@ export function mountWavefunctionViewport({
         selection === 'density'
           ? ['∫ρ dV', `${integral.toFixed(3)} e`]
           : ['∫|ψ|²dV', `${integral.toFixed(3)} (bohr³)`],
+        // QTAIM and NCI (issue 59): the total density's topology, not the
+        // selected orbital's — so these rows are the same whichever MO is on
+        // screen, and are computed once per checkpoint.
+        ...analysisRows(),
       ];
       setNumbers(state.numberRows);
       renderView();

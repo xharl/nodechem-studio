@@ -12,6 +12,7 @@ import { correlationFigure } from './correlation.js';
 import { flowGraphFigure } from './dag.js';
 import { reactionEnergyFigure } from './energy.js';
 import { orbitalLevelsFigure } from './levels.js';
+import { nciFigure } from './nci.js';
 import { espSurfaceFigure, surfaceFigure } from './surface.js';
 import {
   fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd, spectrumFigure,
@@ -19,7 +20,7 @@ import {
 
 export const FIGURE_KINDS = Object.freeze([
   'spectrum:ir', 'spectrum:raman', 'spectrum:uvvis', 'spectrum:vcd', 'spectrum:ecd', 'spectrum:nmr',
-  'levels', 'energy', 'convergence', 'correlation', 'contour', 'surface', 'esp-surface', 'graph',
+  'levels', 'energy', 'convergence', 'correlation', 'contour', 'surface', 'esp-surface', 'nci', 'graph',
 ]);
 
 const BUILDERS = {
@@ -36,6 +37,7 @@ const BUILDERS = {
   contour: (data) => contourFigure(data),
   surface: (data) => surfaceFigure(data),
   'esp-surface': (data) => espSurfaceFigure(data),
+  nci: (data) => nciFigure(data),
   graph: (data) => flowGraphFigure(data),
 };
 
@@ -51,7 +53,7 @@ export function figure(kind, data, options = {}) {
 
 export {
   contourFigure, convergenceFigure, correlationFigure, flowGraphFigure, orbitalLevelsFigure,
-  espSurfaceFigure, reactionEnergyFigure, spectrumFigure, surfaceFigure,
+  espSurfaceFigure, nciFigure, reactionEnergyFigure, spectrumFigure, surfaceFigure,
 };
 export { fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd };
 export { marchingSquares, sliceOf } from './contour.js';
