@@ -172,7 +172,7 @@ export const GEOMETRY_DIMENSIONS = Object.freeze(['', '2d', '3d']);
 export const OUTPUT_KINDS = Object.freeze(['html', 'csv', 'json', 'zip']);
 /** `records` = one artifact for the whole dataset, `record` = one per record. */
 export const OUTPUT_INCLUDES = Object.freeze(['records', 'record']);
-export const DATASET_FORMATS = Object.freeze(['sdf', 'xyz', 'csv', 'json']);
+export const DATASET_FORMATS = Object.freeze(['sdf', 'xyz', 'csv', 'json', 'cdxml']);
 export const DATASET_SOURCES = Object.freeze(['file', 'inline']);
 
 const OUTPUT_EXTENSIONS = Object.freeze({ html: '.html', csv: '.csv', json: '.json', zip: '.zip' });
@@ -2052,7 +2052,7 @@ function normalizeDatasetRecord(c, raw, datasetPath, index, legacy) {
     c.error(path, 'must be an object.');
     return null;
   }
-  warnUnknown(c, raw, new Set(['id', 'label', 'charge', 'multiplicity', 'coords', 'bonds', 'enabled', 'source']), path);
+  warnUnknown(c, raw, new Set(['id', 'label', 'charge', 'multiplicity', 'coords', 'bonds', 'enabled', 'source', 'geometry', 'drawingConfirmed']), path);
   const id = readString(c, raw.id, `${path}.id`, { legacy, fallback: '', max: 64, required: true });
   if (!id || !RECORD_ID_RE.test(id)) {
     c.error(`${path}.id`, 'must be a record id: letters, digits, dot, underscore or dash, starting with a letter or digit.');
@@ -2067,6 +2067,23 @@ function normalizeDatasetRecord(c, raw, datasetPath, index, legacy) {
   // block refuses a parent without it rather than perceiving bonds from
   // distances, because a valence check built on a guess is not a check.
   const bonds = normalizeBonds(c, raw.bonds, legacy, coords.length, `${path}.bonds`);
+  // Issue 139: a record imported from a CDXML drawing says its coordinates are
+  // a depiction, not a geometry. A record that states no dimension — every SDF,
+  // XYZ, CSV and JSON record — is written exactly as before.
+  const geometryRaw = isPlainObject(raw.geometry) ? raw.geometry : null;
+  if (raw.geometry !== undefined && raw.geometry !== null && !geometryRaw) {
+    c.error(`${path}.geometry`, 'must be an object with a dimension.');
+  }
+  let dimension = '';
+  if (geometryRaw) {
+    warnUnknown(c, geometryRaw, new Set(['dimension']), `${path}.geometry`);
+    dimension = readEnum(c, geometryRaw.dimension, GEOMETRY_DIMENSIONS, `${path}.geometry.dimension`, { legacy, fallback: '' });
+  }
+  // Issue 139: the user's answer to the run gate. Only a drawing record's
+  // confirmation has any effect (the gate reads it there), and only the
+  // confirmation is stored — false is the default, so an untouched record stays
+  // byte-identical.
+  const drawingConfirmed = readBoolean(c, raw.drawingConfirmed, `${path}.drawingConfirmed`, { legacy, fallback: false, optional: true }) === true;
   return {
     id,
     label: readString(c, raw.label, `${path}.label`, { legacy, fallback: id, max: 200 }) || id,
@@ -2074,6 +2091,8 @@ function normalizeDatasetRecord(c, raw, datasetPath, index, legacy) {
     multiplicity: readInteger(c, raw.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
     coords,
     ...(bonds.length ? { bonds } : {}),
+    ...(dimension ? { geometry: { dimension } } : {}),
+    ...(drawingConfirmed ? { drawingConfirmed: true } : {}),
     enabled: readBoolean(c, raw.enabled, `${path}.enabled`, { legacy, fallback: true, optional: true }),
   };
 }
