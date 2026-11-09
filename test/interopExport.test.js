@@ -190,6 +190,27 @@ describe('Q-Chem export', () => {
   });
 });
 
+describe('job keywords, in each program\'s own spelling', () => {
+  // The keyword is the part a deck cannot get wrong silently: a wrong one runs a
+  // different job. Two job types per program, asserted against that program's
+  // documented spelling, not against our writer's idea of it.
+  const expected = {
+    nwchem: { SP: /^task dft energy$/m, Freq: /^task dft freq$/m },
+    gamess: { SP: /RUNTYP=ENERGY/, Freq: /RUNTYP=HESSIAN/ },
+    qchem: { SP: /^JOBTYPE {4}sp$/m, Freq: /^JOBTYPE {4}freq$/m },
+  };
+
+  for (const [engine, jobTypes] of Object.entries(expected)) {
+    it(`${engine} writes each job type's keyword`, () => {
+      for (const [jobType, pattern] of Object.entries(jobTypes)) {
+        const rendered = render(engine, { settings: { jobType } });
+        expect(rendered.ok, `${engine} ${jobType} was refused: ${rendered.refused || ''}`).toBe(true);
+        expect(rendered.text).toMatch(pattern);
+      }
+    });
+  }
+});
+
 describe('every exporter refuses what it cannot spell', () => {
   const engines = ['nwchem', 'gamess', 'qchem'];
 
@@ -288,6 +309,21 @@ describe('round trip: write the deck, read it back with the app', () => {
     expect(record.name).toContain('Water');
   });
 
+  it.each(['nwchem', 'gamess', 'qchem'])('%s re-parses to the same geometry within 1e-9 Å', (engine) => {
+    // The writers print eight decimals; a re-parse is therefore exact to well
+    // inside 1e-9, and anything larger means a coordinate was rounded, shifted
+    // or read in the wrong units (Bohr against Ångström is a 1.89× error).
+    const rendered = render(engine);
+    expect(rendered.ok).toBe(true);
+    const record = parseStructureRecords(rendered.text, { filename: files[engine], allowDecks: true }).records[0];
+    expect(record.atoms).toHaveLength(WATER.coords.length);
+    record.atoms.forEach((atom, index) => {
+      expect(Math.abs(atom.x - WATER.coords[index].x)).toBeLessThan(1e-9);
+      expect(Math.abs(atom.y - WATER.coords[index].y)).toBeLessThan(1e-9);
+      expect(Math.abs(atom.z - WATER.coords[index].z)).toBeLessThan(1e-9);
+    });
+  });
+
   it('carries a formal charge through NWChem and back', () => {
     // Acetate, built by hand because the point is the charge line, not a file.
     const acetate = {
@@ -382,24 +418,26 @@ describe('deck readers refuse what they cannot represent', () => {
   });
 });
 
-describe('ncs export-input', () => {
-  async function projectFile() {
-    const project = JSON.parse(readFileSync('examples/single-point.ncs', 'utf8'));
-    project.molecule.coords = WATER.coords;
-    project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
-    for (const node of project.nodes) {
-      if (node.type === 'calc') {
-        node.settings.basis = '6-31G*';
-        node.settings.dispersion = '';
-        node.settings.population = '';
-      }
+/** The shipped single-point example, with water and settings all three exporters carry. */
+async function projectFile({ jobType = null } = {}) {
+  const project = JSON.parse(readFileSync('examples/single-point.ncs', 'utf8'));
+  project.molecule.coords = WATER.coords;
+  project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
+  for (const node of project.nodes) {
+    if (node.type === 'calc') {
+      node.settings.basis = '6-31G*';
+      node.settings.dispersion = '';
+      node.settings.population = '';
+      if (jobType) node.settings.jobType = jobType;
     }
-    const dir = await mkdtemp(path.join(tmpdir(), 'ncs-export-'));
-    const file = path.join(dir, 'water.ncs');
-    await writeFile(file, JSON.stringify(project, null, 2), 'utf8');
-    return { dir, file };
   }
+  const dir = await mkdtemp(path.join(tmpdir(), 'ncs-export-'));
+  const file = path.join(dir, 'water.ncs');
+  await writeFile(file, JSON.stringify(project, null, 2), 'utf8');
+  return { dir, file };
+}
 
+describe('ncs export-input', () => {
   it('writes the deck and reports what it wrote', async () => {
     const { dir, file } = await projectFile();
     const out = path.join(dir, 'job.nw');
@@ -453,5 +491,90 @@ describe('ncs export-input', () => {
     const result = await ncs(['export-input', file, '--node', 'sp-energy', '--engine', 'gaussian']);
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/does not know an engine "gaussian"/);
+  });
+});
+
+describe('ncs convert --format <deck>', () => {
+  const EXTENSION = { nwchem: 'nw', gamess: 'inp', qchem: 'qcin' };
+
+  it.each(['nwchem', 'gamess', 'qchem'])('writes the same bytes as export-input for %s', async (engine) => {
+    const { dir, file } = await projectFile();
+    const viaExportInput = path.join(dir, `a.${EXTENSION[engine]}`);
+    const viaConvert = path.join(dir, `b.${EXTENSION[engine]}`);
+    const first = await ncs(['export-input', file, '--node', 'sp-energy', '--engine', engine, '--out', viaExportInput]);
+    const second = await ncs(['convert', file, '--node', 'sp-energy', '--format', engine, '--out', viaConvert, '--json']);
+    expect(first.code).toBe(0);
+    expect(second.code).toBe(0);
+    expect(JSON.parse(second.stdout)).toMatchObject({ ok: true, format: engine, out: viaConvert });
+    // One project → deck path: the two commands are two doors into one function.
+    expect(await readFile(viaConvert, 'utf8')).toBe(await readFile(viaExportInput, 'utf8'));
+  });
+
+  it('names the format extension when no --out is given', async () => {
+    const { dir, file } = await projectFile();
+    const result = await ncs(['convert', file, '--node', 'sp-energy', '--format', 'gamess']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/gamess written to .*water\.inp/);
+    expect((await readFile(path.join(dir, 'water.inp'), 'utf8'))).toMatch(/RUNTYP=ENERGY/);
+  });
+
+  it('writes the frequency job through the same route', async () => {
+    const { dir, file } = await projectFile({ jobType: 'Freq' });
+    const keyword = { nwchem: /^task dft freq$/m, gamess: /RUNTYP=HESSIAN/, qchem: /^JOBTYPE {4}freq$/m };
+    for (const engine of ['nwchem', 'gamess', 'qchem']) {
+      const out = path.join(dir, `freq.${engine}`);
+      // eslint-disable-next-line no-await-in-loop
+      const result = await ncs(['convert', file, '--node', 'sp-energy', '--format', engine, '--out', out]);
+      expect(result.code, `${engine}: ${result.stderr}`).toBe(0);
+      // eslint-disable-next-line no-await-in-loop
+      expect(await readFile(out, 'utf8')).toMatch(keyword[engine]);
+    }
+  });
+
+  it('refuses a structure file, because a deck needs a block\'s route', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ncs-export-'));
+    const xyz = path.join(dir, 'water.xyz');
+    await writeFile(xyz, '3\nwater\nO 0 0 0.1173\nH 0 0.7572 -0.4692\nH 0 -0.7572 -0.4692\n', 'utf8');
+    const result = await ncs(['convert', xyz, '--format', 'nwchem']);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/takes a \.ncs project and --node/);
+    expect(result.stderr).toMatch(/no route/);
+  });
+
+  it('asks for --node rather than picking a block', async () => {
+    const { file } = await projectFile();
+    const result = await ncs(['convert', file, '--format', 'qchem']);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/needs --node <id>/);
+  });
+
+  it('refuses a project with no geometry with the same code as export-input', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'ncs-export-'));
+    const empty = path.join(dir, 'empty.ncs');
+    await writeFile(empty, readFileSync('examples/single-point.ncs', 'utf8'), 'utf8');
+    const result = await ncs(['convert', empty, '--node', 'sp-energy', '--format', 'nwchem']);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/"code": "export-no-geometry"/);
+  });
+
+  it('reports an option the target program cannot spell instead of dropping it', async () => {
+    const project = JSON.parse(readFileSync('examples/single-point.ncs', 'utf8'));
+    project.molecule.coords = WATER.coords;
+    project.molecule.geometry = { source: 'imported', file: 'water.xyz', format: 'xyz' };
+    for (const node of project.nodes) {
+      if (node.type === 'calc') {
+        node.settings.basis = '6-31G*';
+        node.settings.solvation = true;
+        node.settings.solvationModel = 'PCM';
+        node.settings.solvent = 'Water';
+      }
+    }
+    const dir = await mkdtemp(path.join(tmpdir(), 'ncs-export-'));
+    const file = path.join(dir, 'solvated.ncs');
+    await writeFile(file, JSON.stringify(project, null, 2), 'utf8');
+    const result = await ncs(['convert', file, '--node', 'sp-energy', '--format', 'gamess']);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/"code": "export-refused"/);
+    expect(result.stderr).toMatch(/requests solvation \(PCM, Water\)/);
   });
 });

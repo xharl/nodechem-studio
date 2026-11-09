@@ -33,6 +33,7 @@ ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
 ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv] [--out <file>] [--json]
+ncs convert <project.ncs> --node <id> --format <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs smiles <file|string> [--name <label>] [--out <file.json>] [--json]
 ncs cache <run.log|field.cube> --out <file.ncsr> [--precision f64|f32] [--json]
@@ -62,6 +63,10 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   picks the spectrum written from a log (`ir`, `raman` or `uv`, default `ir`); `molden` needs the basis
   and MO coefficients, so it is only offered for a formatted checkpoint. Without `--out` the result
   lands beside the input with the format's extension.
+  The same command also writes the three **export-only decks**: `--format nwchem`, `gamess` or
+  `qchem` on a `.ncs` project plus `--node <id>`. That is the same text `ncs export-input` and the
+  window's **Export** menu write, because all three call one function; a structure file is refused
+  by name (`a deck needs a block's settings`) rather than given an invented method and basis.
 - `export-input` writes the input one block would be for an engine the app **exports but does not
   run**: `--engine nwchem`, `gamess` or `qchem`. It uses the block's own settings and the project
   geometry, and refuses with a named reason (exit 2, `code: "export-refused"`) anything it cannot
@@ -118,7 +123,7 @@ this table fails the suite, so a new CLI-only capability cannot ship undocumente
 | `ncs record` | **CLI only** | `record import`: a number another program computed, labelled *imported, not run here*. |
 | `ncs diff` | **CLI only** | Two projects compared per node and per field. |
 | `ncs merge` | **CLI only** | Three-way, node-keyed project merge; a conflict writes nothing. |
-| `ncs export-input` | **CLI only** | The deck one block would be for NWChem, GAMESS or Q-Chem — engines this build exports but does not run. |
+| `ncs export-input` | window: **Export** menu → *NWChem / GAMESS / Q-Chem input* | The deck one block would be for NWChem, GAMESS or Q-Chem — engines this build exports but does not run. `ncs convert --format <engine>` writes the same text. |
 | `ncs qcschema` | **CLI only** | MolSSI `qcschema_output` in and out, validated against the vendored schema. |
 | `ncs cache` | **CLI only** | A run or a volumetric field as typed `.ncsr` arrays; `--inspect` reads the header back. |
 

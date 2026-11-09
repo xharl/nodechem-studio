@@ -26,7 +26,7 @@ import { createHash } from 'node:crypto';
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { flowById } from '../src/shared/flows.js';
-import { buildWorkflowPlan, moleculeForNode, settingsForNode } from '../src/shared/workflowTasks.js';
+import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { parseGaussianOutput, geometryToXyz } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
@@ -44,7 +44,13 @@ import {
   structureFromQcschema,
 } from '../src/shared/qcschema.js';
 import { parseFchk } from '../src/shared/fchk.js';
-import { EXPORT_ENGINE_IDS, exporterFor, parseSmiles, parseSmilesList, renderInput } from '../src/shared/interop/index.js';
+import {
+  EXPORT_ENGINE_IDS,
+  exporterFor,
+  parseSmiles,
+  parseSmilesList,
+  renderBlockDeck,
+} from '../src/shared/interop/index.js';
 import { cacheFromCube, cacheFromParsed, cacheInfo, writeCache } from '../src/shared/cache.js';
 import { parseCube, writeCube } from '../src/shared/cubeFile.js';
 import {
@@ -92,6 +98,8 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
   ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
+      [--out <file>] [--json]
+  ncs convert <project.ncs> --node <id> --format <nwchem|gamess|qchem>
       [--out <file>] [--json]
   ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem>
       [--out <file>] [--json]
@@ -958,14 +966,50 @@ async function commandConvert({ positional, flags }) {
   const [input] = positional;
   if (!input) fail('convert needs an input file.');
   const formatId = String(flags.format || '').trim();
-  if (!formatId) fail('convert needs --format <extxyz|xyz|sdf|jcamp|molden>.');
+  if (!formatId) fail(`convert needs --format <extxyz|xyz|sdf|jcamp|molden|${EXPORT_ENGINE_IDS.join('|')}>.`);
   const file = path.resolve(input);
 
   try {
     const text = await fs.readFile(file, 'utf8');
     const extension = path.extname(file).toLowerCase();
     let converted;
-    if (extension === '.ncs') {
+    const deckExporter = exporterFor(formatId);
+    if (deckExporter) {
+      // A deck is a block's route plus the project geometry. A bare .xyz or .log
+      // carries atoms and no settings, so the only honest input here is the
+      // project and the block id — the same pair `ncs export-input` takes.
+      if (extension !== '.ncs') {
+        fail(`a ${deckExporter.label} deck is written from a block's settings, so --format ${deckExporter.id} takes `
+          + `a .ncs project and --node. "${path.basename(file)}" is a structure file with no route; use `
+          + `\`ncs convert project.ncs --node <id> --format ${deckExporter.id}\`.`, EXIT.invalid);
+      }
+      if (!flags.node) {
+        fail(`--format ${deckExporter.id} needs --node <id>: the deck is written from that block's settings `
+          + '(`ncs validate project.ncs --json` lists the node ids).', EXIT.invalid);
+      }
+      const { result } = await readProject(file);
+      if (!result.ok) {
+        process.stderr.write(`${JSON.stringify(validityJson(file, result), null, 2)}\n`);
+        process.exit(EXIT.invalid);
+      }
+      const node = result.project.nodes.find((entry) => entry.id === flags.node);
+      if (!node) fail(`no node "${flags.node}" in ${file}.`, EXIT.invalid);
+      // Same function the window's Export menu calls: one project → deck path.
+      const rendered = renderBlockDeck({ project: result.project, node, engine: deckExporter.id });
+      if (!rendered.ok) {
+        const code = rendered.code || 'export-refused';
+        process.stderr.write(`${JSON.stringify({ ok: false, code, engine: deckExporter.id, message: rendered.refused }, null, 2)}\n`);
+        process.stderr.write(`ncs: ${rendered.refused}\n`);
+        process.exit(EXIT.invalid);
+      }
+      converted = {
+        format: rendered.engine,
+        extension: deckExporter.extension.replace(/^\./, ''),
+        mediaType: 'text/plain',
+        text: rendered.text,
+        notes: rendered.notes,
+      };
+    } else if (extension === '.ncs') {
       const parsed = JSON.parse(text);
       const coords = parsed?.molecule?.coords;
       if (!Array.isArray(coords) || coords.length === 0) fail('this project has no molecule to export.');
@@ -1038,29 +1082,14 @@ async function commandExportInput({ positional, flags }) {
   const node = project.nodes.find((entry) => entry.id === flags.node);
   if (!node) fail(`no node "${flags.node}" in ${file}.`, EXIT.invalid);
 
-  // `moleculeForNode` substitutes the demo water molecule when a project has no
-  // coordinates. For a Gaussian dry run that is a documented demo; for a deck
-  // handed to another program it is a file that computes water. Refused here.
-  const coords = project.molecule?.coords;
-  if (!Array.isArray(coords) || coords.length === 0) {
-    const message = 'This project has no geometry: the block would fall back to the demo water molecule, and a deck '
-      + 'full of water is worse than no deck. Import a structure into the project first.';
-    process.stderr.write(`${JSON.stringify({ ok: false, code: 'export-no-geometry', engine: exporter.id, message }, null, 2)}\n`);
-    process.stderr.write(`ncs: ${message}\n`);
-    process.exit(EXIT.invalid);
-  }
-
-  const settings = settingsForNode(project, node);
-  const molecule = moleculeForNode(project, node);
-  const rendered = renderInput({
-    engine: exporter.id,
-    settings,
-    molecule,
-    geometry: project.molecule?.geometry ?? null,
-    title: node.title,
-  });
+  // `renderBlockDeck` is the one project → deck path; the window's Export menu
+  // calls the same function, so the two write identical bytes. It refuses a
+  // project with no geometry before `moleculeForNode` can substitute the demo
+  // water molecule.
+  const rendered = renderBlockDeck({ project, node, engine: exporter.id });
   if (!rendered.ok) {
-    process.stderr.write(`${JSON.stringify({ ok: false, code: 'export-refused', engine: exporter.id, message: rendered.refused }, null, 2)}\n`);
+    const code = rendered.code || 'export-refused';
+    process.stderr.write(`${JSON.stringify({ ok: false, code, engine: exporter.id, message: rendered.refused }, null, 2)}\n`);
     process.stderr.write(`ncs: ${rendered.refused}\n`);
     process.exit(EXIT.invalid);
   }

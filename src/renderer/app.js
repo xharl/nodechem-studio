@@ -145,6 +145,7 @@ import {
 import { runClusterAction } from './clusterExport.js';
 import { exportRunBundleAction } from './runBundle.js';
 import { exportRunFormatAction } from './runConverter.js';
+import { exportDeckAction } from './deckExport.js';
 import { provenanceSummary, syncVerifyButton, verifyRunInput } from './provenance.js';
 import { mountThermochemistryView } from './thermochemistryView.js';
 import { installResultsView } from './resultsView.js';
@@ -7554,6 +7555,24 @@ function installCloseGuard() {
   });
 }
 
+/**
+ * Export the selected block as an NWChem / GAMESS / Q-Chem deck.
+ *
+ * The deck text comes from `exportDeckAction` → `renderBlockDeck`, the same
+ * function `ncs export-input` calls, so the menu and the CLI cannot diverge.
+ * A refusal (solvation, TD-DFT, `Opt Freq`, no geometry, an unlisted basis) is
+ * shown as the exporter wrote it and nothing is saved.
+ */
+async function exportDeckInput(engineId) {
+  await exportDeckAction({
+    desktop,
+    project: state.project,
+    node: selectedCalcNode(),
+    engine: engineId,
+    notify: toast,
+  });
+}
+
 async function exportSelectedInput() {
   const node = selectedCalcNode();
   if (!node) { toast('Select a calculation block to export its input.'); return; }
@@ -8122,10 +8141,27 @@ async function exportMenuGroups() {
   const groups = [];
   const node = selectedCalcNode();
   if (node) {
-    groups.push([{
-      label: `Input file — ${node.title} (.gjf)`,
-      attrs: 'data-action="export"',
-    }]);
+    groups.push([
+      {
+        label: `Input file — ${node.title} (.gjf)`,
+        attrs: 'data-action="export"',
+      },
+      // Export-only engines (issue 148): the label says "export only" wherever
+      // the engine is named, because this build cannot run them. The text comes
+      // from `renderBlockDeck`, the same function `ncs export-input` uses.
+      {
+        label: `NWChem input (.nw) — ${node.title}, export only`,
+        attrs: 'data-action="export-deck" data-engine="nwchem"',
+      },
+      {
+        label: `GAMESS input (.inp) — ${node.title}, export only`,
+        attrs: 'data-action="export-deck" data-engine="gamess"',
+      },
+      {
+        label: `Q-Chem input (.qcin) — ${node.title}, export only`,
+        attrs: 'data-action="export-deck" data-engine="qchem"',
+      },
+    ]);
   }
   const hasCalc = (state.project?.nodes || []).some((item) => item.type === 'calc');
   if (hasCalc) {
@@ -8311,6 +8347,7 @@ function handleAction(action, element) {
     }
     case 'save-project': saveProject(); break;
     case 'export': exportSelectedInput(); break;
+    case 'export-deck': exportDeckInput(element.dataset.engine); break;
     case 'cluster':
       runClusterAction({
         op: element.dataset.clusterOp,

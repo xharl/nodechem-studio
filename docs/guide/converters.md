@@ -176,7 +176,16 @@ ncs export-input project.ncs --node opt-1 --engine nwchem --out opt1.nw
 ncs export-input project.ncs --node opt-1 --engine gamess --out opt1.inp
 ncs export-input project.ncs --node opt-1 --engine qchem  --out opt1.qcin
 ncs export-input project.ncs --node opt-1 --engine nwchem --json
+
+# The same deck, through the converter. Identical bytes: both call one function.
+ncs convert project.ncs --node opt-1 --format nwchem --out opt1.nw
 ```
+
+In the window, select the calculation block and open **Export** in the header. It offers
+*NWChem input (.nw)*, *GAMESS input (.inp)* and *Q-Chem input (.qcin)* beside the Gaussian `.gjf`,
+each labelled **export only** — this build writes these decks and does not run them. The menu calls
+the same exporter the CLI does, so a deck saved from the window is byte-for-byte the deck
+`ncs export-input` prints; the test suite asserts that comparison rather than trusting it.
 
 The deck is built from the same settings the Gaussian block would use: job type, method, basis,
 charge, multiplicity, memory, and the project geometry. Each engine has a capability table
@@ -185,9 +194,16 @@ charge, multiplicity, memory, and the project geometry. Each engine has a capabi
 | | NWChem | GAMESS (US) | Q-Chem |
 | --- | --- | --- | --- |
 | job types | sp, opt, freq, saddle | sp, opt, freq | sp, opt, freq |
+| job keyword written | `task dft energy\|optimize\|freq\|saddle` (`task scf …` for HF) | `RUNTYP=ENERGY\|OPTIMIZE\|HESSIAN` | `$rem JOBTYPE = sp\|opt\|freq` |
 | functionals | HF, B3LYP, PBE0, PBE, M06-2X | HF, B3LYP, PBE, PBE0 | HF, B3LYP, PBE, PBE0, M06-2X, ωB97X-D |
 | dispersion | `disp vdw 3`/`4` for BLYP, B3LYP, BHLYP, TPSS, TPSSh | — | `DFT_D` = `D3_ZERO`/`D3_BJ` |
 | solvation, TD-DFT, ECP, constraints, TS (GAMESS/Q-Chem) | refused by name | refused by name | refused by name |
+
+The mappings are deliberately narrow and live in one place per program (`METHODS`, `BASES`,
+`JOB_TYPES` at the top of `src/shared/interop/{nwchem,gamess,qchem}.js`). A name outside a table is
+refused rather than transliterated, because `PBE0` in one manual is not necessarily the string
+another program resolves, and a deck that silently means a different functional is worse than an
+error.
 
 Refusals are a value, not an error: `ncs export-input` exits 2 and prints
 `{ "ok": false, "code": "export-refused", "engine": "...", "message": "..." }` on stderr, so a
@@ -210,8 +226,10 @@ does carry them.
 
 - **Cube downsampling.** A `.cube` is read at full resolution; the reader caps it at 4 M voxels and
   64 MB of text, and refuses a larger field rather than subsampling it silently.
-- **Export from the window.** The CLI writes files; the results panel has no export button yet
-  beyond the structure viewer's SVG figure.
+- **Deck import into the window.** The window now writes the three decks, but the reverse trip is
+  CLI-only: `projectSchema.js` has no `geometry.format` id for `nwchem`, `gamess` or `qchem`, so a
+  project saved with an imported deck could not be reopened. `ncs convert job.nw --format xyz` reads
+  one back in the meantime.
 
 ## Next
 
