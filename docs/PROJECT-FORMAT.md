@@ -63,7 +63,7 @@ Top level, all six keys required after normalization:
 | `name` | string | ≤ 200 chars, defaults to `Untitled project` |
 | `molecule` | object | see below; the geometry a flow without an `input` block runs on |
 | `defaults` | object | project-wide route defaults |
-| `runner` | object | `{ maxParallel }`, 1–64, default 1 (sequential) |
+| `runner` | object | `{ maxParallel, timeoutSeconds? }`, 1–64, default 1 (sequential); `timeoutSeconds` 1–`LIMITS.timeoutSeconds`, absent means the built-in 3600 s applies and is never written back |
 | `datasets[]` | array | named record sets; ≤ 64 (see 4.1) |
 | `flows[]` | array | one graph per flow; 1–32 (see 4.2) |
 | `reports[]` | array | combined HTML reports across flows; ≤ 16 (see 4.5) |
@@ -98,6 +98,12 @@ graph.
 | `nproc` | integer | 1–1024 |
 
 `nodes[]` — common keys `id`, `type`, `kind`, `title`, `state`, `x`, `y`.
+`state` is one of `ready`, `running`, `passed`, `review`, `blocked`, `failed`, `skipped`,
+`cancelled`, `interrupted`, `timed out` — the last being a block the queue stopped at its wall-clock
+limit, which is **not** `failed`: the engine never gave a verdict, so its output is not parsed.
+A `calc` block may also carry `timeoutSeconds`, which overrides `runner.timeoutSeconds` for that
+block alone; it is absent unless the block states one, so a project that never set a per-block limit
+serialises exactly as before.
 Type-specific payloads:
 
 | `type` | Payload |
@@ -109,7 +115,7 @@ Type-specific payloads:
 | `merge` | `merge { policy, notes }` |
 | `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
-| `compute` | `compute { expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block |
+| `compute` | `compute { mode?, expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block. `mode` is `expression` (the default, and absent when never set) or `dp4`, the DP4+ probability comparison whose definition lives under `dp4` (issue 165) |
 | `note` | `note { text }` |
 
 `calc.settings` accepts exactly these keys — anything else is dropped:
@@ -121,7 +127,8 @@ Type-specific payloads:
 `emission`, `nto`, `ntoTransition`,
 `raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
-`xtbMethod`, `xtbOptLevel`, `xtbThreads`.
+`xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`,
+`recordTransitionDipoles`, `nmrSpinSpin`.
 
 `settings.engine` is a per-block override (`gaussian`, `xtb`, `orca` or `psi4`); an empty string means "use
 `defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
@@ -150,6 +157,15 @@ orbital-eigenvalue print (`Pop=Full` on Gaussian) that the frontier-orbital and 
 read from, `raman` and `vcd` put `=Raman` / `=VCD` on the frequency keyword (`Freq=(Raman,VCD)`
 when both are on), and `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
 analysis and validity behaviour. `vcd` is refused on a job type with no frequency to carry it.
+
+Four keys are opt-in and **absent by default**, each written only after a block states it, so a
+project saved before they existed serialises byte for byte as it did: `freezeCore` (`auto`, `true` or
+`false`; `auto` writes no line at all, `false` asks for all-electron correlation), `timeoutSeconds`
+(the block's own wall-clock limit), `recordTransitionDipoles` (a Psi4 TD block that records the
+transition-dipole vector, which a coupling cannot be recovered without) and `nmrSpinSpin` (an NMR
+block that writes `NMR=SpinSpin` so Gaussian prints the K and J coupling tables). A key being listed
+above is not the same as being persisted — the reader must also read it — which is the defect class
+that silently dropped `freezeCore` and `recordTransitionDipoles` until a round-trip test caught it.
 
 `jobType` also accepts the composite methods `CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4`
 and `G4(MP2)`. A composite job **must** leave `method`, `basis`, `dispersion`, `solvation`,
