@@ -41,7 +41,9 @@ import {
 } from '../../src/shared/obabelConformers.js';
 import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 import { optimizeUff } from '../../src/shared/uff.js';
+import { relaxWithForces } from '../../src/shared/mlRelax.js';
 import {
+  SCORER_SPECS,
   framesForScorerRanking,
   normalizeScorerResult,
   scorerDomainFindings,
@@ -454,6 +456,21 @@ function conformerTaskRecord(raw, nodeId) {
 }
 
 /**
+ * ADR 0001 §2.10: the atoms a scorer task carries. Bounded like every other
+ * renderer-supplied list; an element is a token, a coordinate is a finite number.
+ */
+function taskAtomList(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, LIMITS.atoms).map((atom) => ({
+    element: oneLine(atom?.element, 3),
+    x: Number(atom?.x),
+    y: Number(atom?.y),
+    z: Number(atom?.z),
+  })).filter((atom) => /^[A-Z][a-z]?$/.test(atom.element)
+    && Number.isFinite(atom.x) && Number.isFinite(atom.y) && Number.isFinite(atom.z));
+}
+
+/**
  * ADR 0001 §2.9: the trust boundary for a prepare task.
  *
  * One structure in, one out, no engine. The input text is required and bounded
@@ -462,7 +479,9 @@ function conformerTaskRecord(raw, nodeId) {
 function prepareTaskRecord(raw, nodeId) {
   const prep = raw?.prepare && typeof raw.prepare === 'object' ? raw.prepare : {};
   const kind = prep.kind === 'embed3d' ? 'embed3d' : 'relax';
-  const converter = kind === 'embed3d' ? 'openbabel' : (prep.converter === 'openbabel' ? 'openbabel' : 'uff');
+  const converter = kind === 'embed3d'
+    ? 'openbabel'
+    : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff');
   const inputName = String(raw?.inputName || '');
   const inputText = String(raw?.inputText || '');
   if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
@@ -525,7 +544,8 @@ function prepareTaskRecord(raw, nodeId) {
     prepare: {
       kind,
       converter,
-      forceField: prep.forceField === 'MMFF94' ? 'MMFF94' : 'UFF',
+      forceField: prep.forceField === 'MMFF94' || prep.forceField === 'AIMNet2'
+        ? prep.forceField : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
       smiles,
       charge: Math.round(number(prep.charge, 0, -10, 10)),
       multiplicity: Math.round(number(prep.multiplicity, 1, 1, 10)),
@@ -831,6 +851,18 @@ function taskRecord(raw, index) {
   // ensemble did not exist when the workflow was queued. Carry the reason so the
   // scheduler can fail the task with it instead of building an input from the
   // project geometry (the silent substitution the conformer stage exists to stop).
+  const rawScorer = raw?.scorer && typeof raw.scorer === 'object' ? raw.scorer : null;
+  const scorerSpec = rawScorer ? String(rawScorer.spec || '') : '';
+  const scorerAtoms = rawScorer ? taskAtomList(rawScorer.atoms) : [];
+  const scorer = rawScorer && SCORER_SPECS.includes(scorerSpec) && scorerAtoms.length > 0
+    ? {
+      spec: scorerSpec,
+      atoms: scorerAtoms,
+      charge: Number.isInteger(Number(rawScorer.charge)) ? Math.min(10, Math.max(-10, Number(rawScorer.charge))) : 0,
+      multiplicity: Number.isInteger(Number(rawScorer.multiplicity))
+        ? Math.min(10, Math.max(1, Number(rawScorer.multiplicity))) : 1,
+    }
+    : null;
   const rawPrepareFrom = raw?.prepareFrom && typeof raw.prepareFrom === 'object' ? raw.prepareFrom : null;
   const prepareFrom = rawPrepareFrom && SAFE_ID.test(String(rawPrepareFrom.nodeId || ''))
     ? { nodeId: String(rawPrepareFrom.nodeId) } : null;
@@ -888,6 +920,7 @@ function taskRecord(raw, index) {
     loop,
     merge,
     prepareFrom,
+    scorer,
     analyse,
     ladder,
     spin,
@@ -1172,7 +1205,7 @@ export class QueueManager {
     // start payload means the generous default, never "no limit".
     const timeoutSeconds = timeoutSecondsFrom(options.timeoutSeconds) ?? DEFAULT_TIMEOUT_SECONDS;
     const calcEngines = [...new Set(tasks
-      .filter((task) => task.executable && task.type === 'calculate')
+      .filter((task) => task.executable && task.type === 'calculate' && !task.scorer)
       .map((task) => String(task.engine || 'gaussian')))];
     const needsCalcEngine = calcEngines.length > 0;
     // A fanned-out member task carries an ensemble that is already stored in the
@@ -1188,7 +1221,9 @@ export class QueueManager {
       || (task.type === 'prepare' && task.prepare?.converter === 'openbabel'));
     // ADR 0001 §2.10: a scorer is optional, but a block that asks for one
     // cannot run without its sidecar.
-    const needsScorer = tasks.some((task) => task.type === 'generate' && task.generate?.rankBy);
+    const needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
+      || (task.type === 'calculate' && task.scorer)
+      || (task.type === 'prepare' && task.prepare?.converter === 'aimnet2'));
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1447,6 +1482,7 @@ export class QueueManager {
     }
     if (task.type === 'generate') return this.runConformers(queue, task);
     if (task.type === 'prepare') return this.runPrepare(queue, task);
+    if (task.type === 'calculate' && task.scorer) return this.runScorerPoint(queue, task);
     return this.runTask(queue, task);
   }
 
@@ -2776,6 +2812,122 @@ export class QueueManager {
   }
 
   /**
+   * ADR 0001 §2.10: a calculate block with a scorer provider.
+   *
+   * The block stays `calculate`; it does not spawn the engine. One structure is
+   * scored, the run record carries the model's provenance and the explicit eV
+   * conversions, and no gate is invented — a scorer has no termination record.
+   */
+  async runScorerPoint(queue, task) {
+    const dir = path.join(this.queueDir(queue.id), 'scorer', task.nodeId);
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.runDir = dir;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+    try {
+      const domain = scorerDomainFindings({
+        spec: task.scorer.spec,
+        atoms: task.scorer.atoms,
+        charge: task.scorer.charge,
+        multiplicity: task.scorer.multiplicity,
+      });
+      if (domain.errors.length > 0) throw new Error(domain.errors.join(' '));
+      const model = scorerModel(task.scorer.spec);
+      const raw = await new ScorerRunner().score({
+        executable: queue.options.scorerExecutable,
+        model: model.id,
+        charge: task.scorer.charge,
+        multiplicity: task.scorer.multiplicity,
+        frames: [{ id: 'point', atoms: task.scorer.atoms }],
+        cwd: dir,
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      });
+      const scored = normalizeScorerResult(raw, { spec: task.scorer.spec, frameIds: ['point'] });
+      if (scored.error) throw new Error(scored.error);
+      const point = scored.results[0];
+      const inputName = 'point.xyz';
+      const inputText = xyzText(task.scorer.atoms, `${task.title} · scorer`);
+      await fsp.writeFile(path.join(dir, inputName), inputText, 'utf8');
+      await writeJsonAtomic(path.join(dir, 'scorer.json'), {
+        ...scored.provenance,
+        energyEv: point.energyEv,
+        energyKcal: point.energyKcal,
+        energyHartree: point.energyHartree,
+      });
+      const runId = `scorer-${String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_')}-${Date.now().toString(36)}`;
+      const startedAt = task.startedAt;
+      const finishedAt = new Date().toISOString();
+      const parsed = {
+        finalEnergy: { hartree: point.energyHartree },
+        scf: { energyHartree: point.energyHartree },
+        energyEv: point.energyEv,
+        energyKcal: point.energyKcal,
+        energyKind: scored.provenance.energyKind,
+        comparableWithQuantumChemistry: false,
+      };
+      const record = {
+        schemaVersion: 1,
+        id: runId,
+        status: 'completed',
+        engine: model.id,
+        argv: ['--model', model.id],
+        dryRun: false,
+        title: task.title,
+        inputName,
+        outputName: 'scorer.json',
+        outputFile: null,
+        outputSource: null,
+        truncated: false,
+        outputBytes: null,
+        executable: queue.options.scorerExecutable || null,
+        scratchDir: null,
+        checkpointHandoff: null,
+        inputSha256: await sha256File(path.join(dir, inputName)).catch(() => ''),
+        outputSha256: await sha256File(path.join(dir, 'scorer.json')).catch(() => ''),
+        provenance: {
+          kind: 'scorer',
+          jobType: 'SP',
+          method: { scorer: model.id, label: model.label, version: scored.provenance.version },
+          input: { name: inputName, bytes: Buffer.byteLength(inputText, 'utf8') },
+          output: null,
+        },
+        startedAt,
+        finishedAt,
+        exitCode: 0,
+        parsed,
+        gates: null,
+        scorer: scored.provenance,
+        error: null,
+      };
+      await writeJsonAtomic(path.join(dir, 'run.json'), record);
+      task.runId = runId;
+      task.parsedSummary = parsed;
+      task.scorerResult = scored.provenance;
+      task.gateVerdict = null;
+      task.status = 'completed';
+      task.finishedAt = finishedAt;
+      task.summary = `${model.label} single point · ${point.energyHartree.toFixed(8)} Ha`
+        + ` (${point.energyEv.toFixed(4)} eV, ML — not QM)`;
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: task.summary });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Scorer failed: ${task.error}` });
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
    * ADR 0001 §2.9: prepare one structure.
    *
    * `embed3d` runs the Open Babel converter; `relax` minimises with the in-app
@@ -2832,6 +2984,60 @@ export class QueueManager {
           iterations: 0,
           atomCount: atoms.length,
           origin: { program: 'Open Babel', version: result.version || '', method: '--gen3d' },
+        };
+      } else if (conf.converter === 'aimnet2') {
+        // ADR 0001 §2.10: relax one structure with a scorer's forces. The
+        // domain guard runs once here, before the first spawn; each evaluation
+        // carries the same provenance back.
+        const spec = `ml:${String(conf.forceField || 'AIMNet2').toLowerCase() === 'aimnet2' ? 'aimnet2' : String(conf.forceField || '').toLowerCase()}`;
+        const domain = scorerDomainFindings({
+          spec, atoms, charge: conf.charge, multiplicity: conf.multiplicity,
+        });
+        if (domain.errors.length > 0) throw new Error(domain.errors.join(' '));
+        const relaxed = await relaxWithForces({
+          atoms,
+          charge: conf.charge,
+          multiplicity: conf.multiplicity,
+          evaluate: async (trialAtoms) => {
+            const raw = await new ScorerRunner().score({
+              executable: queue.options.scorerExecutable,
+              model: 'aimnet2',
+              charge: conf.charge,
+              multiplicity: conf.multiplicity,
+              frames: [{ id: 'point', atoms: trialAtoms }],
+              cwd: dir,
+              timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+              onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+            });
+            const scored = normalizeScorerResult(raw, { spec, frameIds: ['point'] });
+            if (scored.error) throw new Error(scored.error);
+            return {
+              energyEv: scored.results[0].energyEv,
+              forces: scored.results[0].forces,
+              provenance: scored.provenance,
+            };
+          },
+          onProgress: ({ iteration }) => this.emit({
+            type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `ML relax · step ${iteration}`,
+          }),
+        });
+        if (relaxed.error) throw new Error(relaxed.error);
+        atoms = relaxed.atoms;
+        summary = {
+          kind: 'relax',
+          converter: 'aimnet2',
+          forceField: 'AIMNet2',
+          energyKcal: relaxed.energyKcal,
+          converged: relaxed.converged,
+          reason: relaxed.reason || '',
+          iterations: relaxed.iterations,
+          atomCount: atoms.length,
+          origin: {
+            program: relaxed.provenance?.label || 'AIMNet2',
+            version: relaxed.provenance?.version || '',
+            method: 'ML potential · forces + L-BFGS',
+          },
+          ...(relaxed.provenance ? { scorer: relaxed.provenance } : {}),
         };
       } else if (conf.converter === 'openbabel') {
         const outName = 'prepared.xyz';

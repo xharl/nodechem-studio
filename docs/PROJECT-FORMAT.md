@@ -131,8 +131,14 @@ Type-specific payloads:
 `emission`, `nto`, `ntoTransition`,
 `raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
-`xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`,
+`xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`, `provider`,
 `recordTransitionDipoles`, `nmrSpinSpin`.
+
+`provider` is absent (run the engine) or `"ml:aimnet2"`. With a provider the block stays a
+`calculate` block but does not spawn the engine: one structure is scored, `run.json` carries
+`engine: "aimnet2"`, `provenance.kind: "scorer"`, `parsed.finalEnergy.hartree` (converted explicitly
+from eV) and the scorer's full provenance. No gate is invented; `gates` is null. A task with a
+provider does not require an engine executable, but it does require the scorer sidecar.
 
 `settings.engine` is a per-block override (`gaussian`, `xtb`, `orca` or `psi4`); an empty string means "use
 `defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
@@ -222,8 +228,8 @@ naming the first differing index, and nothing is reordered automatically.
 | Key | Type | Notes |
 | --- | --- | --- |
 | `kind` | `relax` or `embed3d` | default `relax` |
-| `converter` | `uff` or `openbabel` | `relax` only; `embed3d` is always `openbabel` |
-| `forceField` | `UFF` or `MMFF94` | the MM force field the converter uses |
+| `converter` | `uff`, `openbabel` or `aimnet2` | `relax` only; `embed3d` is always `openbabel` |
+| `forceField` | `UFF`, `MMFF94` or `AIMNet2` | the force field or scorer the converter uses |
 | `smiles` | string | required for `embed3d`; ignored by `relax` |
 | `charge`, `multiplicity` | integer | the structure's chemistry, not a method |
 
@@ -234,11 +240,16 @@ protonation-state and tautomer enumeration belongs to `generate`.
 `generate.settings` is a separate key space — route keys cannot leak into a conformer search:
 `source` (`search` or `imported`, default `search`), `generator` (`crest`, `uff` or `obabel`,
 search only), `method` (`gfn2` or `gfnff`, CREST only), `energyWindowKcal`, `rmsdThreshold`,
-`maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`, `charge`,
+`maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`, `rankBy`, `charge`,
 `multiplicity`, `fanOut`, `group` (an optional study id shared by blocks that belong together,
 1–32 letters, digits, `.`, `_` or `-`; empty means no group). Defaults: source `search`, generator
 `crest`, energy window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K, spread warning at
 2 kcal/mol, fan-out off, no group.
+
+`rankBy` is `""` (rank by the source's own energies) or `"ml:<model>"` (`ml:aimnet2`), which ranks
+by the optional scorer sidecar. The sidecar is spawned with the model id and a JSON request on
+stdin; it must name its version, weights digest, dtype, device and cutoff. Its eV output is converted
+explicitly to kcal/mol and Hartree and is marked `comparableWithQuantumChemistry: false`.
 
 `source` is the ADR 0001 split: a `search` block runs `generator` on one structure; an `imported`
 block ranks the ensemble of the single `input` block wired into it and owns **no** file path, energy
@@ -270,6 +281,7 @@ be compared or averaged — a group is a heading, not a result.
 | `selectedId`, `selected { id, energyEh, energyKcal, energyUnit, energyMethod, relativeKcal, population, protomer, atoms[] }` | the member downstream blocks run |
 | `requiresSelection`, `autoSelected`, `protomers[]` | true when more than one protomer survives, which forbids an automatic choice |
 | `members[] { id, rank, energyEh, energyKcal, energyUnit, energyMethod, relativeKcal, population, rmsdToLowest, protomer, kept, dropped, atoms[] }` | ranked table; kept members carry their geometry so the choice is offline. `energyEh` is null on a `kcal/mol` member, and `energyKcal` is null on a Hartree one — the absolute energy is never moved into a field that names the other unit |
+| `scorer` | present only when `rankBy` named a model: `{ model, label, version, weightsSha256, dtype, device, cutoffAngstrom, charge, multiplicity, energyKind, comparableWithQuantumChemistry: false }`. Each member also carries its own `scorer { id, energyEv, energyKcal, energyHartree, … }`; the explicit eV value is never overwritten by the converted Hartree number |
 | `pruned { energy, rmsd, count }`, `warnings[]`, `generatedAt` | what was dropped and why |
 
 A `calculate` block fed by a `generate` block runs the selected member's geometry. When no member

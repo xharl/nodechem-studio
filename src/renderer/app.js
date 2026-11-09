@@ -2156,6 +2156,12 @@ function calcInspector(node) {
       ['', `Project default (${engineOrDefault(state.project?.defaults?.engine).label})`],
       ...Object.values(ENGINES).map((entry) => [entry.id, entry.label]),
     ], s.engine ?? ''),
+    // ADR 0001 §2.10: a scorer provider keeps this a calculate block but
+    // bypasses the engine. Empty means "run the engine".
+    selectField('Provider', 'provider', [
+      ['', 'Engine (default)'],
+      ...Object.values(SCORER_MODELS).map((model) => [`ml:${model.id}`, `${model.label} (ML scorer)`]),
+    ], s.provider ?? ''),
     selectField('Job type', 'jobType', isPsi4 ? PSI4_JOB_TYPES.map((id) => [id, id === 'Freq' ? 'Frequency' : id === 'Opt' ? 'Optimization' : id === 'SP' ? 'Single point' : id]) : JOB_TYPES, s.jobType),
     !isXtb && !isPsi4 && s.jobType === 'IRC' ? selectField('IRC direction', 'ircDirection', IRC_DIRECTIONS, s.ircDirection) : '',
     !isXtb && !isPsi4 && isOptJob(s.jobType)
@@ -2947,7 +2953,7 @@ function prepareInspector(node) {
   return `${inspectorHead('Structure · prepare', node.title, detail)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">1 structure in, 1 out · no enumeration</span></div>
-    ${group('Method', kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : 'UFF, in-app'), true, [
+    ${group('Method', kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app')), true, [
       `<div class="field"><label>Kind</label><select class="select" data-prepare-field="kind">
         <option value="relax"${kind === 'relax' ? ' selected' : ''}>Relax one structure</option>
         <option value="embed3d"${kind === 'embed3d' ? ' selected' : ''}>Embed SMILES in 3D</option>
@@ -2955,13 +2961,15 @@ function prepareInspector(node) {
       `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
         <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
         <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel (external)</option>
+        <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>
       </select></div>`,
       ...(kind === 'embed3d' ? [
         `<div class="field full"><label>SMILES</label><input class="input" data-prepare-field="smiles" value="${esc(s.smiles || '')}" placeholder="CCO" spellcheck="false" autocomplete="off"></div>`,
       ] : [
         `<div class="field"><label>Force field</label><select class="select" data-prepare-field="forceField">
-          <option value="UFF"${s.forceField !== 'MMFF94' ? ' selected' : ''}>UFF</option>
+          <option value="UFF"${s.forceField !== 'MMFF94' && s.forceField !== 'AIMNet2' ? ' selected' : ''}>UFF</option>
           <option value="MMFF94"${s.forceField === 'MMFF94' ? ' selected' : ''}>MMFF94</option>
+          <option value="AIMNet2"${s.forceField === 'AIMNet2' || converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML)</option>
         </select></div>`,
       ]),
       `<div class="field"><label>Charge</label><input class="input" type="number" min="-10" max="10" data-prepare-field="charge" value="${esc(s.charge ?? 0)}"></div>`,
@@ -6220,6 +6228,7 @@ function readRunConfig() {
   const saved = storedRunConfig();
   if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
   if (saved.obabelExecutable) $('#run-obabel').value = saved.obabelExecutable;
+  if (saved.scorerExecutable) $('#run-scorer').value = saved.scorerExecutable;
   if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
   if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
   const field = $('#run-exe');
@@ -6232,6 +6241,7 @@ function saveRunConfig() {
       executables: runExecutables(),
       crestExecutable: $('#run-crest').value.trim(),
       obabelExecutable: $('#run-obabel').value.trim(),
+      scorerExecutable: $('#run-scorer')?.value.trim() || '',
       scratchDir: $('#run-scratch').value.trim(),
       dryRun: $('#run-dry').checked,
     }));
@@ -6444,6 +6454,31 @@ async function preflightRun({ quiet = false } = {}) {
         ],
       };
     }
+    let needsScorer = false;
+    try {
+      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
+        || (task.type === 'calculate' && task.scorer)
+        || (task.type === 'prepare' && task.prepare?.converter === 'aimnet2'));
+    } catch {
+      // An unbuildable plan is reported by the queue's own error.
+    }
+    if (needsScorer) {
+      const scorer = $('#run-scorer')?.value.trim() || '';
+      result = {
+        ...result,
+        ok: result.ok && Boolean(scorer),
+        checks: [
+          ...(Array.isArray(result.checks) ? result.checks : []),
+          {
+            id: 'scorer',
+            label: 'ML scorer sidecar',
+            ok: Boolean(scorer),
+            detail: scorer || 'not chosen — a block that asks for ML ranking or a scorer provider cannot run',
+          },
+        ],
+      };
+    }
   }
   // A mixed flow launches one binary per engine, so preflight every engine the
   // plan needs, not only the selected block's. The queue enforces this too; the
@@ -6537,6 +6572,7 @@ async function startSelectedRun() {
       executable: runExecutables()[built.engine] || '',
       crestExecutable: $('#run-crest').value.trim(),
       obabelExecutable: $('#run-obabel').value.trim(),
+      scorerExecutable: $('#run-scorer')?.value.trim() || '',
       scratchDir: $('#run-scratch').value.trim(),
       dryRun,
       gates: gatesForNode(node),
@@ -6980,6 +7016,7 @@ async function startWorkflowUnlocked() {
         executables: runExecutables(),
         crestExecutable: $('#run-crest').value.trim(),
         obabelExecutable: $('#run-obabel').value.trim(),
+        scorerExecutable: $('#run-scorer')?.value.trim() || '',
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue

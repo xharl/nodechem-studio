@@ -133,7 +133,7 @@ describe('rendered calculation inspector', () => {
 
   it('renders no Gaussian resource or checkpoint field for an xTB node', () => {
     expect(nodeFields(renderFor('xtb'))).toEqual([
-      'title', 'engine', 'jobType', 'timeoutSeconds', 'xtbMethod', 'xtbOptLevel', 'xtbThreads',
+      'title', 'engine', 'provider', 'jobType', 'timeoutSeconds', 'xtbMethod', 'xtbOptLevel', 'xtbThreads',
       'solvation', 'solvationModel', 'solvent',
       // Issue 186: the spin-state sweep is offered on every calculation block;
       // its legal multiplicities follow the electron count, not the engine.
@@ -143,7 +143,7 @@ describe('rendered calculation inspector', () => {
 
   it('renders the full Gaussian field set for the same node', () => {
     expect(nodeFields(renderFor('gaussian'))).toEqual([
-      'title', 'engine', 'jobType',
+      'title', 'engine', 'provider', 'jobType',
       'memory', 'memoryUnit', 'nproc', 'timeoutSeconds', 'checkpoint',
       'routePreset', 'method', 'basis', 'dispersion', 'scf', 'grid', 'population', 'orbitals', 'verbosity',
       'tdStates', 'tdTriplets', 'tdRoot', 'ntoTransition', 'nto',

@@ -998,8 +998,13 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
           checkpointFrom: null,
           prepare: {
             kind: settings.kind === 'embed3d' ? 'embed3d' : 'relax',
-            converter: settings.kind === 'embed3d' ? 'openbabel' : (settings.converter === 'openbabel' ? 'openbabel' : 'uff'),
-            forceField: settings.forceField === 'MMFF94' ? 'MMFF94' : 'UFF',
+            converter: settings.kind === 'embed3d'
+              ? 'openbabel'
+              : (settings.converter === 'openbabel' || settings.converter === 'aimnet2'
+                ? settings.converter : 'uff'),
+            forceField: settings.forceField === 'MMFF94' || settings.forceField === 'AIMNet2'
+              ? settings.forceField
+              : (settings.converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
             smiles: String(settings.smiles || ''),
             charge: chemistry.charge ?? 0,
             multiplicity: chemistry.multiplicity ?? 1,
@@ -1413,6 +1418,12 @@ function calculationTask(project, node, {
   const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember, record, checkpointTaskId, ignoreConformer });
   const emissionFor = emissionContextFor(project, node, settingsOverride);
   const taskSettings = settingsOverride || settingsForNode(project, node);
+  // ADR 0001 §2.10: a scorer provider keeps the block a calculate block but
+  // bypasses the engine. The structure it scores is the same one the input
+  // builder consumed, carried explicitly so the queue need not parse a route.
+  const scorerChemistry = taskSettings.provider
+    ? moleculeForNode(project, node, conformerMember, record, { ignoreConformer })
+    : null;
   // NTO (#146): the second job of the chain. The transition it analyses lives
   // on the TD block that wrote the checkpoint, so it is read from there — never
   // guessed from the NTO block's own settings.
@@ -1447,6 +1458,14 @@ function calculationTask(project, node, {
     outputName: built.outputName,
     inputText: built.inputText,
     settings: settingsOverride || settingsForNode(project, node),
+    ...(scorerChemistry ? {
+      scorer: {
+        spec: taskSettings.provider,
+        atoms: scorerChemistry.coords,
+        charge: scorerChemistry.charge,
+        multiplicity: scorerChemistry.multiplicity,
+      },
+    } : {}),
     gates: gatesForNode(node),
     validity: validityForNode(project, node, conformerMember, record, { ignoreConformer }),
     checkpointName: checkpointNameFor(project, node, taskId),

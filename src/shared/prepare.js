@@ -12,8 +12,8 @@
  */
 
 export const PREPARE_KINDS = Object.freeze(['embed3d', 'relax']);
-export const PREPARE_CONVERTERS = Object.freeze(['uff', 'openbabel']);
-export const PREPARE_FORCE_FIELDS = Object.freeze(['UFF', 'MMFF94']);
+export const PREPARE_CONVERTERS = Object.freeze(['uff', 'openbabel', 'aimnet2']);
+export const PREPARE_FORCE_FIELDS = Object.freeze(['UFF', 'MMFF94', 'AIMNet2']);
 
 export const DEFAULT_PREPARE_SETTINGS = Object.freeze({
   kind: 'relax',
@@ -29,12 +29,13 @@ export const DEFAULT_PREPARE_SETTINGS = Object.freeze({
 /** The converter a kind can actually use, so the inspector and schema agree. */
 export function converterFor(kind, requested) {
   if (kind === 'embed3d') return 'openbabel';
-  return requested === 'openbabel' ? 'openbabel' : 'uff';
+  return requested === 'openbabel' || requested === 'aimnet2' ? requested : 'uff';
 }
 
 /** Human label for a prepare block's card and inspector. */
 export function prepareLabel(settings) {
   const kind = settings?.kind === 'embed3d' ? 'embed3d' : 'relax';
   if (kind === 'embed3d') return '3D embed';
+  if (settings?.converter === 'aimnet2') return 'ML relax (AIMNet2)';
   return settings?.converter === 'openbabel' ? 'MM relax (Open Babel)' : 'UFF relax';
 }

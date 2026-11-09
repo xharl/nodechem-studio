@@ -293,6 +293,9 @@ const SETTINGS_KEYS = new Set([
   // here so an explicit value is not read as a typo.
   'recordTransitionDipoles',
   'nmrSpinSpin',
+  // ADR 0001 §2.10: a scorer provider on a calculate block. The block stays
+  // calculate; the provider is not an engine and never enters ENGINE_IDS.
+  'provider',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
@@ -755,7 +758,8 @@ function normalizePrepareSettings(c, raw, path, legacy) {
     c.error(`${path}.converter`, 'must be "openbabel": 3D embedding needs the Open Babel converter.');
   }
   const forceField = readEnum(c, provided.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, {
-    legacy, fallback: kind === 'embed3d' ? 'MMFF94' : 'UFF',
+    legacy,
+    fallback: kind === 'embed3d' ? 'MMFF94' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
   });
   const smiles = readString(c, provided.smiles, `${path}.smiles`, { legacy, fallback: '', max: 1000 });
   if (kind === 'embed3d' && !smiles.trim()) {
@@ -776,7 +780,7 @@ function normalizePrepareOutput(c, raw, path, legacy) {
   const source = requiredObject(c, raw, path, legacy, {});
   warnUnknown(c, source, new Set([
     'kind', 'converter', 'forceField', 'energyKcal', 'converged', 'reason', 'iterations',
-    'atomCount', 'generatedAt', 'origin',
+    'atomCount', 'generatedAt', 'origin', 'scorer',
   ]), path);
   return {
     kind: readEnum(c, source.kind, PREPARE_KINDS, `${path}.kind`, { legacy, fallback: 'relax' }),
@@ -791,6 +795,7 @@ function normalizePrepareOutput(c, raw, path, legacy) {
     atomCount: readInteger(c, source.atomCount, `${path}.atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
     generatedAt: readString(c, source.generatedAt, `${path}.generatedAt`, { legacy, fallback: '', max: 40 }),
     origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
+    ...(isPlainObject(source.scorer) ? { scorer: normalizeScorerProvenance(c, source.scorer, `${path}.scorer`) } : {}),
   };
 }
 
@@ -1492,6 +1497,15 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   if (checkpoint && !CHECKPOINT.test(checkpoint)) {
     c.error(`${path}.checkpoint`, 'must be a safe file name ending in .chk.');
   }
+  // ADR 0001 §2.10: a scorer provider replaces the engine for this block. It is
+  // deliberately not an engine id; the schema refuses any value outside the
+  // model cards, and the queue refuses to spawn without the sidecar.
+  const provider = source.provider === undefined || source.provider === null || source.provider === ''
+    ? ''
+    : (readEnum(c, source.provider, SCORER_SPECS, `${path}.provider`, { legacy, fallback: '' }) || '');
+  if (provider) {
+    c.warn(`${path}.provider`, `uses the ${provider} scorer; the engine and route on this block are ignored.`);
+  }
   const customKeywords = readString(c, source.customKeywords, `${path}.customKeywords`, { legacy, fallback: '', max: 500 });
   if (/^Opt\b/.test(String(source.jobType ?? 'Opt')) && hasOptKeyword(customKeywords)) {
     c.warn(`${path}.customKeywords`,
@@ -1619,6 +1633,7 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // default, so a project that never set them serialises exactly as before.
     ...(freezeCore !== null ? { freezeCore } : {}),
     ...(recordTransitionDipoles !== null ? { recordTransitionDipoles } : {}),
+    ...(provider ? { provider } : {}),
   };
 }
 

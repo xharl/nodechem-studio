@@ -195,3 +195,58 @@ describe('prepare runtime', () => {
     expect(log).toMatch(/-:O -O prepared\.xyz --gen3d/);
   });
 });
+
+describe('prepare with an ML scorer', () => {
+  it('relaxes one structure with scorer forces and records the provenance', async () => {
+    const { base, queueManager } = await stack();
+    const fake = path.join(base, 'ml-scorer');
+    await fsp.writeFile(fake, [
+      '#!/usr/bin/env node',
+      'let text = "";',
+      'process.stdin.on("data", (c) => { text += c; });',
+      'process.stdin.on("end", () => {',
+      '  const req = JSON.parse(text);',
+      '  const targets = [[0,0,0],[0.96,0,0],[-0.24,0.93,0]];',
+      '  let energy = 0;',
+      '  const results = req.frames.map((frame) => {',
+      '    const forces = frame.atoms.map((atom, i) => {',
+      '      const d = [atom.x - targets[i][0], atom.y - targets[i][1], atom.z - targets[i][2]];',
+      '      energy += d[0]*d[0] + d[1]*d[1] + d[2]*d[2];',
+      '      return [-2*d[0], -2*d[1], -2*d[2]];',
+      '    });',
+      '    return { id: frame.id, energyEv: energy, forces };',
+      '  });',
+      '  process.stdout.write(JSON.stringify({',
+      '    model: "aimnet2", version: "2.0.0", weightsSha256: "d".repeat(64),',
+      '    dtype: "float32", device: "cpu", cutoffAngstrom: 5,',
+      '    charge: req.charge, multiplicity: req.multiplicity, results,',
+      '  }));',
+      '});',
+    ].join('\n'), { mode: 0o755 });
+
+    const validated = validateProject(project([prepareNode({
+      kind: 'relax', converter: 'aimnet2', forceField: 'AIMNet2',
+    })]));
+    expect(validated.ok).toBe(true);
+    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'prepare');
+    const started = await queueManager.start({
+      projectName: validated.project.name,
+      tasks: [task],
+      edges: [],
+      options: { dryRun: false, executable: null, crestExecutable: '', scorerExecutable: fake, scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+    const preparedTask = done.tasks.find((entry) => entry.nodeId === 'prep');
+    expect(preparedTask.error).toBeNull();
+    expect(preparedTask.status).toBe('completed');
+    const record = JSON.parse(await fsp.readFile(path.join(preparedTask.runDir, 'prepare.json'), 'utf8'));
+    expect(record.converter).toBe('aimnet2');
+    expect(record.forceField).toBe('AIMNet2');
+    expect(record.converged).toBe(true);
+    expect(record.energyKcal).toBeLessThan(1);
+    expect(record.scorer.comparableWithQuantumChemistry).toBe(false);
+  });
+});

@@ -30,13 +30,14 @@ If you are new, read these in order:
    which.
 7. [Conformers and protomers](conformers.md) — search or import an ensemble, then choose the shape a
    later block runs.
-8. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.
-9. [Results](results.md) — the results panel, gates, validity checks, methods text, run bundles.
-10. [Output blocks and artifacts](outputs.md) — write CSV, JSON, HTML or a zip bundle, with a hashed
+8. [ML scorers](scorers.md) — the optional ranking layer, its domain guard and units.
+9. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.
+10. [Results](results.md) — the results panel, gates, validity checks, methods text, run bundles.
+11. [Output blocks and artifacts](outputs.md) — write CSV, JSON, HTML or a zip bundle, with a hashed
     manifest.
-11. [Reports](reports.md) — the record-grouped per-flow report and the combined report across flows.
-12. [Projects and runs on disk](project-files.md) — the `.ncs` file and the run folder.
-13. [Appearance](appearance.md) — the three themes, what a theme may change, and the font bundle.
+12. [Reports](reports.md) — the record-grouped per-flow report and the combined report across flows.
+13. [Projects and runs on disk](project-files.md) — the `.ncs` file and the run folder.
+14. [Appearance](appearance.md) — the three themes, what a theme may change, and the font bundle.
 
 Reference pages:
 

@@ -10,7 +10,7 @@ import {
   normalizeScorerResult,
   scorerDomainFindings,
 } from '../src/shared/scorer.js';
-import { validateProject } from '../src/shared/projectSchema.js';
+import { validateProject, defaultSettings } from '../src/shared/projectSchema.js';
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
@@ -203,5 +203,65 @@ describe('scorer runtime', () => {
     expect(generated.ensemble.members[0].scorer.energyEv).toBe(-2);
     expect(generated.ensemble.members[0].scorer.energyKcal).toBeLessThan(0);
     expect(generated.ensemble.selected.id).toBe('c1');
+  });
+});
+
+describe('scorer as a calculate provider', () => {
+  it('keeps the block calculate, bypasses the engine and writes a scorer run record', async () => {
+    const { base, queueManager } = await stack();
+    const fake = path.join(base, 'scorer-point');
+    await fsp.writeFile(fake, [
+      '#!/usr/bin/env node',
+      'let text = "";',
+      'process.stdin.on("data", (c) => { text += c; });',
+      'process.stdin.on("end", () => {',
+      '  const req = JSON.parse(text);',
+      '  process.stdout.write(JSON.stringify({',
+      '    model: "aimnet2", version: "2.0.0", weightsSha256: "c".repeat(64),',
+      '    dtype: "float32", device: "cpu", cutoffAngstrom: 5,',
+      '    charge: req.charge, multiplicity: req.multiplicity,',
+      '    results: req.frames.map((frame) => ({ id: frame.id, energyEv: -10 })),',
+      '  }));',
+      '});',
+    ].join('\n'), { mode: 0o755 });
+
+    const settings = defaultSettings({ jobType: 'SP' });
+    settings.provider = 'ml:aimnet2';
+    const raw = {
+      schemaVersion: 3,
+      name: 'Scorer provider',
+      molecule: { charge: 0, multiplicity: 1, fragments: [], coords: water, geometry: { source: 'imported', file: 'w.xyz', format: 'xyz' } },
+      defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
+      nodes: [
+        { id: 'sp', type: 'calculate', title: 'ML single point', state: 'ready', x: 0, y: 0, settings, output: null, checkpointFrom: null },
+      ],
+      edges: [],
+    };
+    const validated = validateProject(raw);
+    expect(validated.ok).toBe(true);
+    const plan = buildWorkflowPlan(validated.project);
+    const task = plan.tasks.find((entry) => entry.nodeId === 'sp');
+    expect(task.scorer.spec).toBe('ml:aimnet2');
+    expect(task.scorer.atoms).toHaveLength(3);
+
+    const started = await queueManager.start({
+      projectName: validated.project.name,
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { dryRun: false, executable: null, crestExecutable: '', scorerExecutable: fake, scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+    const scored = done.tasks.find((entry) => entry.nodeId === 'sp');
+    expect(scored.error).toBeNull();
+    expect(scored.status).toBe('completed');
+    expect(scored.scorerResult.model).toBe('aimnet2');
+    const record = JSON.parse(await fsp.readFile(path.join(scored.runDir, 'run.json'), 'utf8'));
+    expect(record.engine).toBe('aimnet2');
+    expect(record.provenance.kind).toBe('scorer');
+    expect(record.parsed.finalEnergy.hartree).toBeCloseTo(-10 * EV_TO_HARTREE, 12);
+    expect(record.scorer.comparableWithQuantumChemistry).toBe(false);
   });
 });
