@@ -84,6 +84,12 @@ export function flowTabModels(project) {
         records += seriesMemberCount(node.input.series);
         continue;
       }
+      // Issue 188: a complex block queues one run — the combined system — however
+      // many members it names.
+      if (node.input?.complex) {
+        records += 1;
+        continue;
+      }
       const id = node.input?.datasetId;
       if (!id || seen.has(id)) continue;
       seen.add(id);
