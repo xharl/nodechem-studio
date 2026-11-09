@@ -73,10 +73,22 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'ladderCbsHartree', label: 'ladder_cbs_hartree' },
   { key: 'ladderCbsSpreadKcal', label: 'ladder_cbs_spread_kcal' },
   { key: 'ladderCbsForm', label: 'ladder_cbs_form' },
+  // Issue 175 follow-up: a compute block writes its own record with
+  // `kind: 'derived'`, an expression, the numbers it read and either a value or
+  // the reason it has no value. Without these columns a protocol's result lives
+  // only in the report and never reaches the table a spreadsheet reads. They are
+  // appended, so an existing template keeps its column positions, and every one
+  // of them is empty on a run that computed nothing — a derived value is never
+  // an implicit 0.
+  { key: 'derivedValue', label: 'derived_value' },
+  { key: 'derivedUnit', label: 'derived_unit' },
+  { key: 'derivedExpression', label: 'derived_expression' },
+  { key: 'derivedInputs', label: 'derived_inputs' },
+  { key: 'derivedNotComputed', label: 'derived_not_computed' },
 ]);
 
-/** Version 3 added the method-sensitivity columns; existing keys are unchanged. */
-export const DATASET_SCHEMA_VERSION = 3;
+/** Version 4 added the derived-quantity columns; existing keys are unchanged. */
+export const DATASET_SCHEMA_VERSION = 4;
 
 function text(value) {
   return value === null || value === undefined ? null : String(value);
@@ -121,6 +133,24 @@ export function runRow(record) {
   const ladder = run.ladder && typeof run.ladder === 'object' ? run.ladder : {};
   const ladderCbs = ladder.cbs && typeof ladder.cbs === 'object' ? ladder.cbs : {};
   const ensemble = run.ensemble && typeof run.ensemble === 'object' ? run.ensemble : {};
+  // Issue 175: a derived record carries `compute { expression, inputs, value,
+  // unit, notComputed }`. Only a computed value reaches a cell; a refusal keeps
+  // the value empty and puts the reason in its own column, so a reader can tell
+  // "not computed" from "zero" without opening the record.
+  const compute = run.compute && typeof run.compute === 'object' ? run.compute : null;
+  const refused = compute
+    ? (typeof compute.notComputed === 'string' && compute.notComputed.trim() !== ''
+      ? compute.notComputed.trim()
+      : (compute.notComputed ? String(compute.notComputed) : null))
+    : null;
+  const derivedInputs = compute && Array.isArray(compute.inputs)
+    ? compute.inputs.map((input) => {
+      const record = text(input?.recordId) ?? '?';
+      const field = text(input?.field) ?? '?';
+      const value = num(input?.value);
+      return value === null ? `${record}:${field}=not reported` : `${record}:${field}=${value}`;
+    }).join('; ')
+    : null;
   const cbsReported = ladderCbs.available === true;
   // Derived blocks are present but may be `{ok: false, reason}`. Only a
   // computed value reaches a cell; "not computable" is an empty cell, and the
@@ -181,6 +211,11 @@ export function runRow(record) {
     ladderCbsHartree: cbsReported ? num(ladderCbs.energyHartree) : null,
     ladderCbsSpreadKcal: cbsReported ? num(ladderCbs.spread?.kcal ?? ladderCbs.spreadKcal) : null,
     ladderCbsForm: cbsReported ? text(ladderCbs.form) : null,
+    derivedValue: compute && !refused ? num(compute.value) : null,
+    derivedUnit: compute && !refused ? text(compute.unit) : null,
+    derivedExpression: text(compute?.expression),
+    derivedInputs,
+    derivedNotComputed: refused,
   };
 }
 
