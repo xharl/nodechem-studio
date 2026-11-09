@@ -19,6 +19,7 @@ import { LIMITS } from './projectSchema.js';
 import {
   activeFlow,
   datasetById,
+  datasetsOf,
   edgesOfFlow,
   recordsForInput,
   flowById,
@@ -777,7 +778,9 @@ export function buildWorkflowPlan(project, { flowId = null } = {}) {
       // Issue 169: a series block's records are the N generated members, so the
       // inspector and the queue rows list the oligomers, not the unit alone.
       const bound = datasetById(project, node.input?.datasetId);
-      const members = recordsForInput(node, bound);
+      // Issue 188: a complex's members may name another dataset of the project,
+      // so the expansion is given the project's dataset list.
+      const members = recordsForInput(node, bound, { datasets: datasetsOf(project) });
       tasks.push({
         nodeId: node.id,
         type: 'input',
@@ -793,11 +796,15 @@ export function buildWorkflowPlan(project, { flowId = null } = {}) {
           // report can say what was changed, not just which records came out.
           ...(Array.isArray(node.input?.edits) && node.input.edits.length
             ? { edits: node.input.edits.map((edit) => ({ ...edit })) } : {}),
+          // Issue 188: the complex definition travels with the block, so the
+          // queue and the report can say which records, at which separation.
+          ...(node.input?.complex ? { complex: node.input.complex } : {}),
           records: members.map((record) => ({
             id: record.id,
             label: record.label || record.id,
             ...(record.series ? { n: record.series.n, parentId: record.series.parentId } : {}),
             ...(record.derivative ? { parentId: record.derivative.parentId, summary: record.derivative.summary } : {}),
+            ...(record.complex ? { complex: record.complex } : {}),
           })),
         },
       });
@@ -1159,7 +1166,12 @@ function calculationTask(project, node, {
     title: title || (Number.isInteger(record?.series?.n)
       ? `${node.title} — n=${record.series.n}`
       // Issue 189: one block, several analogues — the row says which one.
-      : (record?.derivative?.summary ? `${node.title} — ${record.derivative.summary}` : node.title)),
+      : (record?.derivative?.summary
+        ? `${node.title} — ${record.derivative.summary}`
+        // Issue 188: a complex names its members, so the row says what it is.
+        : (record?.complex?.members?.length
+          ? `${node.title} — ${record.complex.members.map((member) => member.id).join(' + ')}`
+          : node.title))),
     kind: node.kind || 'Calc',
     executable: true,
     engine: built.engine,
@@ -1207,10 +1219,14 @@ function calculationTask(project, node, {
         // Issue 189: the parent record, the edit and the atom numbering, so a
         // result reads as "benzene with H3 replaced by F".
         ...(record.derivative ? { derivative: record.derivative } : {}),
+        // Issue 188: which records were combined, at which stated placement, so
+        // a SAPT or interaction-energy number is traceable to its geometry.
+        ...(record.complex ? { complex: record.complex } : {}),
       },
     } : {}),
     ...(record?.series ? { series: record.series } : {}),
     ...(record?.derivative ? { derivative: record.derivative } : {}),
+    ...(record?.complex ? { complex: record.complex } : {}),
   };
 }
 

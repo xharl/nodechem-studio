@@ -304,6 +304,97 @@ perceiving one from distances, so a dataset record needs a `bonds` array (see
 does not carry the bond block today, so a record imported from an SDF is refused by name instead of
 being given a guessed valence.
 
+## Complexes
+
+A **complex block** combines two or more records into **one** system at a stated relative geometry.
+Select an input block, bind a dataset, and press **Combine records into a complex…**. The block
+stays an `input` block with `kind: "complex"`, and it yields **one record**, so every downstream
+block runs once on the whole system:
+
+```
+complex block ──▶ SAPT0 ──▶ output
+ water-a + water-b   one run   one row
+```
+
+The members of a complex are records, not new molecules: each one is placed as a **rigid body**, so
+every bond length, angle and dihedral inside a member is the member's own. What the block decides is
+where the members sit relative to each other.
+
+```json
+{ "type": "input", "kind": "complex",
+  "input": { "datasetId": "monomers",
+    "complex": {
+      "members": [
+        { "recordId": "water-a" },
+        { "datasetId": "guests", "recordId": "water-b" } ],
+      "placement": { "mode": "axis", "axis": [1,0,0],
+                     "distanceAngstrom": 3.0, "angleDegrees": 0 } } } }
+```
+
+| Field | Meaning |
+| --- | --- |
+| Member | which record a member places; `datasetId` defaults to the block's dataset |
+| Member charge / mult | that member's contribution, when it differs from the record's |
+| Placement | `as-drawn`, `axis` or `principal` |
+| Axis | the direction the centres of mass are laid along (`axis` mode) |
+| Separation | the centre-of-mass distance between members, in Å (`axis`, `principal`) |
+| Angle | the turn about the axis, in degrees (`axis` mode) |
+| Homodimer | the pair is the same record twice — otherwise a duplicate is refused |
+
+The record id names every parent — `complex-water-a-water-b` — so a queue row or a run folder is
+traceable without opening the project. The member list, the placement and its parameters are stored
+on the generated record (`complex.members`, `complex.placement`) and on every task that consumes it.
+
+### Fragment labels
+
+The atoms of member *i* carry `fragment = i + 1`, in the order the members are listed. That is the
+same numbering `atom.fragment` uses in the project format and the same numbering Psithon's `--`
+separator carries, so a downstream **SAPT0** block writes two fragments and runs with no manual
+labelling in the molecule editor. The inspector previews the fragment ranges before the block is
+queued, and the preview is the expansion the plan makes, not a second count.
+
+### What the geometry is, and is not
+
+Every placement is **a starting geometry, not a minimum**. The record says so
+(`complex.geometryStatus: "needs optimisation"`), the card says so, and nothing downstream presents
+it as a stationary point. Rigid-body placement never relaxes a contact; optimise the complex before
+reading an interaction energy from it.
+
+| Mode | Rule |
+| --- | --- |
+| `as-drawn` | every coordinate is copied verbatim; the members keep the relative geometry they already had |
+| `axis` | the members' centres of mass lie on the stated axis, `distanceAngstrom` apart; every member after the first is turned by `angleDegrees` about that axis, through its own centre of mass |
+| `principal` | the members' centres of mass lie along **member 1's smallest principal axis of inertia**, `distanceAngstrom` apart; member 2 keeps its drawn orientation |
+
+`principal` builds the inertia tensor properly — masses from the periodic table, tensor about the
+centre of mass, diagonalised by a Jacobi rotation — and takes the eigenvector of the smallest
+moment. A molecule whose principal moments are equal (a spherical top such as methane) has **no
+unique principal axis**, and that is refused by name rather than guessed at; use `axis` and state the
+direction.
+
+Charge adds across the members. Multiplicity follows the highest-spin coupling (the sum of the
+members' unpaired electrons plus one); a low-spin coupled complex has to be assembled outside this
+block.
+
+### Refused by name
+
+Nothing is built unless the whole complex can be placed, and every refusal names what it refuses:
+
+| Refused | Message names |
+| --- | --- |
+| a member with no 3D coordinates | the record — and that a demo geometry will not be substituted |
+| an unknown or disabled record, or a dataset not in the project | the id and the records that do exist |
+| the same record twice without `homodimer` | the record and the flag |
+| a separation below the sum of the two members' largest covalent radii | both elements, both radii and the separation |
+| an atom pair closer than 0.7 Å between two members | both members, both atoms and the distance |
+| more than 4 members, or more than 1 000 atoms in total | the count and the cap |
+| an unknown placement mode, a zero axis, or a degenerate principal axis | the mode or the member |
+
+Bonds are copied from each member's own record and renumbered; a member whose record states no bonds
+contributes none, and the block does not perceive a topology it was not given. Members may come from
+different datasets of the same project, which is what makes a host–guest pair a single block instead
+of two files assembled by hand.
+
 ## Next
 
 - [Workflows](workflow.md) — the queue, barrier edges, checkpoint hand-off and cluster export.

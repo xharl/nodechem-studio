@@ -18,6 +18,7 @@
 
 import { expandSeries, seriesUnitRecord } from './series.js';
 import { DerivativeEditError, applyEdits } from './derivative.js';
+import { expandComplex } from './complex.js';
 
 export const DEFAULT_FLOW_ID = 'main';
 
@@ -379,10 +380,23 @@ export function expandDerivative(records, edits, recordId = '') {
   return generated;
 }
 
-/** The records an input block iterates: enabled, then filtered, then expanded. */
-export function recordsForInput(input, dataset) {
+/**
+ * The records an input block iterates: enabled, then filtered, then expanded.
+ *
+ * `options.datasets` is the project's dataset list, needed only by a complex
+ * block whose members may name a dataset other than the bound one. Callers that
+ * pass nothing still work when every member lives in the bound dataset.
+ */
+export function recordsForInput(input, dataset, { datasets = null } = {}) {
   const filter = input?.input?.recordFilter;
   const records = enabledRecords(dataset).filter((record) => recordMatchesFilter(record, filter));
+  // Issue 188: a complex block is a structure block whose members are separate
+  // records and whose output is one system. The expansion happens here, at plan
+  // time, so every consumer of a record set keeps working unchanged.
+  const complex = input?.input?.complex;
+  if (complex) {
+    return expandComplex(complex, { dataset, datasets }).records;
+  }
   const series = input?.input?.series;
   if (!series) {
     const edits = input?.input?.edits;
@@ -450,7 +464,7 @@ export function scopeFor(project, nodes, edges, node) {
   if (!dataset) {
     throw new Error(`"${input.title || input.id}" references dataset "${input.input?.datasetId || ''}", which is not in this project.`);
   }
-  return { input, dataset, records: recordsForInput(input, dataset) };
+  return { input, dataset, records: recordsForInput(input, dataset, { datasets: datasetsOf(project) }) };
 }
 
 /**

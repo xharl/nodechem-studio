@@ -40,6 +40,12 @@ import {
 } from '../shared/flows.js';
 import { GEOMETRY_NOTE, GEOMETRY_STATUS } from '../shared/derivative.js';
 import {
+  COMPLEX_GEOMETRY_NOTE,
+  COMPLEX_GEOMETRY_STATUS,
+  COMPLEX_MAX_MEMBERS,
+  COMPLEX_PLACEMENT_MODES,
+} from '../shared/complex.js';
+import {
   SERIES_LINKAGE_ORDER,
   SERIES_MAX_MEMBERS,
   SERIES_TERMINAL_RULE,
@@ -466,6 +472,21 @@ function derivativePreview(node, dataset) {
   }
 }
 
+/**
+ * Issue 188: what a complex block would build right now, or the refusal.
+ * The inspector shows the system the plan will queue, computed by the same
+ * function the plan uses — never a second, optimistic placement.
+ */
+function complexPreview(node, dataset) {
+  if (!node?.input?.complex) return { records: [], error: '' };
+  if (!dataset) return { records: [], error: 'No dataset is bound, so there are no members to combine.' };
+  try {
+    return { records: recordsForInput(node, dataset, { datasets: state.project.datasets }), error: '' };
+  } catch (error) {
+    return { records: [], error: error.message };
+  }
+}
+
 function inputRecordCounts(node) {
   const dataset = datasetForInputNode(node);
   if (!dataset) return { total: 0, enabled: 0 };
@@ -500,6 +521,13 @@ function nodeDetail(node) {
   if (node.type === 'input') {
     const dataset = datasetForInputNode(node);
     if (!dataset) return 'no dataset bound · import a file';
+    if (node.input?.complex) {
+      const definition = node.input.complex;
+      const preview = complexPreview(node, dataset);
+      if (preview.error) return 'complex refused · open the block';
+      const atoms = preview.records[0]?.coords.length ?? 0;
+      return `${definition.members.length} members · ${definition.placement?.mode || 'as-drawn'} · ${atoms} atoms · needs optimisation`;
+    }
     if (node.input?.series) {
       const series = node.input.series;
       const preview = seriesPreview(node, dataset);
@@ -560,6 +588,15 @@ function nodeFoot(node) {
   if (node.type === 'input') {
     const dataset = datasetForInputNode(node);
     const counts = inputRecordCounts(node);
+    if (node.input?.complex) {
+      const definition = node.input.complex;
+      const record = complexPreview(node, dataset).records[0] || null;
+      const members = definition.members.length;
+      return {
+        left: `${members} member${members === 1 ? '' : 's'} · ${record ? record.coords.length : 0} atoms`,
+        right: `${definition.placement?.mode || 'as-drawn'} · needs optimisation`,
+      };
+    }
     if (node.input?.series) {
       const linkage = node.input.series.linkage || {};
       const members = seriesPreview(node, dataset).records.length;
@@ -597,7 +634,7 @@ function kindCode(node) {
   if (node.type === 'conformers') return 'CF';
   if (node.type === 'loop') return '↻';
   if (node.type === 'merge') return '⋈';
-  if (node.type === 'input') return node.input?.edits?.length ? 'Δ' : node.input?.series ? 'n×' : 'IN';
+  if (node.type === 'input') return node.input?.complex ? '⊕' : node.input?.edits?.length ? 'Δ' : node.input?.series ? 'n×' : 'IN';
   if (node.type === 'output') return 'OUT';
   if (node.type === 'note') return '✎';
   return node.kind;
@@ -608,7 +645,7 @@ function kindLabel(node) {
   if (node.type === 'conformers') return 'Structure';
   if (node.type === 'loop') return 'Control';
   if (node.type === 'merge') return 'Join';
-  if (node.type === 'input') return node.input?.edits?.length ? 'Derivative' : node.input?.series ? 'Series' : 'Data';
+  if (node.type === 'input') return node.input?.complex ? 'Complex' : node.input?.edits?.length ? 'Derivative' : node.input?.series ? 'Series' : 'Data';
   if (node.type === 'output') return 'Data';
   if (node.type === 'note') return 'Note';
   return 'Calculation';
@@ -2698,6 +2735,252 @@ function seriesCard(node, dataset) {
     </div>`;
 }
 
+const COMPLEX_MODE_LABELS = Object.freeze({
+  'as-drawn': 'As drawn',
+  axis: 'Along an axis',
+  principal: "Along member 1's principal axis",
+});
+
+/**
+ * Issue 188: switch a structure block between a plain dataset and a complex.
+ *
+ * The starting point is visible, never silent: the first two enabled records as
+ * members, placed 3.0 Å apart along x. The preview judges that placement
+ * immediately, and the card states that the result is a starting geometry.
+ */
+function enableComplex() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input') return;
+  if (!node.input) node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
+  const dataset = datasetForInputNode(node);
+  const enabled = dataset ? recordsOf(dataset).filter((record) => record.enabled !== false) : [];
+  if (enabled.length < 2) {
+    toast('Bind a dataset with at least two enabled records before building a complex.');
+    return;
+  }
+  // A block is one kind of structure block: a complex drops a series definition
+  // and an edit list, which the schema refuses beside it.
+  delete node.input.series;
+  delete node.input.edits;
+  delete node.input.recordId;
+  node.input.complex = {
+    members: [enabled[0], enabled[1]].map((record) => ({ datasetId: dataset.id, recordId: record.id })),
+    placement: { mode: 'axis', axis: [1, 0, 0], distanceAngstrom: 3, angleDegrees: 0 },
+  };
+  node.kind = 'complex';
+  renderGraph();
+  renderInspector();
+  toast(`Complex from "${enabled[0].label || enabled[0].id}" and "${enabled[1].label || enabled[1].id}" · choose the placement.`);
+}
+
+/** Back to a plain dataset block: the complex definition is dropped, nothing else. */
+function disableComplex() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input') return;
+  if (node.input) delete node.input.complex;
+  node.kind = 'Input';
+  renderGraph();
+  renderInspector();
+}
+
+/**
+ * One complex member: the value is `datasetId::recordId`, because a member may
+ * name a record of another dataset and the id alone would be ambiguous.
+ */
+function updateComplexMember(node, index, rawValue) {
+  const members = node.input?.complex?.members;
+  if (!Array.isArray(members) || !members[index]) return;
+  const [datasetId, recordId] = String(rawValue ?? '').split('::');
+  if (!datasetId || !recordId) return;
+  members[index] = { datasetId, recordId };
+}
+
+/** One membership row; a member of another dataset is shown by its dataset title. */
+function addComplexMember() {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  const definition = node?.input?.complex;
+  if (!node || !definition || !Array.isArray(definition.members)) return;
+  if (definition.members.length >= COMPLEX_MAX_MEMBERS) {
+    toast(`A complex holds at most ${COMPLEX_MAX_MEMBERS} members.`);
+    return;
+  }
+  const dataset = datasetForInputNode(node);
+  const first = dataset ? recordsOf(dataset).find((record) => record.enabled !== false) : null;
+  if (!first) {
+    toast('No enabled record is available to add as a member.');
+    return;
+  }
+  definition.members.push({ datasetId: dataset.id, recordId: first.id });
+  renderGraph();
+  renderInspector();
+}
+
+/** A complex needs at least two members; the last two cannot be removed. */
+function removeComplexMember(index) {
+  if (state.selected.type !== 'node') return;
+  const node = nodeById(state.selected.id);
+  const members = node?.input?.complex?.members;
+  if (!Array.isArray(members) || index < 0 || index >= members.length) return;
+  if (members.length <= 2) {
+    toast('A complex needs at least two members. Turn the block back into a dataset instead.');
+    return;
+  }
+  members.splice(index, 1);
+  renderGraph();
+  renderInspector();
+}
+
+/**
+ * One placement field, with the type the schema expects. Switching the mode
+ * fills only the parameters that mode reads, and `as-drawn` drops the rest so
+ * the saved definition says exactly what the placement is.
+ */
+function updateComplexField(node, field, rawValue, checked = undefined) {
+  const definition = node?.input?.complex;
+  if (!definition) return;
+  const placement = definition.placement || (definition.placement = { mode: 'as-drawn' });
+  const value = String(rawValue ?? '').trim();
+  if (field === 'mode') {
+    placement.mode = value;
+    if (value === 'axis') {
+      if (!Array.isArray(placement.axis) || placement.axis.length !== 3) placement.axis = [1, 0, 0];
+      if (!Number.isFinite(Number(placement.angleDegrees))) placement.angleDegrees = 0;
+    }
+    if (value === 'as-drawn') {
+      delete placement.distanceAngstrom;
+      delete placement.angleDegrees;
+    } else if (!(Number(placement.distanceAngstrom) > 0)) {
+      placement.distanceAngstrom = 3;
+    }
+    return;
+  }
+  if (field === 'homodimer') {
+    if (checked) definition.homodimer = true;
+    else delete definition.homodimer;
+    return;
+  }
+  if (field === 'axis0' || field === 'axis1' || field === 'axis2') {
+    const axis = Array.isArray(placement.axis) && placement.axis.length === 3 ? placement.axis.slice() : [1, 0, 0];
+    axis[Number(field.slice(-1))] = value === '' ? 0 : Number(value);
+    placement.axis = axis;
+    return;
+  }
+  if (field === 'distanceAngstrom') {
+    placement.distanceAngstrom = value === '' ? 0 : Number(value);
+    return;
+  }
+  if (field === 'angleDegrees') placement.angleDegrees = value === '' ? 0 : Number(value);
+}
+
+/**
+ * Issue 188: the complex half of the input inspector.
+ *
+ * The member pickers are the block's own definition, the preview is the
+ * expansion itself — the same call the plan makes — and a refusal is shown
+ * verbatim. The geometry note is not decoration: it is the honest status of
+ * what the block produces.
+ */
+function complexCard(node, dataset) {
+  const definition = node.input?.complex;
+  if (!definition) {
+    return `<div class="field full">
+      <button type="button" class="btn small" data-action="complex-enable"${dataset ? '' : ' disabled'}>Combine records into a complex…</button>
+      <p class="field-hint">A complex block places two or more records as rigid bodies and labels each member's atoms with its fragment number, so a SAPT0 block consumes the result with no manual labelling. It yields one record; every downstream block runs once on it.</p>
+    </div>`;
+  }
+  const placement = definition.placement || {};
+  const preview = complexPreview(node, dataset);
+  const members = Array.isArray(definition.members) ? definition.members : [];
+  const datasets = Array.isArray(state.project.datasets) ? state.project.datasets : [];
+  const memberFields = members.map((member, index) => {
+    const current = `${String(member.datasetId || dataset?.id || '')}::${String(member.recordId || '')}`;
+    const groups = datasets.map((entry) => {
+      const records = recordsOf(entry).filter((record) => record.enabled !== false);
+      if (!records.length) return '';
+      return `<optgroup label="${esc(entry.title || entry.id)}">${records.map((record) => {
+        const value = `${entry.id}::${record.id}`;
+        return `<option value="${esc(value)}"${value === current ? ' selected' : ''}>${esc(record.label || record.id)} · ${(record.coords || []).length} atoms</option>`;
+      }).join('')}</optgroup>`;
+    }).join('');
+    return `<div class="field full"><label>Member ${index + 1} · fragment ${index + 1}</label>
+      <select class="select" data-complex-member="${index}" aria-label="Member ${index + 1} record">${groups || '<option value="">— no enabled record —</option>'}</select>
+      <button type="button" class="btn small danger" data-action="complex-remove-member" data-complex-index="${index}"${members.length <= 2 ? ' disabled' : ''}>Remove member ${index + 1}</button>
+    </div>`;
+  }).join('');
+  const record = preview.records[0] || null;
+  let offset = 0;
+  const fragmentRows = record
+    ? record.complex.members.map((entry) => {
+      const first = offset + 1;
+      const last = offset + entry.atomCount;
+      offset = last;
+      return `<tr>
+        <td class="num">${entry.fragment}</td>
+        <td><span class="record-label">${esc(entry.label)}</span><span class="record-id">${esc(entry.id)}</span></td>
+        <td class="mono">${first === last ? `${first}` : `${first}–${last}`}</td>
+        <td class="num">${entry.atomCount}</td>
+      </tr>`;
+    }).join('')
+    : '';
+  const mode = COMPLEX_PLACEMENT_MODES.includes(placement.mode) ? placement.mode : 'as-drawn';
+  const axis = Array.isArray(placement.axis) && placement.axis.length === 3 ? placement.axis : [1, 0, 0];
+  const distance = Number(placement.distanceAngstrom);
+  return `
+    ${memberFields}
+    <div class="field full">
+      <button type="button" class="btn small" data-action="complex-add-member"${members.length >= COMPLEX_MAX_MEMBERS ? ' disabled' : ''}>Add a member</button>
+      <p class="field-hint">At most ${COMPLEX_MAX_MEMBERS} members. A member may come from another dataset of this project. Atoms are labelled fragment 1, 2, … in the order the members are listed.</p>
+    </div>
+    <div class="field full"><label>Placement</label>
+      <select class="select" data-complex-field="mode" aria-label="Placement mode">
+        ${COMPLEX_PLACEMENT_MODES.map((value) => `<option value="${value}"${mode === value ? ' selected' : ''}>${esc(COMPLEX_MODE_LABELS[value] || value)}</option>`).join('')}
+      </select>
+    </div>
+    ${mode === 'axis' ? `
+    <div class="field"><label>x</label>
+      <input class="input" type="number" step="0.01" value="${esc(axis[0])}" data-complex-field="axis0" aria-label="Axis x">
+    </div>
+    <div class="field"><label>y</label>
+      <input class="input" type="number" step="0.01" value="${esc(axis[1])}" data-complex-field="axis1" aria-label="Axis y">
+    </div>
+    <div class="field"><label>z</label>
+      <input class="input" type="number" step="0.01" value="${esc(axis[2])}" data-complex-field="axis2" aria-label="Axis z">
+    </div>` : ''}
+    ${mode === 'as-drawn' ? '' : `
+    <div class="field"><label>Separation (Å)</label>
+      <input class="input" type="number" min="0.1" step="0.01" value="${esc(Number.isFinite(distance) ? distance : 3)}" data-complex-field="distanceAngstrom" aria-label="Centre of mass separation in Angstrom">
+    </div>`}
+    ${mode === 'axis' ? `
+    <div class="field"><label>Angle (°)</label>
+      <input class="input" type="number" min="-360" max="360" step="1" value="${esc(Number.isFinite(Number(placement.angleDegrees)) ? placement.angleDegrees : 0)}" data-complex-field="angleDegrees" aria-label="Rotation about the axis in degrees">
+    </div>` : ''}
+    ${switchRow('Homodimer', 'the same record twice', 'homodimer', definition.homodimer === true, { attr: 'data-complex-field="homodimer"' })}
+    <div class="field full"><label>System this block will queue</label>
+      ${preview.error
+    ? `<div class="callout red"><strong>Refused.</strong> ${esc(preview.error)}</div>`
+    : (record
+      ? `<div class="kv"><span>Record</span><code>${esc(record.id)}</code></div>
+         <div class="kv"><span>Atoms</span><code>${record.coords.length} · charge ${record.charge} · multiplicity ${record.multiplicity}</code></div>
+         <div class="dataset-table-wrap"><table class="dataset-table">
+           <thead><tr><th>Fragment</th><th>Member</th><th>Atoms</th><th>Count</th></tr></thead>
+           <tbody>${fragmentRows}</tbody>
+         </table></div>`
+      : '<p class="field-hint">No complex can be built from these members yet.</p>')}
+    </div>
+    <div class="field full">
+      <div class="callout"><strong>${esc(COMPLEX_GEOMETRY_STATUS)}.</strong> ${esc(COMPLEX_GEOMETRY_NOTE)}</div>
+      <p class="field-hint">${esc(COMPLEX_MODE_LABELS[mode] || mode)}${mode === 'axis'
+    ? `: the members' centres of mass are ${Number.isFinite(distance) ? distance.toFixed(2) : '?'} Å apart along the axis, and every member after the first is turned by the stated angle about it.`
+    : mode === 'principal'
+      ? `: the members' centres of mass lie ${Number.isFinite(distance) ? distance.toFixed(2) : '?'} Å apart along member 1's smallest principal axis of inertia; member 2 keeps its drawn orientation.`
+      : ': every member keeps the coordinates it was drawn or imported with.'}</p>
+      <button type="button" class="btn small" data-action="complex-disable">Use the dataset without a complex</button>
+    </div>`;
+}
+
 /**
  * Issue 189: switch a structure block between a plain dataset and a derivative
  * scan.
@@ -2953,18 +3236,21 @@ function inputInspector(node) {
 
   const seriesRefused = Boolean(node.input?.series && seriesPreview(node, dataset).error);
   const derivativeRefused = Boolean(node.input?.edits?.length && derivativePreview(node, dataset).error);
+  const complexRefused = Boolean(node.input?.complex && complexPreview(node, dataset).error);
 
   return `${inspectorHead(
     'Data · input',
     node.title,
-    node.input?.series
-      ? `${node.input.recordId || 'unit'} · n = ${node.input.series.from}…${node.input.series.to}${seriesRefused ? ' · refused' : ''}`
-      : node.input?.edits?.length
-        ? `${node.input.recordId || 'all records'} · ${node.input.edits.length} edit${node.input.edits.length === 1 ? '' : 's'}${derivativeRefused ? ' · refused' : ''}`
-        : (dataset ? `${esc(dataset.title)} · ${counts.total} record${counts.total === 1 ? '' : 's'}` : 'no dataset bound'),
+    node.input?.complex
+      ? `${node.input.complex.members.length} members · ${node.input.complex.placement?.mode || 'as-drawn'}${complexRefused ? ' · refused' : ''}`
+      : node.input?.series
+        ? `${node.input.recordId || 'unit'} · n = ${node.input.series.from}…${node.input.series.to}${seriesRefused ? ' · refused' : ''}`
+        : node.input?.edits?.length
+          ? `${node.input.recordId || 'all records'} · ${node.input.edits.length} edit${node.input.edits.length === 1 ? '' : 's'}${derivativeRefused ? ' · refused' : ''}`
+          : (dataset ? `${esc(dataset.title)} · ${counts.total} record${counts.total === 1 ? '' : 's'}` : 'no dataset bound'),
   )}
   <div class="inspector-scroll">
-    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${node.input?.series ? 'Runs once per series member' : node.input?.edits?.length ? 'Runs once per edit' : 'Runs once per enabled record'}</span></div>
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${node.input?.complex ? 'Runs once on the complex' : node.input?.series ? 'Runs once per series member' : node.input?.edits?.length ? 'Runs once per edit' : 'Runs once per enabled record'}</span></div>
     ${group('Dataset', dataset ? `${counts.total}` : 'none', true, [
       `<div class="field full"><label>Dataset</label><select class="select" data-input-field="datasetId">${options}</select></div>`,
       datasetCard,
@@ -2979,8 +3265,9 @@ function inputInspector(node) {
         <button type="button" class="btn small" data-action="import-dataset-paste">Import pasted text</button>
       </details>`,
     ].join(''))}
-    ${group('Homologous series', node.input?.series ? `n = ${node.input.series.from}…${node.input.series.to}` : 'off', Boolean(node.input?.series), seriesCard(node, dataset))}
-    ${node.input?.series ? '' : group('Derivative', node.input?.edits?.length ? `${node.input.edits.length} edit${node.input.edits.length === 1 ? '' : 's'}` : 'off', Boolean(node.input?.edits?.length), derivativeCard(node, dataset))}
+    ${node.input?.complex ? '' : group('Homologous series', node.input?.series ? `n = ${node.input.series.from}…${node.input.series.to}` : 'off', Boolean(node.input?.series), seriesCard(node, dataset))}
+    ${node.input?.series || node.input?.complex ? '' : group('Derivative', node.input?.edits?.length ? `${node.input.edits.length} edit${node.input.edits.length === 1 ? '' : 's'}` : 'off', Boolean(node.input?.edits?.length), derivativeCard(node, dataset))}
+    ${node.input?.series || node.input?.edits?.length ? '' : group('Complex', node.input?.complex ? `${node.input.complex.members.length} members` : 'off', Boolean(node.input?.complex), complexCard(node, dataset))}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
       <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
@@ -7103,6 +7390,11 @@ function handleAction(action, element) {
     case 'series-disable': disableSeries(); break;
     case 'derivative-enable': enableDerivative(); break;
     case 'derivative-disable': disableDerivative(); break;
+    // Issue 188: the complex half of a structure block.
+    case 'complex-enable': enableComplex(); break;
+    case 'complex-disable': disableComplex(); break;
+    case 'complex-add-member': addComplexMember(); break;
+    case 'complex-remove-member': removeComplexMember(Number(element?.dataset?.complexIndex)); break;
     case 'derivative-add-edit': addDerivativeEdit(); break;
     case 'derivative-remove-edit': removeDerivativeEdit(Number(element?.dataset?.derivativeIndex)); break;
     case 'validate': validateGraph(); break;
@@ -7356,6 +7648,25 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !node.input?.series) return;
     updateSeriesField(node, target.dataset.seriesField, target.value);
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.complexMember !== undefined) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'input' || !node.input?.complex) return;
+    updateComplexMember(node, Number(target.dataset.complexMember), target.value);
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.complexField) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'input' || !node.input?.complex) return;
+    updateComplexField(node, target.dataset.complexField,
+      target.type === 'checkbox' ? null : target.value, target.checked);
     renderGraph();
     renderInspector();
     return;

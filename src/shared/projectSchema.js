@@ -36,6 +36,7 @@ import {
   recordsForInput,
 } from './flows.js';
 import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, clearCompositeConflicts, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
+import { COMPLEX_MAX_MEMBERS, COMPLEX_PLACEMENT_MODES } from './complex.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import {
@@ -1450,6 +1451,126 @@ function normalizeDerivativeEdits(c, raw, path, legacy, kind) {
   return edits;
 }
 
+/**
+ * Issue 188: one member of a complex block — which dataset and record it comes
+ * from, and the charge/multiplicity that member contributes.
+ *
+ * Shape only. Whether the record exists, carries coordinates and can be placed
+ * is checked against the records themselves by `expandComplex()`, whose message
+ * is what the user sees.
+ */
+function normalizeComplexMember(c, raw, path, legacy) {
+  const source = requiredObject(c, raw, path, legacy, {});
+  warnUnknown(c, source, new Set(['datasetId', 'recordId', 'charge', 'multiplicity']), path);
+  const datasetId = readString(c, source.datasetId, `${path}.datasetId`, { legacy, fallback: '', max: 64 });
+  if (datasetId && !GRAPH_ID_RE.test(datasetId)) {
+    c.error(`${path}.datasetId`, 'must be a dataset id: letters, digits, dot, underscore or dash.');
+  }
+  const recordId = readString(c, source.recordId, `${path}.recordId`, { legacy, fallback: '', max: 64 });
+  if (!recordId) {
+    c.error(`${path}.recordId`, 'is required; a complex member names the record it places.');
+  } else if (!RECORD_ID_RE.test(recordId)) {
+    c.error(`${path}.recordId`, 'must be a record id: letters, digits, dot, underscore or dash.');
+  }
+  const optional = (value, label, min, max) => {
+    if (value === undefined || value === null || value === '') return null;
+    return readInteger(c, value, `${path}.${label}`, { legacy, fallback: null, min, max });
+  };
+  const charge = optional(source.charge, 'charge', -10, 10);
+  const multiplicity = optional(source.multiplicity, 'multiplicity', 1, 10);
+  return {
+    ...(datasetId ? { datasetId } : {}),
+    recordId,
+    ...(charge === null ? {} : { charge }),
+    ...(multiplicity === null ? {} : { multiplicity }),
+  };
+}
+
+/**
+ * Issue 188: how a complex places its members — the mode and its parameters.
+ *
+ * Shape only. A zero axis and a separation the chemistry forbids are refused by
+ * `expandComplex()`, which can name the members those numbers belong to.
+ */
+function normalizeComplexPlacement(c, raw, path, legacy) {
+  const source = requiredObject(c, raw, path, legacy, {});
+  warnUnknown(c, source, new Set(['mode', 'axis', 'distanceAngstrom', 'angleDegrees']), path);
+  const mode = readEnum(c, source.mode, COMPLEX_PLACEMENT_MODES, `${path}.mode`, { legacy, fallback: 'as-drawn' });
+  let axis = null;
+  if (Array.isArray(source.axis)) {
+    if (source.axis.length !== 3) {
+      c.error(`${path}.axis`, 'must be three numbers, such as [1, 0, 0].');
+    } else {
+      axis = source.axis.map((value, index) => readNumber(c, value, `${path}.axis[${index}]`, {
+        legacy, fallback: 0, min: -1000, max: 1000,
+      }));
+    }
+  } else if (source.axis !== undefined && source.axis !== null) {
+    c.error(`${path}.axis`, 'must be three numbers, such as [1, 0, 0].');
+  } else if (mode === 'axis') {
+    c.error(`${path}.axis`, 'is required when the placement mode is "axis".');
+  }
+  const needsDistance = mode === 'axis' || mode === 'principal';
+  let distanceAngstrom = null;
+  if (source.distanceAngstrom === undefined || source.distanceAngstrom === null || source.distanceAngstrom === '') {
+    if (needsDistance) c.error(`${path}.distanceAngstrom`, `is required when the placement mode is "${mode}".`);
+  } else {
+    distanceAngstrom = readNumber(c, source.distanceAngstrom, `${path}.distanceAngstrom`, {
+      legacy, fallback: null, min: 0.1, max: 100,
+    });
+  }
+  const angleDegrees = mode === 'axis'
+    ? readNumber(c, source.angleDegrees, `${path}.angleDegrees`, { legacy, fallback: 0, min: -360, max: 360 })
+    : null;
+  return {
+    mode,
+    ...(axis ? { axis } : {}),
+    ...(distanceAngstrom === null ? {} : { distanceAngstrom }),
+    ...(angleDegrees === null ? {} : { angleDegrees }),
+  };
+}
+
+/**
+ * Issue 188: the definition of a complex block. `null` means "this is a normal
+ * dataset block", which is what every project written before the field existed
+ * says — so the key stays absent from a project that never asked for it.
+ */
+function normalizeComplex(c, raw, path, legacy, kind) {
+  if (raw === undefined || raw === null) {
+    if (kind === 'complex') {
+      c.error(path, 'is required when the block kind is "complex".');
+    }
+    return null;
+  }
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be an object with members and placement.');
+    return null;
+  }
+  warnUnknown(c, raw, new Set(['members', 'placement', 'homodimer']), path);
+  const membersRaw = raw.members;
+  if (!Array.isArray(membersRaw)) {
+    c.error(`${path}.members`, 'must be an array of { recordId, … } members.');
+    return null;
+  }
+  if (membersRaw.length < 2) {
+    c.error(`${path}.members`, 'must contain at least two members; one record on its own is a plain dataset block.');
+  }
+  if (membersRaw.length > COMPLEX_MAX_MEMBERS) {
+    c.error(`${path}.members`, `must contain at most ${COMPLEX_MAX_MEMBERS} members.`);
+  }
+  const members = membersRaw.slice(0, COMPLEX_MAX_MEMBERS)
+    .map((entry, index) => normalizeComplexMember(c, entry, `${path}.members[${index}]`, legacy));
+  const placement = normalizeComplexPlacement(c, raw.placement, `${path}.placement`, legacy);
+  const homodimer = raw.homodimer === undefined || raw.homodimer === null
+    ? false
+    : readBoolean(c, raw.homodimer, `${path}.homodimer`, { legacy, fallback: false });
+  return {
+    members,
+    placement,
+    ...(homodimer ? { homodimer: true } : {}),
+  };
+}
+
 function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePath = 'nodes') {
   const path = `${basePath}[${index}]`;
   if (!isPlainObject(raw)) {
@@ -1565,7 +1686,7 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
 
   if (type === 'input') {
     const source = requiredObject(c, raw.input, `${path}.input`, legacy, {});
-    warnUnknown(c, source, new Set(['datasetId', 'recordFilter', 'recordId', 'series', 'edits']), `${path}.input`);
+    warnUnknown(c, source, new Set(['datasetId', 'recordFilter', 'recordId', 'series', 'edits', 'complex']), `${path}.input`);
     const datasetId = readString(c, source.datasetId, `${path}.input.datasetId`, { legacy, fallback: '', max: 64, required: true });
     if (datasetId && !GRAPH_ID_RE.test(datasetId)) {
       c.error(`${path}.input.datasetId`, 'must be a dataset id: letters, digits, dot, underscore or dash.');
@@ -1585,26 +1706,34 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     // Issue 189: the same field names the parent record of a derivative block;
     // without one the block fans out over every enabled record.
     const edits = normalizeDerivativeEdits(c, source.edits, `${path}.input.edits`, legacy, common.kind);
+    // Issue 188: a complex block combines several records into one system. Its
+    // members name their own records, so `recordId` (one parent) does not apply.
+    const complex = normalizeComplex(c, source.complex, `${path}.input.complex`, legacy, common.kind);
+    const definitions = [series, edits.length ? edits : null, complex].filter(Boolean).length;
     if (series && edits.length) {
       c.error(`${path}.input`, 'cannot carry both a series definition and an edit list; a block is one kind of structure block.');
+    } else if (definitions > 1) {
+      c.error(`${path}.input`, 'cannot carry more than one of a series definition, an edit list and a complex'
+        + ' definition; a block is one kind of structure block.');
     }
     return {
       ...common,
       // A block that carries a series definition *is* a series block, and one
       // that carries an edit list *is* a derivative block; the kind is stored so
       // a renderer can branch on one key instead of two.
-      ...(series ? { kind: 'series' } : edits.length ? { kind: 'derivative' } : {}),
+      ...(series ? { kind: 'series' } : edits.length ? { kind: 'derivative' } : complex ? { kind: 'complex' } : {}),
       input: {
         datasetId,
         recordFilter: {
           field: readString(c, filterRaw.field, `${path}.input.recordFilter.field`, { legacy, fallback: '', max: 64 }),
           equals: readString(c, filterRaw.equals, `${path}.input.recordFilter.equals`, { legacy, fallback: '', max: 200 }),
         },
-        // All three are absent-by-default: a project that never asked for a
-        // series or a derivative saves exactly the bytes it did before.
+        // All four are absent-by-default: a project that never asked for a
+        // series, a derivative or a complex saves exactly the bytes it did before.
         ...(recordId ? { recordId } : {}),
         ...(series ? { series } : {}),
         ...(edits.length ? { edits } : {}),
+        ...(complex ? { complex } : {}),
       },
     };
   }
@@ -1968,17 +2097,20 @@ function validateFlow(c, flow, index, datasets, legacy, { molecule = null, proje
         c.error(`${nodePath}.input.datasetId`, `references unknown dataset "${node.input.datasetId}".`);
       } else if (enabledRecords(dataset).length === 0) {
         c.error(`${nodePath}.input`, `dataset "${dataset.id}" has no enabled record; import or enable at least one.`);
-      } else if (node.input.series || node.input.edits) {
+      } else if (node.input.series || node.input.edits || node.input.complex) {
         // Issue 169: a series is expanded here, at validation time, exactly as
         // the plan will expand it — so an unusable linkage is refused by name
         // when the project is opened, not after the first input file is written.
         // Issue 189: the same guard for a derivative — every refusal comes from
         // the edit engine itself, so a missing bond, a valence overrun or an
         // unknown isotope is named when the project opens.
+        // Issue 188: the same guard for a complex — a member with no geometry, a
+        // clash or a separation below the contact floor is named here too.
         try {
-          recordsForInput(node, dataset);
+          recordsForInput(node, dataset, { datasets });
         } catch (error) {
-          c.error(`${nodePath}.input.${node.input.edits ? 'edits' : 'series'}`, error.message);
+          const key = node.input.complex ? 'complex' : node.input.edits ? 'edits' : 'series';
+          c.error(`${nodePath}.input.${key}`, error.message);
         }
       }
     }
