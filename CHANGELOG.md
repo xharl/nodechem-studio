@@ -8,7 +8,10 @@ The history starts at **0.2.1**, the first release after this repository was pre
 0.1.0 was published and then withdrawn; it is not listed. Sections for released versions summarise
 what the build contains — the GitHub release for each tag carries the long form.
 
-## [Unreleased]
+## [0.5.1] - 2026-11-10
+
+Thirty-nine non-merge commits since 0.5.0. There is no format change: `schemaVersion` stays 3, and a
+0.5.0 project opens unchanged.
 
 ### Added
 
@@ -22,6 +25,10 @@ what the build contains — the GitHub release for each tag carries the long for
 - **A cclib converter sidecar** (#273): a foreign log is converted to Chemical JSON by a
   user-installed interpreter, so NWChem, GAMESS and Q-Chem output can be imported as
   `kind: "imported"` records.
+- **A Multiwfn analysis sidecar** in the Analyse block: QTAIM basin integration, ESP surface
+  statistics, ELF/LOL cubes and RDG–NCI points from a **user-installed** Multiwfn 3.8 binary, in
+  `-silent` batch mode. The binary is never bundled; every `run.json` records its version, the exact
+  menu script, the input SHA-256 and the required citation (#270).
 - **ONIOM result parsing** (#67): extrapolated energies, gridpoint components, layer counts and
   link-atom cuts, with a layer SCF never shown as the ONIOM total.
 - **ROA intensities and invariants** read from a Gaussian log (#127).
@@ -50,6 +57,13 @@ what the build contains — the GitHub release for each tag carries the long for
 - Companion binaries are taken from `PATH`, and a signalled child is reported instead of passing.
 - Psi4 and the schema resolve label/key method names, and a null prepare energy can be saved.
 - A dry run no longer spawns a prepare converter.
+- Psi4 writes its scratch files to the run's own `scratch/` folder instead of `/tmp`, a launch whose
+  scratch filesystem has less than 1 GiB free is refused before it starts, and a run that still
+  exhausts the disk records `scratch.exhausted` with the folder and the free space (#283).
+- `ncs run` no longer stops a healthy queue on a fixed one-hour default: `--timeout` is the
+  watcher's clock and each task keeps the project's `runner.timeoutSeconds` budget. A queue stopped
+  by the watcher is left `paused` with its running task `interrupted`, so a later run resumes it
+  (#305).
 
 ## [0.5.0] - 2026-11-09
 
@@ -91,10 +105,6 @@ the schema bump to 3; a saved 0.4.0 project is refused by version, not migrated.
 - **A cost estimate before a run** — wall time and core-seconds with the uncertainty stated, every
   coefficient derived from a log committed to this repository (#143).
 - **A Compute block** for safe arithmetic across records, including CBS extrapolation (#175).
-- **A Multiwfn analysis sidecar** in the Analyse block: QTAIM basin integration, ESP surface
-  statistics, ELF/LOL cubes and RDG–NCI points from a **user-installed** Multiwfn 3.8 binary, in
-  `-silent` batch mode. The binary is never bundled; every `run.json` records its version, the exact
-  menu script, the input SHA-256 and the required citation (#270).
 - **Spin-state sweeps** surfaced in the inspector, the queue, the results panel and the report (#186).
 - **A wall-clock timeout** per task, recorded as timed out rather than failed (#177).
 - **A measured-spectrum overlay** on the computed sticks, with the overlay file hashed (#184).
@@ -201,6 +211,7 @@ withdrawn 0.2.0 tester build.
 - `.ncs` files open from the desktop, "Open with", `file://` arguments and macOS `open-file`.
 - Packaged provenance records the commit the build came from.
 
+[0.5.1]: https://github.com/xharl/nodechem-studio/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/xharl/nodechem-studio/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xharl/nodechem-studio/releases/tag/v0.4.0
 [0.3.0]: https://github.com/xharl/nodechem-studio/releases/tag/v0.3.0

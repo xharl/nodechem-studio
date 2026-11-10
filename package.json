@@ -1,6 +1,6 @@
 {
   "name": "nodechem-studio",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "description": "NodeChem Studio — software-agnostic desktop workbench for computational-chemistry workflows: graph canvas, local runner over Gaussian 16, ORCA, Psi4, PySCF and xTB, hashed provenance for every run",

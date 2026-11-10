@@ -1,6 +1,6 @@
 # Feature map — what the supported programs offer, and what NodeChem does with it
 
-Status of this document: audit as of **2026-11-09**, renewed after the PySCF engine, the Multiwfn
+Status of this document: audit as of **2026-11-10**, renewed after the PySCF engine, the Multiwfn
 sidecar and the cclib converter landed. It describes the working tree that contains schemaVersion 3
 (ADR 0001), the `prepare` block, the scorer role, RDKit conformers, tautomer enumeration, PySCF and
 the explorer role (ADR 0002). Issues #222, #226–#231, #269 and #273 have closed since the first

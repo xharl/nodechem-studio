@@ -21,7 +21,7 @@ Any other program still joins the graph, at the edge its role allows:
 | --- | --- |
 | Run in-app | the five engines above: the input is built, the output is parsed, the same validity gates apply |
 | Deck export | NWChem, GAMESS and Q-Chem through `ncs export-input` / `ncs convert`; a setting that cannot be spelled is refused by name, not dropped |
-| Output import | any program's finished result as a `kind: "imported"` record, labelled `imported, not run here — <program> <version>`; foreign logs through cclib, plus QCSchema, cube, fchk, Molden and WFN/WFX |
+| Output import | any program's finished result as a `kind: "imported"` record, labelled `imported, not run here — <program> <version>`; foreign logs through cclib (**0.5.1**), plus QCSchema, cube, fchk, Molden, WFN/WFX and binary ChemDraw `.cdx` (**0.5.1**) |
 | Sidecar role | CREST, Open Babel or RDKit as a generator, AIMNet2 as a scorer, Multiwfn as an analysis helper, cclib as a converter |
 
 A project can mix all of them: an xTB pre-optimisation feeding a Gaussian frequency job is a normal
@@ -31,12 +31,12 @@ any, the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
-**Status: v0.5.0 — early preview.** Released 2026-11-09. 0.4.0 shipped on 2026-11-08; 0.5.0 adds
-tautomer enumeration through an RDKit sidecar, ML scorers as a role rather than an engine, DP4/DP4+
-candidate ranking, EPR, QTAIM and NCI figures, electrostatic-potential surfaces, an in-app UFF force
-field for conformers, a pre-run cost estimate, and `schemaVersion: 3` — the ADR 0001 block taxonomy.
-**Schema v3 is the one breaking format change: a 0.4.0 project is refused by version, not migrated.**
-[`CHANGELOG.md`](CHANGELOG.md) records what changed; finish or export a 0.4.0 project before upgrading.
+**Status: v0.5.1 — early preview.** Released 2026-11-10. 0.5.0 shipped on 2026-11-09; 0.5.1 adds the
+PySCF engine, ORCA NMR/TD-DFT/Raman/VCD and transition-state, IRC and scan searches, a Multiwfn
+analysis sidecar, a cclib converter for foreign logs, ONIOM and ROA result parsing, and binary
+ChemDraw import. **The format is unchanged:** `schemaVersion` stays 3, a 0.5.0 project opens here as
+it is, and a 0.4.0 project is still refused by version, not migrated.
+[`CHANGELOG.md`](CHANGELOG.md) records what changed.
 What has *not* been proven is a run driven by this app: no licensed Gaussian job and no real xTB job
 has been executed by the project's automated tests. On 2026-11-08 a peer run did execute 25
 app-written cases on Gaussian 16 Rev A.03 (Windows), and those logs now pin the parsers as fixtures;
@@ -45,14 +45,16 @@ driving the same job from the app's own run console remains unverified. Read
 
 ## What it does
 
-The bullets marked **0.5.0** are the changes in this release; everything unmarked shipped in 0.4.0.
+The bullets marked **0.5.1** are the changes in this release, **0.5.0** the previous one; everything
+unmarked shipped in 0.4.0.
 
 - **Graph workflows** — blocks for each data stage (input, prepare, generate, calculate, analyse,
   output), for control (condition, loop, merge) and for notes, connected by dependency, checkpoint
   and branch edges. Undo/redo, three starting templates, and a save guard that refuses to overwrite a
   file changed on disk since it was opened. **0.5.0:** the ADR 0001 taxonomy behind
   `schemaVersion: 3`, which adds a `prepare` stage for deterministic tool calls and lets an input
-  block carry an ensemble.
+  block carry an ensemble. **0.5.1:** explicit solvent clusters as a `prepare` step, and machine
+  settings stored outside the project.
 - **A durable queue** — runs blocks in dependency order, survives a restart, reconciles an
   interrupted task instead of calling it complete, and records branch decisions and attempts.
   **0.5.0:** a wall-clock limit per task recorded as *timed out*, and an estimate of wall time and
@@ -63,6 +65,8 @@ The bullets marked **0.5.0** are the changes in this release; everything unmarke
   TD-DFT; PySCF with HF/DFT, MP2, CCSD(T), CASSCF, TD-DFT and PCM — each judged by the same
   validity protocol where the checks apply. **0.5.0:** ORCA `DLPNO-CCSD(T)` single points and its
   hyperfine and spin-spin coupling tables imported from the log, and Psi4 TD-DFT and DDX solvation.
+  **0.5.1:** PySCF joins as a fifth engine (including TD-DFT and CASSCF single points), ORCA gains
+  NMR, TD-DFT, Raman/VCD and `OptTS`/IRC/scan, and Psi4 writes its scratch to the run's own folder.
 - **Families of molecules** — a project holds several flows; a Dataset input block drives a whole
   family of records through one designed graph, one run per record (optionally in parallel), and a
   `barrier` connection holds a stage until every record has finished it. Output blocks write HTML,
@@ -90,7 +94,9 @@ The bullets marked **0.5.0** are the changes in this release; everything unmarke
 - **Wavefunction analysis** — cube, formatted checkpoint, Molden, WFN/WFX and QCSchema ingest, with a
   slice and an isosurface viewport. **0.5.0:** an isosurface coloured by electrostatic potential,
   QTAIM bond critical points, an NCI/RDG figure, and `ncs cube` to write a cube from a run or a
-  wavefunction file.
+  wavefunction file. **0.5.1:** a Multiwfn 3.8 analysis sidecar (QTAIM basins, ESP statistics,
+  ELF/LOL cubes, RDG–NCI points), `rwf` matrix-element requests from a Gaussian block, and the fchk
+  job-status, character and MO-dimension fields.
 - **Results you can defend** — gates answer "did it run", validity checks answer "is it
   defensible", an offline signature table explains known engine failures, and any two finished runs
   can be compared without recomputing anything.
@@ -99,7 +105,9 @@ The bullets marked **0.5.0** are the changes in this release; everything unmarke
   IRC paths, scans, barriers, ΔG‡ and a pKa cycle; RRHO at any temperature and pressure with sweeps,
   conformer ensembles and CSV export. **0.5.0:** spin populations and Fermi-contact hyperfine
   couplings (a g-tensor is refused, not invented), and DP4/DP4+ probabilities over candidate
-  structures from a committed parameter bank.
+  structures from a committed parameter bank. **0.5.1:** ORCA NMR shieldings, spin-spin couplings,
+  TD-DFT, Raman and VCD tables read from the log, and ROA intensities and invariants from a Gaussian
+  log.
 - **Structure viewer** — normal-mode animation from real displacement blocks, optimisation
   trajectory replay, Kabsch/Horn superposition with RMSD, and SVG figure export.
 - **Reports and export** — a self-contained `report.html` per flow and a combined document across
@@ -114,11 +122,12 @@ The bullets marked **0.5.0** are the changes in this release; everything unmarke
   <version>`, never mistaken for a run this app performed.
 - **Three themes** — *current*, *graphite*, *paper*, from one token contract; the type scale is
   fixed and not themed.
-- **Headless CLI** — `ncs validate`, `build-input`, `run`, `report`, `export`, `record`, `diff`,
-  `merge`, `convert`, `export-input`, `cache`, plus `smiles` and `cube` (**0.5.0**); `ncs run --json`
-  carries the kinetics summary and exits 5 when a family run is partial. `diff`, `merge`, `qcschema`,
-  `cache`, `export`, `export-input`, `smiles` and `record import` are deliberately CLI-only, and
-  every command's home is listed in [Headless CLI](docs/guide/cli.md).
+- **Headless CLI** — `ncs validate`, `build-input`, `run`, `report`, `validation`, `export`, `record`,
+  `diff`, `merge`, `convert`, `export-input`, `cache`, `qcschema`, plus `smiles` and `cube`
+  (**0.5.0**); `ncs run --json` carries the kinetics summary and exits 5 when a family run is
+  partial. `diff`, `merge`, `qcschema`, `cache`, `export`, `export-input`, `smiles` and
+  `record import` are deliberately CLI-only, and every command's home is listed in
+  [Headless CLI](docs/guide/cli.md).
 - **Local only** — no account, no telemetry, and no network code beyond the update check you
   trigger yourself.
 
@@ -126,8 +135,8 @@ The bullets marked **0.5.0** are the changes in this release; everything unmarke
 
 | Platform | How |
 | --- | --- |
-| Windows 10/11 x64 | Run `nodechem-studio-0.5.0-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
-| Linux x64 | `chmod +x nodechem-studio-0.5.0-x86_64.AppImage` and run it. Unsigned. |
+| Windows 10/11 x64 | Run `nodechem-studio-0.5.1-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
+| Linux x64 | `chmod +x nodechem-studio-0.5.1-x86_64.AppImage` and run it. Unsigned. |
 | From source | Node 22+, then `npm ci && npm run dev`. |
 
 Neither artifact installs an engine. Both are unsigned; `SHA256SUMS`, a
@@ -156,7 +165,7 @@ CycloneDX SBOM and a build-provenance attestation accompany every release. See
 | [The canvas](docs/guide/canvas.md) | Blocks, connections, states, inspector |
 | [Flows, datasets and stages](docs/guide/flows.md) | Several graphs per project, a family of records, barrier stages |
 | [Datasets and input blocks](docs/guide/datasets.md) | Importing a family, one run per record, outputs for the set |
-| [Engines](docs/guide/engines.md) | Gaussian 16, xTB, ORCA and Psi4 — job types, defaults, setup, what each parser proves |
+| [Engines](docs/guide/engines.md) | Gaussian 16, xTB, ORCA, Psi4 and PySCF — job types, defaults, setup, what each parser proves |
 | [Conformers and protomers](docs/guide/conformers.md) | CREST, UFF, Open Babel and RDKit tautomer enumeration, imports, ranking, choosing a member |
 | [ML scorers](docs/guide/scorers.md) | The AIMNet2 sidecar, its domain guard, units and provenance |
 | [Workflows](docs/guide/workflow.md) | Queue, conditions, loops, checkpoints, timeouts, cluster export |
@@ -202,14 +211,20 @@ contract), [`docs/CLUSTER_EXPORT.md`](docs/CLUSTER_EXPORT.md) (SLURM/PBS export)
 - **Real Psi4 run:** Psi4 1.4 or newer with a `psi4` executable and `PSIDATADIR` set (a conda
   install does both). DDX solvation additionally needs the `pyddx` addon in the same environment,
   which Psi4 does not ship.
+- **Real PySCF run:** PySCF 2.x in a Python 3.9+ environment (`pip install pyscf geometric`; conda
+  works too), selected by its interpreter path rather than a bare `python3`. A bare `python3` is
+  accepted and resolved against `PATH`. CASSCF needs the active space declared on the block; PCM,
+  C-PCM and TD-DFT need no extra package.
 - **Sidecars (all optional):** CREST (`crest`) for a GFN conformer search, Open Babel 3 (`obabel`)
-  for an MMFF94 search, a Python with `rdkit` for tautomer enumeration, and a Python environment
-  with `torch` + AIMNet2 weights for the ML scorer. Each is pointed at from the run console; none is
-  bundled, and a missing one fails the block by name instead of producing a result.
+  for an MMFF94 search, a Python with `rdkit` for tautomer enumeration, a Python environment with
+  `torch` + AIMNet2 weights for the ML scorer, a Python with `cclib` for a foreign log, and a
+  **Multiwfn 3.8** binary for the Analyse block. Each is pointed at from the run console or Settings;
+  none is bundled, and a missing one fails the block by name instead of producing a result.
 - **Building from source:** Node.js 22 or newer, npm 10 or newer.
 
 No Gaussian binaries or licence files are included in this repository, in the installer, or in any
-release artifact; neither is any xTB, ORCA or Psi4 binary, any sidecar, or any model weight.
+release artifact; neither is any xTB, ORCA, Psi4 or PySCF installation, any sidecar, or any model
+weight.
 
 ## Commands
 
@@ -231,10 +246,10 @@ electron/          main process: dialogs, IPC, run manager, queue, engine runner
 bin/ncs.js         the headless CLI (`ncs`), one handler per command
 src/renderer/      graph canvas, inspector, run console, results and structure views
 src/shared/        pure modules: input builders, parsers, schema, control flow, validity
-src/shared/engines Gaussian 16, xTB, ORCA and Psi4 descriptors, capabilities, canonical results
+src/shared/engines/ Gaussian 16, xTB, ORCA, Psi4 and PySCF descriptors, capabilities, canonical results
 src/shared/interop SMILES reader and the NWChem/GAMESS/Q-Chem deck exporters
 schemas/           the run-record JSON Schemas (v1 and v2) and the vendored QCSchema set
-scripts/           optional sidecars (tautomer enumerator, AIMNet2 scorer) and the DP4 bank builder
+scripts/           optional sidecars (tautomer enumerator, AIMNet2 scorer, cclib converter) and the DP4 bank builder
 clients/python/    the stdlib-only Python client for `ncs export`
 test/              Vitest suites, including the real-output fixture corpus
 docs/              documentation; the user guide lives in docs/guide/, decisions in docs/adr/
