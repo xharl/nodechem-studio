@@ -1,0 +1,137 @@
+{
+  "activeSpace": null,
+  "basis": "def2-SVP",
+  "basisKey": "def2-svp",
+  "charge": 0,
+  "converged": true,
+  "correlationEnergy": null,
+  "densityFit": true,
+  "ecp": false,
+  "energy": -76.35815183294753,
+  "engine": "pyscf",
+  "error": null,
+  "excitedStates": {
+    "requested": 4,
+    "source": "pyscf-tddft",
+    "states": [
+      {
+        "energyEv": 7.5981493931669934,
+        "energyHartree": 0.2792268399882513,
+        "index": 1,
+        "multiplicity": 1,
+        "oscillatorStrength": 0.018198124703632537,
+        "transitionDipoleAu": [
+          -0.31266579086937313,
+          1.3590207776365046e-13,
+          -2.5787147384833612e-14
+        ],
+        "wavelengthNm": 163.1768368643802
+      },
+      {
+        "energyEv": 9.526799260477445,
+        "energyHartree": 0.3501034153260773,
+        "index": 2,
+        "multiplicity": 1,
+        "oscillatorStrength": 1.8719689345492139e-26,
+        "transitionDipoleAu": [
+          1.2934737876225666e-13,
+          -2.457961533248991e-13,
+          -5.529058455321532e-14
+        ],
+        "wavelengthNm": 130.14255366370173
+      },
+      {
+        "energyEv": 9.869318106531184,
+        "energyHartree": 0.36269075075093976,
+        "index": 3,
+        "multiplicity": 1,
+        "oscillatorStrength": 0.07841915834595992,
+        "transitionDipoleAu": [
+          -8.080462787547243e-15,
+          2.2040230408609615e-14,
+          0.5694931146715441
+        ],
+        "wavelengthNm": 125.62590146724666
+      },
+      {
+        "energyEv": 11.893507094415044,
+        "energyHartree": 0.43707832401109675,
+        "index": 4,
+        "multiplicity": 1,
+        "oscillatorStrength": 0.06143513703440526,
+        "transitionDipoleAu": [
+          -3.0678087235274615e-14,
+          0.4591709569215938,
+          6.06906178505112e-14
+        ],
+        "wavelengthNm": 104.24528056843765
+      }
+    ]
+  },
+  "frequencies": null,
+  "geometry": [
+    {
+      "element": "O",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.1173
+    },
+    {
+      "element": "H",
+      "x": 0.0,
+      "y": 0.7572,
+      "z": -0.4692
+    },
+    {
+      "element": "H",
+      "x": 0.0,
+      "y": -0.7572,
+      "z": -0.4692
+    }
+  ],
+  "hessian": null,
+  "hessianOmitted": false,
+  "jobType": "TD-DFT",
+  "method": "B3LYP",
+  "methodKey": "b3lyp",
+  "moEnergies": [
+    -19.117671501634398,
+    -0.98246323676597,
+    -0.5173064995043117,
+    -0.3657912123409761,
+    -0.29189234818130005,
+    0.04704144214697159,
+    0.12623430847513228,
+    0.5649142995654683,
+    0.6239667058595906,
+    0.9166255417351876,
+    0.92083944878341,
+    1.0062106680236909,
+    1.092596204808749,
+    1.3452443880717322,
+    1.4112865909002532,
+    1.550953380529272,
+    1.7875584467207495,
+    2.222136882762427,
+    2.2632560127612287,
+    2.9619091745963573,
+    3.011442192286592,
+    3.19294579769507,
+    3.5036713785769815,
+    3.822166467163951
+  ],
+  "multiplicity": 1,
+  "nBasis": 24,
+  "nIter": 7,
+  "ok": true,
+  "optimization": null,
+  "pyscfVersion": "2.15.0",
+  "reference": "rhf",
+  "scfConverged": true,
+  "scfEnergy": -76.35815183294753,
+  "schema": "nodechem.pyscf.v1",
+  "solvation": null,
+  "thermochemistry": null,
+  "triplesCorrection": null,
+  "warnings": []
+}
