@@ -17,8 +17,12 @@ import { fileURLToPath } from 'node:url';
  */
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const schema = fs.readFileSync(path.join(ROOT, 'src/shared/projectSchema.js'), 'utf8');
-const doc = fs.readFileSync(path.join(ROOT, 'docs/PROJECT-FORMAT.md'), 'utf8');
+// Windows checkouts may carry CRLF (core.autocrlf). The document's structure is
+// defined by blank lines; normalise before splitting so the Windows package gate
+// reads the same list as Linux instead of treating the whole file as one block.
+const normalize = (text) => String(text).replace(/\r\n?/g, '\n');
+const schema = normalize(fs.readFileSync(path.join(ROOT, 'src/shared/projectSchema.js'), 'utf8'));
+const doc = normalize(fs.readFileSync(path.join(ROOT, 'docs/PROJECT-FORMAT.md'), 'utf8'));
 
 function settingsKeysFromSource() {
   const start = schema.indexOf('const SETTINGS_KEYS = new Set([');
