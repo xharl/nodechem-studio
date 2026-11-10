@@ -54,7 +54,10 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    error. A record is `completed` when every block completed, `partial` when some blocks completed
    and some failed, and `failed` when nothing usable came out.
 4. **Method ladders, conformer ensembles, spin sweeps and reaction energetics** — unchanged from
-   the single-molecule report, printed after the record sections.
+   the single-molecule report, printed after the record sections. A tautomer Generate block gets a
+   *Tautomer candidates* section: one row per candidate with its label and SMILES, and the energy
+   spread across the set at the level the runs were made at. It is never Boltzmann-averaged — the
+   candidates are different molecules, and the section says so instead of printing a population.
 5. **Provenance** — run ids and the input/output SHA-256 prefixes.
 
 A v1 project (no dataset) is unchanged: one table of blocks, no record sections.

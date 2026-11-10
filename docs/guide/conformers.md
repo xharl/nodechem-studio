@@ -12,6 +12,10 @@ across labels it can compare, but it does not know what the label means chemical
 with different labels may be protomers, tautomers, or a mislabelled pair. Say which when you
 report the result; an ensemble that mixes labels never gets one picked automatically.
 
+A **tautomer** block is the one exception, and it is not a label the app found: it enumerated the
+candidates itself, so it writes `t1`, `t2`, … and the SMILES for each. Those labels are this app's
+own (RDKit's enumeration order), not a claim copied from a file.
+
 ## Where it sits in a workflow
 
 ```
@@ -42,6 +46,7 @@ unit and its provenance; the generate block owns ranking and selection.
 | `crest` (search) | The app runs the CREST executable you chose in the run console, with `--gfn2` (or `--gfnff`) and `--nci`, plus `--chrg`/`--uhf` when charge or multiplicity are non-default. Each search runs in its own folder under the queue directory: the starting geometry is staged there as `ensemble.xyz`, so `crest_conformers.xyz`, `crest.energies` and `crest.out` land beside the file CREST was given. |
 | `uff` (search) | The app generates the ensemble here, with UFF, and needs no external binary. See [Generating with UFF](#generating-with-uff-in-app) for what it does and does not claim. |
 | `obabel` (search) | The app runs the Open Babel executable you chose in the run console: `obabel ensemble.xyz -O obabel_conformers.xyz --conformer --nconf N --ff MMFF94 --score energy --writeconformers`, then a second pass (`--energy --append Energy`) that attaches one MMFF94 energy to every frame. The search log and the scored ensemble stay in the queue folder. Open Babel is not bundled. |
+| `rdkit` (search, tautomers only) | Set **Produces** to *Tautomers*. The app spawns the RDKit tautomer sidecar you chose in the run console and asks it for the tautomer set of the input geometry. See [Tautomers](#tautomers-and-protomers-rdkit) — this route produces different *molecules*, not conformers, and is never treated as a search over shapes. |
 | `imported` (input) | Wire an **Ensemble input** block into the generate block and set the source to *Rank a wired ensemble input*. The input reads the multi-XYZ once; the generate block ranks that record. A `crest.energies` file beside it (or `<stem>.energies`) supplies energies for frames whose comment does not carry one. |
 
 The app never bundles CREST. If the generator is `crest` and no executable is configured, the
@@ -120,6 +125,46 @@ route cannot do, it does not pretend to do:
   0.1–0.5 Å; the deliverable is "reproducible, documented, different".
 
 
+## Tautomers and protomers (RDKit)
+
+A tautomer set is not a conformer set. Two conformers are the same molecule; two tautomers are
+different molecules with the same formula, and the question "which one" is answered by a
+calculation per candidate, not by a shape search. Set **Produces** to *Tautomers* on a Generate
+block and the block changes accordingly:
+
+- **The enumerator is external.** `scripts/tautomer-enumerator.py` drives RDKit's
+  `rdMolStandardize.TautomerEnumerator` (BSD-3; RDKit is not bundled and not installed by this app).
+  Point the run console's **Tautomer sidecar** at a Python that has `rdkit` — or at the interpreter
+  with **Tautomer script** naming the file. The sidecar reads one JSON object on stdin (XYZ, charge,
+  multiplicity, title, options) and writes one JSON object on stdout; the request is kept in the
+  task folder as `request.json`, and the raw answer as `tautomers.json`.
+- **Bonds come from the geometry.** The structure arrives as XYZ with no bond table, so the sidecar
+  perceives bonds and bond orders with RDKit's `rdDetermineBonds`. Multiplicity other than 1 is
+  refused: the perception assumes a closed shell, and guessing an open-shell structure would invent
+  a molecule.
+- **Every candidate is labelled** `t1`, `t2`, … in the enumerator's order, with its canonical SMILES
+  and formula. The block stores them as `tautomers: [...]` on the ensemble and `tautomer` on each
+  member; the table and the report show both, so two rows are never told apart only by rank.
+- **No energies, no populations, no pruning.** A candidate arrives without a number: the energy
+  window, the RMSD prune and the Boltzmann column do not apply, and the block says so in a warning.
+  The table's ΔE column is empty at this stage on purpose.
+- **Fan-out is on by default.** The candidate set fans out through the same member mechanism as a
+  conformer ensemble: one calculate task per candidate, each built from that candidate's geometry,
+  and a downstream `Opt → Freq` chain stays per member. **Fan out** can be switched off only if you
+  also pick a member, because one run of c1 answers nothing about t2.
+- **The report shows the spread.** When the fanned-out runs finish, the report's tautomer section
+  lists the candidates and prints *Energy spread across the candidate set: N kcal/mol* from their
+  final energies at the level they ran at — and states that they are not Boltzmann-averaged.
+- **Provenance is recorded in `origin`**: `program` (RDKit), `version`, `ruleset`
+  (`rdkit-default`), the option set (`maxCandidates`, `maxTransforms`, `relaxGeometry`,
+  `removeSp3Stereo`, `removeBondStereo`) and `sourceSha256`, the digest of the geometry that was
+  enumerated. A candidate set without those facts could not be reproduced.
+
+**Out of scope, and refused rather than approximated:** pH-dependent protonation (Epik,
+Dimorphite-DL, pKa models). Charge and multiplicity are inputs. A tautomer block also cannot import
+an ensemble, cannot use CREST/UFF/Open Babel, and cannot ask an ML scorer to rank the set — ranking
+tautomers is a calculate-block job.
+
 ## Imported ensembles: what the blocks record
 
 An imported ensemble is not a result this app computed. The **Ensemble input** block therefore
@@ -174,7 +219,9 @@ running the block.
 | Keep at most | 20 | Hard cap after sorting by energy; the rest are labelled `count`. |
 | Temperature | 298.15 K | Boltzmann populations in the table. They describe the ensemble, not a free energy. |
 | Spread warning | 2 kcal/mol | If the retained ensemble spans more than this, the downstream calculation's validity report carries a warning. |
-| Fan out | off | When on, every retained member becomes its own task downstream instead of one chosen geometry. See below. |
+| Fan out | off (on for tautomers) | When on, every retained member becomes its own task downstream instead of one chosen geometry. See below. |
+| Produces | `conformers` | `conformers` or `tautomers`. Setting `tautomers` fixes the generator to `rdkit`, clears the xTB method, turns fan-out on and treats *Keep at most* as the candidate cap. |
+| Tautomer ruleset | `rdkit-default` | Tautomer block only: the transform set the sidecar applies. Recorded in `origin.ruleset`. |
 | Torsion grid | 120° | `uff` route only: the angle between trial values. Written to the project only when set. |
 | Max trials | 200 | `uff` route only: the cap on relaxed trials. A grid above it is truncated and labelled as such. |
 

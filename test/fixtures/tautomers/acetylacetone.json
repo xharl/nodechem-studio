@@ -1,0 +1,585 @@
+{
+  "provenance": {
+    "generatedBy": "scripts/tautomer-enumerator.py",
+    "program": "RDKit",
+    "version": "2026.9.1",
+    "ruleset": "rdkit-default",
+    "options": {
+      "ruleset": "rdkit-default",
+      "maxCandidates": 16,
+      "maxTransforms": 1000,
+      "relaxGeometry": true,
+      "removeSp3Stereo": false,
+      "removeBondStereo": false
+    },
+    "command": "/path/to/python scripts/tautomer-enumerator.py < request.json > acetylacetone.json",
+    "inputFile": "acetylacetone.xyz",
+    "inputSha256": "ac82034e6b3c22bc9fb6812e7e0aeb2fa2f20d89a16614974f3784a9ad382deb",
+    "note": "Real RDKit output, not a hand-written expectation. The input XYZ was built with Chem.AddHs + ETKDGv3(randomSeed=0xf00d) + MMFF94 from SMILES CC(=O)CC(C)=O; the sidecar then perceived bonds with rdDetermineBonds and enumerated with rdMolStandardize.TautomerEnumerator. Regenerating it needs rdkit, which CI does not install: the queue tests use this file through a fake sidecar instead."
+  },
+  "protocol": "nodechem-tautomers/1",
+  "ok": true,
+  "program": "RDKit",
+  "version": "2026.9.1",
+  "ruleset": "rdkit-default",
+  "options": {
+    "ruleset": "rdkit-default",
+    "maxCandidates": 16,
+    "maxTransforms": 1000,
+    "relaxGeometry": true,
+    "removeSp3Stereo": false,
+    "removeBondStereo": false
+  },
+  "input": {
+    "title": "acetylacetone",
+    "charge": 0,
+    "multiplicity": 1,
+    "atomCount": 15,
+    "formula": "C5H8O2",
+    "smiles": "CC(=O)CC(C)=O"
+  },
+  "truncated": false,
+  "candidates": [
+    {
+      "id": "t1",
+      "label": "t1",
+      "rank": 1,
+      "smiles": "C=C(O)C=C(C)O",
+      "formula": "C5H8O2",
+      "atomCount": 15,
+      "heavyAtomCount": 7,
+      "geometry": {
+        "source": "input",
+        "hydrogens": "rdkit-addhs",
+        "relaxation": "UFF",
+        "converged": true
+      },
+      "notes": [],
+      "atoms": [
+        {
+          "element": "C",
+          "x": 2.023815,
+          "y": -0.739973,
+          "z": -0.939437
+        },
+        {
+          "element": "C",
+          "x": 0.734804,
+          "y": -0.413321,
+          "z": -0.894743
+        },
+        {
+          "element": "O",
+          "x": -0.171519,
+          "y": -1.147993,
+          "z": -1.658322
+        },
+        {
+          "element": "C",
+          "x": 0.298839,
+          "y": 0.744051,
+          "z": -0.082043
+        },
+        {
+          "element": "C",
+          "x": -0.798532,
+          "y": 0.771624,
+          "z": 0.690643
+        },
+        {
+          "element": "C",
+          "x": -1.713626,
+          "y": -0.40981,
+          "z": 0.867266
+        },
+        {
+          "element": "O",
+          "x": -1.097958,
+          "y": 1.95606,
+          "z": 1.361867
+        },
+        {
+          "element": "H",
+          "x": 2.761776,
+          "y": -0.184968,
+          "z": -0.372827
+        },
+        {
+          "element": "H",
+          "x": 2.355093,
+          "y": -1.573879,
+          "z": -1.545067
+        },
+        {
+          "element": "H",
+          "x": -1.13333,
+          "y": -0.856011,
+          "z": -1.773951
+        },
+        {
+          "element": "H",
+          "x": 0.943933,
+          "y": 1.615519,
+          "z": -0.075126
+        },
+        {
+          "element": "H",
+          "x": -2.212687,
+          "y": -0.354029,
+          "z": 1.85717
+        },
+        {
+          "element": "H",
+          "x": -2.497566,
+          "y": -0.399255,
+          "z": 0.082395
+        },
+        {
+          "element": "H",
+          "x": -1.151858,
+          "y": -1.366947,
+          "z": 0.83329
+        },
+        {
+          "element": "H",
+          "x": -1.918358,
+          "y": 2.03802,
+          "z": 1.950588
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "label": "t2",
+      "rank": 2,
+      "smiles": "C=C(O)CC(=C)O",
+      "formula": "C5H8O2",
+      "atomCount": 15,
+      "heavyAtomCount": 7,
+      "geometry": {
+        "source": "input",
+        "hydrogens": "rdkit-addhs",
+        "relaxation": "UFF",
+        "converged": true
+      },
+      "notes": [],
+      "atoms": [
+        {
+          "element": "C",
+          "x": 2.032258,
+          "y": -0.616375,
+          "z": -0.075628
+        },
+        {
+          "element": "C",
+          "x": 0.893722,
+          "y": -0.482416,
+          "z": -0.753967
+        },
+        {
+          "element": "O",
+          "x": 0.454198,
+          "y": -1.53337,
+          "z": -1.556092
+        },
+        {
+          "element": "C",
+          "x": 0.067884,
+          "y": 0.76916,
+          "z": -0.636449
+        },
+        {
+          "element": "C",
+          "x": -0.880202,
+          "y": 0.659175,
+          "z": 0.521985
+        },
+        {
+          "element": "C",
+          "x": -2.077307,
+          "y": 0.086781,
+          "z": 0.374165
+        },
+        {
+          "element": "O",
+          "x": -0.478435,
+          "y": 1.140004,
+          "z": 1.768175
+        },
+        {
+          "element": "H",
+          "x": 2.394255,
+          "y": 0.174599,
+          "z": 0.569522
+        },
+        {
+          "element": "H",
+          "x": 2.613058,
+          "y": -1.526089,
+          "z": -0.158157
+        },
+        {
+          "element": "H",
+          "x": -0.414931,
+          "y": -1.47261,
+          "z": -2.072882
+        },
+        {
+          "element": "H",
+          "x": 0.725523,
+          "y": 1.654205,
+          "z": -0.49174
+        },
+        {
+          "element": "H",
+          "x": -0.492116,
+          "y": 0.938979,
+          "z": -1.581976
+        },
+        {
+          "element": "H",
+          "x": -2.753669,
+          "y": -0.000605,
+          "z": 1.214588
+        },
+        {
+          "element": "H",
+          "x": -2.393873,
+          "y": -0.302461,
+          "z": -0.585538
+        },
+        {
+          "element": "H",
+          "x": -1.077009,
+          "y": 1.080046,
+          "z": 2.584106
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "label": "t3",
+      "rank": 3,
+      "smiles": "C=C(O)CC(C)=O",
+      "formula": "C5H8O2",
+      "atomCount": 15,
+      "heavyAtomCount": 7,
+      "geometry": {
+        "source": "input",
+        "hydrogens": "rdkit-addhs",
+        "relaxation": "UFF",
+        "converged": true
+      },
+      "notes": [],
+      "atoms": [
+        {
+          "element": "C",
+          "x": 2.234413,
+          "y": -0.416311,
+          "z": -0.135211
+        },
+        {
+          "element": "C",
+          "x": 1.025103,
+          "y": -0.487985,
+          "z": -0.689034
+        },
+        {
+          "element": "O",
+          "x": 0.645151,
+          "y": -1.659752,
+          "z": -1.339818
+        },
+        {
+          "element": "C",
+          "x": 0.059713,
+          "y": 0.661168,
+          "z": -0.592029
+        },
+        {
+          "element": "C",
+          "x": -0.870653,
+          "y": 0.462032,
+          "z": 0.570792
+        },
+        {
+          "element": "C",
+          "x": -2.323497,
+          "y": 0.17403,
+          "z": 0.34128
+        },
+        {
+          "element": "O",
+          "x": -0.441175,
+          "y": 0.544107,
+          "z": 1.711909
+        },
+        {
+          "element": "H",
+          "x": 2.556273,
+          "y": 0.473104,
+          "z": 0.392156
+        },
+        {
+          "element": "H",
+          "x": 2.915739,
+          "y": -1.254781,
+          "z": -0.202246
+        },
+        {
+          "element": "H",
+          "x": -0.273259,
+          "y": -1.754336,
+          "z": -1.75679
+        },
+        {
+          "element": "H",
+          "x": 0.596796,
+          "y": 1.628068,
+          "z": -0.475376
+        },
+        {
+          "element": "H",
+          "x": -0.519982,
+          "y": 0.722935,
+          "z": -1.538209
+        },
+        {
+          "element": "H",
+          "x": -2.853368,
+          "y": 0.032722,
+          "z": 1.307481
+        },
+        {
+          "element": "H",
+          "x": -2.790011,
+          "y": 1.021589,
+          "z": -0.202913
+        },
+        {
+          "element": "H",
+          "x": -2.428766,
+          "y": -0.751065,
+          "z": -0.263188
+        }
+      ]
+    },
+    {
+      "id": "t4",
+      "label": "t4",
+      "rank": 4,
+      "smiles": "CC(=O)C=C(C)O",
+      "formula": "C5H8O2",
+      "atomCount": 15,
+      "heavyAtomCount": 7,
+      "geometry": {
+        "source": "input",
+        "hydrogens": "rdkit-addhs",
+        "relaxation": "UFF",
+        "converged": true
+      },
+      "notes": [],
+      "atoms": [
+        {
+          "element": "C",
+          "x": 2.07553,
+          "y": -0.540374,
+          "z": -0.089048
+        },
+        {
+          "element": "C",
+          "x": 0.884131,
+          "y": -0.697941,
+          "z": -0.987061
+        },
+        {
+          "element": "O",
+          "x": 1.094992,
+          "y": -1.288157,
+          "z": -2.234441
+        },
+        {
+          "element": "C",
+          "x": -0.358083,
+          "y": -0.301074,
+          "z": -0.646624
+        },
+        {
+          "element": "C",
+          "x": -0.752851,
+          "y": 0.338996,
+          "z": 0.630908
+        },
+        {
+          "element": "C",
+          "x": -2.18346,
+          "y": 0.717561,
+          "z": 0.844378
+        },
+        {
+          "element": "O",
+          "x": 0.084583,
+          "y": 0.573095,
+          "z": 1.542769
+        },
+        {
+          "element": "H",
+          "x": 1.92466,
+          "y": -1.108696,
+          "z": 0.852792
+        },
+        {
+          "element": "H",
+          "x": 2.982283,
+          "y": -0.940781,
+          "z": -0.589446
+        },
+        {
+          "element": "H",
+          "x": 2.251531,
+          "y": 0.533605,
+          "z": 0.130971
+        },
+        {
+          "element": "H",
+          "x": 0.34286,
+          "y": -1.430601,
+          "z": -2.899131
+        },
+        {
+          "element": "H",
+          "x": -1.15172,
+          "y": -0.459854,
+          "z": -1.367274
+        },
+        {
+          "element": "H",
+          "x": -2.32082,
+          "y": 1.183936,
+          "z": 1.843278
+        },
+        {
+          "element": "H",
+          "x": -2.498428,
+          "y": 1.442829,
+          "z": 0.065087
+        },
+        {
+          "element": "H",
+          "x": -2.822975,
+          "y": -0.187764,
+          "z": 0.781762
+        }
+      ]
+    },
+    {
+      "id": "t5",
+      "label": "t5",
+      "rank": 5,
+      "smiles": "CC(=O)CC(C)=O",
+      "formula": "C5H8O2",
+      "atomCount": 15,
+      "heavyAtomCount": 7,
+      "geometry": {
+        "source": "input",
+        "hydrogens": "rdkit-addhs",
+        "relaxation": "UFF",
+        "converged": true
+      },
+      "notes": [],
+      "atoms": [
+        {
+          "element": "C",
+          "x": 2.421944,
+          "y": -0.432372,
+          "z": -0.078952
+        },
+        {
+          "element": "C",
+          "x": 0.993069,
+          "y": -0.60255,
+          "z": -0.497805
+        },
+        {
+          "element": "O",
+          "x": 0.59964,
+          "y": -1.692799,
+          "z": -0.885096
+        },
+        {
+          "element": "C",
+          "x": 0.043314,
+          "y": 0.561319,
+          "z": -0.456914
+        },
+        {
+          "element": "C",
+          "x": -1.015444,
+          "y": 0.339113,
+          "z": 0.586138
+        },
+        {
+          "element": "C",
+          "x": -2.446406,
+          "y": 0.142387,
+          "z": 0.186477
+        },
+        {
+          "element": "O",
+          "x": -0.708546,
+          "y": 0.329033,
+          "z": 1.768988
+        },
+        {
+          "element": "H",
+          "x": 2.461956,
+          "y": -0.073977,
+          "z": 0.970939
+        },
+        {
+          "element": "H",
+          "x": 2.969479,
+          "y": -1.396492,
+          "z": -0.14946
+        },
+        {
+          "element": "H",
+          "x": 2.917474,
+          "y": 0.310578,
+          "z": -0.738216
+        },
+        {
+          "element": "H",
+          "x": 0.589065,
+          "y": 1.500598,
+          "z": -0.221507
+        },
+        {
+          "element": "H",
+          "x": -0.418908,
+          "y": 0.684202,
+          "z": -1.460287
+        },
+        {
+          "element": "H",
+          "x": -3.083447,
+          "y": -0.031639,
+          "z": 1.079891
+        },
+        {
+          "element": "H",
+          "x": -2.812465,
+          "y": 1.045776,
+          "z": -0.3446
+        },
+        {
+          "element": "H",
+          "x": -2.527314,
+          "y": -0.736044,
+          "z": -0.487415
+        }
+      ]
+    }
+  ],
+  "rejected": []
+}

@@ -112,21 +112,34 @@ export function moleculeForNode(project, node, conformerMember = null, record = 
 export function conformerSettingsFor(node) {
   const source = node?.settings && typeof node.settings === 'object' ? node.settings : {};
   const pick = (key) => (source[key] === undefined || source[key] === null ? DEFAULT_CONFORMER_SETTINGS[key] : source[key]);
+  // Issue #226: what the block enumerates decides the generator, whether an
+  // xTB method applies at all, and whether fan-out is the default.
+  const produces = source.produces === 'tautomers' ? 'tautomers' : 'conformers';
+  const tautomers = produces === 'tautomers';
   return {
     source: source.source === 'imported' ? 'imported' : 'search',
-    generator: String(pick('generator') || 'crest'),
+    ...(tautomers ? { produces } : {}),
+    generator: String(pick('generator') || (tautomers ? 'rdkit' : 'crest')),
     rankBy: typeof source.rankBy === 'string' ? source.rankBy : '',
-    method: String(pick('method') || 'gfn2'),
+    // A tautomer set has no xTB method: leaving `gfn2` here would put a method
+    // on the ensemble that never ran.
+    method: tautomers ? '' : String(pick('method') || 'gfn2'),
     energyWindowKcal: Number(pick('energyWindowKcal')),
     rmsdThreshold: Number(pick('rmsdThreshold')),
-    maxConformers: Number(pick('maxConformers')),
+    // The tautomer mode reuses this field as its candidate cap, whose default
+    // is the enumerator's 16 — not the conformer retention count of 20.
+    maxConformers: Number(source.maxConformers ?? (tautomers ? 16 : DEFAULT_CONFORMER_SETTINGS.maxConformers)),
     temperature: Number(pick('temperature')),
     spreadThresholdKcal: Number(pick('spreadThresholdKcal')),
     selectedConformerId: String(source.selectedConformerId || ''),
-    fanOut: pick('fanOut') === true,
+    fanOut: tautomers ? source.fanOut !== false : pick('fanOut') === true,
     // Issue #132: the study id the block carries. Passed through, never derived:
     // the app does not decide which blocks belong together.
     group: String(source.group || ''),
+    // Issue #226: the tautomer ruleset, and only for a tautomer block.
+    ...(source.tautomerRuleset || tautomers
+      ? { tautomerRuleset: String(source.tautomerRuleset || 'rdkit-default') }
+      : {}),
     // Issue 144: the in-app UFF route's settings, passed through only when the
     // block states them. Absent by default, so a CREST or import task carries
     // exactly the fields it always did.
@@ -187,15 +200,22 @@ export function conformerForNode(project, node, conformerMember = null) {
     nodeId: source?.id || member.nodeId,
     title: member?.title || source?.title,
     generator: member?.generator || output?.generator || '',
+    ...(output?.produces === 'tautomers' || member?.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
     spreadKcal,
     thresholdKcal,
     requiresSelection: member ? false : Boolean(output?.requiresSelection),
     atoms: selected ? selected.atoms : null,
     selected: selected ? {
       id: String(selected.id || ''),
-      relativeKcal: Number(selected.relativeKcal ?? 0),
-      population: Number(selected.population ?? 0),
+      // Issue #226: a tautomer candidate has no relative energy at all. null
+      // stays null rather than becoming a 0 that reads as "the same energy".
+      relativeKcal: selected.relativeKcal === null || selected.relativeKcal === undefined
+        ? null : Number(selected.relativeKcal),
+      population: selected.population === null || selected.population === undefined
+        ? null : Number(selected.population),
       protomer: String(selected.protomer || ''),
+      // Issue #226: the tautomer label, when the ensemble enumerates them.
+      ...(selected.tautomer ? { tautomer: String(selected.tautomer) } : {}),
     } : null,
   };
 }
@@ -360,18 +380,22 @@ export function fanOutMembersFor(node) {
       && /^c\d+$/.test(String(member.id || ''))
       && Array.isArray(member.atoms) && member.atoms.length > 0);
   if (kept.length === 0) return null;
+  // Issue #226: a tautomer set is meant to be compared, so several labels are
+  // the point rather than a refusal. A conformer ensemble that mixes protomers
+  // still is one: those are protonation states, not conformers.
+  const tautomers = output.produces === 'tautomers';
   const protomers = (Array.isArray(output.protomers) ? output.protomers : [])
     .map((item) => String(item || ''))
     .filter(Boolean);
   const selectedId = String(output.selectedId || '');
-  if (output.requiresSelection === true || (protomers.length > 1 && !selectedId)) {
+  if (!tautomers && (output.requiresSelection === true || (protomers.length > 1 && !selectedId))) {
     throw new Error(`"${node.title}" holds ${protomers.length > 1 ? protomers.length : 'several'} protomers`
       + `${protomers.length > 0 ? ` (${protomers.join(', ')})` : ''}; choose the member to fan out instead of comparing protonation states.`);
   }
   // A chosen protomer bounds the fan-out: the other protonation states are not
   // conformers of this one and must not share its ΔE table.
   const selected = kept.find((member) => member.id === selectedId) || null;
-  const scope = selected && protomers.length > 1
+  const scope = !tautomers && selected && protomers.length > 1
     ? kept.filter((member) => String(member.protomer || '') === String(selected.protomer || ''))
     : kept;
   const members = [];
@@ -384,9 +408,13 @@ export function fanOutMembersFor(node) {
       id,
       rank: Number.isInteger(member.rank) ? member.rank : members.length + 1,
       energyEh: Number.isFinite(member.energyEh) ? member.energyEh : null,
-      relativeKcal: Number.isFinite(member.relativeKcal) ? member.relativeKcal : 0,
-      population: Number.isFinite(member.population) ? member.population : 0,
+      relativeKcal: Number.isFinite(member.relativeKcal) ? member.relativeKcal : (tautomers ? null : 0),
+      population: Number.isFinite(member.population) ? member.population : (tautomers ? null : 0),
       protomer: String(member.protomer || ''),
+      // Issue #226: the tautomer label and SMILES travel with the member so a
+      // branch folder, a report row and a task title all name the same
+      // molecule without re-reading the parent ensemble.
+      ...(tautomers ? { tautomer: String(member.tautomer || ''), smiles: String(member.smiles || '') } : {}),
       atoms: member.atoms,
     });
   }
@@ -394,6 +422,7 @@ export function fanOutMembersFor(node) {
   return {
     nodeId: node.id,
     title: node.title,
+    ...(tautomers ? { produces: 'tautomers' } : {}),
     generator: String(output.generator || ''),
     method: String(output.method || ''),
     spreadKcal: Number.isFinite(output.spreadKcal) ? output.spreadKcal : null,
@@ -402,6 +431,11 @@ export function fanOutMembersFor(node) {
     temperature: settings.temperature,
     members,
   };
+}
+
+/** The label a member prints in a task title: `t1` for a tautomer, else its protomer. */
+function memberLabel(member) {
+  return String(member?.tautomer || member?.protomer || '');
 }
 
 export function gatesForNode(node) {
@@ -580,6 +614,7 @@ export function blockingValidityFinding(project, node, settings, molecule, confo
       relativeKcal: conformer.selected?.relativeKcal ?? null,
       population: conformer.selected?.population ?? null,
       protomer: conformer.selected?.protomer || '',
+      ...(conformer.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
       spreadKcal: conformer.spreadKcal,
       thresholdKcal: conformer.thresholdKcal,
       requiresSelection: conformer.requiresSelection,
@@ -617,6 +652,7 @@ export function validityForNode(project, node, conformerMember = null, record = 
       relativeKcal: conformer.selected?.relativeKcal ?? null,
       population: conformer.selected?.population ?? null,
       protomer: conformer.selected?.protomer || '',
+      ...(conformer.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
       spreadKcal: conformer.spreadKcal,
       thresholdKcal: conformer.thresholdKcal,
       requiresSelection: conformer.requiresSelection,
@@ -691,6 +727,9 @@ export function buildRunInput(project, node, {
         relativeKcal: conformer.selected.relativeKcal,
         population: conformer.selected.population,
         protomer: conformer.selected.protomer,
+        // Issue #226: which tautomer this run starts from.
+        ...(conformer.selected.tautomer ? { tautomer: conformer.selected.tautomer } : {}),
+        ...(conformer.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
         spreadKcal: conformer.spreadKcal,
       },
     } : {}),
@@ -1158,7 +1197,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
             conformerMember: readsCheckpoint ? null : fanMemberContext(project, fanOut, member),
             ignoreConformer: readsCheckpoint,
             checkpointTaskId: checkpointTaskFor(member.id),
-            title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`
+            title: `${node.title} — ${member.id}${memberLabel(member) ? ` (${memberLabel(member)})` : ''}`
               + `${record ? ` · ${record.label || record.id}` : ''}`,
             fanOut: {
               conformerId: fanOut.nodeId,
@@ -1728,7 +1767,7 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
   return {
     nodeId: taskId,
     type: 'generate',
-    title: `${node.title} — ${member.id}${member.protomer ? ` (${member.protomer})` : ''}`,
+    title: `${node.title} — ${member.id}${memberLabel(member) ? ` (${memberLabel(member)})` : ''}`,
     kind: node.kind || 'Generate',
     executable: true,
     engine: null,
@@ -1764,6 +1803,12 @@ function conformerMemberTask(project, node, { taskId, member, ensemble, record =
         relativeKcal: member.relativeKcal,
         population: member.population,
         protomer: member.protomer,
+        // Issue #226: the tautomer branch names the candidate molecule it runs.
+        ...(ensemble.produces === 'tautomers' ? {
+          produces: 'tautomers',
+          tautomer: String(member.tautomer || ''),
+          smiles: String(member.smiles || ''),
+        } : {}),
         spreadKcal: ensemble.spreadKcal,
         temperature: ensemble.temperature,
       },
@@ -1826,9 +1871,13 @@ export function conformerSearchTask(project, node, record = null) {
     // record.
     outputName: settings.source === 'imported'
       ? 'conformers.json'
-      : (settings.generator === 'uff'
-        ? 'uff.log'
-        : (settings.generator === 'obabel' ? 'obabel.log' : 'crest.out')),
+      : (settings.produces === 'tautomers'
+        // Issue #226: the sidecar's raw JSON answer, kept beside the curated
+        // ensemble so a reader can see what RDKit actually returned.
+        ? 'tautomers.json'
+        : (settings.generator === 'uff'
+          ? 'uff.log'
+          : (settings.generator === 'obabel' ? 'obabel.log' : 'crest.out'))),
     inputText: settings.source === 'imported'
       ? null
       : xyzText(coords, `${node.title} · charge ${charge} · multiplicity ${multiplicity}`),
@@ -1842,15 +1891,18 @@ export function conformerSearchTask(project, node, record = null) {
       ...(ensembleFrom ? { ensembleFrom } : {}),
       argv: settings.source === 'imported'
         ? []
-        : (settings.generator === 'crest'
-          ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
-          : (settings.generator === 'obabel'
-            ? obabelSearchArgv({
-              inputName,
-              nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
-              ff: settings.ff ?? OBABEL_DEFAULT_FF,
-            })
-            : [])),
+        : (settings.produces === 'tautomers'
+          // The sidecar reads one JSON object from stdin; there is no argv.
+          ? []
+          : (settings.generator === 'crest'
+            ? crestArgv({ method: settings.method, charge, multiplicity, inputName })
+            : (settings.generator === 'obabel'
+              ? obabelSearchArgv({
+                inputName,
+                nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
+                ff: settings.ff ?? OBABEL_DEFAULT_FF,
+              })
+              : []))),
       ...(projectBonds ? { bonds: projectBonds } : {}),
     },
     ...(record ? {

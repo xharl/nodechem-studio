@@ -54,12 +54,20 @@ import {
   CONFORMER_GENERATORS,
   CONFORMER_GROUP_MAX,
   CONFORMER_METHODS,
+  CONFORMER_PRODUCES,
   CONFORMER_SOURCES,
   DEFAULT_CONFORMER_SETTINGS,
   DEFAULT_ENSEMBLE_INPUT,
+  DEFAULT_PRODUCES,
   ENSEMBLE_FORMATS,
   isConformerGroupId,
 } from './conformers.js';
+import {
+  DEFAULT_TAUTOMER_OPTIONS,
+  DEFAULT_TAUTOMER_RULESET,
+  TAUTOMER_PROTOCOL,
+  TAUTOMER_RULESETS,
+} from './tautomers.js';
 import {
   OBABEL_DEFAULT_FF,
   OBABEL_DEFAULT_NCONF,
@@ -600,17 +608,62 @@ function normalizeConformerOrigin(c, raw, path, legacy) {
     c.error(path, 'must be an object with program, version, method and sourceSha256.');
     return empty;
   }
-  warnUnknown(c, raw, new Set(['program', 'version', 'method', 'sourceSha256']), path);
+  // Issue #226: an enumerator records the ruleset and the options that decided
+  // which candidates exist. Both are absent from every other origin, so a
+  // conformer or imported summary keeps exactly the keys it had.
+  warnUnknown(c, raw, new Set(['program', 'version', 'method', 'sourceSha256', 'ruleset', 'protocol', 'options']), path);
   const sourceSha256 = readString(c, raw.sourceSha256, `${path}.sourceSha256`, { legacy, fallback: '', max: 64 });
   if (sourceSha256 && !SHA256_HEX.test(sourceSha256)) {
     c.error(`${path}.sourceSha256`, 'must be a lowercase SHA-256 hex digest (64 characters).');
   }
+  const ruleset = readString(c, raw.ruleset, `${path}.ruleset`, { legacy, fallback: '', max: 40 });
+  if (ruleset && !TAUTOMER_RULESETS.includes(ruleset)) {
+    c.error(`${path}.ruleset`, `must be one of ${TAUTOMER_RULESETS.join(', ')}, or empty for a non-tautomer origin.`);
+  }
+  const protocol = readString(c, raw.protocol, `${path}.protocol`, { legacy, fallback: '', max: 40 });
+  if (protocol && protocol !== TAUTOMER_PROTOCOL) {
+    c.error(`${path}.protocol`, `must be "${TAUTOMER_PROTOCOL}", or empty for a non-tautomer origin.`);
+  }
+  const options = normalizeOriginOptions(c, raw.options, `${path}.options`);
   return {
     program: readString(c, raw.program, `${path}.program`, { legacy, fallback: '', max: 40 }),
     version: readString(c, raw.version, `${path}.version`, { legacy, fallback: '', max: 40 }),
     method: readString(c, raw.method, `${path}.method`, { legacy, fallback: '', max: 60 }),
     sourceSha256: SHA256_HEX.test(sourceSha256) ? sourceSha256 : '',
+    ...(ruleset ? { ruleset } : {}),
+    ...(protocol ? { protocol } : {}),
+    ...(options ? { options } : {}),
   };
+}
+
+/**
+ * Issue #226: the enumerator options that travel with a tautomer origin. A
+ * bounded bag of numbers and booleans — no free text, no nested objects — so a
+ * hand-written file cannot smuggle a claim the provenance line would repeat.
+ */
+function normalizeOriginOptions(c, raw, path) {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    c.error(path, 'must be an object of numbers and booleans.');
+    return null;
+  }
+  const keys = Object.keys(raw);
+  if (keys.length > 12) {
+    c.error(path, 'must carry at most 12 options.');
+    return null;
+  }
+  const out = {};
+  for (const key of keys) {
+    if (!/^[A-Za-z][A-Za-z0-9]{0,31}$/.test(key)) {
+      c.error(`${path}.${key}`, 'option names must be plain identifiers.');
+      continue;
+    }
+    const value = raw[key];
+    if (typeof value === 'boolean') out[key] = value;
+    else if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    else c.error(`${path}.${key}`, 'must be a boolean or a finite number.');
+  }
+  return out;
 }
 
 /**
@@ -653,35 +706,68 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // The Open Babel route's knobs: how many conformers the genetic algorithm
     // is asked for, and which force field it uses.
     'nconf', 'ff',
+    // Issue #226: what the block enumerates, and the tautomer ruleset. The
+    // candidate cap is `maxConformers`; there is deliberately no pH setting.
+    'produces', 'tautomerRuleset',
   ]), path);
   // A generate block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
   const source = { ...DEFAULT_CONFORMER_SETTINGS, charge: 0, multiplicity: 1, ...provided };
+  const produces = readEnum(c, source.produces, CONFORMER_PRODUCES, `${path}.produces`, {
+    legacy, fallback: DEFAULT_PRODUCES,
+  });
   const sourceKind = readEnum(c, source.source, CONFORMER_SOURCES, `${path}.source`, {
     legacy, fallback: DEFAULT_CONFORMER_SETTINGS.source,
   });
   // ADR 0001: import is not a generator. A generate block either runs a search
   // or ranks the ensemble an upstream input(ensemble) materialised.
+  // Issue #226: a tautomer block's generator defaults to RDKit, not to the
+  // conformer default — and the `DEFAULT_CONFORMER_SETTINGS` merge below must
+  // not smuggle CREST in when the file said nothing.
+  const generatorValue = provided.generator === undefined || provided.generator === null
+    ? (produces === 'tautomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator)
+    : source.generator;
   const generator = sourceKind === 'imported'
     ? ''
-    : readEnum(c, source.generator, CONFORMER_GENERATORS, `${path}.generator`, {
-      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.generator,
+    : readEnum(c, generatorValue, CONFORMER_GENERATORS, `${path}.generator`, {
+      legacy, fallback: produces === 'tautomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator,
     });
   if (sourceKind === 'imported' && provided.generator !== undefined && provided.generator !== '') {
     c.warn(`${path}.generator`, 'is not used when the source is an imported ensemble; the input block owns the file.');
   }
+  // Issue #226: exactly one generator enumerates tautomers in this build.
+  // Open Babel has no tautomer enumerator, CREST searches conformers, and the
+  // in-app UFF route ranks geometries of one molecule — none of them can be
+  // asked for a tautomer set without inventing one.
+  if (produces === 'tautomers') {
+    if (sourceKind === 'imported') {
+      c.error(`${path}.source`, 'must be "search": an imported ensemble is a set of conformers, not a tautomer enumeration.');
+    }
+    if (generator && generator !== 'rdkit') {
+      c.error(`${path}.generator`, 'must be "rdkit" when produces is "tautomers"; no other generator in this build enumerates tautomers.');
+    }
+  } else if (generator === 'rdkit') {
+    c.error(`${path}.generator`, 'is only wired for tautomer enumeration in this build; a conformer search uses CREST, UFF or Open Babel.');
+  }
   const rankBy = readEnum(c, source.rankBy ?? '', ['', ...SCORER_SPECS], `${path}.rankBy`, {
     legacy, fallback: '',
   });
+  if (produces === 'tautomers' && rankBy) {
+    c.error(`${path}.rankBy`, 'is not supported for a tautomer block: rank the candidates with a calculate block, one per candidate.');
+  }
   const selected = readString(c, source.selectedConformerId, `${path}.selectedConformerId`, { legacy, fallback: '', max: 24 });
   if (selected && !/^c\d+$/.test(selected)) {
     c.error(`${path}.selectedConformerId`, 'must be a conformer id such as "c1", or empty for automatic selection.');
   }
+  const tautomerRuleset = readEnum(c, source.tautomerRuleset, TAUTOMER_RULESETS, `${path}.tautomerRuleset`, {
+    legacy, fallback: DEFAULT_TAUTOMER_RULESET,
+  });
   return {
     source: sourceKind,
+    ...(produces === 'tautomers' || provided.produces !== undefined ? { produces } : {}),
     generator,
     rankBy,
-    method: sourceKind === 'imported'
+    method: sourceKind === 'imported' || produces === 'tautomers'
       ? ''
       : readEnum(c, source.method, CONFORMER_METHODS, `${path}.method`, {
         legacy, fallback: DEFAULT_CONFORMER_SETTINGS.method,
@@ -692,9 +778,22 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     rmsdThreshold: readNumber(c, source.rmsdThreshold, `${path}.rmsdThreshold`, {
       legacy, fallback: DEFAULT_CONFORMER_SETTINGS.rmsdThreshold, min: 0.01, max: 10,
     }),
-    maxConformers: readInteger(c, source.maxConformers, `${path}.maxConformers`, {
-      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.maxConformers, min: 1, max: 200,
-    }),
+    // Issue #226: for a tautomer block this is the candidate cap, so it starts
+    // at the enumerator's documented default (16) rather than the conformer
+    // retention count (20). A stated value wins either way.
+    maxConformers: readInteger(
+      c,
+      provided.maxConformers === undefined || provided.maxConformers === null || provided.maxConformers === ''
+        ? (produces === 'tautomers' ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers)
+        : provided.maxConformers,
+      `${path}.maxConformers`,
+      {
+        legacy,
+        fallback: produces === 'tautomers' ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers,
+        min: 1,
+        max: 200,
+      },
+    ),
     temperature: readNumber(c, source.temperature, `${path}.temperature`, {
       legacy, fallback: DEFAULT_CONFORMER_SETTINGS.temperature, min: 1, max: 1000,
     }),
@@ -702,13 +801,21 @@ function normalizeConformerSettings(c, raw, path, legacy) {
       legacy, fallback: DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal, min: 0, max: 50,
     }),
     selectedConformerId: selected,
-    fanOut: readBoolean(c, source.fanOut, `${path}.fanOut`, {
-      legacy, fallback: DEFAULT_CONFORMER_SETTINGS.fanOut,
+    // Issue #226: a tautomer block fans out by default — every candidate is a
+    // distinct molecule, and one run of one candidate answers nothing about the
+    // rest. An explicit `fanOut: false` still means "run the chosen member".
+    fanOut: readBoolean(c, provided.fanOut, `${path}.fanOut`, {
+      legacy,
+      fallback: produces === 'tautomers' ? true : DEFAULT_CONFORMER_SETTINGS.fanOut,
+      optional: true,
     }),
     charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, source.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
     // Issue #132: the study this block belongs to, or '' for "stands alone".
     group: readConformerGroup(c, source.group, `${path}.group`),
+    // Issue #226: recorded only for a tautomer block, so every other generate
+    // block serialises exactly as it did before.
+    ...(produces === 'tautomers' || provided.tautomerRuleset !== undefined ? { tautomerRuleset } : {}),
     // Issue 144: the UFF route's own settings. Only present when the file
     // states them, so a project that never chose the route serialises exactly
     // as it did before (the defaults live in uffConformers.js: 120° and 200).
@@ -1010,11 +1117,28 @@ function normalizeConformerOutput(c, raw, path, legacy) {
           : readNumber(c, member.energyKcal, `${memberPath}.energyKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
         energyUnit,
         energyMethod: readString(c, member.energyMethod, `${memberPath}.energyMethod`, { legacy: true, fallback: '', max: 40 }),
-        relativeKcal: readNumber(c, member.relativeKcal, `${memberPath}.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+        // Issue #226: a tautomer candidate has no energy at all. null must stay
+        // null: a 0 here would print as "ΔE 0.00" for every candidate.
+        relativeKcal: member.relativeKcal === null || member.relativeKcal === undefined
+          ? null
+          : readNumber(c, member.relativeKcal, `${memberPath}.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
         // A mixed ensemble has no population to report: null is stored, not 0.
         population: member.population === null ? null : readNumber(c, member.population, `${memberPath}.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
-        rmsdToLowest: readNumber(c, member.rmsdToLowest, `${memberPath}.rmsdToLowest`, { legacy: true, fallback: 0, min: 0, max: 100 }),
+        rmsdToLowest: member.rmsdToLowest === null || member.rmsdToLowest === undefined
+          ? null
+          : readNumber(c, member.rmsdToLowest, `${memberPath}.rmsdToLowest`, { legacy: true, fallback: 0, min: 0, max: 100 }),
         protomer: readString(c, member.protomer, `${memberPath}.protomer`, { legacy: true, fallback: '', max: 40 }),
+        // Issue #226: the tautomer label and the SMILES that make two
+        // candidates distinguishable. Absent from a conformer member.
+        ...(member.tautomer === undefined ? {} : {
+          tautomer: readString(c, member.tautomer, `${memberPath}.tautomer`, { legacy: true, fallback: '', max: 16 }),
+        }),
+        ...(member.smiles === undefined ? {} : {
+          smiles: readString(c, member.smiles, `${memberPath}.smiles`, { legacy: true, fallback: '', max: 120 }),
+        }),
+        ...(member.formula === undefined ? {} : {
+          formula: readString(c, member.formula, `${memberPath}.formula`, { legacy: true, fallback: '', max: 40 }),
+        }),
         kept: Boolean(member.kept),
         dropped: ['energy', 'rmsd', 'count'].includes(member.dropped) ? member.dropped : null,
         atoms: member.kept ? normalizeConformerAtoms(c, member.atoms, `${memberPath}.atoms`, legacy) : [],
@@ -1033,9 +1157,17 @@ function normalizeConformerOutput(c, raw, path, legacy) {
       legacy: true, fallback: ensembleUnit,
     }),
     energyMethod: readString(c, selectedRaw.energyMethod, `${path}.selected.energyMethod`, { legacy: true, fallback: '', max: 40 }),
-    relativeKcal: readNumber(c, selectedRaw.relativeKcal, `${path}.selected.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
+    relativeKcal: selectedRaw.relativeKcal === null || selectedRaw.relativeKcal === undefined
+      ? null
+      : readNumber(c, selectedRaw.relativeKcal, `${path}.selected.relativeKcal`, { legacy: true, fallback: 0, min: -1e6, max: 1e6 }),
     population: selectedRaw.population === null ? null : readNumber(c, selectedRaw.population, `${path}.selected.population`, { legacy: true, fallback: 0, min: 0, max: 1 }),
     protomer: readString(c, selectedRaw.protomer, `${path}.selected.protomer`, { legacy: true, fallback: '', max: 40 }),
+    ...(selectedRaw.tautomer === undefined ? {} : {
+      tautomer: readString(c, selectedRaw.tautomer, `${path}.selected.tautomer`, { legacy: true, fallback: '', max: 16 }),
+    }),
+    ...(selectedRaw.smiles === undefined ? {} : {
+      smiles: readString(c, selectedRaw.smiles, `${path}.selected.smiles`, { legacy: true, fallback: '', max: 120 }),
+    }),
     atoms: normalizeConformerAtoms(c, selectedRaw.atoms, `${path}.selected.atoms`, legacy),
   } : null;
   // Issue 144: present only on an in-app UFF ensemble, so a CREST or imported
@@ -1043,6 +1175,13 @@ function normalizeConformerOutput(c, raw, path, legacy) {
   const search = normalizeConformerSearch(c, raw.search, `${path}.search`);
   return {
     generator: readString(c, raw.generator, `${path}.generator`, { legacy: true, fallback: '', max: 24 }),
+    // Issue #226: what the set is. Only a tautomer block writes it, so a
+    // conformer summary keeps exactly the keys (and bytes) it had.
+    ...(raw.produces === undefined ? {} : {
+      produces: readEnum(c, raw.produces, CONFORMER_PRODUCES, `${path}.produces`, {
+        legacy: true, fallback: DEFAULT_PRODUCES,
+      }),
+    }),
     method: readString(c, raw.method, `${path}.method`, { legacy: true, fallback: '', max: 24 }),
     // Issue #130: what the ensemble's absolute energies are, and what produced
     // them. `mixedEnergies` means the members disagree and nothing was averaged.
@@ -1067,6 +1206,15 @@ function normalizeConformerOutput(c, raw, path, legacy) {
     requiresSelection: Boolean(raw.requiresSelection),
     autoSelected: Boolean(raw.autoSelected),
     protomers: Array.isArray(raw.protomers) ? raw.protomers.slice(0, 20).map((item) => String(item).slice(0, 40)) : [],
+    // Issue #226: the candidate labels a tautomer block enumerated, and whether
+    // the enumerator's cap truncated the set. Absent from every conformer
+    // summary, so those keep their exact key set.
+    ...(raw.tautomers === undefined ? {} : {
+      tautomers: Array.isArray(raw.tautomers)
+        ? raw.tautomers.slice(0, 200).map((item) => String(item ?? '').slice(0, 16)).filter(Boolean)
+        : [],
+    }),
+    ...(raw.truncated === undefined ? {} : { truncated: Boolean(raw.truncated) }),
     pruned: {
       energy: readInteger(c, raw.pruned?.energy, `${path}.pruned.energy`, { legacy: true, fallback: 0, min: 0, max: 5000 }),
       rmsd: readInteger(c, raw.pruned?.rmsd, `${path}.pruned.rmsd`, { legacy: true, fallback: 0, min: 0, max: 5000 }),

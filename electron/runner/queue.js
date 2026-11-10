@@ -22,6 +22,15 @@ import { sha256File } from './hashing.js';
 import { CrestRunner } from './crestRunner.js';
 import { ObabelRunner } from './obabelRunner.js';
 import { ScorerRunner } from './scorerRunner.js';
+import { TautomerRunner } from './tautomerRunner.js';
+import {
+  DEFAULT_TAUTOMER_OPTIONS,
+  TAUTOMER_PROTOCOL,
+  TautomerEnumerationError,
+  normalizeTautomerResponse,
+  tautomerRequest,
+  tautomerSummary,
+} from '../../src/shared/tautomers.js';
 import {
   ensembleSummary,
   fixtureConformerFrames,
@@ -353,7 +362,11 @@ function conformerTaskRecord(raw, nodeId) {
   // treated as CREST, which is the historical default.
   const generator = source === 'imported'
     ? ''
-    : (conf.generator === 'uff' ? 'uff' : (conf.generator === 'obabel' ? 'obabel' : 'crest'));
+    : (conf.generator === 'uff' ? 'uff' : (conf.generator === 'obabel' ? 'obabel' : (conf.generator === 'rdkit' ? 'rdkit' : 'crest')));
+  // Issue #226: what the block enumerates. Only `tautomers` changes the task's
+  // shape (no method, a JSON sidecar, a candidate cap); a file that never said
+  // stays a conformer search.
+  const produces = conf.produces === 'tautomers' ? 'tautomers' : 'conformers';
   // A fanned-out member task (#80) carries one member of an ensemble that is
   // already stored in the project. It does not search, so it needs neither a
   // generator nor an import path — only the member row it stands for.
@@ -362,6 +375,11 @@ function conformerTaskRecord(raw, nodeId) {
   if (rawMember && !/^c\d+$/.test(memberId)) {
     throw new Error(`Generate task "${nodeId}" names an invalid member id.`);
   }
+  // A number a payload did not state stays null. `Number(null)` is 0, so a
+  // plain isFinite check would turn a tautomer's absent energy into a real 0.
+  const nullableNumber = (value) => (value === null || value === undefined || value === ''
+    ? null
+    : (Number.isFinite(Number(value)) ? Number(value) : null));
   const member = rawMember ? {
     id: memberId,
     rank: Number.isFinite(Number(rawMember.rank)) ? Number(rawMember.rank) : null,
@@ -369,10 +387,10 @@ function conformerTaskRecord(raw, nodeId) {
     parentTitle: oneLine(rawMember.parentTitle, 120),
     generator: oneLine(rawMember.generator, 24),
     method: oneLine(rawMember.method, 24),
-    energyEh: Number.isFinite(Number(rawMember.energyEh)) ? Number(rawMember.energyEh) : null,
+    energyEh: nullableNumber(rawMember.energyEh),
     // Issue #130: a fanned-out member must not lose the unit and method its
     // energy was produced with; the branch's conformers.json repeats them.
-    energyKcal: Number.isFinite(Number(rawMember.energyKcal)) ? Number(rawMember.energyKcal) : null,
+    energyKcal: nullableNumber(rawMember.energyKcal),
     energyUnit: rawMember.energyUnit === 'kcal/mol' ? 'kcal/mol' : 'hartree',
     energyMethod: oneLine(rawMember.energyMethod, 40),
     origin: {
@@ -381,14 +399,18 @@ function conformerTaskRecord(raw, nodeId) {
       method: oneLine(rawMember.origin?.method, 60),
       sourceSha256: oneLine(rawMember.origin?.sourceSha256, 64),
     },
-    relativeKcal: Number.isFinite(Number(rawMember.relativeKcal)) ? Number(rawMember.relativeKcal) : null,
+    relativeKcal: nullableNumber(rawMember.relativeKcal),
     // A mixed ensemble's members have no population (null), which is not 0%.
-    population: rawMember.population === null || rawMember.population === undefined
-      ? null
-      : (Number.isFinite(Number(rawMember.population)) ? Number(rawMember.population) : null),
+    population: nullableNumber(rawMember.population),
     protomer: oneLine(rawMember.protomer, 40),
-    spreadKcal: Number.isFinite(Number(rawMember.spreadKcal)) ? Number(rawMember.spreadKcal) : null,
-    temperature: Number.isFinite(Number(rawMember.temperature)) ? Number(rawMember.temperature) : null,
+    // Issue #226: a tautomer branch names the candidate it runs. Absent from a
+    // conformer member, so its normalized row keeps its exact key set.
+    ...(rawMember.tautomer === undefined && rawMember.smiles === undefined ? {} : {
+      tautomer: oneLine(rawMember.tautomer, 16),
+      smiles: oneLine(rawMember.smiles, 120),
+    }),
+    spreadKcal: nullableNumber(rawMember.spreadKcal),
+    temperature: nullableNumber(rawMember.temperature),
   } : null;
   const number = (value, fallback, min, max) => {
     const parsed = Number(value);
@@ -419,7 +441,7 @@ function conformerTaskRecord(raw, nodeId) {
     inputName,
     outputName: source === 'imported'
       ? 'conformers.json'
-      : (/^[A-Za-z0-9._-]+\.(xyz|out|log)$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out'),
+      : (/^[A-Za-z0-9._-]+\.(xyz|out|log|json)$/i.test(String(raw?.outputName || '')) ? String(raw.outputName) : 'crest.out'),
     settings: null,
     gates: {},
     validity: null,
@@ -444,6 +466,9 @@ function conformerTaskRecord(raw, nodeId) {
     error: null,
     reason: null,
     previousError: null,
+    // Issue #226: a tautomer refusal carries a code as well as the message, so
+    // "the enumerator returned nothing" is distinguishable from "it crashed".
+    refusal: null,
     startedAt: null,
     finishedAt: null,
     ensemble: null,
@@ -452,11 +477,18 @@ function conformerTaskRecord(raw, nodeId) {
     generate: {
       source,
       generator,
+      // Issue #226: only a tautomer task states `produces`; a conformer task
+      // keeps exactly the keys it always had.
+      ...(produces === 'tautomers' ? { produces } : {}),
       rankBy: typeof conf.rankBy === 'string' ? conf.rankBy : '',
-      method: source === 'imported' ? '' : (conf.method === 'gfnff' ? 'gfnff' : 'gfn2'),
+      // A tautomer set has no xTB method; recording `gfn2` would put a method
+      // on the run that never ran.
+      method: produces === 'tautomers'
+        ? ''
+        : (source === 'imported' ? '' : (conf.method === 'gfnff' ? 'gfnff' : 'gfn2')),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
-      maxConformers: Math.round(number(conf.maxConformers, 20, 1, 200)),
+      maxConformers: Math.round(number(conf.maxConformers, produces === 'tautomers' ? 16 : 20, 1, 200)),
       temperature: number(conf.temperature, 298.15, 1, 1000),
       spreadThresholdKcal: number(conf.spreadThresholdKcal, 2, 0, 50),
       selectedConformerId: /^c\d+$/.test(String(conf.selectedConformerId || '')) ? String(conf.selectedConformerId) : '',
@@ -467,6 +499,11 @@ function conformerTaskRecord(raw, nodeId) {
       // every other string a hand-written queue payload could carry; an
       // invalid value is dropped rather than guessed at.
       group: isConformerGroupId(String(conf.group ?? '')) ? String(conf.group) : '',
+      // Issue #226: the tautomer ruleset, bounded like the rest, and only on a
+      // tautomer task.
+      ...(produces === 'tautomers'
+        ? { tautomerRuleset: conf.tautomerRuleset === 'rdkit-default' ? conf.tautomerRuleset : DEFAULT_TAUTOMER_OPTIONS.ruleset }
+        : {}),
       // Issue 144: the UFF route's own settings and the project's bond table.
       // Bounded here like everything else, and absent for CREST/import tasks.
       ...(generator === 'uff' && Number.isFinite(Number(conf.torsionStepDegrees))
@@ -1269,6 +1306,13 @@ export class QueueManager {
     const needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
       || (task.type === 'calculate' && task.scorer)
       || (task.type === 'prepare' && task.prepare?.converter === 'aimnet2'));
+    // Issue #226: tautomer enumeration is always the external sidecar — there
+    // is no in-app fallback, and a dry run must not fabricate a tautomer set.
+    const tautomerExecutable = String(options.tautomerExecutable || '').trim();
+    const tautomerScript = String(options.tautomerScript || '').trim();
+    const needsTautomer = tasks.some((task) => task.type === 'generate'
+      && task.generate?.produces === 'tautomers'
+      && !task.generate?.member);
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1293,6 +1337,18 @@ export class QueueManager {
         if (!scorerExecutable) throw new Error('Choose the ML scorer sidecar before running a block with rankBy set.');
         const stat = await fsp.stat(scorerExecutable).catch(() => null);
         if (!stat?.isFile()) throw new Error(`ML scorer sidecar not found: ${scorerExecutable}`);
+      }
+      if (needsTautomer) {
+        if (!tautomerExecutable) {
+          throw new Error('Choose the tautomer sidecar before running a tautomer block. Tautomer enumeration needs '
+            + 'RDKit (scripts/tautomer-enumerator.py); there is no in-app fallback.');
+        }
+        const stat = await fsp.stat(tautomerExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`Tautomer sidecar not found: ${tautomerExecutable}`);
+        if (tautomerScript) {
+          const scriptStat = await fsp.stat(tautomerScript).catch(() => null);
+          if (!scriptStat?.isFile()) throw new Error(`Tautomer sidecar script not found: ${tautomerScript}`);
+        }
       }
     }
 
@@ -1319,6 +1375,10 @@ export class QueueManager {
         crestExecutable: dryRun ? null : crestExecutable,
         obabelExecutable: dryRun ? null : obabelExecutable,
         scorerExecutable: dryRun ? null : String(options.scorerExecutable || '').trim(),
+        // Issue #226: the tautomer sidecar travels with the queue so a replay
+        // names the same program, and a dry run records none because none ran.
+        tautomerExecutable: dryRun ? null : tautomerExecutable,
+        tautomerScript: dryRun ? null : tautomerScript,
         scratchDir,
         // A relative conformer `importPath` resolves against this folder, so it
         // travels with the queue and a replay resolves it the same way.
@@ -1782,6 +1842,13 @@ export class QueueManager {
         await this.carryConformerMember(queue, task, dir, conf.member);
         return;
       }
+      // Issue #226: a tautomer block is a different job — an external
+      // enumerator, a candidate set with no energies, and no ranking pass. It
+      // writes its own ensemble and returns; nothing below applies to it.
+      if (conf.produces === 'tautomers') {
+        await this.runTautomerEnumeration(queue, task, conf, dir);
+        return;
+      }
       let ensembleText = '';
       let energies = [];
       let source = conf.source === 'imported' ? 'imported' : conf.generator;
@@ -2152,6 +2219,146 @@ export class QueueManager {
   }
 
   /**
+   * Issue #226 — enumerate tautomers through the external RDKit sidecar.
+   *
+   * This is deliberately not a variant of the conformer search:
+   *
+   *   - the sidecar is required. A dry run refuses instead of writing a
+   *     three-member "fixture tautomer set", because a fabricated tautomer is a
+   *     fabricated molecule, not a fabricated number;
+   *   - zero candidates, a protocol mismatch and a crashed sidecar are all
+   *     refusals. The input geometry is never substituted for the set: that
+   *     would report "one tautomer" for a structure whose enumeration failed;
+   *   - the summary carries no energies and no populations, and the raw
+   *     sidecar answer is kept in the task folder as `tautomers.json`.
+   */
+  async runTautomerEnumeration(queue, task, conf, dir) {
+    try {
+      const inputPath = this.conformerInputPath(queue.id, task.nodeId);
+      const inputText = await fsp.readFile(inputPath, 'utf8');
+      const parsedInput = parseMultiXyz(inputText);
+      if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+        throw new TautomerEnumerationError(
+          'bad-geometry',
+          `The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`,
+        );
+      }
+      const atoms = parsedInput.frames[0].atoms;
+      if (queue.options.dryRun) {
+        throw new TautomerEnumerationError(
+          'tautomer-dry-run',
+          'A dry run cannot enumerate tautomers: the RDKit sidecar is an external program and a dry run never '
+          + 'fabricates molecules. Configure the tautomer sidecar and run for real, or point the block at data '
+          + 'that already exists.',
+        );
+      }
+      const executable = String(queue.options.tautomerExecutable || '').trim();
+      if (!executable) {
+        throw new TautomerEnumerationError(
+          'tautomer-sidecar-missing',
+          'No tautomer sidecar is configured. Tautomer enumeration needs RDKit (scripts/tautomer-enumerator.py); '
+          + 'there is no in-app fallback, so the block refuses instead of guessing.',
+        );
+      }
+
+      const options = {
+        ruleset: conf.tautomerRuleset || DEFAULT_TAUTOMER_OPTIONS.ruleset,
+        maxCandidates: conf.maxConformers,
+        maxTransforms: DEFAULT_TAUTOMER_OPTIONS.maxTransforms,
+        relaxGeometry: true,
+        removeSp3Stereo: false,
+        removeBondStereo: false,
+      };
+      const request = tautomerRequest({
+        title: task.title,
+        charge: conf.charge,
+        multiplicity: conf.multiplicity,
+        atoms,
+        options,
+      });
+      // The request is part of the run folder: it names every option that
+      // decided the set, so the enumeration can be repeated byte for byte.
+      await fsp.writeFile(path.join(dir, 'request.json'), JSON.stringify(request, null, 2) + '\n', 'utf8');
+
+      const runner = new TautomerRunner();
+      this.conformersRunner = runner;
+      const raw = await runner.enumerate({
+        executable,
+        script: queue.options.tautomerScript || '',
+        request,
+        cwd: dir,
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      }).finally(() => {
+        if (this.conformersRunner === runner) this.conformersRunner = null;
+      });
+      // Keep the answer before validating it: a refusal is evidence too.
+      const answerName = task.outputName || 'tautomers.json';
+      await fsp.writeFile(path.join(dir, answerName), JSON.stringify(raw, null, 2) + '\n', 'utf8');
+
+      const result = normalizeTautomerResponse(raw, { maxCandidates: options.maxCandidates });
+      const sourceSha256 = await sha256File(inputPath).catch(() => '');
+      const summary = tautomerSummary({
+        result,
+        group: conf.group,
+        selectedId: conf.selectedConformerId,
+        sourceSha256,
+      });
+      summary.generatedAt = new Date().toISOString();
+      // One XYZ frame per candidate, in the summary's order. The ensemble file
+      // is what a reader opens when they want the geometries without the JSON;
+      // the comment labels each frame with its tautomer id.
+      const frames = result.candidates.map((candidate) => xyzText(
+        candidate.atoms,
+        `tautomer=${candidate.label} ${candidate.smiles} · charge ${conf.charge} · multiplicity ${conf.multiplicity}`,
+      ));
+      await fsp.writeFile(path.join(dir, 'tautomers.xyz'), frames.join(''), 'utf8');
+      await writeJsonAtomic(path.join(dir, 'conformers.json'), summary);
+
+      task.status = 'completed';
+      task.ensemble = summary;
+      task.ensembleFile = 'conformers.json';
+      task.runDir = dir;
+      task.finishedAt = new Date().toISOString();
+      task.refusal = null;
+      task.summary = `${summary.count} tautomer candidate${summary.count === 1 ? '' : 's'} enumerated`
+        + ` (${summary.origin.program || 'RDKit'} ${summary.origin.version || 'version not reported'}, ${summary.origin.ruleset})`
+        + (summary.truncated ? '; candidate cap reached' : '');
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `${summary.count} tautomer candidate(s): ${summary.tautomers.join(', ')}. `
+          + 'Distinct molecules, not conformers: no energies and no populations are assigned here; '
+          + 'each candidate fans out into its own calculation.',
+      });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      task.finishedAt = new Date().toISOString();
+      if (error instanceof TautomerEnumerationError) {
+        task.refusal = { code: error.code, message: task.error };
+      } else {
+        // A crash, a timeout or an unreadable input is a refusal too — the block
+        // produced no candidates, and the run record must say so rather than
+        // leave `refusal: null` to be read as "fine, nothing to report".
+        task.refusal = {
+          code: String(error?.code || 'tautomer-failed').slice(0, 40),
+          message: task.error,
+        };
+      }
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `Tautomer enumeration refused: ${task.error}`,
+      });
+    }
+    await this.persist(queue);
+    this.publish(queue);
+  }
+
+  /**
    * Materialise one fanned-out member (#80).
    *
    * No search is repeated: the stored geometry and its ranking row are written
@@ -2159,6 +2366,9 @@ export class QueueManager {
    * record, and `run.json` for the branch's calculation names the member.
    */
   async carryConformerMember(queue, task, dir, member) {
+    // Issue #226: a tautomer branch is still one member of one ensemble; the
+    // task says which kind of set that was.
+    const tautomerMember = task.generate?.produces === 'tautomers' || member.produces === 'tautomers';
     const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
     const parsed = parseMultiXyz(inputText);
     if (parsed.errors.length > 0 || parsed.frames.length !== 1) {
@@ -2182,6 +2392,9 @@ export class QueueManager {
     };
     const summary = {
       generator: String(member.generator || ''),
+      // Issue #226: a tautomer branch repeats what the member is, so the branch
+      // folder does not read as a one-member conformer ensemble.
+      ...(tautomerMember ? { produces: 'tautomers' } : {}),
       method: String(member.method || ''),
       ...memberEnergy,
       origin: memberOrigin,
@@ -2219,6 +2432,9 @@ export class QueueManager {
         population: member.population,
         rmsdToLowest: 0,
         protomer: member.protomer,
+        ...(tautomerMember
+          ? { tautomer: String(member.tautomer || ''), smiles: String(member.smiles || '') }
+          : {}),
         kept: true,
         dropped: null,
         atoms,
@@ -2231,9 +2447,16 @@ export class QueueManager {
         relativeKcal: member.relativeKcal,
         population: member.population,
         protomer: member.protomer,
+        ...(tautomerMember
+          ? { tautomer: String(member.tautomer || ''), smiles: String(member.smiles || '') }
+          : {}),
         atoms,
       },
     };
+    if (tautomerMember) {
+      summary.tautomers = member.tautomer ? [member.tautomer] : [];
+      summary.truncated = false;
+    }
     await writeJsonAtomic(path.join(dir, 'conformers.json'), summary);
     task.status = 'completed';
     task.ensemble = summary;
@@ -2249,6 +2472,9 @@ export class QueueManager {
       relativeKcal: member.relativeKcal,
       population: member.population,
       protomer: member.protomer,
+      ...(tautomerMember
+        ? { produces: 'tautomers', tautomer: String(member.tautomer || ''), smiles: String(member.smiles || '') }
+        : {}),
       spreadKcal: member.spreadKcal,
     };
     this.emit({
