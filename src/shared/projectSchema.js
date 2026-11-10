@@ -196,6 +196,10 @@ export const POPULATION_OPTIONS = Object.freeze(['', 'NBO', 'Hirshfeld', 'MK']);
 export const TD_TRIPLETS_MODES = Object.freeze(['', 'triplets', 'both']);
 export const NMR_NUCLEI = Object.freeze(['1H', '13C', '15N', '19F', '31P', '29Si']);
 export const VERBOSITY_OPTIONS = Object.freeze(['', 'Normal', 'Verbose']);
+// Gaussian's Output keyword writes both the print verbosity and the matrix
+// element file. The binary/text form is a scope decision (#247): Tier 1 only
+// asks Gaussian to write it; nodeChem does not parse it in this release.
+export const MATRIX_ELEMENT_OPTIONS = Object.freeze(['', 'MatrixElement', 'RawMatrixElement']);
 export const SOLVATION_MODELS = Object.freeze(['PCM', 'SMD', 'CPCM']);
 export const MEMORY_UNITS = Object.freeze(['MB', 'GB', 'MW']);
 export const CONDITION_UNKNOWN = Object.freeze(['block-both', 'treat-false', 'treat-true']);
@@ -291,6 +295,9 @@ const NODE_TYPE_KEYS = {
 const SETTINGS_KEYS = new Set([
   'jobType', 'method', 'basis', 'memory', 'memoryUnit', 'nproc', 'checkpoint', 'charge',
   'multiplicity', 'dispersion', 'scf', 'grid', 'population', 'verbosity', 'solvation',
+  // Issue #247: Tier 1 asks Gaussian to write a matrix element file; absent by
+  // default so existing projects serialise unchanged.
+  'matrixElement',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
   'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
   // Issue #146: the vertical-emission block and the two-job NTO chain.
@@ -1709,6 +1716,11 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     c.warn(`${path}.provider`, `uses the ${provider} scorer; the engine and route on this block are ignored.`);
   }
   const customKeywords = readString(c, source.customKeywords, `${path}.customKeywords`, { legacy, fallback: '', max: 500 });
+  // Issue #247 Tier 1: ask Gaussian to write a matrix element file. Absent by
+  // default; the value only changes the route, not what nodeChem parses.
+  const matrixElement = source.matrixElement === undefined || source.matrixElement === null || source.matrixElement === ''
+    ? null
+    : readEnum(c, source.matrixElement, MATRIX_ELEMENT_OPTIONS, `${path}.matrixElement`, { legacy, fallback: '' }) || null;
   if (/^Opt\b/.test(String(source.jobType ?? 'Opt')) && hasOptKeyword(customKeywords)) {
     c.warn(`${path}.customKeywords`,
       'adds an Opt keyword, but the job type and force constants already emit one. Remove it, or the input builder will refuse to compose the route.');
@@ -1841,6 +1853,7 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // default, so a project that never set them serialises exactly as before.
     ...(freezeCore !== null ? { freezeCore } : {}),
     ...(pnoThreshold !== null ? { pnoThreshold } : {}),
+    ...(matrixElement ? { matrixElement } : {}),
     ...(recordTransitionDipoles !== null ? { recordTransitionDipoles } : {}),
     ...(provider ? { provider } : {}),
   };

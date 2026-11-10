@@ -126,7 +126,7 @@ Type-specific payloads:
 
 `jobType`, `engine`, `method`, `basis`, `memory`, `memoryUnit`, `nproc`, `checkpoint`,
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
-`solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
+`matrixElement`, `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
 `optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
 `emission`, `nto`, `ntoTransition`,
 `raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,

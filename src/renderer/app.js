@@ -21,7 +21,7 @@ import {
   draftIsRestorable,
   normalizeDraft,
 } from '../shared/draft.js';
-import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, MATRIX_ELEMENT_OPTIONS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
 import { applyQueueToProject, nextAction } from '../shared/queueReconcile.js';
 import { clampFloatingRect, readFloatingRect } from '../shared/floatingWindow.js';
 import {
@@ -2250,6 +2250,11 @@ function calcInspector(node) {
         : 'Prints the orbital eigenvalues, so the results panel can report HOMO, LUMO, gap, IP, EA, hardness, softness and electrophilicity.')
       + '</span></div>',
     selectField('Output verbosity', 'verbosity', VERBOSITY, s.verbosity),
+    selectField('Matrix element file', 'matrixElement', MATRIX_ELEMENT_OPTIONS.map((value) => [
+      value,
+      value === '' ? 'None' : value === 'MatrixElement' ? 'Text (MatrixElement)' : 'Raw binary (RawMatrixElement)',
+    ]), s.matrixElement || ''),
+    '<div class="field full"><span class="inspector-note">Gaussian writes the matrix element file next to the output. This release requests it but does not parse the binary; clear Output verbosity when requesting one, because both share the <code>Output</code> keyword.</span></div>',
   ].join(''));
 
   // Psi4 is the second code engine: its methods, bases and job list are its
@@ -4670,6 +4675,13 @@ function updateNodeField(node, key, value) {
   }
   if (key === 'pnoThreshold') {
     node.settings.pnoThreshold = value;
+    return;
+  }
+  // Issue 247: absent means "do not ask for a matrix element file", so the
+  // empty option removes the key instead of storing an empty string.
+  if (key === 'matrixElement') {
+    if (value) node.settings.matrixElement = value;
+    else delete node.settings.matrixElement;
     return;
   }
   if (key in node.settings) {
