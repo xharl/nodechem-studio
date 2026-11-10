@@ -245,7 +245,7 @@
   <div class="run-body">
     <div class="run-config run-pane" data-pane="setup">
       <label class="run-check"><input type="checkbox" id="run-dry" checked> Dry run (fixture output)</label>
-      <div class="run-field"><label for="run-exe" id="run-exe-label">Gaussian 16 executable</label><div class="run-path"><input id="run-exe" placeholder="C:\\G16W\\g16.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-gaussian">Browse</button></div></div>
+      <div class="run-field"><label for="run-exe" id="run-exe-label">Gaussian 16 executable</label><div class="run-path"><input id="run-exe" placeholder="C:\\G16W\\g16.exe" spellcheck="false" autocomplete="off"><span class="run-detected" id="run-exe-detected" hidden></span><button class="btn small" data-action="pick-gaussian">Browse</button></div></div>
       <div class="run-field"><label for="run-crest" title="CREST executable (conformer blocks)">CREST executable</label><div class="run-path"><input id="run-crest" placeholder="C:\\crest\\crest.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-crest">Browse</button></div></div>
       <div class="run-field"><label for="run-obabel" title="Open Babel executable (MMFF94 conformer stage)">Open Babel</label><div class="run-path"><input id="run-obabel" placeholder="C:\\obabel\\obabel.exe" spellcheck="false" autocomplete="off"><button class="btn small" data-action="pick-obabel">Browse</button></div></div>
       <div class="run-field"><label for="run-scorer" title="Optional ML scorer sidecar (ADR 0001)">ML scorer</label><div class="run-path"><input id="run-scorer" placeholder="python /path/to/aimnet2-scorer.py" spellcheck="false" autocomplete="off"></div></div>

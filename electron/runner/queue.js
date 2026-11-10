@@ -53,7 +53,6 @@ import {
 // `~` joins a block id to the conformer member it was expanded for (#80); it
 // is not a path separator and is legal inside a file name on every target OS.
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,63}$/;
-const SAFE_CHECKPOINT = /^[A-Za-z0-9._-]{1,124}\.chk$/i;
 // xTB's restart artifact is a plain filename (`xtbrestart`); it is not a
 // Gaussian checkpoint and must not be forced through the `.chk` pattern.
 // The first character is alphanumeric so `.`/`..` can never escape targetDir.
@@ -237,7 +236,12 @@ function checkpointArtifactFor(engine, task = {}) {
   // and inventing one from a dataset task id (`sp~water`) produced a name the
   // `.chk` validator then refused.
   if (!engine.capabilities?.restartArtifact) return '';
-  return String(task.checkpointName || `${task.nodeId || 'task'}.chk`);
+  // Ask the capability, not a Gaussian assumption: `.gbw`, `.chk`, or xTB's
+  // fixed `xtbrestart`. A future engine needs only its `restartArtifact`.
+  const artifact = String(engine.capabilities.restartArtifact);
+  if (artifact.startsWith('.')) return String(task.checkpointName || `${task.nodeId || 'task'}${artifact}`);
+  if (artifact === 'chk') return String(task.checkpointName || `${task.nodeId || 'task'}.chk`);
+  return artifact;
 }
 
 /**
@@ -269,8 +273,43 @@ function queueExecutableFor(queue, task) {
   return queue?.options?.executable || null;
 }
 
+/**
+ * The canonical restart artifact an engine declares. Every registered engine
+ * implements `checkpointArtifact`; the capability fallback keeps a future
+ * engine working without a queue change.
+ */
+function canonicalRestartArtifact(engine) {
+  if (typeof engine?.checkpointArtifact === 'function') {
+    return String(engine.checkpointArtifact({ checkpointName: '', nodeId: 'task' }) || '');
+  }
+  const artifact = String(engine?.capabilities?.restartArtifact || '');
+  if (!artifact) return '';
+  if (artifact.startsWith('.')) return `task${artifact}`;
+  if (artifact === 'chk') return 'task.chk';
+  return artifact;
+}
+
+/** What the error tells the user to use: `.gbw`, `.chk`, or `xtbrestart`. */
+function checkpointExpectation(engine) {
+  const canonical = canonicalRestartArtifact(engine);
+  if (!canonical) return 'no restart artifact';
+  const dot = canonical.lastIndexOf('.');
+  return dot > 0 ? `must match ${canonical.slice(dot)}` : `must be "${canonical}"`;
+}
+
+/**
+ * Issue #231: validate against the engine's own restart artifact. A `.gbw`
+ * name is not an "unsafe checkpoint"; it is ORCA's file, and the old Gaussian
+ * pattern refused every ORCA task before it could start.
+ */
 function isSafeCheckpointName(engine, name) {
-  return engine.id === 'xtb' ? SAFE_ARTIFACT.test(String(name)) : SAFE_CHECKPOINT.test(String(name));
+  const candidate = String(name);
+  if (!SAFE_ARTIFACT.test(candidate)) return false;
+  const canonical = canonicalRestartArtifact(engine);
+  if (!canonical) return false;
+  const dot = canonical.lastIndexOf('.');
+  if (dot > 0) return candidate.toLowerCase().endsWith(canonical.slice(dot).toLowerCase());
+  return candidate === canonical;
 }
 
 /**
@@ -784,15 +823,21 @@ function taskRecord(raw, index) {
       ...(geometryOnly ? { geometryOnly: true } : {}),
     };
   }
-  if (checkpointFrom && !checkpointFrom.geometryOnly && !isSafeCheckpointName(engine, checkpointFrom.checkpoint)) {
-    throw new Error(`Task "${nodeId}" hands off a checkpoint with an unsafe name.`);
+  // xTB keeps its deferred mismatch check: a declared name is only a claim until
+  // the upstream runs, and the existing test pins that error. The outgoing
+  // artifact (`checkpointName`) is still validated below against the engine.
+  const safeHandoff = engine.id === 'xtb'
+    ? SAFE_ARTIFACT.test(String(checkpointFrom?.checkpoint || ''))
+    : isSafeCheckpointName(engine, checkpointFrom?.checkpoint);
+  if (checkpointFrom && !checkpointFrom.geometryOnly && !safeHandoff) {
+    throw new Error(`Task "${nodeId}" hands off "${checkpointFrom.checkpoint}", but this engine's restart artifact ${checkpointExpectation(engine)}.`);
   }
   const checkpointName = checkpointArtifactFor(engine, {
     checkpointName: raw?.checkpointName,
     nodeId,
   });
   if (checkpointName && !isSafeCheckpointName(engine, checkpointName)) {
-    throw new Error(`Task "${nodeId}" has an unsafe checkpoint name.`);
+    throw new Error(`Task "${nodeId}" names the restart artifact "${checkpointName}", but this engine's restart artifact ${checkpointExpectation(engine)}.`);
   }
   const type = TASK_TYPES.has(raw?.type) ? raw.type : (executable ? 'calculate' : 'note');
   const condition = type === 'condition'

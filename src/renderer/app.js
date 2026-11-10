@@ -169,6 +169,7 @@ import {
   executablePlaceholderFor,
   runEngineLabel,
 } from './engineCopy.js';
+import { executableSeed } from './runExecutable.js';
 
 const desktop = window.desktop || null;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
@@ -366,6 +367,9 @@ const state = {
   confirmDeleteFlowId: null,
   datasetImportNodeId: null,
   statusMessage: 'Preview project · choose a calculation block to run it locally',
+  // Last engineStatus() answer, used to seed the run-console executable field
+  // without a second probe (issue issue 233).
+  engineStatus: null,
   projectPath: null,
   savedSnapshot: null,
   // Snapshot of the project as loaded, used to tell "untitled and untouched"
@@ -5758,6 +5762,22 @@ function buildInputForNode(node) {
   return buildRunInput(node).inputText;
 }
 
+/** Show "detected" only when the visible value came from engine detection. */
+function syncRunExecutableDetected(engineId) {
+  const field = $('#run-exe');
+  const marker = $('#run-exe-detected');
+  if (!field || !marker) return;
+  const seed = executableSeed({
+    engineId,
+    stored: storedExecutables(),
+    status: state.engineStatus,
+  });
+  const visible = seed.detected && field.value.trim() === seed.value;
+  marker.hidden = !visible;
+  marker.textContent = visible ? 'detected' : '';
+  if (visible) marker.title = `Detected at ${seed.path}`;
+}
+
 /** Point the run-console copy at the engine the selected block will run. */
 function updateRunConsoleCopy() {
   const engineId = activeRunEngineId();
@@ -5767,10 +5787,16 @@ function updateRunConsoleCopy() {
   if (executable) {
     executable.placeholder = executablePlaceholderFor(engineId);
     // Follow the selected block's engine, but never overwrite a path the user
-    // is typing into the field right now.
+    // is typing into the field right now. Issue issue 233: a stored path wins; on a
+    // fresh profile, use the path the app already detected and say so.
     if (document.activeElement !== executable) {
-      executable.value = storedExecutables()[engineId] || '';
+      executable.value = executableSeed({
+        engineId,
+        stored: storedExecutables(),
+        status: state.engineStatus,
+      }).value;
     }
+    syncRunExecutableDetected(engineId);
   }
   const hint = $('#run-hint');
   if (hint && desktop) {
@@ -6232,7 +6258,13 @@ function readRunConfig() {
   if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
   if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
   const field = $('#run-exe');
-  if (field) field.value = storedExecutables()[activeRunEngineId()] || '';
+  if (field) {
+    field.value = executableSeed({
+      engineId: activeRunEngineId(),
+      stored: storedExecutables(),
+      status: state.engineStatus,
+    }).value;
+  }
 }
 
 function saveRunConfig() {
@@ -6259,6 +6291,10 @@ async function pickGaussian() {
       $('#run-exe').value = selected;
       saveRunConfig();
       toast(`${engine.label} executable selected.`);
+    } else {
+      // A cancelled picker must not leave the field blank when the engine was
+      // already detected (issue issue 233).
+      updateRunConsoleCopy();
     }
   } catch (error) {
     toast(`Could not choose executable: ${error.message}`);
@@ -7223,8 +7259,9 @@ async function refreshEngineChips() {
     return;
   }
   if (!status || typeof status !== 'object') return;
-  const order = ['xtb', 'psi4', 'gaussian'];
-  const labels = { xtb: 'xTB', psi4: 'Psi4', gaussian: 'Gaussian' };
+  state.engineStatus = status;
+  const order = ['xtb', 'psi4', 'orca', 'gaussian'];
+  const labels = { xtb: 'xTB', psi4: 'Psi4', orca: 'ORCA', gaussian: 'Gaussian' };
   el.innerHTML = order
     .filter((id) => status[id])
     .map((id) => {
@@ -7234,6 +7271,9 @@ async function refreshEngineChips() {
       return `<span class="engine-chip${entry.ok ? ' is-ok' : ' is-missing'}" title="${esc(title)}"><i></i>${esc(label)}</span>`;
     })
     .join('');
+  // The status answer may arrive after the console first rendered; seed the
+  // executable field now rather than making the user open the pane again.
+  updateRunConsoleCopy();
 }
 
 async function refreshHistory() {
