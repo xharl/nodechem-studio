@@ -100,7 +100,10 @@ describe('Psi4 scratch directory (issue 283)', () => {
       },
     });
     const runManager = new RunManager({ runsRoot, emit: () => {}, createRunner: runner });
-    const { runDir } = await runManager.start(payloadFor(base));
+    const { runId, runDir } = await runManager.start(payloadFor(base));
+    // Let the run settle before the test ends: a record still being written
+    // after `afterEach` removes the folder fails the job with ENOENT.
+    await waitForRecord(runManager, runId, runDir);
 
     expect(seen).toHaveLength(1);
     expect(seen[0].scratchDir).toBe(path.join(runDir, 'scratch'));
