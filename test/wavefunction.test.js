@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { BOHR_TO_ANGSTROM, parseCube } from '../src/shared/cubeFile.js';
 import { parseFchk } from '../src/shared/fchk.js';
@@ -297,6 +298,30 @@ describe('run record block', () => {
     expect(record.fchk.fields.missing).toContain('virialRatio');
     expect(record.fchk.fields.found).toContain('orbitalEnergies');
     expect(record.cube).toBeUndefined();
+  });
+
+  it('carries completion, revision and dimension evidence into the record (#244-#246)', () => {
+    const text = readFileSync('test/fixtures/fchk/dvb-g16-b3lyp-sto3g.fchk', 'utf8');
+    const record = wavefunctionRecord([{ text, filename: 'dvb.fchk' }]);
+    expect(record.fchk.jobStatus).toBe(1);
+    expect(record.fchk.version).toBe('ES64L-G16RevA.03');
+    expect(record.fchk.fullTitle).toBe('dvb');
+    expect(record.fchk.route).toBe('#p b3lyp/sto-3g opt');
+    expect(record.fchk.numberOfIndependentFunctions).toBe(60);
+    expect(record.fchk.iopcl).toBe(0);
+    expect(record.fchk.fields.found).toEqual(expect.arrayContaining([
+      'jobStatus', 'version', 'numberOfIndependentFunctions', 'iopcl',
+    ]));
+    expect(record.fchk.warnings).toEqual([]);
+  });
+
+  it('keeps an absent Job Status absent in the record and reports why', () => {
+    const text = readFileSync('test/fixtures/fchk/dvb-g16-b3lyp-sto3g.fchk', 'utf8')
+      .replace(/^Job Status.*\r?\n/m, '');
+    const record = wavefunctionRecord([{ text, filename: 'dvb.fchk' }]);
+    expect('jobStatus' in record.fchk).toBe(false);
+    expect(record.fchk.fields.missing).toContain('jobStatus');
+    expect(record.fchk.warnings).toEqual([]);
   });
 
   it('keeps a provided digest instead of recomputing it', () => {

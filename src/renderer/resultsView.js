@@ -45,6 +45,7 @@ import { thermoAt, ensembleThermo } from '../shared/thermoSweep.js';
 import { IMPORTED_BADGE_TEXT, importedBadgeHtml, importedSummary } from '../shared/importedRecord.js';
 import { UNVERIFIED_ESOPT_NOTE, excitedStateGate } from '../shared/excitedStates.js';
 import { excitonReport } from '../shared/exciton.js';
+import { jobStatusLabel } from '../shared/fchk.js';
 
 const MISSING_TEXT = 'not reported';
 
@@ -266,6 +267,35 @@ function emptyStateHtml() {
 
 /* ── Cards ─────────────────────────────────────────────────── */
 
+/**
+ * The checkpoint summary a record carries, if any (issues 244-246).
+ *
+ * A run record can carry either the full parse (`parsed.format === 'fchk'`) or
+ * the small `wavefunction.fchk` summary written by `wavefunction.js`. Both use
+ * the same field names, so the card below reads one shape.
+ */
+function checkpointOf(record, parsed) {
+  if (isObject(record?.wavefunction?.fchk)) return record.wavefunction.fchk;
+  if (isObject(parsed) && (parsed.format === 'fchk' || Number.isInteger(parsed.jobStatus))) return parsed;
+  return null;
+}
+
+/**
+ * `Termination` is the log's word. An fchk has no termination line, but its
+ * `Job Status` is the same evidence in another place, so the row says which
+ * one it is rather than showing "not reported" next to a finished job (issue 244).
+ */
+function terminationText(record, parsed) {
+  const fromLog = text(parsed?.termination);
+  if (fromLog !== null) return esc(fromLog);
+  const fchk = checkpointOf(record, parsed);
+  if (Number.isInteger(fchk?.jobStatus)) {
+    const meaning = jobStatusLabel(fchk.jobStatus);
+    return esc(`Checkpoint Job Status ${fchk.jobStatus}${meaning ? ` — ${meaning}` : ''}`);
+  }
+  return missingHtml();
+}
+
 function runCard(record, parsed, status, engineLabel) {
   const dryRun = typeof record?.dryRun === 'boolean'
     ? (record.dryRun ? 'yes — fixture output' : 'no — real executable')
@@ -273,7 +303,7 @@ function runCard(record, parsed, status, engineLabel) {
   return card('Run', kv([
     fieldValue('Status', `<span class="results-chip is-status-${esc(status)}">${esc(status)}</span>`, 'status'),
     fieldValue('Engine', engineLabel ? esc(engineLabel) : missingHtml(), 'engine'),
-    fieldValue('Termination', safeText(parsed?.termination), 'termination'),
+    fieldValue('Termination', terminationText(record, parsed), 'termination'),
     fieldValue('Exit code', integerText(record?.exitCode) ?? missingHtml(), 'exit-code'),
     fieldValue('Started', safeText(formatTimestamp(record?.startedAt)), 'started-at'),
     fieldValue('Finished', safeText(formatTimestamp(record?.finishedAt)), 'finished-at'),
@@ -290,6 +320,43 @@ function programCard(parsed, flags) {
   return card('Program & route', kv([
     fieldValue('Program banner', banner ? esc(banner) : missingHtml(), 'program'),
   ]) + routeHtml + caveatHtml(flags, 'The program and route record'));
+}
+
+/**
+ * The checkpoint's own evidence (issues 244-246): completion, the program that
+ * wrote it, and the dimensions the wavefunction blocks are checked against.
+ *
+ * A missing `Job Status` is printed as "not reported", never as `0`: a
+ * third-party writer that omits the field has not said the file is undefined.
+ */
+function checkpointCard(record, parsed) {
+  const fchk = checkpointOf(record, parsed);
+  if (!fchk) return '';
+  const fields = isObject(fchk.fields) ? fchk.fields : {};
+  const found = Array.isArray(fields.found) ? fields.found : (Array.isArray(fchk.found) ? fchk.found : []);
+  const missing = Array.isArray(fields.missing) ? fields.missing : (Array.isArray(fchk.missing) ? fchk.missing : []);
+  const warnings = Array.isArray(fchk.warnings) ? fchk.warnings.filter((warning) => text(warning)) : [];
+  const status = Number.isInteger(fchk.jobStatus) ? fchk.jobStatus : null;
+  const meaning = status === null ? null : jobStatusLabel(status);
+  const statusHtml = status === null
+    ? missingHtml()
+    : `${esc(meaning || 'unrecognised value')} (Job Status ${esc(String(status))})`;
+  const rows = [
+    fieldValue('Job status', statusHtml, 'checkpoint-job-status'),
+    fieldValue('Gaussian version', safeText(fchk.version), 'checkpoint-version'),
+    fieldValue('Basis functions', integerText(fchk.numberOfBasisFunctions) ?? missingHtml(), 'checkpoint-nbasis'),
+    fieldValue('Independent functions', integerText(fchk.numberOfIndependentFunctions) ?? missingHtml(), 'checkpoint-nbsuse'),
+    fieldValue('IOpCl', integerText(fchk.iopcl) ?? missingHtml(), 'checkpoint-iopcl'),
+  ];
+  const fieldsText = `${found.length} read${missing.length ? `, ${missing.length} absent` : ''}`;
+  return card('Checkpoint', kv(rows)
+    + `<p class="results-note" data-field="checkpoint-fields">Fields ${esc(fieldsText)}. `
+    + `${missing.length ? `Absent: ${esc(missing.join(', '))}.` : 'No field this reader knows is absent.'}</p>`
+    + (warnings.length
+      ? `<p class="results-note is-warn" data-field="checkpoint-warnings">${warnings.map(esc).join(' ')}</p>`
+      : '<p class="results-note" data-field="checkpoint-warnings">No checkpoint warnings.</p>')
+    + '<p class="results-note">The checkpoint is completion evidence in the file; a log termination line is separate evidence and neither is inferred from the exit code.</p>',
+  'is-wide');
 }
 
 /**
@@ -2493,6 +2560,7 @@ export function resultsPanelHtml(record, options = {}) {
     : [
       runCard(record, parsed, status, engineLabel),
       programCard(parsed, flags),
+      checkpointCard(record, parsed),
       energyCard(parsed, flags),
       spinSweepCard(options.spinSweep, options.spinStates),
       saptCard(parsed, flags),

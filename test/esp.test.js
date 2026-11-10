@@ -161,6 +161,19 @@ describe('fchk density matrix (issue 164)', () => {
     expect(potential.values).toBeUndefined();
     expect(espCardRows({ fchk })).toEqual([['ESP', 'no density in this file']]);
   });
+
+  it('refuses the density of an error-terminated checkpoint (#244)', () => {
+    const text = readFileSync('test/fixtures/fchk/dvb-g16-b3lyp-sto3g.fchk', 'utf8')
+      .replace(/^Job Status\s+I\s+1$/m, 'Job Status                                 I                3');
+    const fchk = parseFchk(text);
+    expect(fchk.totalScfDensity).toBeInstanceOf(Float64Array);
+    const matrix = densityMatrix(fchk);
+    expect(matrix.ok).toBe(false);
+    expect(matrix.reason).toMatch(/Job Status 3 \(error termination in Link 9999\)/);
+    // The card must print the refusal, not "no density in this file": the
+    // block is there, but it is not a completed result.
+    expect(espCardRows({ fchk })[0][1]).toMatch(/Job Status 3/);
+  });
 });
 
 describe('Boys functions', () => {

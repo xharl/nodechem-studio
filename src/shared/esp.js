@@ -83,6 +83,17 @@ export const ESP_METHOD = 'analytic basis-function potential (McMurchie–Davids
  */
 export function densityMatrix(fchk) {
   if (!fchk || typeof fchk !== 'object') return { ok: false, reason: 'there is no parsed checkpoint' };
+  // #244: a checkpoint written by a job that ended in Link 9999 still holds a
+  // density block, but it is not a result. Integrate it and the ESP/Molden
+  // output presents a failed job as a finished one, which is the exact mistake
+  // the log path already refuses to make.
+  if (fchk.jobStatus === 3) {
+    return {
+      ok: false,
+      reason: 'the checkpoint reports Job Status 3 (error termination in Link 9999), so its density is not a completed result',
+      detail: 'The density block is present but the job did not finish; no density-dependent quantity is computed from it.',
+    };
+  }
   const dimension = fchk.numberOfBasisFunctions;
   if (!Number.isInteger(dimension) || dimension < 1) {
     return { ok: false, reason: 'the checkpoint does not state how many basis functions it has' };
@@ -888,7 +899,7 @@ export function espForSurface({ fchk, cube, meshes } = {}) {
  */
 export function espCardRows({ fchk = null, esp = null, sampledAt = null } = {}) {
   const density = densityMatrix(fchk);
-  if (!density.ok) return [['ESP', 'no density in this file']];
+  if (!density.ok) return [['ESP', density.reason || 'no density in this file']];
   if (!esp || !esp.ok) {
     return [['ESP colour range', esp?.reason || 'not computed yet']];
   }

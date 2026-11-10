@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { BOHR_TO_ANGSTROM } from '../src/shared/cubeFile.js';
-import { MAX_FCHK_CHARS, MAX_FCHK_VALUES, parseFchk } from '../src/shared/fchk.js';
+import { MAX_FCHK_CHARS, MAX_FCHK_VALUES, jobStatusLabel, parseFchk } from '../src/shared/fchk.js';
 
 /**
  * A formatted checkpoint with the subset this reader claims to support. The
@@ -230,6 +231,46 @@ function zeroValues(count) {
   return lines.join('\n');
 }
 
+/**
+ * A checkpoint whose only purpose is the `NBsUse`/`IOpCl` cross-checks (#246):
+ * two atoms, one (or both) MO blocks of `alphaValues` zeros, and the stated
+ * dimensions. The zeros are single tokens so the block declares an exact count
+ * without carrying 16-character reals.
+ */
+function dimensionCheckpoint({
+  nbf, nbsUse = null, iopcl = null, alphaValues, beta = false, spin = false,
+}) {
+  const count = (number) => String(number).padStart(12);
+  const lines = [
+    'synthetic dimension checkpoint',
+    '',
+    fieldLine('Number of atoms', 'I', '2'),
+    fieldLine('Number of basis functions', 'I', String(nbf)),
+  ];
+  if (Number.isInteger(nbsUse)) lines.push(fieldLine('Number of independent functions', 'I', String(nbsUse)));
+  if (Number.isInteger(iopcl)) lines.push(fieldLine('IOpCl', 'I', String(iopcl)));
+  lines.push(
+    fieldLine('Atomic numbers', 'I', `N= ${count(2)}`),
+    '6 6',
+    fieldLine('Alpha MO coefficients', 'R', `N= ${count(alphaValues)}`),
+    zeroValues(alphaValues),
+  );
+  if (beta) {
+    lines.push(
+      fieldLine('Beta MO coefficients', 'R', `N= ${count(alphaValues)}`),
+      zeroValues(alphaValues),
+    );
+  }
+  if (spin) {
+    const triangular = (nbf * (nbf + 1)) / 2;
+    lines.push(
+      fieldLine('Spin SCF Density', 'R', `N= ${count(triangular)}`),
+      zeroValues(triangular),
+    );
+  }
+  return lines.join('\n');
+}
+
 function largeCheckpoint({ nbf, openShell }) {
   const atoms = 2;
   const values = nbf * nbf;
@@ -289,5 +330,179 @@ describe('fchk large bases (#243)', () => {
     // but the file ends after 4". The shape error names the basis instead.
     expect(() => parseFchk(broken))
       .toThrow(/declares 5 values, but a 2-function basis allows at most 4/);
+  });
+});
+
+/* ── #244: Job Status, #245: character fields, #246: dimensions ──── */
+
+const DVB = readFileSync('test/fixtures/fchk/dvb-g16-b3lyp-sto3g.fchk', 'utf8');
+
+/** The real fixture with its `Job Status I 1` line replaced (or removed). */
+function withJobStatus(value) {
+  const line = `Job Status                                 I                ${value}`;
+  return DVB.replace(/^Job Status\s+I\s+1$/m, line);
+}
+
+describe('fchk Job Status (#244)', () => {
+  it('reads Job Status and treats 1 and 2 as normal completion', () => {
+    const one = parseFchk(DVB);
+    expect(one.jobStatus).toBe(1);
+    expect(one.found).toContain('jobStatus');
+    expect(jobStatusLabel(one.jobStatus)).toBe('finished successfully');
+    expect(one.warnings).toEqual([]);
+
+    const two = parseFchk(withJobStatus(2));
+    expect(two.jobStatus).toBe(2);
+    expect(two.warnings).toEqual([]);
+    expect(jobStatusLabel(2)).toMatch(/multi-step/);
+  });
+
+  it('warns on an error termination (Job Status 3) and says Link 9999', () => {
+    const fchk = parseFchk(withJobStatus(3));
+    expect(fchk.jobStatus).toBe(3);
+    expect(fchk.warnings.join(' ')).toMatch(/Job Status is 3 \(error termination in Link 9999\)/);
+  });
+
+  it('warns on in-progress and undefined/old checkpoints', () => {
+    expect(parseFchk(withJobStatus(-1)).warnings.join(' ')).toMatch(/Job Status is -1 \(in progress\)/);
+    expect(parseFchk(withJobStatus(0)).warnings.join(' ')).toMatch(/Job Status is 0 \(undefined or old checkpoint file\)/);
+  });
+
+  it('leaves an absent Job Status absent — it never invents 0', () => {
+    const without = DVB.replace(/^Job Status.*\r?\n/m, '');
+    const fchk = parseFchk(without);
+    expect(fchk.jobStatus).toBeUndefined();
+    expect('jobStatus' in fchk).toBe(false);
+    expect(fchk.missing).toContain('jobStatus');
+    // The fixture is otherwise self-consistent, so removing the field must not
+    // produce the "undefined/old checkpoint" warning a 0 would.
+    expect(fchk.warnings).toEqual([]);
+  });
+});
+
+describe('fchk character fields (#245)', () => {
+  it('reads Gaussian Version from a C block and normalises its padding', () => {
+    const fchk = parseFchk(DVB);
+    expect(fchk.version).toBe('ES64L-G16RevA.03');
+    expect(fchk.found).toContain('version');
+    expect(fchk.missing).not.toContain('version');
+  });
+
+  it('reads Full Title and Route without tokenising their spaces', () => {
+    const fchk = parseFchk(DVB);
+    expect(fchk.fullTitle).toBe('dvb');
+    expect(fchk.route).toBe('#p b3lyp/sto-3g opt');
+    expect(fchk.found).toEqual(expect.arrayContaining(['fullTitle', 'route']));
+  });
+
+  it('preserves spaces inside a multi-element title', () => {
+    const text = [
+      'synthetic character checkpoint',
+      '',
+      'Full Title                                 C   N=           2',
+      'first  part '.padEnd(12) + 'second  part'.padEnd(12),
+    ].join('\n');
+    expect(parseFchk(text).fullTitle).toBe('first  part second  part');
+  });
+
+  it('reads a 64-character element when a writer uses that width', () => {
+    // The fchk documentation says 5A12 and the fixture encodes 2 × 12 chars,
+    // but the issue notes a 64-character form; one contiguous element of that
+    // width must still round-trip.
+    const text = [
+      'synthetic character checkpoint',
+      '',
+      'Gaussian Version                           C   N=           1',
+      'ES64L-G16RevA.03'.padEnd(64),
+    ].join('\n');
+    expect(parseFchk(text).version).toBe('ES64L-G16RevA.03');
+  });
+
+  it('tolerates a zero-count character block and keeps the field absent', () => {
+    const zero = DVB.replace(
+      /^Gaussian Version.*\r?\nES64L-G16RevA\.03[^\r\n]*/m,
+      'Gaussian Version                           C   N=           0',
+    );
+    expect(zero).not.toContain('ES64L-G16RevA.03');
+    const fchk = parseFchk(zero);
+    expect(fchk.version).toBeUndefined();
+    expect('version' in fchk).toBe(false);
+    expect(fchk.missing).toContain('version');
+  });
+});
+
+describe('fchk independent functions and spin case (#246)', () => {
+  it('reads NBsUse and IOpCl and leaves the self-consistent fixture warning-free', () => {
+    const fchk = parseFchk(DVB);
+    expect(fchk.numberOfIndependentFunctions).toBe(60);
+    expect(fchk.iopcl).toBe(0);
+    expect(fchk.found).toEqual(expect.arrayContaining(['numberOfIndependentFunctions', 'iopcl']));
+    expect(fchk.warnings).toEqual([]);
+  });
+
+  it('accepts the older `independant` spelling', () => {
+    const text = dimensionCheckpoint({ nbf: 2, nbsUse: 2, alphaValues: 4 })
+      .replace('Number of independent functions', 'Number of independant functions');
+    const fchk = parseFchk(text);
+    expect(fchk.numberOfIndependentFunctions).toBe(2);
+    expect(fchk.found).toContain('numberOfIndependentFunctions');
+  });
+
+  it('refuses 60 orbitals where NBsUse is 58, naming both numbers', () => {
+    // 3600 values = 60 NBasis × 60 orbitals; the file says 58 independent
+    // functions, so the block is not NBasis × NBsUse.
+    const text = dimensionCheckpoint({ nbf: 60, nbsUse: 58, alphaValues: 3600 });
+    expect(() => parseFchk(text))
+      .toThrow(/3600 values, but 60 basis functions × 58 independent functions = 3480/);
+  });
+
+  it('refuses the 3480-value block the issue describes for 58 basis functions', () => {
+    // 3480 = 58 × 60: sixty orbitals in a file that states 58 independent
+    // functions. The exact product is 58 × 58 = 3364.
+    const text = dimensionCheckpoint({ nbf: 58, nbsUse: 58, alphaValues: 3480 });
+    expect(() => parseFchk(text))
+      .toThrow(/3480 values, but 58 basis functions × 58 independent functions = 3364/);
+  });
+
+  it('refuses a truncated MO block that is still divisible by NBasis', () => {
+    // Two values with NBasis 2 and NBsUse 2: the old divisibility check passed
+    // it as one orbital, and only the exact product catches the missing one.
+    const text = dimensionCheckpoint({ nbf: 2, nbsUse: 2, alphaValues: 2 });
+    expect(() => parseFchk(text))
+      .toThrow(/2 values, but 2 basis functions × 2 independent functions = 4/);
+  });
+
+  it('refuses NBsUse outside 1..NBasis', () => {
+    const text = dimensionCheckpoint({ nbf: 2, nbsUse: 3, alphaValues: 4 });
+    expect(() => parseFchk(text))
+      .toThrow(/"Number of independent functions" is 3, but the file states 2 basis functions/);
+  });
+
+  it('warns when a closed-shell file carries beta MOs or a spin density', () => {
+    const withBeta = parseFchk(dimensionCheckpoint({
+      nbf: 2, nbsUse: 2, alphaValues: 4, iopcl: 0, beta: true,
+    }));
+    expect(withBeta.warnings.join(' ')).toMatch(/IOpCl is 0 \(closed shell\).*"Beta MO coefficients"/);
+
+    const withSpin = parseFchk(dimensionCheckpoint({
+      nbf: 2, nbsUse: 2, alphaValues: 4, iopcl: 0, spin: true,
+    }));
+    expect(withSpin.warnings.join(' ')).toMatch(/IOpCl is 0 \(closed shell\).*"Spin SCF Density"/);
+  });
+
+  it('warns when IOpCl >= 1 has no beta block', () => {
+    const fchk = parseFchk(dimensionCheckpoint({ nbf: 2, nbsUse: 2, alphaValues: 4, iopcl: 1 }));
+    expect(fchk.warnings.join(' ')).toMatch(/IOpCl is 1 \(open shell\).*no "Beta MO coefficients"/);
+  });
+
+  it('draws no conclusion from IOpCl = -1, and none from a consistent open-shell file', () => {
+    const unspecified = parseFchk(dimensionCheckpoint({
+      nbf: 2, nbsUse: 2, alphaValues: 4, iopcl: -1, beta: true,
+    }));
+    expect(unspecified.warnings).toEqual([]);
+    const open = parseFchk(dimensionCheckpoint({
+      nbf: 2, nbsUse: 2, alphaValues: 4, iopcl: 1, beta: true,
+    }));
+    expect(open.warnings).toEqual([]);
   });
 });

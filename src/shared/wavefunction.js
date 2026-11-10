@@ -521,6 +521,10 @@ function summariseFchk(fchk) {
     format: fchk.format || 'fchk',
     fields: { found: [...fchk.found], missing: [...fchk.missing] },
     units: fchk.units,
+    // Warnings are evidence too: a Job Status of -1/0/3, a spin case that
+    // disagrees with the blocks, or a ghost atom are decisions the reader made
+    // and the results surface has to be able to print them (#244).
+    warnings: Array.isArray(fchk.warnings) ? [...fchk.warnings] : [],
     orbitalGap: orbitalGap(fchk),
     spin: spinFromElectrons(fchk),
     // Not `charge`: that name belongs to the checkpoint's own Charge field,
@@ -530,9 +534,10 @@ function summariseFchk(fchk) {
   // Optional fields are copied only when the file carried them: an absent key
   // is the only honest way to say "not in this checkpoint".
   const copy = [
-    'numberOfAtoms', 'numberOfBasisFunctions', 'numberOfElectrons', 'charge', 'multiplicity',
+    'numberOfAtoms', 'numberOfBasisFunctions', 'numberOfIndependentFunctions', 'iopcl',
+    'numberOfElectrons', 'charge', 'multiplicity',
     'numberOfAlphaElectrons', 'numberOfBetaElectrons',
-    'totalEnergyHartree', 'virialRatio',
+    'totalEnergyHartree', 'virialRatio', 'jobStatus', 'fullTitle', 'route',
   ];
   for (const key of copy) {
     if (fchk[key] !== undefined) summary[key] = fchk[key];

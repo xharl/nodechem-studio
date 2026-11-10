@@ -3,11 +3,13 @@
  * results surface can actually use (#59).
  *
  * The format is line-oriented: a label padded to column 43, then a type letter
- * (`I` integer, `R` real) and either a value or `N= <count>` followed by the
- * data, six integers or five reals per line. It is not fixed-width in practice
- * — Gaussian versions and third-party writers pad differently — so labels are
- * matched as text and the remainder is tokenised, which also gets the `N=`
- * header right without counting columns.
+ * (`I` integer, `R` real, `C` character) and either a value or `N= <count>`
+ * followed by the data — six integers, five reals or five 12-character strings
+ * per line. It is not fixed-width in practice — Gaussian versions and
+ * third-party writers pad differently — so labels are matched as text and the
+ * numeric remainder is tokenised, which also gets the `N=` header right without
+ * counting columns. Character blocks are the exception: their elements are
+ * fixed-width strings, so they are sliced, not tokenised (#245).
  *
  * Contract, because the difference matters:
  * - every field is optional;
@@ -54,6 +56,25 @@ export class FchkFormatError extends Error {
   }
 }
 
+/**
+ * `Job Status`, the fchk twin of `GAUSSIAN SCALARS` entry 61 documented on
+ * gaussian.com/interfacing. It is completion evidence, not a number to show:
+ * 1 and 2 mean the job (or a step of it) finished, 3 means Link 9999 recorded
+ * an error, and -1/0 mean the file cannot prove completion (#244).
+ */
+const JOB_STATUS = Object.freeze({
+  [-1]: 'in progress',
+  0: 'undefined or old checkpoint file',
+  1: 'finished successfully',
+  2: 'step in a multi-step job completed successfully',
+  3: 'error termination in Link 9999',
+});
+
+/** The documented meaning of a `Job Status` value, or `null` if it is not one. */
+export function jobStatusLabel(status) {
+  return Object.hasOwn(JOB_STATUS, status) ? JOB_STATUS[status] : null;
+}
+
 const SYMBOL_BY_NUMBER = new Map([...ELEMENTS].map(([symbol, number]) => [number, symbol]));
 
 const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eEdD][+-]?\d+)?$/;
@@ -63,11 +84,30 @@ const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eEdD][+-]?\d+)?$/;
  * field is; a mismatch is reported rather than trusted.
  */
 const FIELDS = Object.freeze([
+  { key: 'fullTitle', label: 'Full Title', type: 'C', kind: 'charArray' },
+  { key: 'route', label: 'Route', type: 'C', kind: 'charArray' },
   { key: 'numberOfAtoms', label: 'Number of atoms', type: 'I', kind: 'integer' },
   { key: 'numberOfBasisFunctions', label: 'Number of basis functions', type: 'I', kind: 'integer' },
+  // `NBsUse`: the number of linearly independent functions after the linear
+  // dependence of the basis has been removed. The MO coefficient block is
+  // `NBasis × NBsUse`, so it is also the check that a truncated block would
+  // otherwise pass when its length happens to be divisible by NBasis (#246).
+  {
+    key: 'numberOfIndependentFunctions',
+    label: 'Number of independent functions',
+    // Older writers, and the matrix-element documentation, spell it with an
+    // `a`: `independant`. Both name the same integer.
+    aliases: ['Number of independant functions'],
+    type: 'I',
+    kind: 'integer',
+  },
   { key: 'numberOfElectrons', label: 'Number of electrons', type: 'I', kind: 'integer' },
   { key: 'charge', label: 'Charge', type: 'I', kind: 'integer' },
   { key: 'multiplicity', label: 'Multiplicity', type: 'I', kind: 'integer' },
+  // Closed/open-shell flag: 0 is closed shell, >= 1 is an open-shell (two-spin)
+  // file, and -1 means the writer did not specify. It is cross-checked against
+  // the beta and spin-density blocks below (#246).
+  { key: 'iopcl', label: 'IOpCl', type: 'I', kind: 'integer' },
   { key: 'numberOfAlphaElectrons', label: 'Number of alpha electrons', type: 'I', kind: 'integer' },
   { key: 'numberOfBetaElectrons', label: 'Number of beta electrons', type: 'I', kind: 'integer' },
   { key: 'atomicNumbers', label: 'Atomic numbers', type: 'I', kind: 'integerArray' },
@@ -141,6 +181,13 @@ const FIELDS = Object.freeze([
   { key: 'espCharges', label: 'ESP Charges', type: 'R', kind: 'realArray' },
   { key: 'totalEnergyHartree', label: 'Total Energy', type: 'R', kind: 'real' },
   { key: 'virialRatio', label: 'Virial Ratio', type: 'R', kind: 'real' },
+  // #244: completion evidence. Absent is a legitimate answer (not every writer
+  // emits it), so the reader must not synthesise 0 — which would flag every
+  // third-party file as an "undefined/old checkpoint".
+  { key: 'jobStatus', label: 'Job Status', type: 'I', kind: 'integer' },
+  // #245: the program that wrote the checkpoint. Gaussian writes this as a
+  // character array (`C N= 2` for `ES64L-G16RevA.03`), not a scalar.
+  { key: 'version', label: 'Gaussian Version', type: 'C', kind: 'charArray' },
 ]);
 
 function numberToken(token, line, label) {
@@ -171,6 +218,11 @@ function tokensOf(line) {
  * Locate one field. A label that is a prefix of another (`Orbital Energies` of
  * `Orbital Energies, spin 2`) does not match the longer line, because the
  * remainder there starts with a comma rather than a type letter.
+ *
+ * `C` is accepted for character arrays (`C N= k`) and character scalars
+ * (`C value`). The character value of a scalar keeps its spaces; the array
+ * elements are read by `readCharBlock`, which slices them rather than
+ * tokenising them (#245).
  */
 function locate(lines, label) {
   const needle = label.toLowerCase();
@@ -182,7 +234,7 @@ function locate(lines, label) {
     if (rest && !/^\s/.test(rest)) continue;
     const trimmed = rest.trim();
     if (!trimmed) continue;
-    const array = /^([IR])\s+N\s*=\s*(\d+)$/i.exec(trimmed);
+    const array = /^([IRC])\s+N\s*=\s*(\d+)$/i.exec(trimmed);
     if (array) {
       return {
         label,
@@ -202,6 +254,16 @@ function locate(lines, label) {
         value: scalar[2],
       };
     }
+    const character = /^C\s+(.*)$/i.exec(trimmed);
+    if (character) {
+      return {
+        label,
+        line: index + 1,
+        start: index,
+        type: 'C',
+        value: character[1].trim(),
+      };
+    }
     // Some other field whose label merely begins with this one.
   }
   return null;
@@ -211,6 +273,18 @@ function looksLikeFieldHeader(line) {
   const trimmed = String(line ?? '').trim();
   if (!trimmed || trimmed.length < 20) return false;
   return /^[A-Za-z$]/.test(trimmed) && /\s[NICR]\s+(?:N\s*=\s*\d+|-?\d)/.test(` ${trimmed}`);
+}
+
+/**
+ * The same question for a character block. A title is arbitrary text, so a
+ * single space before a letter is not enough to call the line a field header
+ * (a title may legitimately contain `C 1`); Gaussian pads the label to column
+ * 43, which leaves at least two spaces before the type letter.
+ */
+function looksLikeCharacterFieldHeader(line) {
+  const trimmed = String(line ?? '').trim();
+  if (!trimmed || trimmed.length < 20) return false;
+  return /^[A-Za-z$]/.test(trimmed) && /\s{2,}[NICR]\s+(?:N\s*=\s*\d+|-?\d|[A-Za-z])/.test(` ${trimmed}`);
 }
 
 function readArray(lines, located, field, maxValues) {
@@ -251,6 +325,62 @@ function readArray(lines, located, field, maxValues) {
   return collected;
 }
 
+/** One character element, from the documented `5A12` layout. */
+const CHARACTER_WIDTH = 12;
+/** At most five 12-character elements are written per line. */
+const CHARACTERS_PER_LINE = 5;
+
+/**
+ * Read a `C N= k` block.
+ *
+ * Unlike the integer and real arrays, this cannot tokenise: a title contains
+ * spaces and a 12-character element may begin or end with one. Gaussian writes
+ * five 12-character elements per line (`5A12` on gaussian.com/interfacing), and
+ * the fixture's `Gaussian Version C N= 2` is 24 characters, not two 64-character
+ * lines. The elements are sliced and concatenated, then the result is
+ * right-trimmed: the padding is not part of the string, but a space between two
+ * elements is. A zero-count block is an empty field, not a one-line value.
+ */
+function readCharBlock(lines, located, field, maxValues) {
+  const declared = located.count;
+  if (declared === 0) return '';
+  if (declared > maxValues) {
+    throw new FchkFormatError(
+      `Field "${field.label}" declares ${declared} character elements; the limit is ${maxValues}. `,
+    );
+  }
+  let collected = 0;
+  let text = '';
+  for (let index = located.start + 1; collected < declared && index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    if (looksLikeCharacterFieldHeader(line)) {
+      throw new FchkFormatError(
+        `Field "${field.label}" declares ${declared} character elements but stops after ${collected} at line ${index + 1}, where another field begins.`,
+      );
+    }
+    const remaining = declared - collected;
+    const onThisLine = Math.min(CHARACTERS_PER_LINE, remaining);
+    // The documented field is 12 characters. A writer that uses a wider fixed
+    // field (the older notes describe 64-character lines) still writes its
+    // elements contiguously, so a line longer than `onThisLine * 12` is divided
+    // evenly rather than truncated.
+    const width = line.length > onThisLine * CHARACTER_WIDTH && line.length % onThisLine === 0
+      ? line.length / onThisLine
+      : CHARACTER_WIDTH;
+    for (let offset = 0; offset < line.length && collected < declared; offset += width) {
+      text += line.slice(offset, offset + width);
+      collected += 1;
+    }
+  }
+  if (collected < declared) {
+    throw new FchkFormatError(
+      `Field "${field.label}" declares ${declared} character elements but the file ends after ${collected}.`,
+    );
+  }
+  return text.replace(/\s+$/, '');
+}
+
 /**
  * The largest count a field can legitimately declare, given the basis the file
  * itself states, or `null` when the field's length is not fixed by `NBasis`.
@@ -265,7 +395,13 @@ function readArray(lines, located, field, maxValues) {
 function basisShapeLimit(field, parsed) {
   const nbf = parsed.numberOfBasisFunctions;
   if (!Number.isInteger(nbf) || nbf <= 0) return null;
-  if (field.key === 'alphaMOCoefficients' || field.key === 'betaMOCoefficients') return nbf * nbf;
+  if (field.key === 'alphaMOCoefficients' || field.key === 'betaMOCoefficients') {
+    const nbsUse = parsed.numberOfIndependentFunctions;
+    // When the file states a usable NBsUse, the block is exactly
+    // `NBasis × NBsUse`, which is tighter than the `NBasis²` ceiling (#246).
+    if (Number.isInteger(nbsUse) && nbsUse >= 1 && nbsUse <= nbf) return nbf * nbsUse;
+    return nbf * nbf;
+  }
   if (field.triangular) return (nbf * (nbf + 1)) / 2;
   return null;
 }
@@ -310,6 +446,31 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS, maxValues = MAX_FCH
     if (located.type !== field.type) {
       warnings.push(`Field "${shown}" is written as ${located.type} where the format specifies ${field.type}; it was read as written.`);
     }
+    if (field.kind === 'charArray') {
+      if (located.count === undefined) {
+        if (located.type !== 'C' || !located.value) {
+          throw new FchkFormatError(`Line ${located.line}: field "${shown}" carries one value in this file, but the reader expects an array.`);
+        }
+        parsed[field.key] = String(located.value).trim();
+        found.push(field.key);
+        continue;
+      }
+      if (located.count === 0) {
+        // A zero-count character block is how some writers spell an empty
+        // string. It is not a value: report the field as absent rather than
+        // storing `''`, and do not consume the next field as its data.
+        missing.push(field.key);
+        continue;
+      }
+      const value = readCharBlock(lines, located, { ...field, label: shown }, maxValues);
+      if (value === '') {
+        missing.push(field.key);
+        continue;
+      }
+      parsed[field.key] = value;
+      found.push(field.key);
+      continue;
+    }
     if (field.kind === 'integer' || field.kind === 'real') {
       if (located.count !== undefined) {
         // An `N=` header on a scalar field means the file is not laid out the
@@ -329,9 +490,15 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS, maxValues = MAX_FCH
       // wrong.
       const shapeLimit = basisShapeLimit(field, parsed);
       if (shapeLimit !== null && located.count > shapeLimit) {
+        const nbsUse = parsed.numberOfIndependentFunctions;
+        const stated = Number.isInteger(parsed.numberOfBasisFunctions)
+          && Number.isInteger(nbsUse) && nbsUse >= 1 && nbsUse <= parsed.numberOfBasisFunctions;
+        const allowed = stated
+          ? `${parsed.numberOfBasisFunctions} basis functions × ${nbsUse} independent functions = ${shapeLimit}`
+          : `a ${parsed.numberOfBasisFunctions}-function basis allows at most ${shapeLimit}`;
         throw new FchkFormatError(
-          `Field "${shown}" declares ${located.count} values, but a ${parsed.numberOfBasisFunctions}-function `
-          + `basis allows at most ${shapeLimit}. The declared count and the basis dimensions disagree, `
+          `Field "${shown}" declares ${located.count} values, but ${allowed}. `
+          + 'The declared count and the basis dimensions disagree, '
           + 'so the block is not a matrix over this basis.',
         );
       }
@@ -407,13 +574,84 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS, maxValues = MAX_FCH
       }
     }
   }
-  if (Array.isArray(parsed.alphaMOCoefficients) && Number.isInteger(parsed.numberOfBasisFunctions)) {
-    const nbf = parsed.numberOfBasisFunctions;
+  // #246: NBsUse is the number of linearly independent functions, and the MO
+  // coefficient block is exactly `NBasis × NBsUse`. The old check only asked
+  // whether the length was divisible by NBasis, so a block with one orbital
+  // dropped still passed. Where the file states NBsUse, the exact product is
+  // checked and the disagreement names both dimensions.
+  const nbf = parsed.numberOfBasisFunctions;
+  const nbsUse = parsed.numberOfIndependentFunctions;
+  if (Number.isInteger(nbsUse)) {
+    if (Number.isInteger(nbf) && nbf > 0 && (nbsUse < 1 || nbsUse > nbf)) {
+      throw new FchkFormatError(
+        `"Number of independent functions" is ${nbsUse}, but the file states ${nbf} basis functions; `
+        + 'it must be between 1 and NBasis.',
+      );
+    }
+    if (Number.isInteger(nbf) && nbf > 0) {
+      const expected = nbf * nbsUse;
+      for (const [key, label] of [
+        ['alphaMOCoefficients', 'Alpha MO coefficients'],
+        ['betaMOCoefficients', 'Beta MO coefficients'],
+      ]) {
+        const block = parsed[key];
+        if (!Array.isArray(block)) continue;
+        if (block.length !== expected) {
+          throw new FchkFormatError(
+            `"${label}" has ${block.length} values, but ${nbf} basis functions × ${nbsUse} independent `
+            + `functions = ${expected}. The MO block is not NBasis × NBsUse over this basis.`,
+          );
+        }
+      }
+    }
+  }
+  if (Array.isArray(parsed.alphaMOCoefficients) && Number.isInteger(nbf)) {
     if (nbf > 0 && parsed.alphaMOCoefficients.length % nbf !== 0) {
       throw new FchkFormatError(
         `"Alpha MO coefficients" has ${parsed.alphaMOCoefficients.length} values, which is not a whole number of ${nbf}-function orbitals.`,
       );
     }
+  }
+
+  // #246: the spin case and the blocks must tell the same story. `IOpCl = 0`
+  // with a beta manifold (MO coefficients or a spin density) is a closed-shell
+  // label on an open-shell file; `IOpCl >= 1` with no beta MO block is the
+  // reverse. -1 means unspecified, so no conclusion is drawn from it.
+  const hasBetaMOs = Array.isArray(parsed.betaMOCoefficients) && parsed.betaMOCoefficients.length > 0;
+  const hasSpinDensity = (Array.isArray(parsed.spinScfDensity) || parsed.spinScfDensity instanceof Float64Array)
+    && parsed.spinScfDensity.length > 0;
+  if (parsed.iopcl === 0) {
+    const contradictory = [
+      hasBetaMOs ? '"Beta MO coefficients"' : '',
+      hasSpinDensity ? '"Spin SCF Density"' : '',
+    ].filter(Boolean);
+    if (contradictory.length > 0) {
+      warnings.push(
+        `IOpCl is 0 (closed shell), but the checkpoint carries ${contradictory.join(' and ')}. `
+        + 'The spin label and the wavefunction blocks disagree.',
+      );
+    }
+  } else if (Number.isInteger(parsed.iopcl) && parsed.iopcl >= 1 && !hasBetaMOs) {
+    warnings.push(
+      `IOpCl is ${parsed.iopcl} (open shell), but the checkpoint carries no "Beta MO coefficients". `
+      + 'The beta manifold is missing or was not written.',
+    );
+  }
+
+  // #244: completion evidence. 1 and 2 are the normal values; -1, 0 and 3 mean
+  // the file cannot stand as a finished result. Absent stays absent: not every
+  // writer emits `Job Status`, and inventing 0 would flag every one of them.
+  if (parsed.jobStatus === 3) {
+    warnings.push(
+      'Job Status is 3 (error termination in Link 9999): this checkpoint records a failed job, '
+      + 'so its density and orbitals are not a completed result.',
+    );
+  } else if (parsed.jobStatus === -1) {
+    warnings.push('Job Status is -1 (in progress): this checkpoint was written before the job finished.');
+  } else if (parsed.jobStatus === 0) {
+    warnings.push(
+      'Job Status is 0 (undefined or old checkpoint file): completion cannot be confirmed from this file.',
+    );
   }
 
   // issue 164: a density matrix is a lower triangle, so its length is fixed by
