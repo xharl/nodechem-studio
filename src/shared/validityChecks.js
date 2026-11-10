@@ -176,6 +176,14 @@ export const VALIDITY_CHECKS = Object.freeze([
     description: 'A frequency job may only claim a minimum when the optimisation it reads completed.',
   },
   {
+    id: 'solvation-evidence',
+    title: 'Solvation evidence',
+    phases: Object.freeze(['post']),
+    blocking: false,
+    engines: Object.freeze(['gaussian', 'orca', 'psi4', 'xtb']),
+    description: 'A route that requested solvation and a log that reported none (or the reverse) is named instead of being silently treated as gas phase.',
+  },
+  {
     id: 'conformer-spread',
     title: 'Conformer ensemble',
     phases: Object.freeze(['pre', 'post']),
@@ -1213,6 +1221,40 @@ function checkExcitedStateSettings({ settings, upstream }) {
   };
 }
 
+/**
+ * Issue 223: a solvated run and a gas-phase run must not be indistinguishable.
+ * The parsed block is evidence; the block's own request is the claim. A
+ * mismatch is a warning, never a pass — an imported log may legitimately carry
+ * solvation the block did not ask for.
+ */
+export function checkSolvationEvidence({ settings = {}, parsed = null } = {}) {
+  const requested = settings?.solvation === true;
+  const block = parsed?.solvation && typeof parsed.solvation === 'object' ? parsed.solvation : null;
+  const model = block ? String(block.model || block.provider || 'a solvation model') : '';
+  if (requested && !block) {
+    return {
+      id: 'solvation-evidence',
+      status: CHECK_STATUS.WARNING,
+      message: 'The block requested solvation, but this log carries no solvation block; the record must not be read as a gas-phase result.',
+    };
+  }
+  if (!requested && block) {
+    return {
+      id: 'solvation-evidence',
+      status: CHECK_STATUS.WARNING,
+      message: `This log reports ${model} solvation, but the block did not request it. The record names the model printed by the log.`,
+    };
+  }
+  if (!requested && !block) {
+    return skipped('solvation-evidence', 'No solvation was requested or reported.');
+  }
+  return {
+    id: 'solvation-evidence',
+    status: CHECK_STATUS.PASS,
+    message: `The log reports ${model} solvation, matching the block's request.`,
+  };
+}
+
 const CHECK_FUNCTIONS = Object.freeze({
   'orbital-descriptors': checkOrbitalDescriptors,
   'charge-multiplicity': checkChargeMultiplicity,
@@ -1223,6 +1265,7 @@ const CHECK_FUNCTIONS = Object.freeze({
   'excited-state-root': checkExcitedStateSettings,
   'method-basis-compatibility': checkMethodBasisCompatibility,
   'counterpoise-bsse': checkCounterpoise,
+  'solvation-evidence': checkSolvationEvidence,
   'opt-convergence': checkOptimizationConvergence,
   'conformer-spread': checkConformerSpread,
 });

@@ -95,6 +95,7 @@ describe('validity checks — contract', () => {
       'method-basis-compatibility',
       'counterpoise-bsse',
       'opt-convergence',
+      'solvation-evidence',
       'conformer-spread',
     ]);
     expect(VALIDITY_CHECKS.every((check) => Array.isArray(check.phases) && check.phases.length > 0)).toBe(true);
@@ -596,6 +597,7 @@ describe('running checks', () => {
       'imaginary-frequencies',
       'method-basis-compatibility',
       'opt-convergence',
+      'solvation-evidence',
       'spin-contamination',
     ]);
     expect(result.findings.every((finding) => finding.phase === 'post')).toBe(true);
@@ -629,8 +631,8 @@ describe('running checks', () => {
   it('removes a disabled check from the result entirely', () => {
     const before = runValidityChecks(context, { phase: 'post' });
     const after = runValidityChecks(context, { phase: 'post', disabled: ['spin-contamination'] });
-    expect(before.findings).toHaveLength(8);
-    expect(after.findings).toHaveLength(7);
+    expect(before.findings).toHaveLength(9);
+    expect(after.findings).toHaveLength(8);
     expect(after.findings.map((finding) => finding.id)).not.toContain('spin-contamination');
   });
 

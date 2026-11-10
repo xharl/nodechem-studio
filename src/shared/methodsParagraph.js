@@ -415,6 +415,20 @@ function solvationSentence(record, engine) {
       ? `Implicit solvation used the ${solvation.model} model with the xTB solvent identifier "${solvation.solvent}", as recorded in argv in run.json.`
       : 'No implicit-solvation flag (--alpb or --gbsa) is recorded in run.json; the run is gas phase.';
   }
+  // Issue 223: the parsed solvation block is evidence even when run.json has no
+  // method block (an imported log). Never say "not recorded" when the log says
+  // exactly which model and solvent it used.
+  const parsedSolvation = record?.parsed?.solvation;
+  if (parsedSolvation && typeof parsedSolvation === 'object' && engine === 'gaussian') {
+    const model = clean(parsedSolvation.model);
+    const solvent = clean(parsedSolvation.solvent);
+    const term = parsedSolvation.nonElectrostatic?.kcalPerMol;
+    const terms = Number.isFinite(term)
+      ? ` and a ${clean(parsedSolvation.nonElectrostatic.name) || 'non-electrostatic'} term of ${term.toFixed(2)} kcal/mol`
+      : '';
+    return `Implicit solvation used the ${model || 'unstated'} model${solvent ? ` with ${solvent} as solvent` : ''}, `
+      + `as recorded in the log${terms}. The reported total is an SCF energy in solution, not a solvation free energy.`;
+  }
   const method = methodOf(record);
   if (!method) return `The solvation treatment is ${NOT_RECORDED} because no method block is recorded.`;
   const phrase = solvationPhrase(method);
