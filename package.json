@@ -46,6 +46,7 @@
       "dist/**/*",
       "electron/**/*",
       "src/shared/**/*",
+      "src/data/**/*",
       "package.json",
       "LICENSE"
     ],

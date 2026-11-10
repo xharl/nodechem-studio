@@ -1,9 +1,11 @@
 # Feature map — what the supported programs offer, and what NodeChem does with it
 
-Status of this document: audit as of **2026-11-09**, against the working tree that contains
-schemaVersion 3 (ADR 0001), the `prepare` block, the scorer role, RDKit conformers and tautomer
-enumeration. Issues #222, #226, #227, #229 and #231 have closed since the map was first drafted;
-#228 (explicit solvation) remains open; #230 (validation harness) now has recorded and live PySCF paths. It records capabilities, not keywords:
+Status of this document: audit as of **2026-11-09**, renewed after the PySCF engine, the Multiwfn
+sidecar and the cclib converter landed. It describes the working tree that contains schemaVersion 3
+(ADR 0001), the `prepare` block, the scorer role, RDKit conformers, tautomer enumeration, PySCF and
+the explorer role (ADR 0002). Issues #222, #226–#231, #269 and #273 have closed since the first
+draft; **every gap that remains is filed as an issue (#285–#296)**, and #67/#64 carry the
+multiscale and HPC work. The document records capabilities, not keywords:
 "feature" means something a computational chemist selects — a job type, a property, a method
 family, a correction or a workflow primitive. Every Gaussian keyword, ORCA `%block` and Psi4
 `set` option is not enumerated; that would be a manual, not a map.
@@ -85,7 +87,7 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | Frequency + thermochemistry | Freq | **Implemented** | QRRHO recorded |
 | Optimise then frequency | Opt Freq | **Implemented** | |
 | DLPNO-CCSD(T) single point | DLPNO-CCSD(T) | **Implemented** | PNO threshold recorded; real log fixture |
-| **NMR shieldings (GIAO)** | `! NMR` + `%EPRNMR` | **Implemented** | `nmrBlockFor()` writes the block; `parseOrcaShieldings()` reads the summary; real 6.1.1 fixture (#284) |
+| **NMR shieldings (GIAO)** | `! NMR` + `%EPRNMR` | **Implemented** | `nmrBlockFor()` writes the block, `parseOrcaShieldings()` reads the summary; real 6.1.1 fixture (#284) |
 | NMR spin-spin couplings | `%EPRNMR … SSALL` | **Implemented** | `nmrSpinSpin` writes `SHIFT, SSALL`; the J summary is parsed into `nmr.couplings` (#284) |
 | **TD-DFT / excited states** | TD-DFT, SOC | **Absent** | refused by name |
 | **Transition-state search** | OptTS | **Absent** | refused by name |
@@ -140,7 +142,28 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 
 ---
 
-## 4. xTB (LGPL)
+## 4. PySCF 2.15 (Apache-2.0)
+
+Added after the first draft (#269). The deck is Python, so results are written as a JSON record
+rather than scraped from a log; the text parser exists only for user-supplied logs.
+
+| Capability | Program | NodeChem | Evidence / note |
+|---|---|---|---|
+| SP / Opt / Freq / Opt Freq | yes | **Implemented** | `engines/pyscf.js`, `pyscfDeck.js`; Opt through geomeTRIC, Freq through `mf.Hessian()` |
+| HF, B3LYP, PBE0, M06-2X, MP2, CCSD, CCSD(T) | yes | **Implemented** | `PYSCF_METHODS`; MP2/CC are single points |
+| **CASSCF** | yes | **Implemented (single point)** | explicit active space; Opt/Freq refused by name |
+| PCM / C-PCM implicit solvation | yes | **Implemented (single point)** | `pyscf.solvent`; not offered on Opt/Freq |
+| ECP via the def2 sets | yes | **Implemented** | `ecp=<basis>` when a def2 set meets a heavy element |
+| **TD-DFT** | yes (`pyscf.tdscf`) | **Absent** | the deck writes no TDSCF step (#296) |
+| **NMR shieldings** | yes (`pyscf.prop`) | **Absent** | no GIAO path in this deck |
+| **Opt=TS / IRC / Scan** | no native saddle search | **Absent** | the explorer role (ADR 0002) is the intended home |
+| **Relativistic (X2C)** | yes | **Absent** | refused by name (#294) |
+| Periodic (`pyscf.pbc`) | yes | **N/A** | out of scope for a molecular workbench |
+| QM/MM, GPU kernels | partial | **N/A** | out of scope |
+
+---
+
+## 5. xTB (LGPL)
 
 | Capability | Program | NodeChem | Evidence / note |
 |---|---|---|---|
@@ -159,7 +182,7 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 
 ---
 
-## 5. Generators and scorers
+## 6. Generators and scorers
 
 | Tool | NodeChem | Note |
 |---|---|---|
@@ -178,33 +201,39 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 
 ---
 
-## 6. The gaps worth fixing, ranked
+## 7. The gaps worth fixing, ranked
 
 Effort is engineering time, not calendar, and assumes the parser work is done against a real log.
 
-| Rank | Gap | Why it matters | Effort |
-|---|---|---|---|
-| 1 | **ORCA TD-DFT** | ORCA users cannot do UV-Vis/ECD; the excited-state analysis already exists for Gaussian and Psi4 | ~4 days |
-| 2 | **ORCA TS / IRC / Scan** | no reaction paths at all on ORCA, although the Gaussian path logic is written | ~1 week |
-| 3 | **Explicit / micro-solvation** (#228) | implicit models miss specific H-bonds; the record cannot even say "implicit only" today | 1–2 weeks |
-| 4 | **Validation harness** (#230) | recorded and live PySCF paths are implemented; Gaussian/ORCA/Psi4 live rungs remain | — |
-| 5 | **Gaussian Polar** (polarizability, hyperpolarizability) | a single keyword job; completes the property set on the licensed engine | ~3 days |
-| 6 | **Psi4 SAPT2 family** | SAPT0 is the cheapest rung; interaction-energy analysis is the app's strength | ~1 week |
-| 7 | **ONIOM / QM-MM** | whole class of papers; needs a layer/region model, not just a keyword | 2–4 weeks (result reader shipped; input builder open) |
-| 8 | **CASSCF / NEVPT2** (ORCA) | the one method family with no representation; T1 diagnostic already exists | ~2 weeks |
-| 9 | **BOMD / ADMP** (Gaussian) and **MD** (ORCA/xTB) | would need a trajectory model and viewer; the app has no dynamics at all | 1–3 weeks |
-| 10 | **EOM-CCSD / ADC** | excited-state accuracy beyond TD-DFT | 1–2 weeks |
-| 11 | **xTB scan / NEB / sTDA** | cheap reaction paths and UV-Vis without a licence | 3–5 days each |
-| 12 | **Relativistic (DKH/ZORA/X2C)** | heavy elements are currently ECP-only | ~1 week |
-| 13 | **Anharmonic frequencies** | improves thermochemistry and spectra | 1–2 weeks |
+| Rank | Gap | Issue | Why it matters | Effort |
+|---|---|---|---|---|
+| 1 | **ORCA TD-DFT** | #285 | ORCA users cannot do UV-Vis/ECD; the analysis exists for Gaussian and Psi4 | ~4 days |
+| 2 | **ORCA OptTS / IRC / Scan** | #286 | no reaction paths at all on ORCA, although the path logic is written | ~1 week |
+| 3 | **ORCA CASSCF / NEVPT2** | #287 | the practical MR engine; PySCF covers only a single-point CASSCF | ~2 weeks |
+| 4 | **ORCA Raman / VCD / ROA** | #288 | Gaussian has all three; ORCA users get none | ~1 week |
+| 5 | **Gaussian Polar, IRCMax, Force, Volume, EET** | #290 | closes the job-type surface on the licensed engine | ~3–5 days |
+| 6 | **Psi4 SAPT2 family + counterpoise** | #291 | SAPT0 is the cheapest rung; interaction energy is the app's strength | ~1 week |
+| 7 | **Psi4 EOM-CCSD / ADC(2) / FNO-CCSD(T)** | #292 | excited-state accuracy beyond TD-DFT and cheaper CC on large systems | ~2 weeks |
+| 8 | **xTB scan / NEB / sTDA / fixed atoms** | #293 | cheap paths and UV-Vis without a licence | 3–5 days each |
+| 9 | **Relativistic DKH / ZORA / X2C** | #294 | heavy elements are ECP-only today | 1–2 weeks |
+| 10 | **Anharmonic frequencies** | #295 | improves thermochemistry and spectra on both engines | 1–2 weeks |
+| 11 | **PySCF TD-DFT** | #296 | the permissive engine cannot produce a UV-Vis spectrum | ~4 days |
+| 12 | **ORCA EDA / LED** | #289 | interaction-energy decomposition beside SAPT | ~1 week |
+| 13 | **ONIOM input builder** | #67 | result reader shipped; layer/region construction open | 2–4 weeks |
+| 14 | **Dynamics** (BOMD/ADMP, ORCA/xTB MD, metadynamics) | #67 | needs a trajectory model and viewer; the app has none | 1–3 weeks |
+
+Closed since the first draft: **#226** tautomers, **#227** DLPNO-CCSD(T), **#228** explicit
+solvation (deterministic cluster), **#229** uncertainty, **#230** validation harness, **#269**
+PySCF, **#270** Multiwfn sidecar, **#273** cclib converter, **#284** ORCA NMR.
 
 Deliberately not a gap: **Psi4 NMR** (does not exist), **Psi4 SMD/CPCM** (not DDX models),
 **Psi4 CC frequencies** (no analytic Hessian). ROA has a G09 fixture and a reader; G16 B.01+ is
-unverified, not absent.
+unverified, not absent. **Psi4 CASSCF/DMRG** is not ranked separately while PySCF CASSCF covers
+the single-point multireference case.
 
 ---
 
-## 7. Limits of this map
+## 8. Limits of this map
 
 - It is a capability map, not a keyword audit. Gaussian's `Polar` and ORCA's `%elprop` cover more
   than the rows above.
