@@ -28,6 +28,19 @@ Task statuses you will see:
 | `cancelled` | Stopped by **Cancel all** |
 | `timed out` | Stopped at its wall-clock limit; the output was **not** parsed |
 
+A failed row carries its reason in the row itself — wrapped, clamped to two lines, and expandable
+from the keyboard; the `title` tooltip keeps the full text as a secondary copy. The same reason is
+written to the console log as `Workflow failed — …`, and the hint line under **Setup** reports the
+outcome. For the three common causes the row — and the hint line — also offers the fix: a missing
+executable focuses the matching Setup field, an unselected conformer opens and focuses the Generate
+block's member control, and a failed gate focuses the gate row.
+
+The header and the Queue tab belong to the **project on screen**. Opening another project resets the
+header to `idle · 0/0 · no run`; a queue event from a project that is not visible never changes it.
+**Recent runs** names the project and start time of each queue-produced run. If the newest queue
+belongs to another project, the header says `last run: <project> (other project)` instead of showing
+that queue's status as if it were the open project's.
+
 ## Time limits
 
 A hung engine must not hold a queue slot, so every task has a wall-clock limit. The limit is read
