@@ -113,7 +113,7 @@ input(molecule) ─▶ generate(search) ─▶ calculate ─▶ analyse ─▶ o
 | `sourceSha256` | `input` | digest of the bytes read |
 | `source` (`search` \| `imported`) | `generate` | how candidates arrive |
 | `generator` (`crest`/`uff`/`obabel`/`rdkit`) | `generate` | search implementation |
-| `method`, `ff`, `nconf`, `seed`, `torsionStepDegrees`, `maxTrials` | `generate` | search knobs |
+| `method`, `nconf`, `seed`, `torsionStepDegrees`, `maxTrials` | `generate` | search knobs (`method` is generator-dependent; `ff` is read only as its pre-#240 alias) |
 | `energyWindowKcal`, `rmsdThreshold`, `maxConformers`, `temperature` | `generate` | curation policy |
 | `selectedConformerId`, fan-out | `generate` | decision on the curated set |
 

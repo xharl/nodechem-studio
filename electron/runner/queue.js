@@ -41,12 +41,13 @@ import {
   xyzText,
 } from '../../src/shared/conformers.js';
 import {
-  OBABEL_DEFAULT_FF,
   OBABEL_SEARCH_LOG,
   normalizeObabelForceField,
   obabelCoverageRefusal,
   obabelForceFieldKeyword,
+  obabelSearchFailure,
   obabelSearchSummary,
+  obabelVersionRefusal,
 } from '../../src/shared/obabelConformers.js';
 import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 import { optimizeUff } from '../../src/shared/uff.js';
@@ -481,11 +482,16 @@ function conformerTaskRecord(raw, nodeId) {
       // keeps exactly the keys it always had.
       ...(produces === 'tautomers' ? { produces } : {}),
       rankBy: typeof conf.rankBy === 'string' ? conf.rankBy : '',
-      // A tautomer set has no xTB method; recording `gfn2` would put a method
-      // on the run that never ran.
-      method: produces === 'tautomers'
+      // Issue #240: the task records the method its generator actually runs.
+      // `ff` was the pre-#240 name for Open Babel's force field; it is read
+      // here only as a migration source, never written back beside `method`.
+      method: produces === 'tautomers' || source === 'imported'
         ? ''
-        : (source === 'imported' ? '' : (conf.method === 'gfnff' ? 'gfnff' : 'gfn2')),
+        : (generator === 'crest'
+          ? (conf.method === 'gfnff' ? 'gfnff' : 'gfn2')
+          : (generator === 'uff'
+            ? 'UFF'
+            : (obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94'))),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
       maxConformers: Math.round(number(conf.maxConformers, produces === 'tautomers' ? 16 : 20, 1, 200)),
@@ -514,8 +520,6 @@ function conformerTaskRecord(raw, nodeId) {
       // hand-written queue payload could carry.
       ...(generator === 'obabel' && Number.isFinite(Number(conf.nconf))
         ? { nconf: Math.round(number(conf.nconf, 20, 1, 1000)) } : {}),
-      ...(generator === 'obabel' && ['mmff94', 'mmff94s'].includes(String(conf.ff || '').toLowerCase())
-        ? { ff: String(conf.ff).toLowerCase() } : {}),
       ...(generator === 'uff' && Array.isArray(conf.bonds)
         ? {
           bonds: conf.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
@@ -1301,6 +1305,14 @@ export class QueueManager {
       && task.generate?.generator === 'obabel'
       && !task.generate?.member)
       || (task.type === 'prepare' && task.prepare?.converter === 'openbabel'));
+    // Issue #239: Open Babel 3.2.x segfaults in its `--conformer` search. Only
+    // a search is affected — `--gen3d` and the relax path run fine on the same
+    // binary — so the version refusal is scoped to generate tasks (a prepare
+    // converter on 3.2.x is left alone).
+    const obabelSearchTasks = tasks.filter((task) => task.type === 'generate'
+      && task.generate?.generator === 'obabel'
+      && !task.generate?.member);
+    const needsObabelSearch = obabelSearchTasks.length > 0;
     // ADR 0001 §2.10: a scorer is optional, but a block that asks for one
     // cannot run without its sidecar.
     const needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
@@ -1331,6 +1343,22 @@ export class QueueManager {
         if (!obabelExecutable) throw new Error('Choose the Open Babel executable before running an Open Babel search, embed3d or relax (or change the block to CREST, UFF, or a different prepare converter).');
         const stat = await fsp.stat(obabelExecutable).catch(() => null);
         if (!stat?.isFile()) throw new Error(`Open Babel executable not found: ${obabelExecutable}`);
+      }
+      if (needsObabelSearch) {
+        // Issue #239: ask the binary what it is before spawning a search that
+        // the known-broken series cannot finish. The refusal is recorded on the
+        // affected tasks — not thrown — so a mixed workflow still runs the
+        // blocks it can and the report names the version and the way out.
+        const version = await ObabelRunner.version(obabelExecutable);
+        const refusal = obabelVersionRefusal(version);
+        if (refusal) {
+          for (const task of obabelSearchTasks) {
+            task.status = 'failed';
+            task.error = refusal;
+            task.refusal = { code: 'obabel-version', version, message: refusal };
+            task.finishedAt = new Date().toISOString();
+          }
+        }
       }
       if (needsScorer) {
         const scorerExecutable = String(options.scorerExecutable || '').trim();
@@ -1416,6 +1444,13 @@ export class QueueManager {
     this.queues.set(id, queue);
     await this.persist(queue);
     this.publish(queue, 'queue-started');
+    // Issue #239: the refusal is already on the task; say it in the run console
+    // too, so a user watching the queue sees the version and the workaround
+    // rather than only a red row.
+    for (const task of tasks) {
+      if (task.refusal?.code !== 'obabel-version') continue;
+      this.emit({ type: 'queue-output', queueId: id, nodeId: task.nodeId, text: `Refused: ${task.error}\n` });
+    }
     this.drain(queue).catch((error) => this.stall(queue, error));
     return publicQueue(queue);
   }
@@ -1871,7 +1906,9 @@ export class QueueManager {
         ? ''
         : (conf.generator === 'uff'
           ? 'UFF'
-          : (conf.generator === 'obabel' ? (obabelForceFieldKeyword(conf.ff) || 'MMFF94') : ''));
+          : (conf.generator === 'obabel'
+            ? (obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94')
+            : ''));
       if (conf.source === 'imported') {
         // ADR 0001: the input block already read, hashed and wrote the file.
         // This block only ranks what that record contains; it never opens the
@@ -1985,8 +2022,10 @@ export class QueueManager {
         }
         // MMFF94 has no parameters for every element. Refusing by name here is
         // the difference between "this molecule is out of scope" and a silently
-        // untyped atom producing a plausible-looking energy.
-        const coverageRefusal = obabelCoverageRefusal(parsedInput.frames[0].atoms);
+        // untyped atom producing a plausible-looking energy. Issue #240: the
+        // check belongs to the force field the block selected, so a UFF search
+        // is not refused for an element MMFF94 lacks.
+        const coverageRefusal = obabelCoverageRefusal(parsedInput.frames[0].atoms, conf.method);
         if (coverageRefusal) throw new Error(coverageRefusal);
 
         const argv = await this.stageConformerSearchInput(queue, task, dir);
@@ -1997,7 +2036,9 @@ export class QueueManager {
           argv,
           cwd: dir,
           outputName: task.outputName || OBABEL_SEARCH_LOG,
-          ff: normalizeObabelForceField(conf.ff),
+          // Issue #240: the block's method *is* the force field; one name
+          // drives both the record and `--ff`.
+          ff: normalizeObabelForceField(conf.method),
           // Issue 177: the same wall-clock limit the calculation tasks get.
           timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
           onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
@@ -2021,8 +2062,11 @@ export class QueueManager {
           return;
         }
         if (result.cancelled) throw new Error('Conformer search cancelled by the user.');
-        if (Number(result.exitCode) !== 0) {
-          throw new Error(`Open Babel exited with code ${result.exitCode}; see ${task.outputName || OBABEL_SEARCH_LOG} in the queue folder.`);
+        // Issue #239: a signalled child leaves `exitCode === null`, which an
+        // exit-code-only test reads as success. Signal first, then the code.
+        const failure = obabelSearchFailure(result);
+        if (failure) {
+          throw new Error(`${failure} See ${task.outputName || OBABEL_SEARCH_LOG} in the queue folder.`);
         }
         if (!result.ensembleText) {
           throw new Error('Open Babel returned no scored conformers; see obabel.log in the queue folder for the reason.');
@@ -2033,7 +2077,7 @@ export class QueueManager {
         origin = {
           program: 'Open Babel',
           version: result.version || '',
-          method: obabelForceFieldKeyword(conf.ff) || 'MMFF94',
+          method: obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94',
           // The digest identifies the starting geometry this search consumed,
           // not the conformers it produced: a re-run from the same input is
           // reproducible, a re-run from a different one is visibly different.
@@ -2045,7 +2089,7 @@ export class QueueManager {
           nodeId: task.nodeId,
           text: obabelSearchSummary({
             version: result.version,
-            ff: conf.ff,
+            ff: conf.method,
             nconf: conf.nconf ?? 0,
             log: result.log,
           }),
@@ -2163,10 +2207,11 @@ export class QueueManager {
       };
       const summary = ensembleSummary(ranked, {
         generator: source,
-        // Issue 144: a UFF or Open Babel search has no xTB method, and
-        // recording the block's `method` beside its ensemble would be a false
-        // provenance claim. ADR 0001: an imported ensemble keeps the method its
-        // producing input declared.
+        // Issue 144: a UFF or Open Babel search has no xTB Hamiltonian. Its
+        // force field is recorded in `energyMethod` and `origin.method`; the
+        // summary's `method` key stays reserved for the search Hamiltonian, so
+        // it is empty on those routes. Issue #240 made the *block's* `method`
+        // the force field, but this field is the ensemble's, not the block's.
         method: scorerProvenance
           ? scorerProvenance.label
           : (conf.source === 'imported'

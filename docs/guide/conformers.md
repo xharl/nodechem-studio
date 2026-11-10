@@ -67,12 +67,23 @@ the run console at `obabel`, and the block spawns it.
   the app runs `--energy --append Energy` over the generated ensemble and reads
   one number per frame.
 - **The numbers are kcal/mol and the record says so**: `energyUnit:
-  "kcal/mol"`, `energyMethod: "MMFF94"` (or `MMFF94s`). An MM energy is not a
-  total electronic energy and is never stored in a Hartree field.
+  "kcal/mol"`, `energyMethod: "MMFF94"` (or `MMFF94s` / `UFF`). An MM energy is
+  not a total electronic energy and is never stored in a Hartree field.
+- **The force field is the block's `method`.** `MMFF94`, `MMFF94s` and `UFF`
+  are the choices, and the same value is written to `--ff`; there is no second
+  `ff` key. A project saved before this rule (with `method: "gfn2"` on an
+  Open Babel block) still opens: its `ff` value, or MMFF94, becomes the method.
+- **Open Babel 3.2.x cannot run this search.** That series segfaults in
+  `--conformer` on every molecule tested (3.1.0 runs the same command), so the
+  queue reads `obabel -V` before spawning and refuses 3.2.x by version, naming
+  the workaround: install 3.1.x or use the in-app UFF search. A signalled child
+  is a failed search, never a completed one with an empty ensemble.
 - **MMFF94 does not cover every element.** It is parameterised for H, C, N, O,
   F, Si, P, S, Cl, Br and I. An atom outside that list is refused by name before
   Open Babel is spawned; the alternative is a plausible-looking energy for a
-  molecule the force field never described.
+  molecule the force field never described. This check belongs to the MMFF
+  fields — a UFF search is parameterised across the periodic table and is not
+  refused for an element MMFF94 lacks.
 - **This is not Spartan's stage.** Spartan uses MMFF94/DLFF03 with its own
   search protocol. Re-running the same molecule with Open Babel MMFF94 is a
   different, reproducible search: on a real 84-atom 2,4-DHI-IQ ensemble the two
@@ -186,9 +197,9 @@ and the app has no way to check a file written by another program. The hash is a
 re-exporting the same conformers changes it. Report the origin as the source's claim, not as this
 app's verification.
 
-An imported ensemble keeps `gfn2` out of its provenance: `method` on the generate block is the
-conformer *search* method and applies to CREST only. The method that produced an imported file's
-energies is the input's `energyMethod` (free text, e.g. `MMFF94`), and it is shown next to the unit.
+An imported ensemble owns no method: the generate block stores `method: ""`, because the method that
+produced the file's energies is the input's `energyMethod` (free text, e.g. `MMFF94`), shown next to
+the unit. `gfn2` therefore never appears in an imported block's provenance.
 
 ## Energy units (Hartree vs kcal/mol)
 

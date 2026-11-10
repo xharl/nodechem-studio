@@ -7,6 +7,8 @@ import {
   obabelForceFieldKeyword,
   obabelScoreArgv,
   obabelSearchArgv,
+  obabelSearchFailure,
+  obabelVersionRefusal,
   parseObabelScoredEnsemble,
   parseObabelSearchLog,
   untypableElements,
@@ -42,6 +44,15 @@ describe('Open Babel invariants', () => {
     expect(() => obabelScoreArgv({ ff: 'gaff' })).toThrow(/not one this app runs/);
   });
 
+  it('runs UFF as the third force field, and never GAFF', () => {
+    // Issue #240: the block's `method` selects the field, and UFF is a real
+    // Open Babel field with no charge-model caveat.
+    expect(obabelForceFieldKeyword('UFF')).toBe('UFF');
+    expect(obabelSearchArgv({ ff: 'UFF' })).toContain('UFF');
+    expect(obabelScoreArgv({ ff: 'uff' })).toContain('UFF');
+    expect(() => obabelSearchArgv({ ff: 'gaff' })).toThrow(/mmff94, mmff94s, uff/);
+  });
+
   it('bounds --nconf to a real integer range', () => {
     expect(() => obabelSearchArgv({ nconf: 0 })).toThrow(/between 1 and 1000/);
     expect(() => obabelSearchArgv({ nconf: 1001 })).toThrow(/between 1 and 1000/);
@@ -66,6 +77,48 @@ describe('MMFF94 coverage', () => {
     expect(untypableElements(atoms)).toEqual(['Se']);
     expect(obabelCoverageRefusal(atoms)).toMatch(/no parameters for Se/);
     expect(obabelCoverageRefusal([{ element: 'C' }, { element: 'O' }])).toBe('');
+  });
+
+  it('checks coverage against the selected force field, not the program', () => {
+    // Issue #240: UFF is parameterised across the periodic table; MMFF94 is not.
+    const selenium = [{ element: 'C' }, { element: 'Se' }];
+    expect(obabelCoverageRefusal(selenium, 'MMFF94')).toMatch(/MMFF94 has no parameters for Se/);
+    expect(obabelCoverageRefusal(selenium, 'mmff94s')).toMatch(/MMFF94s has no parameters for Se/);
+    expect(obabelCoverageRefusal(selenium, 'UFF')).toBe('');
+  });
+});
+
+describe('issue #239: the Open Babel 3.2.x conformer crash', () => {
+  it('refuses every 3.2.x spelling, naming the version and the workaround', () => {
+    for (const version of ['3.2.0', '3.2.1', '3.2.1-1', '3.2', 'v3.2.1']) {
+      const refusal = obabelVersionRefusal(version);
+      expect(refusal).toMatch(/Open Babel 3\.2(?:\.\d+)? crashes in its conformer search/);
+      expect(refusal).toContain('`--conformer`');
+      expect(refusal).toMatch(/install 3\.1\.x or use the in-app UFF search/);
+    }
+    // The whole `-V` line is accepted too; the version token is what matters.
+    expect(obabelVersionRefusal('Open Babel 3.2.1 -- Feb 17 2026'))
+      .toMatch(/Open Babel 3\.2\.1 crashes/);
+  });
+
+  it('does not refuse 3.1.x, later series, or a version it cannot read', () => {
+    for (const version of ['3.1.0', '3.1.1-2', '3.10.0', '2.4.1', '4.0.0', '', 'not a version']) {
+      expect(obabelVersionRefusal(version)).toBe('');
+    }
+  });
+
+  it('treats a signalled child as a failure even though exitCode is null', () => {
+    const failure = obabelSearchFailure({ exitCode: null, signal: 'SIGSEGV' });
+    expect(failure).toMatch(/ended with signal SIGSEGV/);
+    expect(failure).toMatch(/not used/);
+    // No exit code at all is still not a completed search.
+    expect(obabelSearchFailure({ exitCode: null, signal: null })).toMatch(/without an exit code/);
+    // A real zero is the only success.
+    expect(obabelSearchFailure({ exitCode: 0, signal: null })).toBe('');
+    expect(obabelSearchFailure({ exitCode: 1, signal: null })).toMatch(/exited with code 1/);
+    // Cancellation and timeout have their own paths; they are not "completed".
+    expect(obabelSearchFailure({ exitCode: null, signal: 'SIGTERM', cancelled: true })).toBe('');
+    expect(obabelSearchFailure({ exitCode: null, signal: 'SIGTERM', timedOut: true })).toBe('');
   });
 });
 
