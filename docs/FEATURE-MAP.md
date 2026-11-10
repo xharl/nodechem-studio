@@ -68,7 +68,8 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | **Relativistic (DKH/ZORA)** | — | **Absent** | one `DKH` mention in `validityChecks.js` |
 | **Anharmonic frequencies** | Freq=Anharmonic | **Absent** | zero occurrences |
 | Implicit solvation | PCM / SMD / CPCM | **Implemented** | `projectSchema.js` solvation models |
-| **Explicit / micro-solvation** | manual cluster | **Absent** | no solvent-cluster builder |
+| **Explicit / micro-solvation** | `prepare.kind = "solvate"` | **Implemented (deterministic placement)** | seeded rigid-template cluster (#228); not equilibrated, not a free energy |
+| **Explicit solvent MD / equilibration** | — | **Absent** | no MD engine; implicit solvation remains the continuum model |
 | ECP / GenECP | GenECP | **Implemented** | `ecp.js`, `ecpData.js` (def2, SDD subsets) |
 | Coordinate constraints | ModRedundant | **Implemented** | `constraints.js` |
 | Checkpoint chaining | %OldChk, Geom=Check | **Implemented** | `checkpoint.js` |
@@ -153,7 +154,7 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | **Relaxed scan** | `--scan` | **Absent** | no builder path |
 | **UV-Vis (sTDA)** | `--stda` | **Absent** | no builder path |
 | **Constraints / fixed atoms** | `--fix` | **Absent** | not exposed |
-| **Explicit solvent** | `--solvent` shell | **Absent** | implicit only |
+| **Explicit solvent** | `--solvent` shell | **Implemented (placement only)** | `prepare.kind = "solvate"`; no equilibration |
 | **Population / charges output** | yes | **Keyword-only** | result parsing is energy/frequency oriented |
 
 ---

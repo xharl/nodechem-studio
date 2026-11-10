@@ -42,6 +42,7 @@ import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import { ORCA_PNO_THRESHOLDS } from './engines/orca.js';
 import { PYSCF_SOLVATION_MODELS } from './engines/pyscf.js';
+import { EXPLICIT_SOLVENT_IDS } from './explicitSolvation.js';
 import { validateBlockContracts } from './blockContracts.js';
 import { SCORER_SPECS } from './scorer.js';
 import {
@@ -922,7 +923,10 @@ function normalizePrepareSettings(c, raw, path, legacy) {
     c.error(path, 'must be an object.');
     return { ...DEFAULT_PREPARE_SETTINGS };
   }
-  warnUnknown(c, provided, new Set(['kind', 'converter', 'forceField', 'smiles', 'charge', 'multiplicity']), path);
+  warnUnknown(c, provided, new Set([
+    'kind', 'converter', 'forceField', 'smiles', 'charge', 'multiplicity',
+    'solvent', 'solventCount', 'seed', 'shellAngstrom',
+  ]), path);
   const kind = readEnum(c, provided.kind, PREPARE_KINDS, `${path}.kind`, {
     legacy, fallback: DEFAULT_PREPARE_SETTINGS.kind,
   });
@@ -933,14 +937,19 @@ function normalizePrepareSettings(c, raw, path, legacy) {
   if (kind === 'embed3d' && requestedConverter === 'uff') {
     c.error(`${path}.converter`, 'must be "openbabel": 3D embedding needs the Open Babel converter.');
   }
+  if (kind === 'solvate' && requestedConverter !== 'geometric') {
+    c.error(`${path}.converter`, 'must be "geometric": explicit solvation is deterministic placement, not a force-field relaxation.');
+  }
   const forceField = readEnum(c, provided.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, {
     legacy,
-    fallback: kind === 'embed3d' ? 'MMFF94' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
+    fallback: kind === 'embed3d' ? 'MMFF94' : (kind === 'solvate' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
   });
   const smiles = readString(c, provided.smiles, `${path}.smiles`, { legacy, fallback: '', max: 1000 });
   if (kind === 'embed3d' && !smiles.trim()) {
     c.error(`${path}.smiles`, 'is required for an embed3d block; name the SMILES to turn into a structure.');
   }
+  const solvent = readEnum(c, provided.solvent ?? DEFAULT_PREPARE_SETTINGS.solvent, EXPLICIT_SOLVENT_IDS,
+    `${path}.solvent`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.solvent });
   return {
     kind,
     converter,
@@ -948,6 +957,13 @@ function normalizePrepareSettings(c, raw, path, legacy) {
     smiles,
     charge: readInteger(c, provided.charge ?? 0, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, provided.multiplicity ?? 1, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
+    solvent,
+    solventCount: readInteger(c, provided.solventCount ?? DEFAULT_PREPARE_SETTINGS.solventCount,
+      `${path}.solventCount`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.solventCount, min: 1, max: 64 }),
+    seed: readInteger(c, provided.seed ?? DEFAULT_PREPARE_SETTINGS.seed,
+      `${path}.seed`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.seed, min: 0, max: 0x7fffffff }),
+    shellAngstrom: readNumber(c, provided.shellAngstrom ?? DEFAULT_PREPARE_SETTINGS.shellAngstrom,
+      `${path}.shellAngstrom`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.shellAngstrom, min: 1, max: 20 }),
   };
 }
 
@@ -957,8 +973,10 @@ function normalizePrepareOutput(c, raw, path, legacy) {
   warnUnknown(c, source, new Set([
     'kind', 'converter', 'forceField', 'energyKcal', 'converged', 'reason', 'iterations',
     'atomCount', 'generatedAt', 'origin', 'scorer',
+    'solvent', 'count', 'seed', 'shellAngstrom', 'minDistanceAngstrom', 'composition',
+    'formula', 'method', 'limitation', 'solvationModel',
   ]), path);
-  return {
+  const output = {
     kind: readEnum(c, source.kind, PREPARE_KINDS, `${path}.kind`, { legacy, fallback: 'relax' }),
     converter: readEnum(c, source.converter, PREPARE_CONVERTERS, `${path}.converter`, { legacy, fallback: 'uff' }),
     forceField: readEnum(c, source.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, { legacy, fallback: 'UFF' }),
@@ -981,7 +999,42 @@ function normalizePrepareOutput(c, raw, path, legacy) {
     generatedAt: readString(c, source.generatedAt, `${path}.generatedAt`, { legacy, fallback: '', max: 40 }),
     origin: normalizeConformerOrigin(c, source.origin, `${path}.origin`, legacy),
     ...(isPlainObject(source.scorer) ? { scorer: normalizeScorerProvenance(c, source.scorer, `${path}.scorer`) } : {}),
+    // Issue 228: explicit cluster provenance. Absent for every pre-228 record,
+    // so a saved prepare output that never solvated keeps exactly its keys.
+    ...(source.kind === 'solvate' || source.solvent || source.composition
+      ? {
+        solvent: isPlainObject(source.solvent)
+          ? {
+            id: readString(c, source.solvent.id, `${path}.solvent.id`, { legacy, fallback: '', max: 40 }),
+            label: readString(c, source.solvent.label, `${path}.solvent.label`, { legacy, fallback: '', max: 40 }),
+            formula: readString(c, source.solvent.formula, `${path}.solvent.formula`, { legacy, fallback: '', max: 40 }),
+          }
+          : null,
+        count: readInteger(c, source.count, `${path}.count`, { legacy, fallback: 0, min: 0, max: 64 }),
+        seed: readInteger(c, source.seed, `${path}.seed`, { legacy, fallback: 0, min: 0, max: 0x7fffffff }),
+        shellAngstrom: readNumber(c, source.shellAngstrom, `${path}.shellAngstrom`, { legacy, fallback: 0, min: 0, max: 20 }),
+        minDistanceAngstrom: readNumber(c, source.minDistanceAngstrom, `${path}.minDistanceAngstrom`, { legacy, fallback: 0, min: 0, max: 6 }),
+        formula: readString(c, source.formula, `${path}.formula`, { legacy, fallback: '', max: 120 }),
+        method: readString(c, source.method, `${path}.method`, { legacy, fallback: '', max: 200 }),
+        limitation: readString(c, source.limitation, `${path}.limitation`, { legacy, fallback: '', max: 400 }),
+        solvationModel: readEnum(c, source.solvationModel, ['explicit'], `${path}.solvationModel`,
+          { legacy, fallback: 'explicit' }),
+        ...(isPlainObject(source.composition)
+          ? {
+            composition: {
+              soluteFormula: readString(c, source.composition.soluteFormula, `${path}.composition.soluteFormula`, { legacy, fallback: '', max: 80 }),
+              solventFormula: readString(c, source.composition.solventFormula, `${path}.composition.solventFormula`, { legacy, fallback: '', max: 80 }),
+              solventCount: readInteger(c, source.composition.solventCount, `${path}.composition.solventCount`, { legacy, fallback: 0, min: 0, max: 64 }),
+              soluteAtoms: readInteger(c, source.composition.soluteAtoms, `${path}.composition.soluteAtoms`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              solventAtoms: readInteger(c, source.composition.solventAtoms, `${path}.composition.solventAtoms`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              totalAtoms: readInteger(c, source.composition.totalAtoms, `${path}.composition.totalAtoms`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+            },
+          }
+          : {}),
+      }
+      : {}),
   };
+  return output;
 }
 
 /**
@@ -2344,7 +2397,7 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     const settings = normalizePrepareSettings(c, raw.settings, `${path}.settings`, legacy);
     return {
       ...common,
-      kind: settings.kind === 'embed3d' ? '3D embed' : 'Relax',
+      kind: settings.kind === 'embed3d' ? '3D embed' : (settings.kind === 'solvate' ? 'Solvate' : 'Relax'),
       settings,
       ...(raw.output === undefined ? {} : {
         output: normalizePrepareOutput(c, raw.output, `${path}.output`, legacy),

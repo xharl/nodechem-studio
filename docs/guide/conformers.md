@@ -30,10 +30,20 @@ project geometry.
 ## Preparing one structure first
 
 A **Prepare structure** block is the 1→1 stage: `relax` minimises one structure with the in-app UFF
-engine (or Open Babel MMFF94), and `embed3d` turns a SMILES into one 3D structure with
-`obabel --gen3d`. It never enumerates protonation states, tautomers or conformers — those are sets, and
+engine (or Open Babel MMFF94), `embed3d` turns a SMILES into one 3D structure with
+`obabel --gen3d`, and `solvate` adds a deterministic explicit solvent cluster around the current
+geometry. It never enumerates protonation states, tautomers or conformers — those are sets, and
 sets belong to Generate. A Calculate block wired from Prepare runs on its written `prepared.xyz`, not
 on the geometry the workflow was planned with.
+
+### Explicit solvent clusters
+
+`solvate` places rigid solvent molecules (water, methanol or acetonitrile) on a Fibonacci shell
+around the solute. The block records the solvent, molecule count, seed, shell thickness, minimum
+atom distance and composition, so the same inputs rebuild the same cluster. The placement is not a
+molecular-dynamics run and is not equilibrated: a single cluster is not bulk solvent, and the
+record says so. The cluster is a starting geometry for a calculation, not a solvation free energy;
+implicit solvation in the calculate block remains the continuum model.
 
 ## Sources
 

@@ -1045,17 +1045,29 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
           validity: null,
           checkpointFrom: null,
           prepare: {
-            kind: settings.kind === 'embed3d' ? 'embed3d' : 'relax',
+            kind: settings.kind === 'embed3d' ? 'embed3d' : (settings.kind === 'solvate' ? 'solvate' : 'relax'),
             converter: settings.kind === 'embed3d'
               ? 'openbabel'
-              : (settings.converter === 'openbabel' || settings.converter === 'aimnet2'
-                ? settings.converter : 'uff'),
-            forceField: settings.forceField === 'MMFF94' || settings.forceField === 'AIMNet2'
-              ? settings.forceField
-              : (settings.converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
+              : (settings.kind === 'solvate'
+                ? 'geometric'
+                : (settings.converter === 'openbabel' || settings.converter === 'aimnet2'
+                  ? settings.converter : 'uff')),
+            forceField: settings.kind === 'solvate'
+              ? 'none'
+              : (settings.forceField === 'MMFF94' || settings.forceField === 'AIMNet2'
+                ? settings.forceField
+                : (settings.converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
             smiles: String(settings.smiles || ''),
             charge: chemistry.charge ?? 0,
             multiplicity: chemistry.multiplicity ?? 1,
+            ...(settings.kind === 'solvate'
+              ? {
+                solvent: String(settings.solvent || 'water'),
+                solventCount: Number(settings.solventCount) || 10,
+                seed: Number.isInteger(Number(settings.seed)) ? Number(settings.seed) : 1,
+                shellAngstrom: Number(settings.shellAngstrom) || 3.5,
+              }
+              : {}),
             bonds: Array.isArray(project?.molecule?.bonds) && project.molecule.bonds.length
               ? project.molecule.bonds.map((bond) => ({ a: bond.a, b: bond.b, order: bond.order })) : null,
           },
