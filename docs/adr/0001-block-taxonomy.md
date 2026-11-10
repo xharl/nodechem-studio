@@ -91,6 +91,11 @@ If this rule drifts, CREST and RDKit become ambiguous again.
 - **Converter** — translates files; never a block, invoked by import/export.
 - **Analysis helper** — pure functions over an existing geometry.
 
+**Amended by [ADR 0002](0002-explorer-role.md):** a sixth role, **explorer**,
+covers programs that navigate a potential energy surface (Sella, pysisyphus)
+and produce no energies of their own. They consume an engine or scorer as a
+calculator and return a saddle, path or profile.
+
 ### 2.6 Import becomes `input`; ranking stays in `generate`
 
 An imported ensemble is data from outside the project. It enters through an
