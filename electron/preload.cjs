@@ -4,6 +4,11 @@ contextBridge.exposeInMainWorld('desktop', {
   getInfo: () => ipcRenderer.invoke('app:info'),
   // Presence of each engine binary on PATH, for the status bar.
   engineStatus: () => ipcRenderer.invoke('engines:status'),
+  // Issue #252: machine/app settings stored outside every project.
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  settingsPath: () => ipcRenderer.invoke('settings:path'),
+  detectSettings: () => ipcRenderer.invoke('settings:detect'),
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
   collectDiagnostics: (payload) => ipcRenderer.invoke('diagnostics:collect', payload),
   saveDiagnostics: (text) => ipcRenderer.invoke('diagnostics:save', text),
@@ -31,7 +36,7 @@ contextBridge.exposeInMainWorld('desktop', {
     ipcRenderer.on('app:save-and-close', handler);
     return () => ipcRenderer.removeListener('app:save-and-close', handler);
   },
-  pickExecutable: () => ipcRenderer.invoke('gaussian:pick-executable'),
+  pickExecutable: (payload) => ipcRenderer.invoke('gaussian:pick-executable', payload),
   pickCrestExecutable: () => ipcRenderer.invoke('crest:pick-executable'),
   pickObabelExecutable: () => ipcRenderer.invoke('obabel:pick-executable'),
   pickToolExecutable: (tool) => ipcRenderer.invoke('tool:pick-executable', tool),
