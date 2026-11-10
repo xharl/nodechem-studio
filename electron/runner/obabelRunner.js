@@ -8,6 +8,7 @@ import {
   obabelEnsembleText,
   obabelForceFieldKeyword,
   obabelScoreArgv,
+  obabelVersionRefusal,
   parseObabelScoredEnsemble,
   parseObabelSearchLog,
 } from '../../src/shared/obabelConformers.js';
@@ -57,6 +58,10 @@ export class ObabelRunner {
     if (!executable) throw new Error('No Open Babel executable is configured; set it in the run console or choose a different generator.');
 
     const version = await ObabelRunner.version(executable);
+    // Issue #239: defence in depth. The queue refuses a 3.2.x search before it
+    // gets here, but no code path may spawn the known-broken combination.
+    const refusal = obabelVersionRefusal(version);
+    if (refusal) throw new Error(refusal);
     const scoredName = OBABEL_SCORED_OUTPUT;
     const search = await this.#spawnOnce({
       executable,
@@ -70,11 +75,31 @@ export class ObabelRunner {
 
     if (search.timedOut || search.cancelled) {
       await fsp.writeFile(path.join(cwd, outputName), outputText, 'utf8');
-      return { ...search, outputText, ensembleText: '', energies: [], frames: [], version, log: parseObabelSearchLog(search.text) };
+      return {
+        ...search,
+        searchExitCode: search.exitCode,
+        searchSignal: search.signal,
+        outputText,
+        ensembleText: '',
+        energies: [],
+        frames: [],
+        version,
+        log: parseObabelSearchLog(search.text),
+      };
     }
     if (search.exitCode !== 0) {
       await fsp.writeFile(path.join(cwd, outputName), outputText, 'utf8');
-      return { ...search, outputText, ensembleText: '', energies: [], frames: [], version, log: parseObabelSearchLog(search.text) };
+      return {
+        ...search,
+        searchExitCode: search.exitCode,
+        searchSignal: search.signal,
+        outputText,
+        ensembleText: '',
+        energies: [],
+        frames: [],
+        version,
+        log: parseObabelSearchLog(search.text),
+      };
     }
 
     // Second pass: one MMFF94 energy per conformer, appended to its comment.
@@ -97,7 +122,7 @@ export class ObabelRunner {
       const stat = await fsp.stat(scoredPath).catch(() => null);
       if (stat && stat.size > 0 && stat.size <= MAX_ENSEMBLE_BYTES) {
         const text = await fsp.readFile(scoredPath, 'utf8');
-        const parsed = parseObabelScoredEnsemble(text);
+        const parsed = parseObabelScoredEnsemble(text, { ff });
         if (parsed.errors.length === 0) {
           frames = parsed.frames;
           energies = parsed.frames.map((frame) => frame.energyKcal);
@@ -112,6 +137,11 @@ export class ObabelRunner {
     return {
       exitCode: scoring.exitCode,
       signal: scoring.signal,
+      // Issue #239: the search stage's own result, so a caller can tell a
+      // crashed search from a crashed scoring pass even though both arrive as
+      // an exit code on the same record.
+      searchExitCode: search.exitCode,
+      searchSignal: search.signal,
       cancelled: scoring.cancelled,
       timedOut: scoring.timedOut,
       truncated: search.truncated || scoring.truncated,

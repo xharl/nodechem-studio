@@ -31,7 +31,88 @@ export const CONFORMER_GENERATORS = Object.freeze(['crest', 'uff', 'obabel', 'rd
 export const CONFORMER_SOURCES = Object.freeze(['search', 'imported']);
 /** The only external ensemble format this build reads: one or more XYZ frames. */
 export const ENSEMBLE_FORMATS = Object.freeze(['xyz']);
+/** CREST's Hamiltonians. Issue #240: this is no longer every generator's list. */
 export const CONFORMER_METHODS = Object.freeze(['gfn2', 'gfnff']);
+
+/**
+ * Issue #240: `method` names the method the generator actually runs, so the
+ * allowed values belong to the generator — not to the block in general.
+ *
+ *   - `crest` runs an xTB Hamiltonian (`gfn2` / `gfnff`);
+ *   - `uff` is fixed to UFF, the only force field that route evaluates;
+ *   - `obabel` runs an MM force field, and `--ff` is written from this value;
+ *   - `imported` has no block method: the file's producer owns that claim;
+ *   - `rdkit` (tautomers) is not a conformer search at all.
+ *
+ * Before this map every generator was validated against `CONFORMER_METHODS`,
+ * so an Open Babel block had to claim `gfn2` — a method it never ran — and the
+ * saved project misdescribed itself.
+ */
+export const CONFORMER_METHODS_BY_GENERATOR = Object.freeze({
+  crest: CONFORMER_METHODS,
+  uff: Object.freeze(['UFF']),
+  obabel: Object.freeze(['MMFF94', 'MMFF94s', 'UFF']),
+  rdkit: Object.freeze([]),
+});
+export const DEFAULT_CONFORMER_METHOD = Object.freeze({
+  crest: 'gfn2',
+  uff: 'UFF',
+  obabel: 'MMFF94',
+});
+
+/** The methods `generator` runs, in canonical spelling; [] when it runs none. */
+export function conformerMethodsFor(generator) {
+  const key = String(generator ?? '').trim().toLowerCase();
+  return CONFORMER_METHODS_BY_GENERATOR[key] || [];
+}
+
+/**
+ * `value` in the generator's canonical spelling, or '' when the generator does
+ * not run it. Case-insensitive: a hand-written `mmff94` is the same request as
+ * `MMFF94`, and the stored value is always the canonical one.
+ */
+export function normalizeConformerMethod(generator, value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return conformerMethodsFor(generator)
+    .find((item) => item.toLowerCase() === text.toLowerCase()) || '';
+}
+
+/**
+ * The CREST xTB method every block used to be validated against, including the
+ * ones that never ran CREST. Issue #240 migrates these on read instead of
+ * refusing a project the previous build wrote.
+ */
+export function isLegacyConformerMethod(value) {
+  const key = String(value ?? '').trim().toLowerCase();
+  return key === 'gfn2' || key === 'gfnff';
+}
+
+/**
+ * The method a block should record for `generator`, migrating the pre-#240
+ * `gfn2`/`gfnff` placeholder to the generator's real value:
+ *
+ *   - `obabel` takes the old `ff` value when one was stored (that was the only
+ *     truthful field on such a block), else MMFF94;
+ *   - `uff` becomes UFF;
+ *   - `crest` stays on `gfn2` unless the file stated `gfnff`.
+ *
+ * Returns '' for a generator with no method (`imported`, `rdkit`) and for a
+ * value that is neither canonical nor the legacy placeholder — the caller
+ * decides whether that is a refusal.
+ */
+export function conformerMethodForGenerator(generator, { method = '', ff = '' } = {}) {
+  const key = String(generator ?? '').trim().toLowerCase();
+  if (conformerMethodsFor(key).length === 0) return '';
+  const stated = normalizeConformerMethod(key, method);
+  if (stated) return stated;
+  const text = String(method ?? '').trim();
+  if (text !== '' && !isLegacyConformerMethod(text)) return '';
+  if (key === 'obabel') {
+    return normalizeConformerMethod('obabel', ff) || DEFAULT_CONFORMER_METHOD.obabel;
+  }
+  return DEFAULT_CONFORMER_METHOD[key] || '';
+}
 
 /**
  * Issue #130: the unit an absolute member energy is recorded in. `hartree` is

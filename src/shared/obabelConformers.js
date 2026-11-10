@@ -32,12 +32,23 @@ export const OBABEL_GENERATOR = 'obabel';
  * so an ensemble produced here would carry an unstated charge model. MMFF94s is
  * the static variant (planarised delocalised nitrogen) and is a different claim
  * about the geometry, so it is a separate choice rather than a default.
+ *
+ * Issue #240: UFF is listed because the block's `method` selects the force
+ * field the search actually runs, and UFF is a real Open Babel field with no
+ * charge-model caveat. It is also the in-app route's method, so refusing it
+ * here would make the same word mean two things.
  */
-export const OBABEL_FORCE_FIELDS = Object.freeze(['mmff94', 'mmff94s']);
+export const OBABEL_FORCE_FIELDS = Object.freeze(['mmff94', 'mmff94s', 'uff']);
+/** The MMFF family, the only fields with a published element coverage list. */
+export const OBABEL_MMFF_FORCE_FIELDS = Object.freeze(['mmff94', 'mmff94s']);
 export const OBABEL_DEFAULT_FF = 'mmff94';
 export const OBABEL_DEFAULT_NCONF = 20;
 export const OBABEL_MIN_NCONF = 1;
 export const OBABEL_MAX_NCONF = 1000;
+
+/** The release whose `--conformer` search segfaults (issue #239). */
+export const OBABEL_BROKEN_CONFORMER_MAJOR = 3;
+export const OBABEL_BROKEN_CONFORMER_MINOR = 2;
 
 export const OBABEL_PROVENANCE = 'Halgren, J. Comput. Chem. 17, 490-519 (1996), MMFF94';
 export const OBABEL_ENERGY_KIND = 'force-field energy (kcal/mol), not a total electronic energy';
@@ -54,6 +65,7 @@ export function obabelForceFieldKeyword(value) {
   const key = String(value ?? '').trim().toLowerCase();
   if (key === 'mmff94') return 'MMFF94';
   if (key === 'mmff94s') return 'MMFF94s';
+  if (key === 'uff') return 'UFF';
   return null;
 }
 
@@ -62,6 +74,61 @@ export function normalizeObabelForceField(value, fallback = OBABEL_DEFAULT_FF) {
   const keyword = obabelForceFieldKeyword(value);
   if (keyword) return keyword.toLowerCase();
   return obabelForceFieldKeyword(fallback)?.toLowerCase() ?? OBABEL_DEFAULT_FF;
+}
+
+/**
+ * Issue #239: Open Babel 3.2.x segfaults inside its genetic-algorithm conformer
+ * search (`--conformer`) on every molecule tried, leaving a zero-byte ensemble;
+ * 3.1.0 runs the same command. A version is not something the app can fix, but
+ * it is something the app can *refuse* — before spawning a process that will
+ * die, and in words that name the version and the way out.
+ *
+ * Pure and deliberately narrow: only the 3.2 series is refused. Anything the
+ * parser cannot read returns '' (no claim), so a packaged build string never
+ * turns into a false refusal. The patch level is irrelevant — 3.2.0 and
+ * 3.2.1-1 are the same broken series — and `3.1.0`, `3.10.0` and `4.0.0` pass.
+ */
+export function obabelVersionRefusal(version) {
+  // Accept either the token `ObabelRunner.version()` returns or the whole
+  // `obabel -V` line, so a caller cannot lose the refusal to a prefix. The
+  // prefix is matched literally: `-V` prints `Open Babel <version>`.
+  const text = String(version ?? '').trim().replace(/^Open Babel /i, '');
+  if (!text) return '';
+  // `obabel -V` prints `3.2.1`, `3.2.1-1` (Arch package revision) or `3.2`.
+  // Only the first three numeric components are the release; the optional `v`
+  // prefix and anything after the version token are not.
+  const match = text.match(/^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/i);
+  if (!match) return '';
+  const major = Number(match[1]);
+  const minor = Number(match[2] ?? 0);
+  if (major !== OBABEL_BROKEN_CONFORMER_MAJOR || minor !== OBABEL_BROKEN_CONFORMER_MINOR) return '';
+  // Name the release, not a packaging suffix or the whole `-V` line: the
+  // series is what crashes, and a readable message is the point.
+  const release = match[0].replace(/^v/i, '');
+  return `Open Babel ${release} crashes in its conformer search (\`--conformer\`); install 3.1.x or use the in-app UFF search.`;
+}
+
+/**
+ * Issue #239: a child killed by a signal has `exitCode === null`, which passes
+ * `Number(exitCode) !== 0`. A signal death is never a completed search, and
+ * saying which signal it was is the difference between a bug report and a
+ * mystery. Returns '' when the run is not a failure the caller should raise:
+ * a timeout and a user cancellation have their own handling.
+ */
+export function obabelSearchFailure({ exitCode = 0, signal = null, cancelled = false, timedOut = false } = {}) {
+  if (cancelled || timedOut) return '';
+  if (signal) {
+    return `The Open Babel search ended with signal ${signal} before writing conformers; `
+      + 'the search output was not used.';
+  }
+  if (exitCode === null || exitCode === undefined) {
+    return 'The Open Babel search ended without an exit code; the search output was not used.';
+  }
+  const code = Number(exitCode);
+  if (!Number.isFinite(code) || code !== 0) {
+    return `Open Babel exited with code ${exitCode}; the search output was not used.`;
+  }
+  return '';
 }
 
 /**
@@ -83,11 +150,21 @@ export function untypableElements(atoms) {
   return [...seen].sort();
 }
 
-/** Refusal text for a structure MMFF94 cannot describe, or '' when it can. */
-export function obabelCoverageRefusal(atoms) {
+/**
+ * Refusal text for a structure an MMFF force field cannot describe, or '' when
+ * it can.
+ *
+ * Issue #240: coverage belongs to the force field, not the program. UFF is
+ * parameterised across the periodic table, so a UFF search is not refused for
+ * an element MMFF94 lacks; MMFF94/MMFF94s keep the published list check.
+ */
+export function obabelCoverageRefusal(atoms, ff = OBABEL_DEFAULT_FF) {
+  const keyword = obabelForceFieldKeyword(ff) || 'MMFF94';
+  const field = keyword.toLowerCase();
+  if (!OBABEL_MMFF_FORCE_FIELDS.includes(field)) return '';
   const missing = untypableElements(atoms);
   if (missing.length === 0) return '';
-  return `MMFF94 has no parameters for ${missing.join(', ')}; Open Babel would leave those atoms untyped. `
+  return `${keyword} has no parameters for ${missing.join(', ')}; Open Babel would leave those atoms untyped. `
     + `Choose another generator, or run the search in a program that covers this element.`;
 }
 
@@ -180,7 +257,8 @@ export function parseObabelSearchLog(text) {
  * convention that makes a positive value meaningless (the 84-atom 2,4-DHI-IQ
  * ensemble sits at +215.9 kcal/mol).
  */
-export function parseObabelScoredEnsemble(text) {
+export function parseObabelScoredEnsemble(text, { ff = OBABEL_DEFAULT_FF } = {}) {
+  const keyword = obabelForceFieldKeyword(ff) || 'MMFF94';
   const lines = String(text ?? '').replace(/\r\n/g, '\n').split('\n');
   const frames = [];
   const errors = [];
@@ -220,9 +298,11 @@ export function parseObabelScoredEnsemble(text) {
   }
   const unscored = frames.findIndex((frame) => frame.energyKcal === null);
   if (unscored !== -1) {
+    // `an MMFF94` / `a UFF`: the spoken name, not the letter.
+    const article = /^(mmff|m)/i.test(keyword) ? 'an' : 'a';
     errors.push({
       frame: unscored + 1,
-      message: `Conformer ${unscored + 1} came back without an MMFF94 energy — the force field could not type that structure.`,
+      message: `Conformer ${unscored + 1} came back without ${article} ${keyword} energy — the force field could not type that structure.`,
     });
   }
   return { frames, errors };

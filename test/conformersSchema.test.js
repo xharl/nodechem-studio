@@ -205,3 +205,70 @@ describe('conformers node schema', () => {
     expect(result.errors.some((error) => /fanOut/.test(error.path))).toBe(true);
   });
 });
+
+describe('issue #240: the method belongs to the generator', () => {
+  const cases = [
+    { generator: 'crest', method: 'gfn2', ok: true, stored: 'gfn2' },
+    { generator: 'crest', method: 'gfnff', ok: true, stored: 'gfnff' },
+    { generator: 'crest', method: 'MMFF94', ok: false },
+    { generator: 'uff', method: 'UFF', ok: true, stored: 'UFF' },
+    // The pre-#240 placeholder is migrated, not refused.
+    { generator: 'uff', method: 'gfn2', ok: true, stored: 'UFF' },
+    { generator: 'uff', method: 'MMFF94', ok: false },
+    { generator: 'obabel', method: 'MMFF94', ok: true, stored: 'MMFF94' },
+    { generator: 'obabel', method: 'MMFF94s', ok: true, stored: 'MMFF94s' },
+    { generator: 'obabel', method: 'mmff94s', ok: true, stored: 'MMFF94s' },
+    { generator: 'obabel', method: 'UFF', ok: true, stored: 'UFF' },
+    { generator: 'obabel', method: 'gfn2', ok: true, stored: 'MMFF94' },
+    { generator: 'obabel', method: 'B3LYP', ok: false },
+  ];
+  for (const row of cases) {
+    it(`${row.generator} + ${row.method} ${row.ok ? 'is accepted' : 'is refused'}`, () => {
+      const result = validateProject(project([conformersNode({
+        settings: { generator: row.generator, method: row.method },
+      })]));
+      expect(result.ok).toBe(row.ok);
+      if (row.ok) {
+        expect(result.project.nodes[0].settings.method).toBe(row.stored);
+      } else {
+        expect(result.errors.some((error) => /settings\.method/.test(error.path))).toBe(true);
+        expect(result.errors.find((error) => /settings\.method/.test(error.path))?.message)
+          .toMatch(new RegExp(`when generator is "${row.generator}"`));
+      }
+    });
+  }
+
+  it('records MMFF94 on an obabel block and stops writing the old ff alias', () => {
+    const result = validateProject(project([conformersNode({
+      settings: { generator: 'obabel', method: 'MMFF94', nconf: 12 },
+    })]));
+    expect(result.ok).toBe(true);
+    const settings = result.project.nodes[0].settings;
+    expect(settings.method).toBe('MMFF94');
+    expect(settings.ff).toBeUndefined();
+    // One name per fact: saving and reopening does not grow a second field.
+    const twice = parseProjectText(stringifyProject(result.project).text);
+    expect(twice.ok).toBe(true);
+    expect(twice.project.nodes[0].settings.method).toBe('MMFF94');
+    expect(twice.project.nodes[0].settings.ff).toBeUndefined();
+  });
+
+  it('migrates a pre-#240 obabel block from its ff value, without erroring', () => {
+    const result = validateProject(project([conformersNode({
+      settings: { generator: 'obabel', method: 'gfn2', ff: 'mmff94s', nconf: 8 },
+    })]));
+    expect(result.ok).toBe(true);
+    const settings = result.project.nodes[0].settings;
+    expect(settings.method).toBe('MMFF94s');
+    expect(settings.ff).toBeUndefined();
+  });
+
+  it('gives an imported block no method, whatever the file says', () => {
+    const result = validateProject(project(
+      [ensembleInput(), conformersNode({ settings: { source: 'imported', method: 'MMFF94' } })],
+      [{ from: 'ens1', to: 'conf1', type: 'dependency' }],
+    ));
+    expect(result.ok).toBe(true);
+    expect(result.project.nodes.find((node) => node.type === 'generate').settings.method).toBe('');
+  });
+});

@@ -78,6 +78,7 @@ import {
 } from './outputFields.js';
 import { SCORER_MODELS } from '../shared/scorer.js';
 import {
+  DEFAULT_CONFORMER_METHOD,
   DEFAULT_CONFORMER_SETTINGS,
   DEFAULT_ENSEMBLE_INPUT,
   conformerEnergyLabel,
@@ -3171,12 +3172,15 @@ function conformersInspector(node) {
             <option value="gfnff"${s.method === 'gfnff' ? ' selected' : ''}>GFN-FF</option>
           </select></div>`] : []),
         ...(s.generator === 'obabel' ? [
-          `<div class="field"><label>Force field</label><select class="select" data-conformer-field="ff">
-            <option value="mmff94"${s.ff === undefined || s.ff === 'mmff94' ? ' selected' : ''}>MMFF94</option>
-            <option value="mmff94s"${s.ff === 'mmff94s' ? ' selected' : ''}>MMFF94s (static)</option>
+          // Issue 240: the force field is the block's `method`, the same value
+          // the search writes as `--ff`. There is no second `ff` name.
+          `<div class="field"><label>Force field (method)</label><select class="select" data-conformer-field="method">
+            <option value="MMFF94"${s.method === undefined || s.method === 'MMFF94' || s.method === 'mmff94' ? ' selected' : ''}>MMFF94</option>
+            <option value="MMFF94s"${s.method === 'MMFF94s' || s.method === 'mmff94s' ? ' selected' : ''}>MMFF94s (static)</option>
+            <option value="UFF"${s.method === 'UFF' ? ' selected' : ''}>UFF</option>
           </select></div>`,
           `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
-          `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on MMFF94 energy, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name.</span></div>`,
+          `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on the chosen force field, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name, while UFF is parameterised across the periodic table. Open Babel 3.2.x crashes in its conformer search (--conformer); the queue refuses that series by version before spawning — install 3.1.x or use the in-app UFF search.</span></div>`,
         ] : []),
         ...(s.generator === 'uff' ? [
           `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
@@ -9431,6 +9435,12 @@ function applyConformerField(target) {
       node.settings.generator = node.settings.source === 'imported' ? '' : 'crest';
       node.output = null;
       node.state = 'ready';
+    }
+    if (key === 'generator') {
+      // Issue 240: the method allowed values belong to the generator, so
+      // switching generator carries its default instead of leaving a method
+      // the new route would never run.
+      node.settings.method = DEFAULT_CONFORMER_METHOD[target.value] || '';
     }
     if (key === 'generator' && node.output && node.output.generator !== target.value) {
       // A CREST table is not what UFF would produce, and a UFF run is not the

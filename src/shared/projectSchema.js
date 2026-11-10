@@ -54,14 +54,17 @@ import {
   CONFORMER_ENERGY_UNITS,
   CONFORMER_GENERATORS,
   CONFORMER_GROUP_MAX,
-  CONFORMER_METHODS,
   CONFORMER_PRODUCES,
   CONFORMER_SOURCES,
   DEFAULT_CONFORMER_SETTINGS,
   DEFAULT_ENSEMBLE_INPUT,
   DEFAULT_PRODUCES,
   ENSEMBLE_FORMATS,
+  conformerMethodForGenerator,
+  conformerMethodsFor,
   isConformerGroupId,
+  isLegacyConformerMethod,
+  normalizeConformerMethod,
 } from './conformers.js';
 import {
   DEFAULT_TAUTOMER_OPTIONS,
@@ -692,6 +695,34 @@ function readConformerGroup(c, value, path) {
 }
 
 /**
+ * Issue #240: the method a conformer block records depends on its generator.
+ * The same key meant CREST's Hamiltonian for every generator before this, so an
+ * Open Babel block had to claim `gfn2` and a UFF block's `gfn2` was ignored.
+ *
+ * The migration is deliberately forgiving for the two values the previous build
+ * wrote everywhere: `gfn2`/`gfnff` on a non-CREST block are read as "the old
+ * placeholder" and replaced with the generator's real method (`MMFF94` for Open
+ * Babel, taken from the block's `ff` when present; `UFF` for the in-app route).
+ * Any other method the generator does not run is refused by name — a crest block
+ * may not claim `MMFF94`, and an obabel block may not claim `B3LYP`.
+ */
+function readConformerMethod(c, value, path, { legacy, generator, sourceKind, produces, ff = '' }) {
+  if (sourceKind === 'imported' || produces === 'tautomers') return '';
+  const allowed = conformerMethodsFor(generator);
+  if (allowed.length === 0) return '';
+  if (value === undefined || value === null || value === '') {
+    return conformerMethodForGenerator(generator, { ff });
+  }
+  const canonical = normalizeConformerMethod(generator, value);
+  if (canonical) return canonical;
+  if (isLegacyConformerMethod(value)) {
+    return conformerMethodForGenerator(generator, { ff });
+  }
+  c.error(path, `must be one of: ${allowed.join(', ')} when generator is "${generator}".`);
+  return conformerMethodForGenerator(generator, { ff });
+}
+
+/**
  * Settings for a conformer block. Deliberately separate from the calculation
  * settings: CREST has no route, basis or SCF, and a shared key space would let
  * a route value leak into a conformer search.
@@ -771,16 +802,26 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   const tautomerRuleset = readEnum(c, source.tautomerRuleset, TAUTOMER_RULESETS, `${path}.tautomerRuleset`, {
     legacy, fallback: DEFAULT_TAUTOMER_RULESET,
   });
+  // Issue #240: `ff` is the pre-#240 spelling of the Open Babel force field.
+  // It is still read so a project that stored it migrates, but only `method` is
+  // written back — two names for one field is what made the block ambiguous.
+  const legacyFf = generator === 'obabel' && provided.ff !== undefined
+    ? readEnum(c, provided.ff, OBABEL_FORCE_FIELDS, `${path}.ff`, {
+      legacy, fallback: OBABEL_DEFAULT_FF,
+    })
+    : '';
   return {
     source: sourceKind,
     ...(produces === 'tautomers' || provided.produces !== undefined ? { produces } : {}),
     generator,
     rankBy,
-    method: sourceKind === 'imported' || produces === 'tautomers'
-      ? ''
-      : readEnum(c, source.method, CONFORMER_METHODS, `${path}.method`, {
-        legacy, fallback: DEFAULT_CONFORMER_SETTINGS.method,
-      }),
+    method: readConformerMethod(c, source.method, `${path}.method`, {
+      legacy,
+      generator,
+      sourceKind,
+      produces,
+      ff: legacyFf,
+    }),
     energyWindowKcal: readNumber(c, source.energyWindowKcal, `${path}.energyWindowKcal`, {
       legacy, fallback: DEFAULT_CONFORMER_SETTINGS.energyWindowKcal, min: 0, max: 100,
     }),
@@ -843,11 +884,6 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     ...(provided.nconf === undefined ? {} : {
       nconf: readInteger(c, provided.nconf, `${path}.nconf`, {
         legacy, fallback: OBABEL_DEFAULT_NCONF, min: OBABEL_MIN_NCONF, max: OBABEL_MAX_NCONF,
-      }),
-    }),
-    ...(provided.ff === undefined ? {} : {
-      ff: readEnum(c, provided.ff, OBABEL_FORCE_FIELDS, `${path}.ff`, {
-        legacy, fallback: OBABEL_DEFAULT_FF,
       }),
     }),
   };

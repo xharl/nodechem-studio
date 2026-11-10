@@ -12,8 +12,8 @@ import { engineOrDefault } from './engines/index.js';
 import { ladderRungs } from './methodLadder.js';
 import { spinSweepFor } from './spinSweep.js';
 import { runSettingsFor } from './engineSettings.js';
-import { DEFAULT_CONFORMER_SETTINGS, crestArgv, xyzText } from './conformers.js';
-import { OBABEL_DEFAULT_FF, OBABEL_DEFAULT_NCONF, obabelSearchArgv } from './obabelConformers.js';
+import { DEFAULT_CONFORMER_SETTINGS, conformerMethodForGenerator, crestArgv, xyzText } from './conformers.js';
+import { OBABEL_DEFAULT_NCONF, obabelSearchArgv } from './obabelConformers.js';
 import { checkTsForceConstants, freqGeometryWarnings, optConvergenceWarnings } from './tsForceConstants.js';
 import { CHECK_STATUS, VALIDITY_CHECKS, runValidityChecks } from './validityChecks.js';
 import { LIMITS } from './projectSchema.js';
@@ -116,14 +116,20 @@ export function conformerSettingsFor(node) {
   // xTB method applies at all, and whether fan-out is the default.
   const produces = source.produces === 'tautomers' ? 'tautomers' : 'conformers';
   const tautomers = produces === 'tautomers';
+  const generator = String(pick('generator') || (tautomers ? 'rdkit' : 'crest'));
   return {
     source: source.source === 'imported' ? 'imported' : 'search',
     ...(tautomers ? { produces } : {}),
-    generator: String(pick('generator') || (tautomers ? 'rdkit' : 'crest')),
+    generator,
     rankBy: typeof source.rankBy === 'string' ? source.rankBy : '',
-    // A tautomer set has no xTB method: leaving `gfn2` here would put a method
-    // on the ensemble that never ran.
-    method: tautomers ? '' : String(pick('method') || 'gfn2'),
+    // Issue #240: the method belongs to the generator. A tautomer set and an
+    // imported ensemble have none; CREST keeps its Hamiltonian; Open Babel and
+    // UFF record the force field they actually run. A pre-#240 `gfn2` on those
+    // routes is migrated here as well as in the schema, so a task built from an
+    // in-memory project never carries a method it will not run.
+    method: tautomers || source.source === 'imported'
+      ? ''
+      : conformerMethodForGenerator(generator, { method: source.method, ff: source.ff }),
     energyWindowKcal: Number(pick('energyWindowKcal')),
     rmsdThreshold: Number(pick('rmsdThreshold')),
     // The tautomer mode reuses this field as its candidate cap, whose default
@@ -150,8 +156,6 @@ export function conformerSettingsFor(node) {
     // The Open Babel route's settings, passed through the same way.
     ...(Number.isFinite(Number(source.nconf))
       ? { nconf: Number(source.nconf) } : {}),
-    ...(['mmff94', 'mmff94s'].includes(String(source.ff || '').toLowerCase())
-      ? { ff: String(source.ff).toLowerCase() } : {}),
   };
 }
 
@@ -1900,7 +1904,9 @@ export function conformerSearchTask(project, node, record = null) {
               ? obabelSearchArgv({
                 inputName,
                 nconf: settings.nconf ?? OBABEL_DEFAULT_NCONF,
-                ff: settings.ff ?? OBABEL_DEFAULT_FF,
+                // Issue #240: the block's recorded method is the one force
+                // field the search writes, not a second `ff` name beside it.
+                ff: settings.method,
               })
               : []))),
       ...(projectBonds ? { bonds: projectBonds } : {}),

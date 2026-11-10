@@ -87,6 +87,32 @@ const FAKE_OBABEL = [
   'exit 64',
 ].join('\n');
 
+/**
+ * Issue #239: an Open Babel 3.2.x binary. `-V` answers with the broken series
+ * and every other invocation leaves a marker, so a test can prove the search
+ * was never spawned rather than merely that it failed.
+ */
+const brokenObabel = (base) => [
+  '#!/bin/sh',
+  'if [ "$1" = "-V" ]; then',
+  '  echo "Open Babel 3.2.1 -- Arch package 3.2.1-1"',
+  '  exit 0',
+  'fi',
+  `echo spawned > "${path.join(base, 'spawned.txt')}"`,
+  'exit 0',
+].join('\n');
+
+/** Issue #239: a 3.1.x binary that dies by signal inside the conformer search. */
+const SIGSEGV_OBABEL = [
+  '#!/bin/sh',
+  'if [ "$1" = "-V" ]; then',
+  '  echo "Open Babel 3.1.0 -- fake build"',
+  '  exit 0',
+  'fi',
+  'kill -SEGV $$',
+  'exit 0',
+].join('\n');
+
 function projectWith({ settings = {}, coordsOverride = coords } = {}) {
   const raw = {
     schemaVersion: 3,
@@ -102,7 +128,7 @@ function projectWith({ settings = {}, coordsOverride = coords } = {}) {
     nodes: [
       {
         id: 'conf', type: 'generate', title: 'Open Babel search', state: 'ready', x: 0, y: 0,
-        settings: { generator: 'obabel', nconf: 3, ff: 'mmff94', ...settings }, output: null,
+        settings: { generator: 'obabel', nconf: 3, method: 'MMFF94', ...settings }, output: null,
       },
     ],
     edges: [],
@@ -112,13 +138,13 @@ function projectWith({ settings = {}, coordsOverride = coords } = {}) {
   return validated.project;
 }
 
-async function stack() {
+async function stack({ script = () => FAKE_OBABEL } = {}) {
   const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'obabel-workflow-'));
   roots.push(base);
   const queuesRoot = path.join(base, 'queues');
   const runsRoot = path.join(base, 'runs');
   const executable = path.join(base, 'obabel');
-  await fsp.writeFile(executable, FAKE_OBABEL, { mode: 0o755 });
+  await fsp.writeFile(executable, script(base), { mode: 0o755 });
   const events = [];
   const runManager = new RunManager({
     runsRoot,
@@ -159,6 +185,12 @@ describe.skipIf(onWindows)('the Open Babel route through the queue', () => {
     const plan = buildWorkflowPlan(project);
     const task = plan.tasks.find((entry) => entry.nodeId === 'conf');
     expect(task.generate.generator).toBe('obabel');
+    // Issue #240: the block records the force field it actually runs, and the
+    // task writes `--ff` from that same value — no second `ff` name.
+    expect(project.nodes[0].settings.method).toBe('MMFF94');
+    expect(project.nodes[0].settings.ff).toBeUndefined();
+    expect(task.generate.method).toBe('MMFF94');
+    expect(task.generate.ff).toBeUndefined();
     expect(task.generate.argv).toEqual([
       'conf.xyz', '-O', 'obabel_conformers.xyz',
       '--conformer', '--nconf', '3', '--ff', 'MMFF94',
@@ -246,5 +278,80 @@ describe.skipIf(onWindows)('the Open Babel route through the queue', () => {
     expect(conf.ensemble.generator).toBe('fixture');
     expect(conf.ensemble.energyUnit).toBe('hartree');
     expect(conf.ensemble.energyMethod).toBe('');
+  });
+
+  it('refuses a 3.2.x binary by version before spawning the search', async () => {
+    const project = projectWith();
+    const plan = buildWorkflowPlan(project);
+    const { queueManager, executable, base } = await stack({ script: brokenObabel });
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { dryRun: false, executable: null, crestExecutable: null, obabelExecutable: executable, scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' && queue.status !== 'queued' ? queue : null;
+    });
+    const conf = done.tasks.find((entry) => entry.nodeId === 'conf');
+    expect(conf.status).toBe('failed');
+    // The refusal names the version it read and both ways out.
+    expect(conf.error).toMatch(/Open Babel 3\.2\.1/);
+    expect(conf.error).toMatch(/--conformer/);
+    expect(conf.error).toMatch(/install 3\.1\.x or use the in-app UFF search/);
+    expect(conf.refusal).toMatchObject({ code: 'obabel-version', version: '3.2.1' });
+    // Nothing was spawned: the search only runs after the version check.
+    const spawned = await fsp.stat(path.join(base, 'spawned.txt')).catch(() => null);
+    expect(spawned).toBeNull();
+  });
+
+  it('treats a signalled search as a failure, never a completed ensemble', async () => {
+    const project = projectWith();
+    const plan = buildWorkflowPlan(project);
+    const { queueManager, executable } = await stack({ script: () => SIGSEGV_OBABEL });
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { dryRun: false, executable: null, crestExecutable: null, obabelExecutable: executable, scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' && queue.status !== 'queued' ? queue : null;
+    });
+    const conf = done.tasks.find((entry) => entry.nodeId === 'conf');
+    expect(conf.status).toBe('failed');
+    expect(conf.error).toMatch(/signal SIGSEGV/);
+    expect(conf.ensemble).toBeNull();
+  });
+
+  it('writes --ff from a migrated pre-#240 block and records the migrated method', async () => {
+    const project = projectWith({ settings: { method: 'gfn2', ff: 'mmff94s' } });
+    expect(project.nodes[0].settings.method).toBe('MMFF94s');
+    const plan = buildWorkflowPlan(project);
+    const task = plan.tasks.find((entry) => entry.nodeId === 'conf');
+    expect(task.generate.method).toBe('MMFF94s');
+    expect(task.generate.argv).toEqual([
+      'conf.xyz', '-O', 'obabel_conformers.xyz',
+      '--conformer', '--nconf', '3', '--ff', 'MMFF94s',
+      '--score', 'energy', '--writeconformers',
+    ]);
+
+    const { queueManager, executable } = await stack();
+    const started = await queueManager.start({
+      projectName: project.name,
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { dryRun: false, executable: null, crestExecutable: null, obabelExecutable: executable, scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' && queue.status !== 'queued' ? queue : null;
+    });
+    const conf = done.tasks.find((entry) => entry.nodeId === 'conf');
+    expect(conf.status).toBe('completed');
+    expect(conf.ensemble.energyMethod).toBe('MMFF94s');
+    expect(conf.ensemble.origin.method).toBe('MMFF94s');
   });
 });

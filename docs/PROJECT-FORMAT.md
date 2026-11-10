@@ -244,12 +244,22 @@ protonation-state and tautomer enumeration belongs to `generate`.
 
 `generate.settings` is a separate key space — route keys cannot leak into a conformer search:
 `source` (`search` or `imported`, default `search`), `generator` (`crest`, `uff` or `obabel`,
-search only), `method` (`gfn2` or `gfnff`, CREST only), `energyWindowKcal`, `rmsdThreshold`,
+search only), `method`, `energyWindowKcal`, `rmsdThreshold`,
 `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`, `rankBy`, `charge`,
 `multiplicity`, `fanOut`, `group` (an optional study id shared by blocks that belong together,
 1–32 letters, digits, `.`, `_` or `-`; empty means no group). Defaults: source `search`, generator
-`crest`, energy window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K, spread warning at
-2 kcal/mol, fan-out off, no group.
+`crest`, method `gfn2`, energy window 10 kcal/mol, RMSD 0.5 Å, at most 20 conformers, 298.15 K,
+spread warning at 2 kcal/mol, fan-out off, no group.
+
+`method` names the method the chosen generator actually runs, so its allowed values belong to
+`generator`: `gfn2` or `gfnff` for `crest`, `MMFF94`, `MMFF94s` or `UFF` for `obabel`, and `UFF` for
+the in-app `uff` route (fixed). An `imported` block stores `method: ""` — the file's producer owns
+that claim, and the input's `energyMethod` carries it. An Open Babel block's `method` is the force
+field, and the queue writes `--ff MMFF94` (or `MMFF94s`/`UFF`) from it; the pre-#240 `ff` key is
+read as a legacy alias and is not written back, so there is one name per fact. A project written
+before this rule stored `gfn2` on every block; on read it is migrated to the generator's real
+method (`ff` selects the Open Babel field when present, otherwise `MMFF94`; a `uff` block becomes
+`UFF`) rather than refused.
 
 `rankBy` is `""` (rank by the source's own energies) or `"ml:<model>"` (`ml:aimnet2`), which ranks
 by the optional scorer sidecar. The sidecar is spawned with the model id and a JSON request on
@@ -264,8 +274,8 @@ belong to the ensemble input.
 
 The in-app `uff` route adds two optional keys, present only when the block states them so a project
 that never chose the route serialises as before: `torsionStepDegrees` (15–360, default 120) and
-`maxTrials` (1–2000, default 200). A `uff` ensemble always records `energyUnit: kcal/mol` and
-`energyMethod: UFF`; `method` is left empty because it names the CREST xTB method.
+`maxTrials` (1–2000, default 200). A `uff` block's `method` is `UFF` (there is no other value for
+this generator), and its ensemble always records `energyUnit: kcal/mol` and `energyMethod: UFF`.
 
 `produces` is what the block enumerates: `conformers` (the default, and what a file that omits the
 key means) or `tautomers`. A tautomer block is deliberately narrow — `generator` must be `rdkit`,
