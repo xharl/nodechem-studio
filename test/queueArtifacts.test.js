@@ -13,6 +13,16 @@ import { QueueManager } from '../electron/runner/queue.js';
 const roots = [];
 const managers = [];
 
+async function waitFor(check, timeout = 10000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const value = await check();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('timed out waiting for the queue');
+}
+
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((manager) => manager.flush()));
   await Promise.all(roots.splice(0).map((dir) => fsp.rm(dir, { recursive: true, force: true })));
@@ -61,7 +71,12 @@ describe('queue restart artifacts (#231)', () => {
       options: { dryRun: true, executable: '', scratchDir: '' },
     });
     expect(started.tasks.map((entry) => entry.nodeId)).toEqual(['g', 'o', 'x', 'p']);
-    await queueManager.cancel(started.id);
+    // Let the dry-run fixtures settle before the temp tree is removed; a
+    // teardown that races a run write is the ENOTEMPTY flake CI caught.
+    await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return queue && !['idle', 'running'].includes(queue.status) ? queue : null;
+    });
     await queueManager.flush();
   });
 
