@@ -209,6 +209,8 @@ describe('ORCA spin-spin couplings (issue 222)', () => {
     // dvb_coupling_nmr.out line 10348: `SUMMARY OF ISOTOPIC COUPLING CONSTANTS (Hz)`;
     // lines 10350–10421 are the four six-column blocks.
     expect(dvb.nmr).toBeDefined();
+    expect(dvb.nmr.count).toBe(20);
+    expect(dvb.nmr.atoms[0]).toMatchObject({ index: 1, element: 'C', isotropic: 114.127 });
     const couplings = dvb.nmr.couplings;
     expect(couplings.atoms).toBe(20);
     expect(couplings.pairs).toHaveLength(190);
@@ -311,14 +313,17 @@ describe('ORCA couplings in the cards and the report (issue 222)', () => {
     expect(html).toContain('printed no g-tensor');
   });
 
-  it('renders the ORCA J table with 0-based names and no shielding table', () => {
+  it('renders the ORCA shielding and J tables from the same log', () => {
     const html = resultsPanelHtml(recordFor(dvb, 'run-orca-nmr'));
+    // The log carries both a shielding summary and the coupling matrix; since
+    // the shielding reader landed, both cards are drawn from one record.
+    expect(html).toContain('data-field="nmr-shieldings"');
+    expect(html).toContain('114.1270');
     expect(html).toContain('data-field="nmr-couplings"');
     expect(html).toContain('C0–C1');
     expect(html).toContain('9.451000');
     expect(html).toContain('numbers nuclei from 0 in input order');
     expect(html).toContain('no reduced K table');
-    expect(html).not.toContain('data-field="nmr-shieldings"');
   });
 
   it('prints the hyperfine rows in the workflow report', () => {

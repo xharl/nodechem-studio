@@ -101,6 +101,12 @@ export function canonicalResult({
   // that asked for excited states; absent otherwise, so a Gaussian log without a
   // TD section and a Psi4 single point look the same to every consumer.
   excitedStates = null,
+  // Issue 288: per-mode Raman activities and VCD rotational strengths. Passed
+  // through as the engine produced them: the mode numbers, frequencies and
+  // units are part of the table, and a consumer that keeps only the intensity
+  // loses the mode it belongs to.
+  raman = null,
+  vcd = null,
   // Issue 168: the EPR block (spin populations, Fermi-contact couplings, and the
   // g-tensor refusal). Present whenever an engine reported one — including the
   // closed-shell case, whose block says "no unpaired electrons" in words. It is
@@ -209,6 +215,21 @@ export function canonicalResult({
            */
           transitionDipoleCount: integerOrNull(excitedStates.transitionDipoleCount),
           /**
+           * Issue 285: ORCA ends a TD-DFT job with `E(tot) = E(SCF) + DE(CIS)`
+           * and prints that as the final single point. The decomposition travels
+           * with the states so a consumer can see which root the total belongs
+           * to instead of mistaking it for a ground-state energy.
+           */
+          totalEnergy: excitedStates.totalEnergy
+            && Number.isFinite(excitedStates.totalEnergy.hartree)
+            ? {
+              hartree: excitedStates.totalEnergy.hartree,
+              scfHartree: finiteOrNull(excitedStates.totalEnergy.scfHartree),
+              excitationHartree: finiteOrNull(excitedStates.totalEnergy.excitationHartree),
+              root: integerOrNull(excitedStates.totalEnergy.root),
+            }
+            : null,
+          /**
            * Issue 173, route B: how many states carry a transition-density block,
            * and the fragment label of each atom as the deck declared it. Kept
            * beside the states for the same reason as the dipole count: the CT
@@ -222,6 +243,10 @@ export function canonicalResult({
         },
       }
       : {}),
+    // Issue 288: only a real table is carried; an empty array would claim a
+    // spectrum was computed.
+    ...(Array.isArray(raman) && raman.length > 0 ? { raman } : {}),
+    ...(Array.isArray(vcd) && vcd.length > 0 ? { vcd } : {}),
     ...(epr && typeof epr === 'object' && typeof epr.status === 'string' ? { epr } : {}),
     // Issue 173: a boolean `modelled` is the minimum a consumer can act on; a
     // block without it is not a CT analysis and is dropped rather than passed on
