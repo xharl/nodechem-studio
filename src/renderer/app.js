@@ -50,6 +50,15 @@ import {
 import { DP4_VARIANTS, DP4_VARIANT_LABELS, dp4Levels } from '../shared/dp4.js';
 import { dp4RowsFromSources, dp4Summary, evaluateDp4 } from '../shared/dp4Workflow.js';
 import {
+  MULTIWFN_ANALYSES,
+  MULTIWFN_CITATION,
+  MULTIWFN_LICENCE,
+  MULTIWFN_SUPPORTED_VERSION,
+  multiwfnAnalysis,
+  multiwfnMenuScript,
+  multiwfnSummary,
+} from '../shared/multiwfn.js';
+import {
   COMPLEX_GEOMETRY_NOTE,
   COMPLEX_GEOMETRY_STATUS,
   COMPLEX_MAX_MEMBERS,
@@ -2780,6 +2789,11 @@ function computeUpstreamBlocks(node) {
 function computePreviewOf(node) {
   try {
     const context = shared.computeContext(state.project, node);
+    if (context.mode === 'multiwfn') {
+      // Issue 270: a Multiwfn block has no value to preview. The inspector
+      // shows the pinned script it will run instead of pretending to compute.
+      return { error: null, mode: 'multiwfn', result: null };
+    }
     if (context.mode === 'dp4') {
       // Issue 165: the preview reads the same candidate rows the plan does. It
       // can only see the blocks' attached parsed results (a fresh project has
@@ -2822,6 +2836,21 @@ function dp4PreviewHtml(result) {
 function computePreviewHtml(node) {
   const { error, mode, result } = computePreviewOf(node);
   if (error) return `<p class="inspector-note" data-role="compute-preview">${esc(error)}</p>`;
+  if (mode === 'multiwfn') {
+    const definition = node.analyse?.multiwfn;
+    const analysis = multiwfnAnalysis(definition?.analysis);
+    if (!analysis) return '<p class="inspector-note" data-role="compute-preview">Choose a Multiwfn analysis.</p>';
+    let script;
+    try {
+      script = multiwfnMenuScript(analysis.id, definition);
+    } catch (failure) {
+      return `<p class="inspector-note" data-role="compute-preview">${esc(failure.message)}</p>`;
+    }
+    return `<p class="inspector-note" data-role="compute-preview">Multiwfn ${MULTIWFN_SUPPORTED_VERSION} · `
+      + `${esc(analysis.label)} · ${script.lines.length} menu answers. This block runs the user-installed `
+      + 'binary in batch mode; it has no arithmetic preview.</p>'
+      + `<div class="code-block" data-role="multiwfn-script">${esc(script.text)}</div>`;
+  }
   if (mode === 'dp4') return dp4PreviewHtml(result);
   if (result.status === 'computed') {
     return `<div class="code-block" data-role="compute-preview">`
@@ -2942,29 +2971,96 @@ function dp4InspectorBody(definition) {
   ].join(''));
 }
 
+/**
+ * The saved Multiwfn definition of a block (issue 270), with the defaults a
+ * new block needs filled in. No analysis is chosen silently: a block that never
+ * asked for Multiwfn keeps its expression byte for byte.
+ */
+function multiwfnDefinitionOf(node) {
+  if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
+  if (!node.analyse.multiwfn || typeof node.analyse.multiwfn !== 'object') {
+    const upstream = computeUpstreamBlocks(node);
+    node.analyse.multiwfn = {
+      analysis: 'qtaim',
+      input: upstream.length === 1 ? { nodeId: upstream[0].id } : {},
+      grid: 2,
+    };
+  }
+  const definition = node.analyse.multiwfn;
+  if (!definition.input || typeof definition.input !== 'object') definition.input = {};
+  return definition;
+}
+
+/** One Multiwfn inspector: analysis, input source, parameters and pinned script. */
+function multiwfnInspectorBody(definition, upstream, node) {
+  const analysis = multiwfnAnalysis(definition.analysis);
+  const analysisOptions = MULTIWFN_ANALYSES.map((entry) => `<option value="${esc(entry.id)}"${entry.id === definition.analysis ? ' selected' : ''}>`
+    + `${esc(entry.label)}</option>`).join('');
+  const sourceOptions = ['<option value="">choose an upstream block…</option>']
+    .concat(upstream.map((block) => `<option value="${esc(block.id)}"${definition.input.nodeId === block.id ? ' selected' : ''}>`
+      + `${esc(block.title || block.id)}</option>`)).join('');
+  const input = definition.input || {};
+  const parameterFields = Object.entries(analysis?.parameters || {}).map(([key, spec]) => {
+    const raw = definition[key] ?? spec.default;
+    return `<div class="field"><label>${esc(spec.label)}</label>`
+      + `<input class="input" type="number" step="${spec.type === 'integer' ? '1' : 'any'}" min="${spec.min}" max="${spec.max}" `
+      + `data-multiwfn-field="${esc(key)}" value="${esc(String(raw))}" aria-label="${esc(spec.label)}">`
+      + `<div class="inspector-note">${esc(spec.help)}</div></div>`;
+  }).join('');
+  let script = '';
+  try {
+    script = multiwfnMenuScript(analysis?.id || 'qtaim', definition).text;
+  } catch (error) {
+    script = error.message;
+  }
+  return group('Multiwfn sidecar', `${MULTIWFN_SUPPORTED_VERSION} · user-installed`, true, [
+    `<div class="field full"><label>Analysis</label><select class="select" data-multiwfn-field="analysis" aria-label="Multiwfn analysis">${analysisOptions}</select>`
+      + '<div class="inspector-note">Version 3.8 menus only. ELF/LOL write a cube; QTAIM integrates basins; '
+      + 'ESP reports surface statistics; RDG–NCI reports sign(λ₂)ρ / RDG points.</div></div>',
+    `<div class="field full"><label>Wavefunction from an upstream block</label><select class="select" data-multiwfn-input="nodeId" aria-label="Upstream block">${sourceOptions}</select></div>`,
+    `<div class="field full"><label>…or a project-relative path</label><input class="input" data-multiwfn-input="path" value="${esc(input.path || '')}" placeholder="wavefunctions/water.fchk" aria-label="Wavefunction path" spellcheck="false" autocomplete="off">`
+      + '<div class="inspector-note">Exactly one source: an upstream block, a run id, or a path. '
+      + 'A path is relative to the project folder and may not contain “..”.</div></div>',
+    `<div class="field full"><label>…or a run id</label><input class="input" data-multiwfn-input="runId" value="${esc(input.runId || '')}" placeholder="run id from an upstream task" aria-label="Run id" spellcheck="false" autocomplete="off"></div>`,
+    parameterFields,
+    `<div class="field full"><label>Menu script</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
+    `<div class="full"><div class="inspector-note"><strong>Licence.</strong> ${esc(MULTIWFN_LICENCE)} `
+      + `<strong>Cite:</strong> ${esc(MULTIWFN_CITATION)}. A missing binary, an unsupported version or a missing `
+      + 'density matrix fails by name; it is never reported as unknown.</div></div>',
+  ].join(''));
+}
+
 function computeInspector(node) {
   const upstream = computeUpstreamBlocks(node);
   const ins = incoming(node.id);
   const definition = node.analyse && typeof node.analyse === 'object'
     ? node.analyse : { expression: '', inputs: [] };
-  const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
+  const mode = definition.mode === 'dp4'
+    ? 'dp4'
+    : (definition.mode === 'multiwfn' ? 'multiwfn' : 'expression');
   const dp4 = mode === 'dp4' ? dp4DefinitionOf(node) : null;
+  const multiwfn = mode === 'multiwfn' ? multiwfnDefinitionOf(node) : null;
   const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
   const inputRows = inputs.length
     ? inputs.map((input, index) => computeInputRow(input, index, upstream)).join('')
     : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
   const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
-  return `${inspectorHead(mode === 'dp4' ? 'Derived · DP4+' : 'Derived · analyse', node.title, `${upstream.length} upstream · ${mode === 'dp4' ? 'candidate comparison' : 'derived quantity'}`)}
+  const eyebrow = mode === 'dp4' ? 'Derived · DP4+' : (mode === 'multiwfn' ? 'Sidecar · Multiwfn' : 'Derived · analyse');
+  const subtitle = mode === 'dp4'
+    ? 'candidate comparison'
+    : (mode === 'multiwfn' ? 'wavefunction analysis' : 'derived quantity');
+  return `${inspectorHead(eyebrow, node.title, `${upstream.length} upstream · ${subtitle}`)}
   <div class="inspector-scroll">
-    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · evaluated from upstream records</span></div>
-    <div class="callout"><strong>Derived, not measured.</strong> This block computes ${mode === 'dp4' ? 'a probability per candidate structure from the committed DP4+ bank' : 'a number from other blocks\' results — a CBS limit, a ΔE, a ratio'}. Its result is never presented as a QM result, and a missing input is a refusal that names it, never a zero.</div>
-    ${group('Mode', 'arithmetic or DP4+', true, [
+    <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · ${mode === 'multiwfn' ? 'ran by the user-installed Multiwfn binary' : 'evaluated from upstream records'}</span></div>
+    <div class="callout"><strong>${mode === 'multiwfn' ? 'External analysis' : 'Derived, not measured'}.</strong> This block computes ${mode === 'dp4' ? 'a probability per candidate structure from the committed DP4+ bank' : 'a number from other blocks\' results — a CBS limit, a ΔE, a ratio'}. Its result is never presented as a QM result, and a missing input is a refusal that names it, never a zero.</div>
+    ${group('Mode', 'arithmetic, DP4+ or Multiwfn', true, [
       `<div class="field full"><label>What this block computes</label><select class="select" data-compute-mode="mode" aria-label="Analyse mode">
         <option value="expression"${mode === 'expression' ? ' selected' : ''}>Arithmetic expression over upstream fields</option>
         <option value="dp4"${mode === 'dp4' ? ' selected' : ''}>DP4+ probabilities over candidate structures</option>
+        <option value="multiwfn"${mode === 'multiwfn' ? ' selected' : ''}>Multiwfn analysis of a wavefunction</option>
       </select></div>`,
     ].join(''))}
-    ${mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
+    ${mode === 'multiwfn' ? multiwfnInspectorBody(multiwfn, upstream, node) : mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
       `<div class="field full"><label>Expression</label><textarea class="textarea" rows="3" data-compute-field="expression" data-role="compute-expression" aria-label="Expression">${esc(definition.expression || '')}</textarea></div>`,
       `<div class="field full"><label>Preview</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
     ].join(''))}
@@ -2973,11 +3069,11 @@ function computeInspector(node) {
         `<div class="field full"><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
         `<div class="field full"><div class="inspector-note">The preview reads the upstream blocks' attached results; the plan counts one candidate per dataset record, so a fanned-out ensemble is one candidate with several conformers.</div></div>`,
       ].join(''))
-      : group('Inputs', `${inputs.length}`, true, [
+      : mode === 'expression' ? group('Inputs', `${inputs.length}`, true, [
         `<div class="full"><table class="mini-table"><thead><tr><th>Name</th><th>Field</th><th>From</th><th></th></tr></thead><tbody>${inputRows}</tbody></table></div>`,
         `<div class="field full"><button type="button" class="btn small" data-action="compute-add-input">Add input</button></div>`,
-      ].join(''))}
-    ${mode === 'dp4' ? '' : group('Functions', `${COMPUTE_FUNCTIONS.length}`, false, [`<div class="code-block">${functions}</div>`])}
+      ].join('')) : ''}
+    ${mode === 'expression' ? group('Functions', `${COMPUTE_FUNCTIONS.length}`, false, [`<div class="code-block">${functions}</div>`]) : ''}
     ${group('Connections', upstream.length ? `${upstream.length} upstream` : 'not connected', false, [`<div class="full">${incomingList(node.id)}</div>`])}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="validate">Validate</button>
@@ -6307,6 +6403,7 @@ const COMPANION_FIELDS = Object.freeze({
   crest: { field: '#run-crest', marker: '#run-crest-detected', label: 'CREST' },
   obabel: { field: '#run-obabel', marker: '#run-obabel-detected', label: 'Open Babel' },
   scorer: { field: '#run-scorer', marker: '#run-scorer-detected', label: 'ML scorer' },
+  multiwfn: { field: '#run-multiwfn', marker: '#run-multiwfn-detected', label: 'Multiwfn' },
   tautomer: { field: '#run-tautomer', marker: '#run-tautomer-detected', label: 'Tautomer sidecar' },
 });
 
@@ -7166,6 +7263,9 @@ function readRunConfig() {
   if ($('#run-crest')) $('#run-crest').value = seed.crest;
   if ($('#run-obabel')) $('#run-obabel').value = seed.obabel;
   if ($('#run-scorer')) $('#run-scorer').value = seed.scorer;
+  // Issue 270: the Multiwfn sidecar is user-installed and seeded like the
+  // other companion programs; an explicit local path still wins.
+  if ($('#run-multiwfn')) $('#run-multiwfn').value = seed.multiwfn;
   // Issue 226: the tautomer sidecar is remembered like the other programs.
   if ($('#run-tautomer')) $('#run-tautomer').value = seed.tautomer;
   if ($('#run-tautomer-script')) $('#run-tautomer-script').value = seed.tautomerScript;
@@ -7182,7 +7282,7 @@ function readRunConfig() {
   syncCompanionExecutables();
 }
 
-const RUN_TOOL_FIELDS = Object.freeze(['crest', 'obabel', 'scorer', 'tautomer', 'tautomerScript', 'scratch']);
+const RUN_TOOL_FIELDS = Object.freeze(['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'scratch']);
 
 function saveRunConfig() {
   try {
@@ -7201,6 +7301,7 @@ function saveRunConfig() {
       crest: $('#run-crest')?.value.trim() || '',
       obabel: $('#run-obabel')?.value.trim() || '',
       scorer: $('#run-scorer')?.value.trim() || '',
+      multiwfn: $('#run-multiwfn')?.value.trim() || '',
       tautomer: $('#run-tautomer')?.value.trim() || '',
       tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
       scratch: $('#run-scratch')?.value.trim() || '',
@@ -7212,6 +7313,7 @@ function saveRunConfig() {
       crestExecutable: tools.crest || '',
       obabelExecutable: tools.obabel || '',
       scorerExecutable: tools.scorer || '',
+      multiwfnExecutable: tools.multiwfn || '',
       tautomerExecutable: tools.tautomer || '',
       tautomerScript: tools.tautomerScript || '',
       scratchDir: tools.scratch || '',
@@ -7674,6 +7776,7 @@ async function startSelectedRun() {
       crestExecutable: $('#run-crest').value.trim(),
       obabelExecutable: $('#run-obabel').value.trim(),
       scorerExecutable: $('#run-scorer')?.value.trim() || '',
+      multiwfnExecutable: $('#run-multiwfn')?.value.trim() || '',
       scratchDir: $('#run-scratch').value.trim(),
       dryRun,
       gates: gatesForNode(node),
@@ -8304,6 +8407,7 @@ async function startWorkflowUnlocked() {
         crestExecutable: $('#run-crest').value.trim(),
         obabelExecutable: $('#run-obabel').value.trim(),
         scorerExecutable: $('#run-scorer')?.value.trim() || '',
+        multiwfnExecutable: $('#run-multiwfn')?.value.trim() || '',
         // Issue 226: the tautomer enumerator sidecar and, when the executable
         // is an interpreter, the script it should run.
         tautomerExecutable: $('#run-tautomer')?.value.trim() || '',
@@ -10042,6 +10146,7 @@ function handleAction(action, element) {
     case 'pick-crest': pickCrest(); break;
     case 'pick-obabel': pickObabel(); break;
     case 'pick-scorer': pickCompanionTool('scorer'); break;
+    case 'pick-multiwfn': pickCompanionTool('multiwfn'); break;
     case 'pick-tautomer': pickCompanionTool('tautomer'); break;
     case 'pause-workflow': pauseWorkflow(); break;
     case 'export-workflow-report': exportWorkflowReportAction(); break;
@@ -10412,7 +10517,9 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'analyse') return;
     if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
-    const mode = target.value === 'dp4' ? 'dp4' : 'expression';
+    const mode = target.value === 'dp4'
+      ? 'dp4'
+      : (target.value === 'multiwfn' ? 'multiwfn' : 'expression');
     if (mode === 'dp4') {
       // Switching modes creates the DP4+ definition with no level chosen: a
       // block that quietly inherited the first bank level would be computing a
@@ -10421,12 +10528,65 @@ function onDocumentChange(event) {
       dp4DefinitionOf(node);
       // The arithmetic declaration is kept until the file is saved, so flipping
       // the mode back does not lose an expression the user typed.
+    } else if (mode === 'multiwfn') {
+      // Issue 270: a new Multiwfn definition defaults to QTAIM and the only
+      // upstream block, if there is exactly one; nothing is chosen silently for
+      // two upstream blocks.
+      node.analyse.mode = 'multiwfn';
+      multiwfnDefinitionOf(node);
     } else {
       delete node.analyse.mode;
     }
     refreshDirty();
     renderGraph();
     renderInspector();
+    return;
+  }
+  if (target.dataset.multiwfnField) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'analyse') return;
+    const definition = multiwfnDefinitionOf(node);
+    const key = target.dataset.multiwfnField;
+    if (key === 'analysis') {
+      definition.analysis = target.value;
+      const analysis = multiwfnAnalysis(definition.analysis);
+      for (const [param, spec] of Object.entries(analysis?.parameters || {})) {
+        definition[param] = spec.default;
+      }
+      for (const param of ['grid', 'isovalue', 'rhoCutoff']) {
+        if (!analysis?.parameters?.[param]) delete definition[param];
+      }
+      refreshDirty();
+      renderGraph();
+      renderInspector();
+      return;
+    }
+    if (key === 'grid') definition.grid = Number(target.value);
+    else if (key === 'isovalue') definition.isovalue = Number(target.value);
+    else if (key === 'rhoCutoff') definition.rhoCutoff = Number(target.value);
+    else definition[key] = target.value;
+    refreshDirty();
+    refreshComputePreview();
+    return;
+  }
+  if (target.dataset.multiwfnInput) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'analyse') return;
+    const definition = multiwfnDefinitionOf(node);
+    const key = target.dataset.multiwfnInput;
+    // Exactly one source: typing a path clears the block and run id, and vice
+    // versa. The schema refuses two sources, and the inspector should not make
+    // that state easy to reach.
+    for (const other of ['nodeId', 'runId', 'path']) {
+      if (other !== key) delete definition.input[other];
+    }
+    const value = String(target.value || '').trim();
+    if (value) definition.input[key] = value;
+    else delete definition.input[key];
+    refreshDirty();
+    refreshComputePreview();
     return;
   }
   if (target.dataset.dp4Field) {

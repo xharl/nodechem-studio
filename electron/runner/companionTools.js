@@ -15,6 +15,9 @@ export const COMPANION_BINARIES = Object.freeze({
   // A scorer is spawned as one executable, so only a wrapper command is
   // detectable. The shipped Python sidecar is not installed as a command.
   scorer: ['aimnet2-scorer', 'aimnet2_scorer'],
+  // Issue #270: Multiwfn is user-installed and has no installer that puts it on
+  // PATH; detection is a convenience, and the field is still the authority.
+  multiwfn: ['Multiwfn', 'multiwfn'],
   // The tautomer field takes a Python interpreter when the user also names the
   // enumerator script; python3 is preferred so a Buster-style `python` shim
   // does not win over a real Python 3.

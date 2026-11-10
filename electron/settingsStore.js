@@ -32,6 +32,7 @@ const TOOL_LABELS = Object.freeze({
   crest: 'CREST',
   obabel: 'Open Babel',
   scorer: 'ML scorer',
+  multiwfn: 'Multiwfn',
   tautomer: 'Tautomer sidecar',
 });
 

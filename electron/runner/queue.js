@@ -23,6 +23,21 @@ import { CrestRunner } from './crestRunner.js';
 import { ObabelRunner } from './obabelRunner.js';
 import { ScorerRunner } from './scorerRunner.js';
 import { TautomerRunner } from './tautomerRunner.js';
+import { MultiwfnRunner } from './multiwfnRunner.js';
+import { parseFchk } from '../../src/shared/fchk.js';
+import { densityMatrix } from '../../src/shared/esp.js';
+import { qtaimAnalysis } from '../../src/shared/qtaim.js';
+import {
+  MULTIWFN_CITATION,
+  MULTIWFN_LICENCE,
+  compareQtaimToApp,
+  multiwfnAnalysis,
+  multiwfnMenuScript,
+  multiwfnSummary,
+  multiwfnVersionRefusal,
+  normalizeMultiwfnTask,
+  parseMultiwfnOutput,
+} from '../../src/shared/multiwfn.js';
 import {
   DEFAULT_TAUTOMER_OPTIONS,
   TAUTOMER_PROTOCOL,
@@ -806,6 +821,7 @@ function analyseTaskPayload(raw) {
     }))
     .filter((entry) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.name) && entry.field);
   const dp4 = raw?.mode === 'dp4' ? dp4TaskDefinition(raw.dp4) : null;
+  const multiwfn = raw?.mode === 'multiwfn' ? normalizeMultiwfnTask(raw.multiwfn, { path: 'analyse.multiwfn' }) : null;
   return {
     expression: oneLine(raw?.expression, 2000),
     declared,
@@ -813,6 +829,10 @@ function analyseTaskPayload(raw) {
     // from the run.json files it finds; the arithmetic payload is otherwise
     // unchanged, and a task without a mode is still exactly an expression.
     ...(dp4 ? { mode: 'dp4', dp4 } : {}),
+    // Issue #270: a Multiwfn task carries the validated analysis, input and
+    // parameters. Its menu script is generated from the pinned 3.8 recipe, never
+    // read from the task, so a hand-written queue cannot smuggle in a menu.
+    ...(multiwfn ? { mode: 'multiwfn', multiwfn } : {}),
     sources: (Array.isArray(raw?.sources) ? raw.sources.map(String) : [])
       .filter((id) => SAFE_ID.test(id)).slice(0, 32),
     ...(raw?.recordId && SAFE_ID.test(String(raw.recordId)) ? { recordId: String(raw.recordId) } : {}),
@@ -1113,6 +1133,9 @@ export class QueueManager {
     this.writeChains = new Map();
     this.pendingRuns = new Map();
     this.finishedRuns = new Map();
+    // Issue #270: the Multiwfn sidecar child currently running, so a queue
+    // cancellation can stop it the way it stops an engine.
+    this.multiwfnRunner = null;
     this.starting = false;
     this.unsubscribe = this.runManager.onEvent((event) => this.handleRunEvent(event));
   }
@@ -1319,6 +1342,11 @@ export class QueueManager {
       || await resolveOnPath(process.platform === 'win32' ? ['crest.exe'] : ['crest']);
     const obabelExecutable = String(options.obabelExecutable || '').trim()
       || await resolveOnPath(process.platform === 'win32' ? ['obabel.exe'] : ['obabel']);
+    // Issue #270: Multiwfn is a separately installed analysis sidecar. It is
+    // never bundled, so a block that asks for it needs a path (or one on PATH).
+    const multiwfnExecutable = String(options.multiwfnExecutable || '').trim()
+      || await resolveOnPath(process.platform === 'win32'
+        ? ['Multiwfn.exe', 'multiwfn.exe'] : ['Multiwfn', 'multiwfn']);
     const scratchDir = String(options.scratchDir || '').trim();
     // RFC 0001: 1 keeps the sequential drain every existing queue had.
     const maxParallel = Math.max(1, Math.min(Number(options.maxParallel) || 1, LIMITS.maxParallel));
@@ -1360,6 +1388,10 @@ export class QueueManager {
     const needsTautomer = tasks.some((task) => task.type === 'generate'
       && task.generate?.produces === 'tautomers'
       && !task.generate?.member);
+    // Issue #270: a Multiwfn analyse block spawns the user-installed sidecar.
+    // A dry run must not spawn it, exactly as it spawns no engine.
+    const needsMultiwfn = tasks.some((task) => task.type === 'analyse'
+      && task.analyse?.mode === 'multiwfn');
 
     // PATH fallback (#233 sibling): an engine that is on PATH should not require
     // the same absolute path in every run. Explicit settings still win.
@@ -1431,6 +1463,14 @@ export class QueueManager {
           if (!scriptStat?.isFile()) throw new Error(`Tautomer sidecar script not found: ${tautomerScript}`);
         }
       }
+      if (needsMultiwfn) {
+        if (!multiwfnExecutable) {
+          throw new Error('Choose the Multiwfn executable before running a Multiwfn analysis block. '
+            + 'Multiwfn is user-installed and is not bundled with NodeChem Studio.');
+        }
+        const stat = await fsp.stat(multiwfnExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`Multiwfn executable not found: ${multiwfnExecutable}`);
+      }
     }
 
     const id = queueIdFor();
@@ -1456,6 +1496,9 @@ export class QueueManager {
         crestExecutable: dryRun ? null : crestExecutable,
         obabelExecutable: dryRun ? null : obabelExecutable,
         scorerExecutable: dryRun ? null : String(options.scorerExecutable || '').trim(),
+        // Issue #270: the user-installed Multiwfn binary travels with the queue,
+        // so a replay names the same program and a dry run records none.
+        multiwfnExecutable: dryRun ? null : multiwfnExecutable,
         // Issue #226: the tautomer sidecar travels with the queue so a replay
         // names the same program, and a dry run records none because none ran.
         tautomerExecutable: dryRun ? null : tautomerExecutable,
@@ -3603,6 +3646,12 @@ export class QueueManager {
    */
   async runAnalyse(queue, task) {
     const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    // Issue #270: a Multiwfn block is an analyse block that spawns the
+    // user-installed sidecar, not an expression over fields.
+    if (analyse.mode === 'multiwfn') {
+      await this.runMultiwfn(queue, task);
+      return;
+    }
     // Issue 165: a DP4+ block is an analyse block with a definition instead of
     // an expression. It reads whole run records (candidates) rather than named
     // fields, so it has its own reader below but the same record contract.
@@ -3703,6 +3752,389 @@ export class QueueManager {
     await this.persist(queue);
     this.publish(queue);
     this.announce(queue, task);
+  }
+
+  /**
+   * One Multiwfn analyse block (issue #270).
+   *
+   * The block resolves the wavefunction from an upstream run (or a
+   * project-relative path), refuses by name when the file or the density matrix
+   * is not there, runs the user-installed Multiwfn in `-silent` batch mode with
+   * the pinned 3.8 menu script, normalises the text and writes its own
+   * `run.json`. The record carries the Multiwfn version, the exact script and
+   * the input SHA-256; a refusal is written down too, never left as `unknown`.
+   */
+  async runMultiwfn(queue, task) {
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    const definition = analyse.multiwfn && typeof analyse.multiwfn === 'object' ? analyse.multiwfn : null;
+    const analysis = definition ? multiwfnAnalysis(definition.analysis) : null;
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    task.runId = null;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+
+    let script = null;
+    let input = null;
+    let version = '';
+    const startedAt = task.startedAt;
+    try {
+      if (!definition || !analysis) {
+        throw new Error(`"${task.title}" is a Multiwfn block without a supported analysis; `
+          + 'save the project so the definition is validated before it is queued.');
+      }
+      if (queue.options.dryRun) {
+        const error = new Error('dry run — Multiwfn was not run; the sidecar is user-installed and a dry run spawns nothing');
+        error.code = 'multiwfn-dry-run';
+        throw error;
+      }
+      const executable = String(queue.options.multiwfnExecutable || '').trim();
+      if (!executable) {
+        const error = new Error('No Multiwfn executable is configured. Multiwfn is user-installed and is not '
+          + 'bundled; choose its binary in the run console before queuing this block.');
+        error.code = 'multiwfn-binary';
+        throw error;
+      }
+      version = await MultiwfnRunner.version(executable);
+      const refusal = multiwfnVersionRefusal(version);
+      if (refusal) {
+        const error = new Error(refusal);
+        error.code = 'multiwfn-version';
+        throw error;
+      }
+      input = await this.resolveMultiwfnInput(queue, task, definition, analysis);
+      // The runner's workdir is the task's own folder; stage the wavefunction
+      // there so Multiwfn sees a local file and cannot write side files beside
+      // the upstream run. The hash is still taken from the source bytes.
+      const staged = path.join(dir, input.name);
+      if (path.resolve(staged) !== path.resolve(input.path)) {
+        await fsp.copyFile(input.path, staged);
+      }
+      script = multiwfnMenuScript(definition.analysis, definition);
+      const runner = new MultiwfnRunner();
+      this.multiwfnRunner = runner;
+      const raw = await runner.run({
+        executable,
+        inputName: input.name,
+        script,
+        cwd: dir,
+        // `maxParallel` is how many queue tasks run at once, not how many
+        // threads one task may use. Multiwfn's own default is the honest
+        // choice; pass a thread count only when the block declares one.
+        threads: Number.isInteger(Number(task.settings?.nproc)) ? Number(task.settings.nproc) : null,
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      });
+      if (raw.cancelled) {
+        const error = new Error('Multiwfn was cancelled by the user.');
+        error.code = 'multiwfn-cancelled';
+        throw error;
+      }
+      if (raw.timedOut) {
+        const error = new Error(`Multiwfn did not finish within ${this.taskTimeoutSeconds(queue, task)} s and was stopped.`);
+        error.code = 'multiwfn-timeout';
+        throw error;
+      }
+      if (Number(raw.exitCode) !== 0) {
+        const tail = String(raw.outputText || '').trim().split(/\r?\n/).slice(-3).join(' ');
+        const error = new Error(`Multiwfn exited with code ${raw.exitCode}${raw.signal ? ` (signal ${raw.signal})` : ''}`
+          + `${tail ? `: ${oneLine(tail, 240)}` : '.'}`);
+        error.code = 'multiwfn-exit';
+        throw error;
+      }
+      const result = parseMultiwfnOutput({
+        analysis: definition.analysis,
+        text: raw.outputText,
+        files: raw.files,
+        parameters: definition,
+      });
+      if (!result.ok) {
+        const error = new Error(`Multiwfn produced no usable ${analysis.label} result: ${result.reason}`);
+        error.code = 'multiwfn-output';
+        throw error;
+      }
+      if (definition.analysis === 'qtaim' && input.format === 'fchk' && input.text) {
+        try {
+          const parsed = parseFchk(input.text);
+          const inApp = qtaimAnalysis({ fchk: parsed, bondPath: false });
+          if (inApp.ok) result.comparison = compareQtaimToApp(result, inApp);
+        } catch (error) {
+          result.comparison = {
+            compared: 0,
+            matched: 0,
+            differences: [],
+            withinTolerance: false,
+            reason: `the in-app QTAIM comparison could not run: ${error.message}`,
+          };
+        }
+      }
+      const summary = multiwfnSummary(result);
+      const record = {
+        schemaVersion: 1,
+        kind: 'multiwfn',
+        id: task.nodeId,
+        status: 'completed',
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        exitCode: Number(raw.exitCode),
+        inputSha256: input.sha256,
+        provenance: {
+          kind: 'multiwfn',
+          program: 'Multiwfn',
+          version: raw.version || version,
+          executable,
+          citation: MULTIWFN_CITATION,
+          licence: MULTIWFN_LICENCE,
+          analysis: definition.analysis,
+          parameters: { ...definition },
+          menuVersion: script.version,
+          menuScript: script.text,
+          argv: raw.argv,
+          input: {
+            name: input.name,
+            format: input.format,
+            sha256: input.sha256,
+            bytes: input.bytes,
+            source: input.source,
+          },
+        },
+        multiwfn: result,
+        analyse: {
+          mode: 'multiwfn',
+          analysis: definition.analysis,
+          input: definition.input,
+          parameters: { ...definition },
+          status: 'computed',
+          summary,
+          citation: MULTIWFN_CITATION,
+          notComputed: null,
+        },
+      };
+      await writeJsonAtomic(path.join(dir, 'run.json'), record);
+      task.runId = task.nodeId;
+      task.analyse = {
+        ...analyse,
+        mode: 'multiwfn',
+        status: 'computed',
+        summary,
+        citation: MULTIWFN_CITATION,
+        provenance: record.provenance,
+        multiwfn: result,
+        notComputed: null,
+      };
+      task.summary = oneLine(summary, 400);
+      this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: summary });
+    } catch (error) {
+      const message = oneLine(error?.message || String(error), 500) || 'Multiwfn failed without a message.';
+      task.analyse = {
+        ...analyse,
+        mode: 'multiwfn',
+        status: error?.code === 'multiwfn-dry-run' ? 'pending' : 'refused',
+        summary: `Multiwfn — ${message}`,
+        citation: MULTIWFN_CITATION,
+        notComputed: message,
+        ...(script ? { menuScript: script.text, menuVersion: script.version } : {}),
+        ...(input ? { input: { ...definition?.input, resolved: input.name, sha256: input.sha256 } } : {}),
+      };
+      const record = {
+        schemaVersion: 1,
+        kind: 'multiwfn',
+        id: task.nodeId,
+        status: error?.code === 'multiwfn-dry-run' ? 'blocked' : 'failed',
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        inputSha256: input?.sha256 || null,
+        provenance: {
+          kind: 'multiwfn',
+          program: 'Multiwfn',
+          version: version || null,
+          executable: queue.options.multiwfnExecutable || null,
+          citation: MULTIWFN_CITATION,
+          licence: MULTIWFN_LICENCE,
+          analysis: definition?.analysis || null,
+          parameters: definition ? { ...definition } : null,
+          menuVersion: script?.version || null,
+          menuScript: script?.text || null,
+          input: input
+            ? { name: input.name, format: input.format, sha256: input.sha256, bytes: input.bytes, source: input.source }
+            : null,
+        },
+        error: { code: error?.code || 'multiwfn', message },
+        analyse: {
+          mode: 'multiwfn',
+          analysis: definition?.analysis || null,
+          input: definition?.input || null,
+          parameters: definition ? { ...definition } : null,
+          status: error?.code === 'multiwfn-dry-run' ? 'pending' : 'refused',
+          summary: `Multiwfn — ${message}`,
+          citation: MULTIWFN_CITATION,
+          notComputed: message,
+        },
+      };
+      await writeJsonAtomic(path.join(dir, 'run.json'), record).catch(() => {});
+      task.error = message;
+      this.setTaskOutcome(task, error?.code === 'multiwfn-dry-run' ? 'blocked' : 'failed', message);
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Multiwfn refused: ${message}` });
+    } finally {
+      this.multiwfnRunner = null;
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * Resolve the wavefunction a Multiwfn task reads.
+   *
+   * `input.path` is resolved against the project folder and may not escape it;
+   * `input.nodeId`/`input.runId` read an upstream task's run folder. The file
+   * format is checked against the analysis before anything is spawned, and a
+   * checkpoint without a density block is refused by name here rather than by
+   * Multiwfn several steps into the menu.
+   */
+  async resolveMultiwfnInput(queue, task, definition, analysis) {
+    const input = definition.input || {};
+    let target = '';
+    let source = {};
+    if (input.path) {
+      const root = queue.options.projectDir ? path.resolve(queue.options.projectDir) : '';
+      if (!root) {
+        const error = new Error(`Multiwfn input "${input.path}" is project-relative, but this queue was started `
+          + 'without a project folder; start it from the project file or give an upstream block instead.');
+        error.code = 'multiwfn-input';
+        throw error;
+      }
+      target = resolveArtifactPath(root, input.path);
+      source = { kind: 'path', path: input.path };
+    } else {
+      const sources = this.incomingSources(queue, task.nodeId);
+      let chosen = null;
+      if (input.runId) {
+        chosen = sources.find((entry) => String(entry.runId || '') === String(input.runId))
+          || sources.find((entry) => String(entry.nodeId || '') === String(input.runId))
+          // A run id names one task in this queue; it need not be wired into
+          // the block, because the run id is itself the reference. Prefer the
+          // wired source above, then the queue's own task list.
+          || (Array.isArray(queue.tasks) ? queue.tasks : []).find((entry) => entry !== task
+            && (String(entry.runId || '') === String(input.runId)
+              || String(entry.nodeId || '') === String(input.runId)))
+          || null;
+        if (!chosen) {
+          const error = new Error(`Multiwfn input run "${input.runId}" is not a completed run in this queue `
+            + `(upstream: ${sources.map((entry) => entry.runId || entry.nodeId).join(', ') || 'none'}).`);
+          error.code = 'multiwfn-input';
+          throw error;
+        }
+      } else if (input.nodeId) {
+        const exact = task.recordId ? `${input.nodeId}~${task.recordId}` : input.nodeId;
+        chosen = sources.find((entry) => entry.nodeId === exact)
+          || sources.find((entry) => String(entry.nodeId || '').startsWith(`${input.nodeId}~`))
+          || sources.find((entry) => entry.nodeId === input.nodeId)
+          || null;
+        if (!chosen) {
+          const error = new Error(`Multiwfn input block "${input.nodeId}" has no run in this queue; `
+            + `wire it in and let it finish (upstream: ${sources.map((entry) => entry.nodeId).join(', ') || 'none'}).`);
+          error.code = 'multiwfn-input';
+          throw error;
+        }
+      } else {
+        chosen = sources[0] || null;
+      }
+      if (!chosen) {
+        const error = new Error(`"${task.title}" has no upstream run to read a wavefunction from.`);
+        error.code = 'multiwfn-input';
+        throw error;
+      }
+      if (chosen.status !== 'completed' || !chosen.runDir) {
+        const error = new Error(`Multiwfn input "${chosen.title || chosen.nodeId}" has no completed run folder `
+          + `(status: ${chosen.status || 'unknown'}).`);
+        error.code = 'multiwfn-input';
+        throw error;
+      }
+      const preferred = analysis.inputs;
+      let names = [];
+      try {
+        names = await fsp.readdir(chosen.runDir);
+      } catch {
+        names = [];
+      }
+      const candidates = names
+        .filter((name) => preferred.includes((/\.([A-Za-z0-9]+)$/.exec(name) || [])[1]?.toLowerCase()))
+        .sort((a, b) => {
+          const rank = (name) => preferred.indexOf((/\.([A-Za-z0-9]+)$/.exec(name) || [])[1].toLowerCase());
+          return rank(a) - rank(b) || a.localeCompare(b);
+        });
+      if (candidates.length === 0) {
+        const error = new Error(`Multiwfn input: the run folder for "${chosen.title || chosen.nodeId}" carries no `
+          + `${preferred.map((format) => `.${format}`).join(', ')} file. ${analysis.label} reads `
+          + `${preferred.map((format) => `.${format}`).join(', ')}; attach or generate one before running this block.`);
+        error.code = 'multiwfn-input';
+        throw error;
+      }
+      target = path.join(chosen.runDir, candidates[0]);
+      source = {
+        kind: input.nodeId ? 'node' : 'run',
+        nodeId: chosen.nodeId,
+        runId: chosen.runId || null,
+        runDir: chosen.runDir,
+        file: candidates[0],
+      };
+    }
+    const name = path.basename(target);
+    const format = (/\.([A-Za-z0-9]+)$/.exec(name) || [])[1]?.toLowerCase() || '';
+    if (!analysis.inputs.includes(format)) {
+      const error = new Error(`Multiwfn ${analysis.label} cannot read "${name}": it reads `
+        + `${analysis.inputs.map((entry) => `.${entry}`).join(', ')}.`);
+      error.code = 'multiwfn-input';
+      throw error;
+    }
+    const stat = await fsp.stat(target).catch(() => null);
+    if (!stat?.isFile() || stat.size === 0) {
+      const error = new Error(`Multiwfn input "${name}" was not found or is empty.`);
+      error.code = 'multiwfn-input';
+      throw error;
+    }
+    let text = '';
+    if (format === 'fchk') {
+      text = await fsp.readFile(target, 'utf8');
+      let parsed;
+      try {
+        parsed = parseFchk(text);
+      } catch (error) {
+        const refusal = new Error(`Multiwfn ${analysis.label} cannot read "${name}" as a formatted checkpoint: ${error.message}`);
+        refusal.code = 'multiwfn-input';
+        throw refusal;
+      }
+      const density = densityMatrix(parsed);
+      if (!density.ok) {
+        const refusal = new Error(`Multiwfn ${analysis.label} needs a density matrix, and "${name}" carries none `
+          + `(${density.reason}).`);
+        refusal.code = 'multiwfn-input';
+        throw refusal;
+      }
+    }
+    return {
+      path: target,
+      name,
+      format,
+      bytes: stat.size,
+      sha256: await sha256File(target),
+      source,
+      text,
+    };
   }
 
   /**
@@ -3991,6 +4423,9 @@ export class QueueManager {
       }
       if (task.status === 'running' && task.type === 'generate') {
         this.conformersRunner?.cancel();
+      }
+      if (task.status === 'running' && task.type === 'analyse' && task.analyse?.mode === 'multiwfn') {
+        this.multiwfnRunner?.cancel();
       }
     }
     queue.currentTaskId = null;

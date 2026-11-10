@@ -13,6 +13,7 @@ either calculation engine — the app drives Gaussian 16 or xTB **where they alr
 | Operating system | Windows 10/11 x64, or a modern Linux x64 distribution. macOS runs from source; there is no packaged macOS build. |
 | For a real Gaussian run | A licensed Gaussian 16 installation on the same machine and operating system as the app. Platform-bound: a Windows licence does not authorise a Linux binary, and a Windows licence may not be used under WSL. |
 | For a real xTB run | An `xtb` executable (`xtb.exe` on Windows) and its `share/xtb` parameter directory, or `XTBPATH` pointing at it. No licence file. |
+| For a Multiwfn analysis block | A user-installed **Multiwfn 3.8** executable. It is not bundled, and the block's menu numbers are pinned to 3.8. Academic/non-profit use requires citation; commercial use needs the author's permission. See [Analyse blocks](analyse.md#multiwfn-analyses). |
 | To use neither | Nothing. The dry run is a labelled fixture and needs no engine. |
 
 The app itself is free software under the Apache License 2.0. That licence covers this project's

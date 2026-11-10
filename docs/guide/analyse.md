@@ -28,6 +28,107 @@ The block has two modes (issue 165), chosen with **What this block computes** in
 
 A project that never asks for `"dp4"` saves and plans exactly as it did before the mode existed.
 
+A third mode, `"multiwfn"`, runs a **user-installed Multiwfn** binary as an external analysis
+sidecar (issue 270). It is additive: the expression and DP4+ modes are unchanged, and a project that
+never selects it saves exactly as it did. [Multiwfn analyses](#multiwfn-analyses) describes it,
+including the licence and the parts that need your binary to validate.
+
+## Multiwfn analyses
+
+Multiwfn is the de facto reference implementation for wavefunction analyses the app does not
+compute itself. The block runs it in **batch mode** — a fixed stdin menu script and `-silent`, never
+the interactive GUI — and normalises the text it prints into a JSON record. Multiwfn is **not
+bundled**: you install it, choose the binary in the run console (or `ncs run --multiwfn <path>`),
+and the record says which binary ran.
+
+### Licence and citation
+
+Multiwfn is free for academic and non-profit use with citation; commercial use needs the author's
+permission. Every result card and every `run.json` carries:
+
+> Tian Lu, Feiwu Chen, *J. Comput. Chem.* **2012**, *33*, 580–592. doi:10.1002/jcc.22885
+
+The app does not redistribute the binary. Check Multiwfn's own terms before packaging this app for
+other users.
+
+### Version pin
+
+The menu numbers are pinned to **Multiwfn 3.8**. They are transcribed from the 3.8 manual examples
+(topology analysis, basin analysis, quantitative molecular surface, grid export and NCI), and a
+different release renumbers them. A binary whose banner is not `3.8` is refused by name — the block
+does not guess that a newer menu still means the same thing.
+
+### Analyses in v1
+
+| `analysis` | Reads | Parameters | Normalised result |
+| --- | --- | --- | --- |
+| `qtaim` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` = basin grid quality 1–4 (default 2) | `basins` (population, volume, volume at ρ > 0.001), `atomicCharges`, `criticalPoints`, and a comparison with the in-app `qtaim.js` when the input is a formatted checkpoint |
+| `esp` | `.wfn`, `.wfx`, `.fchk`, `.molden`, `.cube` | `grid` (points per axis, default 80), `isovalue` (density surface, default 0.001 a.u.) | `volume`, `surfaceArea` (overall/positive/negative), `potential` (min/max and averages, a.u. and kcal/mol), `polarity` |
+| `elf` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` (points per axis, default 80) | an ELF cube and its value range, mean and grid |
+| `lol` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` (points per axis, default 80) | a LOL cube and its value range, mean and grid |
+| `rdg` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` = NCI grid quality 1–4 (default 2), `isovalue` (RDG s, default 0.5), `rhoCutoff` (default 0.05 a.u.) | `points` in the sign(λ₂)ρ / RDG plane, ranges and attractive/repulsive counts |
+
+An analysis that is not in this table is refused by name. A format the analysis does not read (a
+cube for QTAIM, for example) is refused with both the file and the formats it does read.
+
+### Input
+
+Exactly one of:
+
+- `input.nodeId` — an upstream block wired into the analyse block; its run folder supplies the first
+  `.fchk`/`.wfx`/`.wfn`/`.molden`/`.cube` in the order the analysis prefers;
+- `input.runId` — a specific upstream run id in the same queue;
+- `input.path` — a project-relative path, e.g. `wavefunctions/water.fchk`. It may not be absolute or
+  contain `..`, so a project keeps its own data inside its folder.
+
+A block with no input source, two sources, or an unsupported extension is refused at save time. A
+run folder with no readable wavefunction, a file that is empty, a formatted checkpoint without a
+density matrix, and a missing or non-3.8 Multiwfn binary are each **named failures**; none is
+reported as `unknown`.
+
+### What the record holds
+
+The block writes its own `run.json` under the queue's `analyse/` folder, with:
+
+- `provenance.version` — the Multiwfn version read from its banner;
+- `provenance.menuVersion` and `provenance.menuScript` — the pinned 3.8 recipe and the exact bytes
+  fed to stdin;
+- `provenance.input.sha256` — the SHA-256 of the wavefunction the run read;
+- `provenance.citation`, `provenance.licence`, `provenance.executable` and `provenance.argv`;
+- `multiwfn` — the normalised result, and `analyse` — the block's declaration and one-line summary.
+
+The results card and the workflow report print the same normalised numbers and the same provenance;
+neither reads the raw transcript.
+
+### QTAIM compared with the in-app analysis
+
+When the input is a formatted checkpoint, a QTAIM run also records `multiwfn.comparison`, matching
+each Multiwfn `(3,-1)` critical point to the in-app `qtaim.js` bond by connected atom labels (with a
+0.1 Å coordinate fallback). The stated tolerances are ρ 1×10⁻³ e·bohr⁻³, ∇²ρ 1×10⁻² e·bohr⁻⁵,
+ellipticity 1×10⁻² and BCP position 0.05 Å. Every difference is printed; a mismatch is not averaged
+away. The in-app code integrates **no basins**, so basin populations have no in-app counterpart and
+are not compared — the card says so.
+
+### What is not validated yet
+
+This build's Multiwfn tests use **synthetic transcripts** written in Multiwfn 3.8's printed layout.
+They prove the parser, the menu script, the provenance and the refusal paths; they do **not** prove
+that a real Multiwfn 3.8 binary agrees with the in-app QTAIM on a real wavefunction, nor that the
+menu numbers are right for a binary other than the one they were transcribed from. A first run
+against your installed 3.8 binary is the validation step; if it prints a different table, the parser
+refuses rather than inventing a number, and the raw `multiwfn.out` is kept beside `run.json` for the
+fix.
+
+### Wiring it
+
+1. Add an Analyse block and choose **Multiwfn analysis of a wavefunction** under *What this block
+   computes*.
+2. Choose the analysis, then exactly one input: an upstream block, a run id, or a project-relative
+   path.
+3. Set the parameters the analysis lists. The inspector shows the exact pinned menu script.
+4. Choose the **Multiwfn** binary in the run console (or pass `--multiwfn` to `ncs run`) and queue
+   the workflow. A dry run spawns nothing and records that the sidecar did not run.
+
 ## Wiring an analyse block
 
 1. Wire the blocks whose results it reads into the analyse block with ordinary dependency edges.

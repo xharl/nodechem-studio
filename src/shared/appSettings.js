@@ -18,7 +18,7 @@ export const SETTINGS_FILE_NAME = 'settings.json';
 
 export const SETTINGS_ENGINE_IDS = Object.freeze(['gaussian', 'xtb', 'psi4', 'orca', 'pyscf']);
 export const SETTINGS_TOOL_IDS = Object.freeze([
-  'crest', 'obabel', 'scorer', 'tautomer', 'tautomerScript', 'scratch',
+  'crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'scratch',
 ]);
 export const SETTINGS_MEMORY_UNITS = Object.freeze(['MB', 'GB', 'MW']);
 export const SETTINGS_XTB_METHODS = Object.freeze(['gfn2', 'gfn1', 'gfn0', 'gfnff']);
@@ -41,6 +41,7 @@ export function defaultAppSettings() {
       crest: '',
       obabel: '',
       scorer: '',
+      multiwfn: '',
       tautomer: '',
       tautomerScript: '',
       scratch: '',

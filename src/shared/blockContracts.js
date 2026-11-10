@@ -108,8 +108,11 @@ export function validateBlockContracts(flow) {
       }
     } else if (node.type === 'analyse') {
       const records = ins.filter((edge) => RECORD_TYPES.has(byId.get(edge.from)?.type) || byId.get(edge.from)?.type === 'generate');
-      if (records.length === 0) {
+      if (records.length === 0 && node.analyse?.mode !== 'multiwfn') {
         warnings.push({ path, message: 'analyse has no record input wired; its expression has nothing to read.' });
+      } else if (node.analyse?.mode === 'multiwfn' && node.analyse?.multiwfn?.input?.nodeId
+        && !ins.some((edge) => edge.from === node.analyse.multiwfn.input.nodeId)) {
+        warnings.push({ path, message: `multiwfn reads the run of "${node.analyse.multiwfn.input.nodeId}", which is not wired into this block.` });
       }
     } else if (node.type === 'output') {
       if (outs.length > 0) {

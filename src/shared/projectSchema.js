@@ -120,6 +120,7 @@ import {
   dp4DefinitionForFile,
   validateDp4Definition,
 } from './dp4Workflow.js';
+import { validateMultiwfnDefinition } from './multiwfn.js';
 
 const XTB_METHOD_IDS = XTB_METHODS.map((method) => method.id);
 
@@ -2368,11 +2369,13 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     // `dp4`. Absent `mode` is the expression block byte for byte, so every
     // project written before this existed saves exactly as it did.
     const source = requiredObject(c, raw.analyse, `${path}.analyse`, legacy, {});
-    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4']), `${path}.analyse`);
-    const mode = source.mode === 'dp4' ? DP4_COMPUTE_MODE : 'expression';
-    if (source.mode !== undefined && source.mode !== 'dp4' && source.mode !== 'expression') {
-      c.error(`${path}.analyse.mode`, 'must be "expression" (the default) or "dp4".');
+    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4', 'multiwfn']), `${path}.analyse`);
+    if (source.mode !== undefined && source.mode !== 'dp4' && source.mode !== 'expression' && source.mode !== 'multiwfn') {
+      c.error(`${path}.analyse.mode`, 'must be "expression" (the default), "dp4" or "multiwfn".');
     }
+    const mode = source.mode === 'dp4'
+      ? DP4_COMPUTE_MODE
+      : (source.mode === 'multiwfn' ? 'multiwfn' : 'expression');
     if (mode === 'dp4') {
       const checked = validateDp4Definition(source.dp4);
       for (const problem of checked.errors) {
@@ -2389,6 +2392,33 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
         analyse: {
           mode: 'dp4',
           dp4: dp4DefinitionForFile(source.dp4),
+        },
+      };
+    }
+    if (mode === 'multiwfn') {
+      // Issue #270: a Multiwfn block reads a whole run record's wavefunction,
+      // not a field. The definition is validated here so an unknown analysis or
+      // a missing input is refused by name at save time, before a queue exists.
+      const checked = validateMultiwfnDefinition(source.multiwfn);
+      if (!source.multiwfn || typeof source.multiwfn !== 'object' || Array.isArray(source.multiwfn)) {
+        c.error(`${path}.analyse.multiwfn`, 'is required for a Multiwfn block: it names the analysis and its input.');
+      }
+      for (const problem of checked.errors) {
+        c.error(`${path}.analyse.multiwfn${problem.path ? `.${problem.path}` : ''}`, problem.message);
+      }
+      if (Array.isArray(source.inputs) && source.inputs.length) {
+        c.error(`${path}.analyse.inputs`,
+          'a Multiwfn block reads a whole run record or a wavefunction path, not fields; leave the input list empty.');
+      }
+      if (String(source.expression ?? '').trim()) {
+        c.warn(`${path}.analyse.expression`,
+          'is not saved or evaluated by a Multiwfn block: it reads a wavefunction, not an expression.');
+      }
+      return {
+        ...common,
+        analyse: {
+          mode: 'multiwfn',
+          ...(checked.value ? { multiwfn: checked.value } : {}),
         },
       };
     }

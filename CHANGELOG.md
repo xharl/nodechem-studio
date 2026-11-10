@@ -48,6 +48,10 @@ the schema bump to 3; a saved 0.4.0 project is refused by version, not migrated.
 - **A cost estimate before a run** — wall time and core-seconds with the uncertainty stated, every
   coefficient derived from a log committed to this repository (#143).
 - **A Compute block** for safe arithmetic across records, including CBS extrapolation (#175).
+- **A Multiwfn analysis sidecar** in the Analyse block: QTAIM basin integration, ESP surface
+  statistics, ELF/LOL cubes and RDG–NCI points from a **user-installed** Multiwfn 3.8 binary, in
+  `-silent` batch mode. The binary is never bundled; every `run.json` records its version, the exact
+  menu script, the input SHA-256 and the required citation (#270).
 - **Spin-state sweeps** surfaced in the inspector, the queue, the results panel and the report (#186).
 - **A wall-clock timeout** per task, recorded as timed out rather than failed (#177).
 - **A measured-spectrum overlay** on the computed sticks, with the overlay file hashed (#184).

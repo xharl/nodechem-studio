@@ -32,6 +32,7 @@ const TOOL_COPY = Object.freeze({
   crest: { title: 'CREST', hint: 'Conformer searches' },
   obabel: { title: 'Open Babel', hint: 'MMFF94 conformers, embed3d and relax' },
   scorer: { title: 'ML scorer', hint: 'Optional AIMNet2 sidecar' },
+  multiwfn: { title: 'Multiwfn', hint: 'User-installed 3.8 binary for analyse blocks' },
   tautomer: { title: 'Tautomer sidecar', hint: 'Python interpreter for RDKit enumeration' },
 });
 
@@ -56,6 +57,7 @@ export function runFieldSeed({ settings, saved = {} } = {}) {
     crest: or(saved.crestExecutable, tools.crest),
     obabel: or(saved.obabelExecutable, tools.obabel),
     scorer: or(saved.scorerExecutable, tools.scorer),
+    multiwfn: or(saved.multiwfnExecutable, tools.multiwfn),
     tautomer: or(saved.tautomerExecutable, tools.tautomer),
     tautomerScript: or(saved.tautomerScript, tools.tautomerScript),
     scratch: or(saved.scratchDir, tools.scratch),

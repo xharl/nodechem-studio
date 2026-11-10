@@ -930,8 +930,10 @@ otherwise:
 - **Attaching checkpoints and Molden files from the UI.** The cube picker in the wavefunction view
   is wired; choosing an fchk or a Molden file when a run finishes, and writing the block into
   `run.json`, still belongs to the run-writer.
-- **Multiwfn hand-off.** Generating a Multiwfn input deck and reading its text report back is the
-  cheaper route for the analyses above, and is not implemented.
+- **Multiwfn hand-off.** The `analyse` block's `multiwfn` mode now runs a user-installed Multiwfn
+  3.8 binary in batch mode and normalises QTAIM, ESP, ELF/LOL and RDG–NCI output (issue 270); it is
+  not bundled and its tests use synthetic transcripts, so the first real-binary run is the
+  validation step. See [Analyse blocks](analyse.md#multiwfn-analyses).
 
 Every one of those is listed in issue #59, so the gap between "what is read" and "what is drawn"
 stays visible instead of being discovered by a user who expected a picture.

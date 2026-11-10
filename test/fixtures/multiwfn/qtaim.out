@@ -1,0 +1,54 @@
+ Multiwfn -- A Multifunctional Wavefunction Analyzer
+ Version 3.8(dev), release date: 2024-May-17
+ Developer: Tian Lu (Beijing Kein Research Center for Natural Sciences)
+ Multiwfn official website: http://sobereva.com/multiwfn
+ Citation: Tian Lu, Feiwu Chen, J. Comput. Chem. 2012, 33, 580-592
+
+ Loading wavefunction...
+ Total energy: -76.026783922100 Hartree, Virial ratio: 2.00336470
+ Total/Alpha/Beta electrons: 10.0000
+
+ Topology analysis
+
+ ---------------- CP 1, Type (3,-1) ----------------
+ Connected atoms:     1(O )   --     2(H )
+ Position (Bohr):       1.132800000000    0.000000000000    0.764900000000
+ Position (Angstrom):   0.599461439315    0.000000000000    0.404802005761
+ Density of all electrons:  0.3560528793E+00
+ Density of Alpha electrons:  0.1780264397E+00
+ Density of Beta electrons:  0.1780264397E+00
+ Laplacian of electron density: -0.1866651214E+01
+ Electron localization function (ELF):  0.8123456789E+00
+ Localized orbital locator (LOL):  0.7012345678E+00
+ Ellipticity of electron density:  0.2392642391E-01
+ ---------------- CP 2, Type (3,-1) ----------------
+ Connected atoms:     1(O )   --     3(H )
+ Position (Bohr):      -1.132800000000    0.000000000000    0.764900000000
+ Position (Angstrom):  -0.599461439315    0.000000000000    0.404802005761
+ Density of all electrons:  0.3560528793E+00
+ Density of Alpha electrons:  0.1780264397E+00
+ Density of Beta electrons:  0.1780264397E+00
+ Laplacian of electron density: -0.1866651214E+01
+ Electron localization function (ELF):  0.8123456789E+00
+ Localized orbital locator (LOL):  0.7012345678E+00
+ Ellipticity of electron density:  0.2392642391E-01
+ ---------------- CP 3, Type (3,-3) ----------------
+ Connected atoms:     1(O )
+ Position (Angstrom):   0.000000000000    0.000000000000    0.000000000000
+ Density of all electrons:  0.2213456789E+03
+
+ Basin analysis
+
+ Total result:
+   #Basin        Integral(a.u.)      Vol(Bohr^3)    Vol(rho>0.001)
+       1          8.1234567890         120.123          34.884
+       2          0.9382716055          50.058          50.058
+       3          0.9382716055          50.097          50.097
+ Sum of above integrals:         10.0000000000
+ Sum of basin volumes (rho>0.001):     135.039 Bohr^3
+
+ Normalization factor of the integral of electron density is    1.000000
+ The atomic charges after normalization and atomic volumes:
+     1 (O )    Charge:   -0.123457     Volume:   120.123 Bohr^3
+     2 (H )    Charge:    0.061728     Volume:    50.058 Bohr^3
+     3 (H )    Charge:    0.061728     Volume:    50.097 Bohr^3

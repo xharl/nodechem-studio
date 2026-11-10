@@ -561,6 +561,11 @@ const COMPANION_DIALOG = Object.freeze({
     windows: 'C:\\Python\\python.exe',
     posix: '/usr/bin/python3',
   },
+  multiwfn: {
+    title: 'Locate the Multiwfn executable (version 3.8)',
+    windows: 'C:\\Multiwfn\\Multiwfn.exe',
+    posix: '/opt/Multiwfn/Multiwfn',
+  },
 });
 
 async function chooseCompanionExecutable(tool) {
