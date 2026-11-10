@@ -267,6 +267,13 @@ that never chose the route serialises as before: `torsionStepDegrees` (15–360,
 `maxTrials` (1–2000, default 200). A `uff` ensemble always records `energyUnit: kcal/mol` and
 `energyMethod: UFF`; `method` is left empty because it names the CREST xTB method.
 
+`produces` is what the block enumerates: `conformers` (the default, and what a file that omits the
+key means) or `tautomers`. A tautomer block is deliberately narrow — `generator` must be `rdkit`,
+`source` must be `search`, `rankBy` must be empty, `method` is stored empty, `fanOut` defaults to
+true, and `maxConformers` is the candidate cap (default 16). It adds one key, present only in this
+mode: `tautomerRuleset` (`rdkit-default`). The candidates are different molecules, so no energy
+window, RMSD prune, population or spread is computed at this stage.
+
 `group` is the only cross-block key a `generate` block has: two blocks with the same `group` say they
 belong to the same study. It is not a protomer or tautomer judgement, and it never causes energies to
 be compared or averaged — a group is a heading, not a result.
@@ -275,9 +282,10 @@ be compared or averaged — a group is a heading, not a result.
 
 | Key | Notes |
 | --- | --- |
-| `generator`, `method` | `crest`, `uff`, `obabel`, `imported`, or `fixture` for a dry run. An imported ensemble records the producer's program when declared (`origin.program`), else `imported` |
+| `generator`, `method` | `crest`, `uff`, `obabel`, `rdkit`, `imported`, or `fixture` for a dry run. An imported ensemble records the producer's program when declared (`origin.program`), else `imported` |
+| `produces`, `tautomers[]`, `truncated` | present only on a tautomer block: `produces: "tautomers"`, the candidate labels `t1, t2, …`, and whether the enumerator's cap cut the set short. Each member then carries `tautomer` and `smiles` |
 | `group` | the block's study id, copied from `generate.settings.group`; empty means no group. Per block, never per member |
-| `origin { program, version, method, sourceSha256 }` | what produced the ensemble; `crest`/`fixture` for a search run here, the declared program plus the digest of the imported file otherwise. Empty `program` means **not recorded**, never "computed here" |
+| `origin { program, version, method, sourceSha256 }` | what produced the ensemble; `crest`/`fixture` for a search run here, the declared program plus the digest of the imported file otherwise. Empty `program` means **not recorded**, never "computed here". A tautomer origin also carries `ruleset`, `protocol` and the enumerator `options` |
 | `energyUnit`, `energyMethod` | the unit and producing method of the ensemble's absolute energies (`hartree` by default) |
 | `mixedEnergies` | true when the members disagree on unit or method; such an ensemble has no populations and no spread |
 | `search` | present only on an in-app `uff` ensemble: `{ method, engine, torsionStepDegrees, rmsdThreshold, trials, trialsPlanned, truncated, rotatableBonds, rotors[], excluded[], deduplicated, unique, relaxMaxIterations, bondSource, randomized, seed, electrostatics, ringSampling, comparableWithQuantumChemistry, energyKind, note }`. It is the record of a torsional grid plus UFF relaxation — no Monte-Carlo, no seed, no electrostatics |

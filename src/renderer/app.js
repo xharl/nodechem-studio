@@ -3045,6 +3045,10 @@ function prepareInspector(node) {
 function conformersInspector(node) {
   const s = node.settings || {};
   const output = node.output && typeof node.output === 'object' ? node.output : null;
+  // Issue 226: what the block produces is the first decision, because it
+  // decides whether any of the conformer knobs below even apply.
+  const produces = s.produces === 'tautomers' ? 'tautomers' : 'conformers';
+  const tautomersBlock = produces === 'tautomers';
   const selectedId = output?.selectedId || s.selectedConformerId || '';
   const members = Array.isArray(output?.members) ? output.members : [];
   const warnings = Array.isArray(output?.warnings) ? output.warnings : [];
@@ -3053,7 +3057,9 @@ function conformersInspector(node) {
     : '';
   const selected = output?.selected;
   const summaryLine = output
-    ? `${output.count} of ${output.total} kept${Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(2)} kcal/mol` : ''}`
+    ? (produces === 'tautomers'
+      ? `${output.count} tautomer${output.count === 1 ? '' : 's'} enumerated${output.truncated ? ' · cap reached' : ''}`
+      : `${output.count} of ${output.total} kept${Number.isFinite(output.spreadKcal) ? ` · spread ${output.spreadKcal.toFixed(2)} kcal/mol` : ''}`)
     : 'no ensemble yet';
   // Issues 129/130: the caption names the absolute energy unit and its
   // method, and the provenance line names what produced the ensemble.
@@ -3081,14 +3087,14 @@ function conformersInspector(node) {
   // ADR 0001: a generate block either searches or ranks the one ensemble input
   // wired into it. The inspector says which, and never offers a file picker of
   // its own: the input block owns the path, the unit and the provenance.
-  const sourceKind = s.source === 'imported' ? 'imported' : 'search';
+  const sourceKind = tautomersBlock ? 'search' : (s.source === 'imported' ? 'imported' : 'search');
   const upstream = incoming(node.id).find((entry) => entry.type === 'input' && entry.input?.kind === 'ensemble') || null;
   const upstreamOutput = upstream?.output && typeof upstream.output === 'object' ? upstream.output : null;
   const rows = members.length
     ? `<table class="batch-table">
         <thead><tr><th>Member</th><th>ΔE (kcal/mol)</th><th>Pop.</th><th>RMSD</th><th></th></tr></thead>
         <tbody>${members.map((member) => `<tr${member.kept ? '' : ' class="is-muted"'}>
-          <td>${esc(member.id)}${member.protomer ? ` · ${esc(member.protomer)}` : ''}</td>
+          <td>${esc(member.id)}${member.tautomer ? ` · ${esc(member.tautomer)}` : ''}${member.protomer ? ` · ${esc(member.protomer)}` : ''}${member.smiles ? ` <span class="mono">${esc(member.smiles)}</span>` : ''}</td>
           <td>${formatRelativeKcal(member.relativeKcal)}</td>
           <td>${formatPopulation(member.population)}</td>
           <td>${Number.isFinite(member.rmsdToLowest) ? member.rmsdToLowest.toFixed(2) : '—'}</td>
@@ -3097,15 +3103,17 @@ function conformersInspector(node) {
             : `<span class="inspector-note">${esc(member.dropped || 'dropped')}</span>`}</td>
         </tr>`).join('')}</tbody>
       </table>`
-    : `<div class="inspector-note">No ensemble yet. ${s.source === 'imported'
-      ? (upstream ? `Run the block to rank the ensemble from "${esc(upstream.title)}".` : 'Wire an ensemble input into this block first.')
-      : (s.generator === 'uff'
-        ? 'Run the block: the UFF search runs here and needs no external binary.'
-        : (s.generator === 'obabel'
-          ? 'Run the block with an Open Babel executable configured in the run console.'
-          : 'Run the block with a CREST executable configured.'))}</div>`;
+    : `<div class="inspector-note">No ensemble yet. ${tautomersBlock
+      ? 'Run the block with the RDKit tautomer sidecar configured in the run console; there is no in-app enumerator.'
+      : (s.source === 'imported'
+        ? (upstream ? `Run the block to rank the ensemble from "${esc(upstream.title)}".` : 'Wire an ensemble input into this block first.')
+        : (s.generator === 'uff'
+          ? 'Run the block: the UFF search runs here and needs no external binary.'
+          : (s.generator === 'obabel'
+            ? 'Run the block with an Open Babel executable configured in the run console.'
+            : 'Run the block with a CREST executable configured.')))}</div>`;
 
-  return `${inspectorHead('Generate · conformers', node.title, summaryLine)}
+  return `${inspectorHead(tautomersBlock ? 'Generate · tautomers' : 'Generate · conformers', node.title, summaryLine)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${selected
       ? `using ${esc(selected.id)} · ${formatRelativeKcal(selected.relativeKcal)} kcal/mol · ${formatPopulation(selected.population)}`
@@ -3116,11 +3124,24 @@ function conformersInspector(node) {
     ${warningBlock}
     ${group('Ensemble', output ? caption : summaryLine, true, [rows])}
     ${groupBlock}
-    ${group('Source', sourceKind === 'imported'
-      ? 'wired ensemble input'
-      : (s.generator === 'crest'
-        ? 'CREST'
-        : (s.generator === 'uff' ? 'UFF, in-app' : 'Open Babel, external')), true, [
+    ${group('Source', tautomersBlock
+      ? 'RDKit, external'
+      : (sourceKind === 'imported'
+        ? 'wired ensemble input'
+        : (s.generator === 'crest'
+          ? 'CREST'
+          : (s.generator === 'uff' ? 'UFF, in-app' : 'Open Babel, external'))), true, [
+      `<div class="field full"><label>Produces</label><select class="select" data-conformer-field="produces">
+        <option value="conformers"${!tautomersBlock ? ' selected' : ''}>Conformers — geometries of one molecule</option>
+        <option value="tautomers"${tautomersBlock ? ' selected' : ''}>Tautomers — distinct molecules of one formula</option>
+      </select></div>`,
+      ...(tautomersBlock ? [
+        `<div class="field full"><span class="inspector-note" data-conformer-tautomer-note>Tautomer enumeration is a set of molecules, not geometries: no energy window, no RMSD prune and no Boltzmann population. Each candidate is planned as its own calculation, and the report shows the energy spread across them. pH-dependent protonation (Epik, Dimorphite-DL) is out of scope; charge and multiplicity are taken as given.</span></div>`,
+        `<div class="field"><label>Ruleset</label><select class="select" data-conformer-field="tautomerRuleset">
+          <option value="rdkit-default"${(s.tautomerRuleset || 'rdkit-default') === 'rdkit-default' ? ' selected' : ''}>rdkit-default (RDKit TautomerEnumerator)</option>
+        </select></div>`,
+        `<div class="field"><label>Max candidates</label><input class="input" type="number" min="1" max="200" data-conformer-field="maxConformers" value="${esc(s.maxConformers ?? 16)}"></div>`,
+      ] : [
       `<div class="field full"><label>Candidate source</label><select class="select" data-conformer-field="source">
         <option value="search"${sourceKind === 'search' ? ' selected' : ''}>Search with a generator</option>
         <option value="imported"${sourceKind === 'imported' ? ' selected' : ''}>Rank a wired ensemble input</option>
@@ -3166,17 +3187,24 @@ function conformersInspector(node) {
           </select></div>`,
           `<div class="field"><label>Max trials</label><input class="input" type="number" min="1" max="2000" step="1" data-conformer-field="maxTrials" value="${esc(s.maxTrials ?? 200)}"></div>`,
           `<div class="field full"><span class="inspector-note" data-conformer-uff-note>Torsional grid plus UFF relaxation, run in this app: not a Monte-Carlo or CREST search. Every member is a UFF force-field structure, and its kcal/mol energy is not comparable with a Hartree value. UFF here has no electrostatics term and does not sample ring conformers; a molecule with no rotatable bonds yields one relaxed structure.</span></div>`,
-        ] : []),
+          ] : []),
+        ]),
       ]),
-      `<div class="field"><label>Energy window (kcal/mol)</label><input class="input" type="number" min="0" max="100" step="0.5" data-conformer-field="energyWindowKcal" value="${esc(s.energyWindowKcal)}"></div>`,
-      `<div class="field"><label>RMSD threshold (Å)</label><input class="input" type="number" min="0.01" max="10" step="0.05" data-conformer-field="rmsdThreshold" value="${esc(s.rmsdThreshold)}"></div>`,
-      `<div class="field"><label>Keep at most</label><input class="input" type="number" min="1" max="200" data-conformer-field="maxConformers" value="${esc(s.maxConformers)}"></div>`,
-      `<div class="field"><label>Temperature (K)</label><input class="input" type="number" min="1" max="1000" step="0.15" data-conformer-field="temperature" value="${esc(s.temperature)}"></div>`,
-      `<div class="field"><label>Spread warning (kcal/mol)</label><input class="input" type="number" min="0" max="50" step="0.5" data-conformer-field="spreadThresholdKcal" value="${esc(s.spreadThresholdKcal)}"></div>`,
+      ...(tautomersBlock ? [] : [
+        `<div class="field"><label>Energy window (kcal/mol)</label><input class="input" type="number" min="0" max="100" step="0.5" data-conformer-field="energyWindowKcal" value="${esc(s.energyWindowKcal)}"></div>`,
+        `<div class="field"><label>RMSD threshold (Å)</label><input class="input" type="number" min="0.01" max="10" step="0.05" data-conformer-field="rmsdThreshold" value="${esc(s.rmsdThreshold)}"></div>`,
+        `<div class="field"><label>Keep at most</label><input class="input" type="number" min="1" max="200" data-conformer-field="maxConformers" value="${esc(s.maxConformers)}"></div>`,
+        `<div class="field"><label>Temperature (K)</label><input class="input" type="number" min="1" max="1000" step="0.15" data-conformer-field="temperature" value="${esc(s.temperature)}"></div>`,
+        `<div class="field"><label>Spread warning (kcal/mol)</label><input class="input" type="number" min="0" max="50" step="0.5" data-conformer-field="spreadThresholdKcal" value="${esc(s.spreadThresholdKcal)}"></div>`,
+      ]),
       `<div class="field"><label>Charge</label><input class="input" type="number" min="-10" max="10" data-conformer-field="charge" value="${esc(s.charge)}"></div>`,
       `<div class="field"><label>Multiplicity</label><input class="input" type="number" min="1" max="10" data-conformer-field="multiplicity" value="${esc(s.multiplicity)}"></div>`,
       // Issue #80: one task per retained member instead of one chosen geometry.
-      switchRow('Fan out the ensemble', 'one task per retained member downstream', 'fanOut', s.fanOut === true, { attr: 'data-conformer-field="fanOut"' }),
+      // Issue 226: a tautomer block defaults to on, because one candidate's run
+      // says nothing about the other molecules in the set.
+      switchRow('Fan out the ensemble', tautomersBlock
+        ? 'one task per tautomer candidate downstream (recommended)'
+        : 'one task per retained member downstream', 'fanOut', tautomersBlock ? s.fanOut !== false : s.fanOut === true, { attr: 'data-conformer-field="fanOut"' }),
     ].join(''))}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="validate">Validate project</button>
@@ -6341,6 +6369,9 @@ function readRunConfig() {
   if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
   if (saved.obabelExecutable) $('#run-obabel').value = saved.obabelExecutable;
   if (saved.scorerExecutable) $('#run-scorer').value = saved.scorerExecutable;
+  // Issue 226: the tautomer sidecar is remembered like the other programs.
+  if (saved.tautomerExecutable && $('#run-tautomer')) $('#run-tautomer').value = saved.tautomerExecutable;
+  if (saved.tautomerScript && $('#run-tautomer-script')) $('#run-tautomer-script').value = saved.tautomerScript;
   if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
   if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
   const field = $('#run-exe');
@@ -6360,6 +6391,8 @@ function saveRunConfig() {
       crestExecutable: $('#run-crest').value.trim(),
       obabelExecutable: $('#run-obabel').value.trim(),
       scorerExecutable: $('#run-scorer')?.value.trim() || '',
+      tautomerExecutable: $('#run-tautomer')?.value.trim() || '',
+      tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
       scratchDir: $('#run-scratch').value.trim(),
       dryRun: $('#run-dry').checked,
     }));
@@ -6601,6 +6634,33 @@ async function preflightRun({ quiet = false } = {}) {
         ],
       };
     }
+    // Issue 226: a tautomer block has no in-app route, so a missing sidecar is
+    // a hard refusal rather than a slower fallback.
+    let needsTautomer = false;
+    try {
+      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      needsTautomer = tasks.some((task) => task.type === 'generate'
+        && task.generate?.produces === 'tautomers'
+        && !task.generate?.member);
+    } catch {
+      // An unbuildable plan is reported by the queue's own error.
+    }
+    if (needsTautomer) {
+      const tautomer = $('#run-tautomer')?.value.trim() || '';
+      result = {
+        ...result,
+        ok: result.ok && Boolean(tautomer),
+        checks: [
+          ...(Array.isArray(result.checks) ? result.checks : []),
+          {
+            id: 'tautomer',
+            label: 'Tautomer enumerator sidecar',
+            ok: Boolean(tautomer),
+            detail: tautomer || 'not chosen — tautomer enumeration needs RDKit; there is no in-app fallback',
+          },
+        ],
+      };
+    }
   }
   // A mixed flow launches one binary per engine, so preflight every engine the
   // plan needs, not only the selected block's. The queue enforces this too; the
@@ -6729,6 +6789,8 @@ async function startSelectedConformerRun(node) {
   const dryRun = $('#run-dry').checked;
   const crestExecutable = $('#run-crest').value.trim();
   const obabelExecutable = $('#run-obabel').value.trim();
+  const tautomerExecutable = $('#run-tautomer')?.value.trim() || '';
+  const tautomerScript = $('#run-tautomer-script')?.value.trim() || '';
 
   let task;
   try {
@@ -6747,6 +6809,12 @@ async function startSelectedConformerRun(node) {
   }
   if (!dryRun && generator === 'obabel' && !obabelExecutable) {
     toast('Choose the Open Babel executable before running an Open Babel conformer search.');
+    return;
+  }
+  // Issue 226: there is no in-app tautomer enumerator, so this block cannot
+  // even start without the sidecar.
+  if (!dryRun && task.generate?.produces === 'tautomers' && !tautomerExecutable) {
+    toast('Choose the RDKit tautomer sidecar before enumerating tautomers; there is no in-app fallback.');
     return;
   }
 
@@ -6774,6 +6842,10 @@ async function startSelectedConformerRun(node) {
         executable: runExecutables()[engineForNode(state.project, node).id] || '',
         crestExecutable,
         obabelExecutable,
+        // Issue 226: the tautomer sidecar travels with the single-block run
+        // exactly as it does with the whole workflow.
+        tautomerExecutable,
+        tautomerScript,
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue
@@ -7139,6 +7211,10 @@ async function startWorkflowUnlocked() {
         crestExecutable: $('#run-crest').value.trim(),
         obabelExecutable: $('#run-obabel').value.trim(),
         scorerExecutable: $('#run-scorer')?.value.trim() || '',
+        // Issue 226: the tautomer enumerator sidecar and, when the executable
+        // is an interpreter, the script it should run.
+        tautomerExecutable: $('#run-tautomer')?.value.trim() || '',
+        tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue
@@ -7274,7 +7350,13 @@ function attachQueueEnsembles(queue) {
     if (node.output && node.output.generatedAt === task.ensemble.generatedAt) continue;
     node.output = task.ensemble;
     node.settings.selectedConformerId = task.ensemble.selectedId || '';
-    node.state = task.ensemble.requiresSelection ? 'review' : 'passed';
+    // Issue 226: a tautomer set that fans out needs no member chosen — the
+    // candidates are the point. One that does not fan out still needs a pick.
+    const tautomers = task.ensemble.produces === 'tautomers';
+    const needsChoice = tautomers
+      ? node.settings.fanOut === false && !task.ensemble.selectedId
+      : task.ensemble.requiresSelection;
+    node.state = needsChoice ? 'review' : 'passed';
     changed = true;
   }
   if (changed) {
@@ -9358,6 +9440,30 @@ function applyConformerField(target) {
     }
     if (key === 'rankBy' && node.output) {
       // A table ranked by one method cannot stand after choosing another.
+      node.output = null;
+      node.state = 'ready';
+    }
+    // Issue 226: conformers and tautomers are exclusive jobs with different
+    // generators and different knobs. Switching rewrites the fields the new job
+    // cannot honour, and voids the ensemble the old one produced.
+    if (key === 'produces') {
+      if (node.settings.produces === 'tautomers') {
+        node.settings.source = 'search';
+        node.settings.generator = 'rdkit';
+        node.settings.method = '';
+        node.settings.rankBy = '';
+        node.settings.fanOut = true;
+        node.settings.tautomerRuleset = node.settings.tautomerRuleset || 'rdkit-default';
+      } else {
+        node.settings.generator = 'crest';
+        node.settings.method = 'gfn2';
+        node.settings.fanOut = false;
+      }
+      node.output = null;
+      node.state = 'ready';
+    }
+    if (key === 'tautomerRuleset' && node.output) {
+      // Another ruleset is another candidate set; the stored one is stale.
       node.output = null;
       node.state = 'ready';
     }

@@ -52,6 +52,12 @@ function conformerRecord(raw) {
     relativeKcal: number(raw.relativeKcal),
     population: number(raw.population),
     protomer: text(raw.protomer, 40),
+    // Issue #226: which tautomer candidate this run started from, when the
+    // ensemble enumerates them. Absent from a conformer run record.
+    ...(raw.tautomer === undefined && raw.produces === undefined ? {} : {
+      tautomer: text(raw.tautomer, 16),
+      ...(raw.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
+    }),
     spreadKcal: number(raw.spreadKcal),
   };
 }

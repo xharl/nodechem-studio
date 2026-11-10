@@ -17,7 +17,16 @@ export const HARTREE_KCAL = 627.5094740631;
 /** Boltzmann constant in kcal/mol/K. */
 export const KB_KCAL = 0.00198720425864083;
 
-export const CONFORMER_GENERATORS = Object.freeze(['crest', 'uff', 'obabel']);
+/**
+ * Issue #226: what a generate block produces. `conformers` is a candidate set
+ * of geometries of one molecule; `tautomers` is a candidate set of *different
+ * molecules* of the same formula. The distinction decides whether pruning,
+ * populations and averaging apply at all — they do not for tautomers.
+ */
+export const CONFORMER_PRODUCES = Object.freeze(['conformers', 'tautomers']);
+export const DEFAULT_PRODUCES = 'conformers';
+
+export const CONFORMER_GENERATORS = Object.freeze(['crest', 'uff', 'obabel', 'rdkit']);
 /** ADR 0001: how the candidate set arrives at a generate block. */
 export const CONFORMER_SOURCES = Object.freeze(['search', 'imported']);
 /** The only external ensemble format this build reads: one or more XYZ frames. */
@@ -653,6 +662,13 @@ export function conformerOriginShort(ensemble) {
     const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim() || 'MMFF94';
     return `Open Babel · ${method}`;
   }
+  if (generator === 'rdkit') {
+    // Issue #226: enumeration, not a search. The ruleset matters because it is
+    // the thing that decides which candidates exist.
+    const ruleset = String(origin.ruleset ?? '').trim();
+    const version = String(origin.version ?? '').trim();
+    return ['RDKit', version, ruleset ? `· ${ruleset}` : ''].filter(Boolean).join(' ');
+  }
   if (generator === 'fixture') return 'dry-run fixture';
   if (generator === 'import') {
     const program = originProgramText(origin);
@@ -688,6 +704,13 @@ export function conformerOriginLabel(ensemble) {
     const program = originProgramText(origin) || 'Open Babel';
     return `external MM stage · ${program} · ${method} (force field, not QM)`;
   }
+  if (generator === 'rdkit') {
+    // Issue #226: the candidates are molecules, not geometries. No energy was
+    // computed at this stage and none is implied.
+    const ruleset = String(origin.ruleset ?? '').trim() || 'ruleset not recorded';
+    return `external enumeration · ${originProgramText(origin) || 'RDKit'} · TautomerEnumerator · ${ruleset} `
+      + '(distinct molecules, not conformers; no energy computed here)';
+  }
   const parts = ['imported'];
   const program = originProgramText(origin);
   parts.push(program || 'origin not recorded');
@@ -704,6 +727,11 @@ export function conformerOriginLabel(ensemble) {
  */
 export function conformerEnergyLabel(ensemble) {
   if (ensembleField(ensemble, 'mixedEnergies')) return 'mixed units/methods — not averaged';
+  // Issue #226: a tautomer block assigns no energy at all, so there is no unit
+  // to print and no method to name. The comparison lives one stage downstream.
+  if (String(ensembleField(ensemble, 'produces') ?? '') === 'tautomers') {
+    return 'no energy at this stage — ΔE is taken from the target-level runs';
+  }
   const unit = normalizeEnergyUnit(ensembleField(ensemble, 'energyUnit')) || DEFAULT_ENERGY_UNIT;
   const method = String(ensembleField(ensemble, 'energyMethod') ?? '').trim()
     || (String(ensembleField(ensemble, 'generator') ?? '').toLowerCase() === 'crest'
@@ -733,6 +761,12 @@ export function conformerTableCaption(ensemble) {
   if (!ensemble || typeof ensemble !== 'object') return 'No ensemble yet.';
   if (ensembleField(ensemble, 'mixedEnergies')) {
     return 'ΔE in kcal/mol · mixed energy units/methods — not averaged';
+  }
+  // Issue #226: no absolute energy exists for a tautomer candidate, so the
+  // caption cannot promise one. The ΔE column is the target-level comparison.
+  if (String(ensembleField(ensemble, 'produces') ?? '') === 'tautomers') {
+    return 'ΔE in kcal/mol at the target level · tautomer candidates are distinct molecules — no Boltzmann '
+      + 'populations, no averaging';
   }
   const unit = normalizeEnergyUnit(ensembleField(ensemble, 'energyUnit')) || DEFAULT_ENERGY_UNIT;
   const generator = String(ensembleField(ensemble, 'generator') ?? '').trim().toLowerCase();

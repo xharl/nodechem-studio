@@ -626,6 +626,16 @@
         "protomer": {
           "type": "string"
         },
+        "tautomer": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "Issue 226: the tautomer candidate label (t1, t2, ...) when the run started from a tautomer enumeration. Absent for a conformer run."
+        },
+        "produces": {
+          "type": "string",
+          "enum": ["tautomers"],
+          "description": "Issue 226: present only when the ensemble enumerated tautomers, not conformers."
+        },
         "spreadKcal": {
           "type": [
             "number",

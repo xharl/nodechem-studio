@@ -88,6 +88,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs build-input <project.ncs> --node <id> [--out <file>]
   ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
       [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>]
+      [--tautomer <path>] [--tautomer-script <path>]
       [--timeout <seconds>] [--json]
   ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
   ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
@@ -326,6 +327,10 @@ async function commandRun({ positional, flags }) {
       // calculation block needs its engine; the queue fails by name otherwise.
       crestExecutable: flags.crest ? String(flags.crest) : '',
       obabelExecutable: flags.obabel ? String(flags.obabel) : '',
+      // Issue #226: tautomer enumeration is an external sidecar, so a headless
+      // run needs the same two paths the run console takes.
+      tautomerExecutable: flags.tautomer ? String(flags.tautomer) : '',
+      tautomerScript: flags['tautomer-script'] ? String(flags['tautomer-script']) : '',
       scratchDir: '',
       maxParallel,
       // Issue 177: the project's per-task wall clock. Absent from the project

@@ -939,13 +939,20 @@ export function checkConformerSpread({ conformer = null } = {}) {
     relativeKcal: Number.isFinite(Number(conformer.relativeKcal)) ? Number(conformer.relativeKcal) : null,
     population: Number.isFinite(Number(conformer.population)) ? Number(conformer.population) : null,
     protomer: String(conformer.protomer || ''),
+    // Issue #226: a tautomer set is a different refusal from a protomer set.
+    ...(conformer.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
     spreadKcal: Number.isFinite(spread) ? spread : null,
     thresholdKcal: Number.isFinite(threshold) ? threshold : null,
     requiresSelection: Boolean(conformer.requiresSelection),
   };
   if (!memberId) {
+    const reason = conformer.requiresSelection
+      ? (conformer.produces === 'tautomers'
+        ? '; choose the tautomer candidate to carry forward'
+        : '; its protomers must be chosen explicitly')
+      : '';
     return finding(id, CHECK_STATUS.FAIL,
-      `"${evidence.source || 'The Generate block'}" has no selected conformer${conformer.requiresSelection ? '; its protomers must be chosen explicitly' : ''}.`,
+      `"${evidence.source || 'The Generate block'}" has no selected conformer${reason}.`,
       evidence);
   }
   if (Number.isFinite(spread) && Number.isFinite(threshold) && spread > threshold) {

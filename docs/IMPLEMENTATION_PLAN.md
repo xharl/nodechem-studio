@@ -19,6 +19,9 @@ After 0.4.0, **ADR 0001** replaced the block vocabulary with `schemaVersion: 3`
 Steps 2–6 have landed: the behaviour-neutral rename, import as `input(ensemble)`, `prepare`,
 the optional ML scorer role (generate `rankBy`, calculate `provider`, prepare relax) and the
 declarative block-contract table. Version 2 and older files are refused rather than migrated.
+`generate` now also owns `produces: "conformers" | "tautomers"`: a tautomer set is enumerated by an
+external RDKit sidecar, fans out one calculation per candidate, and is reported as a spread rather
+than a Boltzmann average.
 
 ## 1. Product target
 
