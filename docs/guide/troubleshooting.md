@@ -20,6 +20,7 @@ Preflight prints `PASS` / `FAIL` / `WARN` lines and a header: `Preflight · read
 | `FAIL  xTB executable` | The file is not named `xtb` / `xtb.exe` | Rename or point at the real binary |
 | `FAIL  xTB parameter files found` | `share/xtb` not found beside the executable | Export `XTBPATH` to the `share/xtb` directory |
 | `WARN  Scratch path contains spaces` | The scratch path has a space | Use a space-free path; the runner uses yours unchanged |
+| `Psi4 … WRITE failed … No space left on device` | The scratch filesystem is full | Psi4 now writes to the run's own `scratch/` folder (`PSI_SCRATCH`); a run that still fills it records `scratch.exhausted` with the folder and free space. Point the scratch directory at a larger filesystem |
 | `WARN  Scratch directory is not node-local disk` | The path looks NFS/SMB-mounted | Move scratch to local disk — Gaussian I/O over a network filesystem is slow and fragile |
 
 `GAUSS_EXEDIR is set per run` is informational: the runner overrides your shell's value so the
