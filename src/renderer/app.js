@@ -9697,7 +9697,7 @@ function handleAction(action, element) {
       break;
     }
     case 'confirm-drawing': confirmDrawingGate(); break;
-    case 'about': toast(`NodeChem Studio — the graph is the workspace. The inspector exposes the full job parameter set; the local runner executes one selected block or the whole workflow queue${appVersion ? ` (v${appVersion})` : ''}. Some capabilities are CLI-only by design: ncs export, ncs record import, ncs diff, ncs merge, ncs export-input, ncs qcschema, ncs cache. docs/guide/cli.md lists every command and where it lives.`); break;
+    case 'about': toast(`NodeChem Studio — the graph is the workspace. The inspector exposes the full job parameter set; the local runner executes one selected block or the whole workflow queue${appVersion ? ` (v${appVersion})` : ''}. Some capabilities are CLI-only by design: ncs export, ncs record import, ncs diff, ncs merge, ncs export-input, ncs qcschema, ncs cache, ncs validation. docs/guide/cli.md lists every command and where it lives.`); break;
     default: break;
   }
 }

@@ -44,6 +44,7 @@ import {
   structureFromQcschema,
 } from '../src/shared/qcschema.js';
 import { parseFchk } from '../src/shared/fchk.js';
+import { ValidationFormatError, validationMatrix, validationMatrixText } from '../src/shared/validationMatrix.js';
 import {
   EXPORT_ENGINE_IDS,
   exporterFor,
@@ -91,6 +92,7 @@ const USAGE = `ncs — headless NodeChem Studio
       [--tautomer <path>] [--tautomer-script <path>]
       [--timeout <seconds>] [--json]
   ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
+  ncs validation <cases.json> [--out <file>] [--json]
   ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
   ncs record import --program <name> --version <version> --method <method>
       --basis <basis> --energy <hartree> (--source <file>|--source-sha256 <hex>)
@@ -641,6 +643,45 @@ async function commandReport({ positional, flags }) {
   await fs.mkdir(path.dirname(outFile), { recursive: true });
   await fs.writeFile(outFile, html, 'utf8');
   process.stdout.write(`${outFile}\n`);
+  process.exit(EXIT.ok);
+}
+
+/**
+ * `ncs validation` — tabulate a recorded method ladder across reference cases.
+ *
+ * This command does not launch an engine: the case file records the rung
+ * energies a previous run produced, and this pass validates that record and
+ * computes the spread and error table. That is deliberate (issue #230): the
+ * output has to be reproducible from recorded inputs with no network, and a
+ * table that silently launched a different binary would not be.
+ */
+async function commandValidation({ positional, flags }) {
+  const [file] = positional;
+  if (!file) fail('validation needs a case file.');
+  let text;
+  try {
+    text = await fs.readFile(path.resolve(file), 'utf8');
+  } catch (error) {
+    fail(`could not read ${file}: ${error.message}`, EXIT.invalid);
+  }
+  let matrix;
+  try {
+    matrix = validationMatrix(text);
+  } catch (error) {
+    const message = error instanceof ValidationFormatError ? error.message : `invalid JSON: ${error.message}`;
+    fail(`validation case set: ${message}`, EXIT.invalid);
+  }
+  const table = validationMatrixText(matrix);
+  if (flags.out !== undefined) {
+    const out = path.resolve(String(flags.out));
+    await fs.mkdir(path.dirname(out), { recursive: true });
+    await fs.writeFile(out, table, 'utf8');
+  }
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify(matrix, null, 2)}\n`);
+  } else {
+    process.stdout.write(table);
+  }
   process.exit(EXIT.ok);
 }
 
@@ -1820,6 +1861,7 @@ const handlers = {
   'build-input': commandBuildInput,
   run: commandRun,
   report: commandReport,
+  validation: commandValidation,
   export: commandExport,
   record: commandRecord,
   diff: commandDiff,
