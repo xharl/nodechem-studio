@@ -1,18 +1,18 @@
 # NodeChem Studio — implementation plan
 
-Status: **0.4.0 released 2026-11-08 — tag `v0.4.0` → `36d36e1`.** Sections 1–3 and 5 describe the architecture and the original
-phase plan; §4 is the v0.1 baseline kept for history, §4b lists what landed since, and §6b is what
-remains. **GN-001 is partly satisfied**: on 2026-11-08 a peer run executed 25 cases written by this
-builder on a licensed Gaussian 16 Rev A.03 (Windows) and its logs are committed as
-`test/fixtures/real/g16-a03-*`; what is still unproven is the app's own run console driving a job end
-to end on that machine.
+Status: **0.5.0 release candidate — tag pending.** The 0.4.0 installers remain the published build.
+Sections 1–3 and 5 describe the architecture and the original phase plan; §4 is the v0.1 baseline
+kept for history, §4b lists what landed since, and §6b is what remains. **GN-001 is partly
+satisfied**: on 2026-11-08 a peer run executed 25 cases written by this builder on a licensed
+Gaussian 16 Rev A.03 (Windows) and its logs are committed as `test/fixtures/real/g16-a03-*`; what is
+still unproven is the app's own run console driving a job end to end on that machine.
 
-0.4.0 carries everything merged between the two tags: multi-flow projects with dataset inputs, barrier
-stages and artifact outputs; fan-out that follows a branch; constrained optimisation and QST2/QST3;
-Eyring kinetics, pKa and redox cycles; CBS extrapolation and benchmarks; Psi4 and ORCA execution;
-QCSchema, Molden, WFN/WFX, JCAMP-DX and ChemDraw CDXML readers; the workbench's own state and results;
-conformer provenance, energy units and groups; and an `imported` result that cannot be mistaken for a
-run performed here.
+0.5.0 carries everything merged after 0.4.0: the ADR 0001 `schemaVersion: 3` block vocabulary
+(`input`, `prepare`, `generate`, `calculate`, `analyse`, `output`), tautomer enumeration through an
+RDKit sidecar, the optional ML scorer role, in-app UFF and Open Babel conformer routes, ORCA
+DLPNO-CCSD(T) and coupling tables, Gaussian SCRF solvation, Psi4 TD-DFT/DDX, EPR, DP4/DP4+, QTAIM,
+NCI and ESP surfaces, the measured-uncertainty report, and the fchk `formchk -3` and size fixes.
+Version 2 and older projects are refused rather than migrated.
 
 After 0.4.0, **ADR 0001** replaced the block vocabulary with `schemaVersion: 3`
 (input · prepare · generate · calculate · analyse · output, plus control and annotation axes).
@@ -139,7 +139,7 @@ reuses `buildWorkflowTasks` and `RunManager` so a headless run and a UI run cann
 | Structure import | `.xyz`, `.mol`/`.sdf`, `.mol2`, `.pdb`/`.pdbqt`, `.cjson`, `.gjf`/`.com` and Gaussian logs with element/coordinate/parity validation; project-level geometry feeds every `.gjf` | `test/structureImport.test.js`, `test/structureFormats.test.js`, `test/structureCorpus.test.js`, `test/projectSchema.test.js`, `test/gaussianInput.test.js` |
 | Dry run | labelled synthetic output, full parser/gate path | run console PASS evidence |
 | Persistence | native Open/Save, schema v1 validation, v0.1 migration, canonical save | `test/projectSchema.test.js` |
-| Packaging | electron-builder NSIS config; `npm run dist` produces `release/nodechem-studio-0.4.0-x64.exe`; CI workflow builds it on windows-latest. Linux AppImage target plus a `Linux package` CI workflow | `.github/workflows/windows-package.yml`, `.github/workflows/linux-package.yml`, `package.json` |
+| Packaging | electron-builder NSIS config; `npm run dist` produces `release/nodechem-studio-0.5.0-x64.exe`; CI workflow builds it on windows-latest. Linux AppImage target plus a `Linux package` CI workflow | `.github/workflows/windows-package.yml`, `.github/workflows/linux-package.yml`, `package.json` |
 
 ### Verified gaps
 
@@ -305,6 +305,7 @@ Linux/macOS Gaussian job has been run.
 | Tag and publish 0.3.0 | **Done** 2026-11-08 — tag `v0.3.0` → `699ae18`, prerelease with the Windows and Linux installers, milestone 3 closed | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
 | Block taxonomy, schemaVersion 3 (ADR 0001) | **Implemented** — rename, `input(ensemble)`, `prepare`, the optional scorer role and the declarative block-contract table; v2 and older refused | `docs/adr/0001-block-taxonomy.md`, `src/shared/projectSchema.js` |
 | Tag and publish 0.4.0 | **Done** 2026-11-08 — tag `v0.4.0` → `36d36e1`, published as the current release (GitHub leaves the Latest badge on the newest non-prerelease, so 0.3.0 and 0.4.0 are not flagged prerelease) with both installers, `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations, both verified with `gh attestation verify` | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
+| Tag and publish 0.5.0 | **Pending** — release candidate prepared at 0.5.0; package workflows must pass on `main` before `v0.5.0` is tagged. Breaking: `schemaVersion: 3`; 0.4.0 projects are refused, not migrated | `.github/workflows/*-package.yml`, `CHANGELOG.md`, `docs/releases/0.5.0.md` |
 | GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
 | Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |
 | Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |
