@@ -67,6 +67,8 @@ import { parseWfx } from '../src/shared/wfx.js';
 import { FIGURE_LEVELS, cubeVolumesFor, surfacesFor } from '../src/shared/report.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
+import { readSettingsFile } from '../electron/settingsStore.js';
+import { defaultSettingsPath } from '../src/shared/appSettings.js';
 import {
   RECORD_SCHEMA_VERSION,
   recordSchemaPath,
@@ -90,6 +92,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
       [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>]
       [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>]
+      [--settings <file>]
       [--timeout <seconds>] [--json]
   ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
   ncs validation <cases.json> [--out <file>] [--json]
@@ -229,6 +232,30 @@ async function readRunRecord(runDir) {
   }
 }
 
+/**
+ * Issue 252: `ncs run` reads the same settings file the app writes when a
+ * flag is absent. `--settings` names another file; otherwise the platform
+ * user-config path is used. A missing default file is normal (fresh machine);
+ * an explicitly named one that is missing is a usage error.
+ */
+async function readRunSettings(flags) {
+  if (flags.settings !== undefined && typeof flags.settings !== 'string') {
+    fail('--settings needs a file path.', EXIT.usage);
+  }
+  const explicit = typeof flags.settings === 'string' ? path.resolve(String(flags.settings)) : '';
+  const target = explicit || defaultSettingsPath();
+  const result = await readSettingsFile(target);
+  if (explicit && !result.found) fail(`settings file not found: ${explicit}`, EXIT.usage);
+  if (result.errors.length > 0) {
+    const reason = result.errors
+      .map((error) => `${error.field || 'settings'}: ${error.message}`)
+      .join('; ');
+    if (explicit) fail(`settings file ${explicit} is invalid: ${reason}`, EXIT.usage);
+    process.stderr.write(`ncs: ignoring settings file ${target}: ${reason}\n`);
+  }
+  return result.settings;
+}
+
 async function commandRun({ positional, flags }) {
   const [file] = positional;
   if (!file) fail('run needs a project file.');
@@ -238,6 +265,13 @@ async function commandRun({ positional, flags }) {
     process.stderr.write(`${JSON.stringify(validityJson(file, result), null, 2)}\n`);
     process.exit(EXIT.invalid);
   }
+  // Issue 252: flag > settings > PATH. The settings file holds machine paths
+  // only; the project remains the description of what to compute.
+  const settings = await readRunSettings(flags);
+  const settingsEngines = Object.fromEntries(Object.entries(settings?.engines || {})
+    .map(([engine, value]) => [engine, String(value || '').trim()])
+    .filter(([, value]) => value));
+  const settingsTools = settings?.tools || {};
 
   let plan;
   try {
@@ -325,23 +359,34 @@ async function commandRun({ positional, flags }) {
     options: {
       dryRun: Boolean(flags['dry-run']),
       executable: flags.executable ? String(flags.executable) : '',
+      // Issue 252: settings supply per-engine paths when --executable is
+      // absent. An explicit --executable is a deliberate override for every
+      // engine, so the map is omitted in that case rather than shadowing it.
+      ...(!flags.executable && Object.keys(settingsEngines).length
+        ? { executables: settingsEngines }
+        : {}),
       // A workflow with a CREST block needs the binary the same way a
       // calculation block needs its engine; the queue fails by name otherwise.
-      crestExecutable: flags.crest ? String(flags.crest) : '',
-      obabelExecutable: flags.obabel ? String(flags.obabel) : '',
+      crestExecutable: flags.crest ? String(flags.crest) : String(settingsTools.crest || ''),
+      obabelExecutable: flags.obabel ? String(flags.obabel) : String(settingsTools.obabel || ''),
       // Issue #226: tautomer enumeration is an external sidecar, so a headless
       // run needs the same two paths the run console takes.
-      tautomerExecutable: flags.tautomer ? String(flags.tautomer) : '',
-      tautomerScript: flags['tautomer-script'] ? String(flags['tautomer-script']) : '',
+      tautomerExecutable: flags.tautomer
+        ? String(flags.tautomer) : String(settingsTools.tautomer || ''),
+      tautomerScript: flags['tautomer-script']
+        ? String(flags['tautomer-script']) : String(settingsTools.tautomerScript || ''),
       // Issue #270: the user-installed Multiwfn binary for analyse blocks.
-      multiwfnExecutable: flags.multiwfn ? String(flags.multiwfn) : '',
-      scratchDir: '',
+      multiwfnExecutable: flags.multiwfn
+        ? String(flags.multiwfn) : String(settingsTools.multiwfn || ''),
+      scratchDir: String(settingsTools.scratch || ''),
       maxParallel,
       // Issue 177: the project's per-task wall clock. Absent from the project
-      // means the queue applies its own 3600 s default — never "no limit".
+      // means Settings → Runs, then the queue's own 3600 s default.
       ...(Number(result.project.runner?.timeoutSeconds) > 0
         ? { timeoutSeconds: Number(result.project.runner.timeoutSeconds) }
-        : {}),
+        : (Number(settings?.runs?.timeoutSeconds) > 0
+          ? { timeoutSeconds: Number(settings.runs.timeoutSeconds) }
+          : {})),
     },
   }).catch((error) => fail(`queue did not start: ${error.message}`, EXIT.engine));
 

@@ -105,6 +105,14 @@ import {
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { engineSummary, formatRecentModified } from '../shared/recentProjects.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
+import { defaultAppSettings, mergeAppSettings } from '../shared/appSettings.js';
+import {
+  SETTINGS_PAGES,
+  engineExecutableMap,
+  localOverrides,
+  runFieldSeed,
+  settingsPageHtml,
+} from './settingsView.js';
 import { ORCA_BASES, ORCA_METHODS, ORCA_PNO_THRESHOLDS, buildOrcaInput } from '../shared/engines/orca.js';
 import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../shared/engines/psi4.js';
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
@@ -387,6 +395,12 @@ const state = {
   // Last engineStatus() answer, used to seed the run-console executable field
   // without a second probe (issue issue 233).
   engineStatus: null,
+  // Issue 252: machine/app settings loaded once from the main process. The
+  // run console's path fields are seeded from these when no local override
+  // exists; saving Settings re-seeds them.
+  appSettings: defaultAppSettings(),
+  settingsDetection: null,
+  settingsPath: '',
   // Run console geometry (issue 253): null means docked to the CSS corner.
   runConsoleRect: null,
   runConsoleDrag: null,
@@ -5359,6 +5373,212 @@ function openSettingsDrawer() {
   });
 }
 
+/* ── App-wide Settings (issue 252) ─────────────────────────── */
+
+function cloneAppSettings(settings) {
+  return JSON.parse(JSON.stringify(settings || defaultAppSettings()));
+}
+
+/** Load the one settings document at boot; a browser preview uses defaults. */
+async function loadAppSettings() {
+  if (!desktop?.getSettings) {
+    state.appSettings = defaultAppSettings();
+    return;
+  }
+  try {
+    const result = await desktop.getSettings();
+    if (result?.settings) {
+      state.appSettings = mergeAppSettings(defaultAppSettings(), result.settings);
+      state.settingsPath = String(result.path || '');
+    }
+  } catch {
+    // A broken settings file must not keep the app from opening; main already
+    // falls back to defaults, and the defaults loaded above stay in force.
+  }
+}
+
+/**
+ * A newly created project starts from Settings → Project defaults. Existing
+ * project files keep the defaults they were saved with; this is only called
+ * for the in-memory seed project and a template just applied.
+ */
+function applySettingsProjectDefaults(project) {
+  const defaults = state.appSettings?.projectDefaults;
+  if (!project || !defaults) return project;
+  project.defaults = {
+    ...(project.defaults || {}),
+    engine: defaults.engine,
+    method: defaults.method,
+    basis: defaults.basis,
+    memory: String(defaults.memory),
+    memoryUnit: defaults.memoryUnit,
+    nproc: Number(defaults.nproc),
+    xtbMethod: defaults.xtbMethod,
+    xtbOptLevel: defaults.xtbOptLevel,
+  };
+  const parallel = Number(state.appSettings?.runs?.maxParallel);
+  if (Number.isInteger(parallel) && parallel >= 1) {
+    if (!project.runner || typeof project.runner !== 'object') project.runner = {};
+    project.runner.maxParallel = Math.min(parallel, LIMITS.maxParallel);
+  }
+  return project;
+}
+
+/** Open the Settings window on a page; the modal shell is the existing one. */
+function openAppSettings(page = 'engines') {
+  state.drawer = {
+    type: 'app-settings',
+    page: SETTINGS_PAGES.some((entry) => entry.id === page) ? page : 'engines',
+    returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+    draft: cloneAppSettings(state.appSettings),
+    errors: [],
+    detection: state.settingsDetection,
+    busy: false,
+  };
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) backdrop.hidden = false;
+  renderAppSettings();
+  requestAnimationFrame(() => {
+    const modal = $('#modal');
+    modal?.querySelector('.settings-rail button.is-active, input, select, button')?.focus();
+  });
+  refreshSettingsDetection();
+}
+
+async function refreshSettingsDetection() {
+  if (!desktop?.detectSettings || state.drawer?.type !== 'app-settings') return;
+  try {
+    const detection = await desktop.detectSettings();
+    if (!detection || typeof detection !== 'object') return;
+    state.settingsDetection = detection;
+    if (state.drawer?.type === 'app-settings') {
+      state.drawer.detection = detection;
+      renderAppSettings();
+    }
+  } catch {
+    // Detection is advisory; a failed probe leaves the last answer in place.
+  }
+}
+
+function renderAppSettings() {
+  const modal = $('#modal');
+  const drawer = state.drawer;
+  if (!modal || drawer?.type !== 'app-settings') return;
+  const page = SETTINGS_PAGES.find((entry) => entry.id === drawer.page) || SETTINGS_PAGES[0];
+  modal.classList.remove('is-molecule');
+  modal.classList.add('is-settings');
+  modal.innerHTML = `
+    <div class="modal-head">
+      <div>
+        <span class="eyebrow">Application · settings</span>
+        <h2 id="modal-title">Settings</h2>
+        <p>${esc(page.description)}</p>
+      </div>
+      <button type="button" class="icon-btn" data-modal-close aria-label="Close settings">×</button>
+    </div>
+    <div class="modal-body settings-body">
+      <nav class="settings-rail" aria-label="Settings sections">
+        ${SETTINGS_PAGES.map((entry) => `<button type="button" class="settings-rail-item${entry.id === page.id ? ' is-active' : ''}" data-action="settings-page" data-settings-page="${entry.id}"${entry.id === page.id ? ' aria-current="page"' : ''}>${esc(entry.label)}</button>`).join('')}
+      </nav>
+      <section class="settings-page" data-settings-page-body="${page.id}" aria-label="${esc(page.title)}">
+        ${settingsPageHtml({
+    page: page.id,
+    draft: drawer.draft,
+    detection: drawer.detection,
+    errors: drawer.errors,
+    settingsPath: state.settingsPath,
+  })}
+      </section>
+    </div>
+    <div class="modal-foot">
+      <div class="modal-note">Applies to every project on this machine · <code>${esc(state.settingsPath || 'settings.json')}</code></div>
+      <button type="button" class="btn" data-modal-close>Cancel</button>
+      <button type="button" class="btn primary" data-action="save-app-settings"${drawer.busy ? ' disabled' : ''}>Save settings</button>
+    </div>`;
+  placeModal();
+}
+
+function setSettingsField(path, value) {
+  const drawer = state.drawer;
+  if (drawer?.type !== 'app-settings' || !drawer.draft) return;
+  const parts = String(path || '').split('.').filter(Boolean);
+  if (parts.length === 0) return;
+  let target = drawer.draft;
+  for (const part of parts.slice(0, -1)) {
+    if (!target[part] || typeof target[part] !== 'object') target[part] = {};
+    target = target[part];
+  }
+  target[parts[parts.length - 1]] = value;
+  if (Array.isArray(drawer.errors) && drawer.errors.length) {
+    drawer.errors = drawer.errors.filter((error) => error?.field !== path);
+  }
+}
+
+async function browseSettingsPath(spec) {
+  if (!desktop) {
+    toast('Open the Electron app to browse for a program.');
+    return;
+  }
+  const [kind, id] = String(spec || '').split(':');
+  let selected = null;
+  try {
+    if (kind === 'engine') selected = await desktop.pickExecutable({ engine: id });
+    else if (kind === 'tool' && id === 'crest') selected = await desktop.pickCrestExecutable();
+    else if (kind === 'tool' && id === 'obabel') selected = await desktop.pickObabelExecutable();
+    else if (kind === 'tool') selected = await desktop.pickToolExecutable(id);
+  } catch (error) {
+    toast(`Could not choose a program: ${error.message}`);
+    return;
+  }
+  if (!selected) return;
+  setSettingsField(kind === 'engine' ? `engines.${id}` : `tools.${id}`, selected);
+  renderAppSettings();
+}
+
+/** Re-seed the run console after Settings change, without touching projects. */
+function applyAppSettingsToRunConsole() {
+  readRunConfig();
+  updateRunConsoleCopy();
+  syncRunnerInputs();
+  if (state.appSettings?.appearance?.runConsoleDock === true) dockRunConsole();
+}
+
+async function saveAppSettings() {
+  const drawer = state.drawer;
+  if (drawer?.type !== 'app-settings' || drawer.busy) return;
+  if (!desktop?.setSettings) {
+    state.appSettings = mergeAppSettings(defaultAppSettings(), drawer.draft);
+    closeDrawer();
+    applyAppSettingsToRunConsole();
+    toast('Settings applied for this preview; the desktop app persists them.');
+    return;
+  }
+  drawer.busy = true;
+  drawer.errors = [];
+  renderAppSettings();
+  let result;
+  try {
+    result = await desktop.setSettings(drawer.draft);
+  } catch (error) {
+    result = { ok: false, errors: [{ field: '', message: error.message }] };
+  }
+  if (!result?.ok) {
+    drawer.busy = false;
+    drawer.errors = Array.isArray(result?.errors) && result.errors.length
+      ? result.errors
+      : [{ field: '', message: 'Settings were not saved.' }];
+    renderAppSettings();
+    toast(drawer.errors[0]?.message || 'Settings were not saved.');
+    return;
+  }
+  state.appSettings = mergeAppSettings(defaultAppSettings(), result.settings);
+  state.settingsPath = String(result.path || state.settingsPath);
+  closeDrawer();
+  applyAppSettingsToRunConsole();
+  toast('Settings saved.');
+}
+
+
 /** Every dataset record in the project, flattened with its dataset's title. */
 function projectDatasetRecords() {
   const datasets = Array.isArray(state.project?.datasets) ? state.project.datasets : [];
@@ -5427,6 +5647,12 @@ function renderDrawer() {
   if (!modal || !state.drawer) return;
   modal.classList.remove('is-molecule');
   const drawer = state.drawer;
+  // Issue 252: the app-wide Settings window reuses this modal shell but owns
+  // its own left rail and footer.
+  if (drawer.type === 'app-settings') {
+    renderAppSettings();
+    return;
+  }
   // The New project chooser reuses the modal shell and its close/Escape/focus
   // handling; only the body renderer is different.
   if (drawer.type === 'template') {
@@ -6020,20 +6246,23 @@ function buildInputForNode(node) {
   return buildRunInput(node).inputText;
 }
 
-/** Show "detected" only when the visible value came from engine detection. */
+/** Show "detected" or "from Settings" when the visible value came from there. */
 function syncRunExecutableDetected(engineId) {
   const field = $('#run-exe');
   const marker = $('#run-exe-detected');
   if (!field || !marker) return;
+  const settingsPath = String(state.appSettings?.engines?.[engineId] || '').trim();
   const seed = executableSeed({
     engineId,
-    stored: storedExecutables(),
+    stored: engineExecutableMap(state.appSettings, storedExecutables()),
     status: state.engineStatus,
   });
   const visible = seed.detected && field.value.trim() === seed.value;
-  marker.hidden = !visible;
-  marker.textContent = visible ? 'detected' : '';
+  const fromSettings = !visible && Boolean(settingsPath) && field.value.trim() === settingsPath;
+  marker.hidden = !visible && !fromSettings;
+  marker.textContent = visible ? 'detected' : (fromSettings ? 'from Settings' : '');
   if (visible) marker.title = `Detected at ${seed.path}`;
+  else if (fromSettings) marker.title = `Settings → Engines: ${settingsPath}`;
 }
 
 /**
@@ -6081,13 +6310,17 @@ function syncCompanionExecutables() {
     const visible = input.value.trim();
     const detected = detectedCompanionPath(status, toolId);
     const isDetected = Boolean(detected) && visible === detected;
+    const settingsPath = String(state.appSettings?.tools?.[toolId] || '').trim();
+    const fromSettings = Boolean(settingsPath) && visible === settingsPath && !isDetected;
     const missing = Boolean(status) && !visible && !detected;
-    marker.hidden = !isDetected && !missing;
-    marker.textContent = isDetected ? 'detected' : (missing ? 'not found on PATH' : '');
-    marker.classList.toggle('is-missing', missing);
+    marker.hidden = !isDetected && !fromSettings && !missing;
+    marker.textContent = isDetected ? 'detected' : (fromSettings ? 'from Settings' : (missing ? 'not found on PATH' : ''));
+    marker.classList.toggle('is-missing', missing && !fromSettings);
     marker.title = isDetected
       ? `Detected at ${detected}`
-      : (missing ? `No ${ui.label} found on PATH; use Browse to choose it.` : '');
+      : fromSettings
+        ? `Settings → Tools: ${settingsPath}`
+        : (missing ? `No ${ui.label} found on PATH; use Browse to choose it.` : '');
   }
 }
 
@@ -6247,7 +6480,12 @@ function syncTimeoutInput() {
   const input = $('#run-timeout');
   if (!input) return;
   const configured = Number(state.project?.runner?.timeoutSeconds);
-  input.value = Number.isInteger(configured) && configured >= 1 ? String(configured) : '';
+  const fromSettings = Number(state.appSettings?.runs?.timeoutSeconds);
+  const fallback = Number.isInteger(fromSettings) && fromSettings >= 1
+    ? Math.min(fromSettings, LIMITS.timeoutSeconds) : 0;
+  input.value = Number.isInteger(configured) && configured >= 1
+    ? String(configured)
+    : (fallback ? String(fallback) : '');
   input.placeholder = `${DEFAULT_TASK_TIMEOUT_SECONDS} (default)`;
   updateTimeoutHint();
 }
@@ -6287,16 +6525,22 @@ function applyTimeout(value) {
 /** The project's limit for a queue, or null when it was never set. */
 function timeoutForQueue() {
   const input = $('#run-timeout');
+  const fromSettings = Number(state.appSettings?.runs?.timeoutSeconds);
+  const settingsLimit = Number.isInteger(fromSettings) && fromSettings >= 1
+    ? Math.min(fromSettings, LIMITS.timeoutSeconds) : null;
   if (!input) {
     return Number.isInteger(Number(state.project?.runner?.timeoutSeconds))
-      ? Number(state.project.runner.timeoutSeconds) : null;
+      ? Number(state.project.runner.timeoutSeconds) : settingsLimit;
   }
   const stored = Number(state.project?.runner?.timeoutSeconds);
   const text = String(input.value ?? '').trim();
-  if (text === '') return Number.isInteger(stored) ? applyTimeout('') : null;
+  if (text === '') return Number.isInteger(stored) ? applyTimeout('') : settingsLimit;
   const value = Math.trunc(Number(text));
   // A queue start must not mark the project dirty for a value it already has.
-  if (!Number.isFinite(value) || value < 1) return Number.isInteger(stored) ? stored : null;
+  if (!Number.isFinite(value) || value < 1) return Number.isInteger(stored) ? stored : settingsLimit;
+  // The field is showing the Settings default, not a project override; use it
+  // without writing a per-run value into the project.
+  if (!Number.isInteger(stored) && settingsLimit !== null && value === settingsLimit) return settingsLimit;
   return value === stored ? stored : applyTimeout(text);
 }
 
@@ -6495,6 +6739,11 @@ function applyRunConsoleRect(consoleEl, rect) {
 function placeRunConsole() {
   const consoleEl = $('#run-console');
   if (!consoleEl) return;
+  // Issue 252: Settings → Appearance can make the corner authoritative.
+  if (state.appSettings?.appearance?.runConsoleDock === true) {
+    dockRunConsole();
+    return;
+  }
   const stored = state.runConsoleRect || readStoredRunConsoleRect();
   if (!stored) return;
   applyRunConsoleRect(consoleEl, stored);
@@ -6863,55 +7112,87 @@ function activeRunEngineId() {
   return engineOrDefault(state.project?.defaults?.engine).id;
 }
 
+/**
+ * Issue 252: the effective map is Settings first, then a local per-run
+ * override. A fresh profile with Settings configured therefore needs no path
+ * typed into the console.
+ */
 function runExecutables() {
-  const map = storedExecutables();
+  const map = engineExecutableMap(state.appSettings, storedExecutables());
   const engineId = activeRunEngineId();
   const field = $('#run-exe');
   if (field) {
     const typed = field.value.trim();
     if (typed) map[engineId] = typed;
-    else delete map[engineId];
   }
   return map;
 }
 
 function readRunConfig() {
   const saved = storedRunConfig();
-  if (saved.crestExecutable) $('#run-crest').value = saved.crestExecutable;
-  if (saved.obabelExecutable) $('#run-obabel').value = saved.obabelExecutable;
-  if (saved.scorerExecutable) $('#run-scorer').value = saved.scorerExecutable;
-  // Issue 270: the Multiwfn sidecar is user-installed and remembered like the
-  // other companion programs.
-  if (saved.multiwfnExecutable && $('#run-multiwfn')) $('#run-multiwfn').value = saved.multiwfnExecutable;
+  const seed = runFieldSeed({ settings: state.appSettings, saved });
+  if ($('#run-crest')) $('#run-crest').value = seed.crest;
+  if ($('#run-obabel')) $('#run-obabel').value = seed.obabel;
+  if ($('#run-scorer')) $('#run-scorer').value = seed.scorer;
+  // Issue 270: the Multiwfn sidecar is user-installed and seeded like the
+  // other companion programs; an explicit local path still wins.
+  if ($('#run-multiwfn')) $('#run-multiwfn').value = seed.multiwfn;
   // Issue 226: the tautomer sidecar is remembered like the other programs.
-  if (saved.tautomerExecutable && $('#run-tautomer')) $('#run-tautomer').value = saved.tautomerExecutable;
-  if (saved.tautomerScript && $('#run-tautomer-script')) $('#run-tautomer-script').value = saved.tautomerScript;
-  if (saved.scratchDir) $('#run-scratch').value = saved.scratchDir;
-  if (typeof saved.dryRun === 'boolean') $('#run-dry').checked = saved.dryRun;
+  if ($('#run-tautomer')) $('#run-tautomer').value = seed.tautomer;
+  if ($('#run-tautomer-script')) $('#run-tautomer-script').value = seed.tautomerScript;
+  if ($('#run-scratch')) $('#run-scratch').value = seed.scratch;
+  if ($('#run-dry')) $('#run-dry').checked = seed.dryRun;
   const field = $('#run-exe');
   if (field) {
     field.value = executableSeed({
       engineId: activeRunEngineId(),
-      stored: storedExecutables(),
+      stored: engineExecutableMap(state.appSettings, storedExecutables()),
       status: state.engineStatus,
     }).value;
   }
   syncCompanionExecutables();
 }
 
+const RUN_TOOL_FIELDS = Object.freeze(['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'scratch']);
+
 function saveRunConfig() {
   try {
-    localStorage.setItem(RUN_CONFIG_STORAGE_KEY, JSON.stringify({
-      executables: runExecutables(),
-      crestExecutable: $('#run-crest').value.trim(),
-      obabelExecutable: $('#run-obabel').value.trim(),
-      scorerExecutable: $('#run-scorer')?.value.trim() || '',
-      multiwfnExecutable: $('#run-multiwfn')?.value.trim() || '',
-      tautomerExecutable: $('#run-tautomer')?.value.trim() || '',
+    // Only values that differ from Settings are stored: a console field that
+    // merely echoes Settings must not shadow a later Settings change.
+    const engineValues = { ...storedExecutables() };
+    const engineId = activeRunEngineId();
+    const field = $('#run-exe');
+    if (field) {
+      const typed = field.value.trim();
+      if (typed) engineValues[engineId] = typed;
+      else delete engineValues[engineId];
+    }
+    const executables = localOverrides(engineValues, state.appSettings?.engines, Object.keys(ENGINES));
+    const toolValues = {
+      crest: $('#run-crest')?.value.trim() || '',
+      obabel: $('#run-obabel')?.value.trim() || '',
+      scorer: $('#run-scorer')?.value.trim() || '',
+      multiwfn: $('#run-multiwfn')?.value.trim() || '',
+      tautomer: $('#run-tautomer')?.value.trim() || '',
       tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
-      scratchDir: $('#run-scratch').value.trim(),
-      dryRun: $('#run-dry').checked,
-    }));
+      scratch: $('#run-scratch')?.value.trim() || '',
+    };
+    const tools = localOverrides(toolValues, state.appSettings?.tools, RUN_TOOL_FIELDS);
+    const dry = $('#run-dry')?.checked !== false;
+    const payload = {
+      executables,
+      crestExecutable: tools.crest || '',
+      obabelExecutable: tools.obabel || '',
+      scorerExecutable: tools.scorer || '',
+      multiwfnExecutable: tools.multiwfn || '',
+      tautomerExecutable: tools.tautomer || '',
+      tautomerScript: tools.tautomerScript || '',
+      scratchDir: tools.scratch || '',
+    };
+    if (typeof state.appSettings?.runs?.dryRun !== 'boolean' || dry !== state.appSettings.runs.dryRun) {
+      payload.dryRun = dry;
+    }
+    localStorage.setItem(RUN_CONFIG_STORAGE_KEY, JSON.stringify(payload));
   } catch {
     // Preferences are optional.
   }
@@ -8873,6 +9154,9 @@ function applyTemplateProject(templateId) {
     toast(`Could not start from template: ${error.message}`);
     return;
   }
+  // Issue 252: a new project adopts the app-wide defaults; a saved project
+  // never does, because its own `defaults` travel with the file.
+  applySettingsProjectDefaults(project);
   closeDrawer();
   const previousQueue = resetRunConsoleForProjectSwap();
   state.project = project;
@@ -9452,6 +9736,9 @@ function closeProject() {
   requestProjectReplacement(() => {
     const previousQueue = resetRunConsoleForProjectSwap();
     state.project = blankProject();
+    // Issue 252: closing a project creates a new blank one, so it adopts the
+    // machine's project defaults just like a template does.
+    applySettingsProjectDefaults(state.project);
     state.selected = { type: 'project', id: null };
     state.connecting = null;
     state.keyboardConnect = null;
@@ -9627,6 +9914,18 @@ async function toggleExportMenu() {
 function handleAction(action, element) {
   switch (action) {
     case 'toggle-app-menu': toggleAppMenu(); break;
+    // Issue 252: app-wide settings, distinct from per-project settings.
+    case 'open-app-settings': openAppSettings(element.dataset.settingsPage || 'engines'); break;
+    case 'save-app-settings': saveAppSettings(); break;
+    case 'settings-page':
+      if (state.drawer?.type === 'app-settings') {
+        state.drawer.page = element.dataset.settingsPage || 'engines';
+        renderAppSettings();
+      }
+      break;
+    case 'settings-detect': refreshSettingsDetection(); break;
+    case 'settings-browse': browseSettingsPath(element.dataset.settingsBrowse); break;
+    case 'settings-reset-console': dockRunConsole(); toast('Run console returned to the corner.'); break;
     case 'toggle-export-menu': toggleExportMenu(); break;
     case 'quit': window.close(); break;
     case 'toggle-palette': togglePalette(); break;
@@ -9886,6 +10185,10 @@ function onDocumentClick(event) {
 
 function onDocumentChange(event) {
   const target = event.target;
+  if (target.dataset.settingsField && state.drawer?.type === 'app-settings') {
+    setSettingsField(target.dataset.settingsField, target.type === 'checkbox' ? target.checked : target.value);
+    return;
+  }
   if (target.matches('[data-flow-rename]')) {
     commitFlowRename(target);
     return;
@@ -10478,6 +10781,10 @@ function applyConformerField(target) {
 
 function onDocumentInput(event) {
   const target = event.target;
+  if (target.dataset.settingsField && state.drawer?.type === 'app-settings') {
+    setSettingsField(target.dataset.settingsField, target.type === 'checkbox' ? target.checked : target.value);
+    return;
+  }
   if (target.dataset.prepareField) {
     applyPrepareField(target);
     return;
@@ -10664,6 +10971,13 @@ function wireEvents() {
 
   document.addEventListener('keydown', (event) => {
     const mod = event.metaKey || event.ctrlKey;
+    // Issue 252: the conventional Settings shortcut, available from any
+    // surface including a focused input.
+    if (mod && !event.altKey && event.key === ',') {
+      event.preventDefault();
+      openAppSettings();
+      return;
+    }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || '')
       || event.target?.isContentEditable === true;
     if (mod && !event.altKey && !typing && event.key.toLowerCase() === 'z') {
@@ -10806,10 +11120,12 @@ export {
   queueBelongsToProject,
   queueFailure,
   queueRowHtml,
+  readRunConfig,
   renderFlowTabs,
   renderRecordSummary,
   resetRunHeader,
   resultFacts,
+  runExecutables,
   runHeaderFor,
   runStateOf,
   setRunHint,
@@ -10845,8 +11161,12 @@ async function loadAppInfo() {
   applyAppInfo();
 }
 
-function init() {
+async function init() {
   loadAppInfo();
+  // Issue 252: Settings are loaded before the console is seeded, so a fresh
+  // profile with machine paths configured needs nothing typed in the console.
+  await loadAppSettings();
+  applySettingsProjectDefaults(state.project);
   // Remember the project exactly as loaded: until it changes, there is nothing
   // worth drafting, and a fresh session must not overwrite a recoverable draft.
   state.draftBaseline = JSON.stringify(state.project);
