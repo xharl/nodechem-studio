@@ -26,6 +26,7 @@ ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--tautomer <path>] [--tautomer-script <path>] [--timeout <seconds>]
 ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
+ncs validation <cases.json> [--out <file>] [--json]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
 ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--json]
 ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicity <n>] [--out <file>] [--json]
@@ -53,6 +54,11 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
 - `report` rebuilds the HTML report from the newest queue under `<out-dir>/queues/` and writes
   `<out-dir>/reports/index.html` unless `--out` names another file. `--flow` restricts it to one
   flow; without it every flow that has a queue is combined into one document.
+- `validation` reads a case set that records a method ladder (method, basis, energy in hartree, or
+  `null` plus a reason) and prints the per-case spread, the aggregate MAE/RMSE and every
+  `not computed` rung. It launches no engine: the input is the recorded result, so the table is
+  reproducible offline. The case set is refused as a whole when a reference, a rung or the schema
+  version is malformed; a rung that was not computed stays in the table with its reason.
 - `export` prints every `run.json` under `<out-dir>/runs/` in one versioned envelope, with the
   absolute path of the schema the records were validated against. `--schema-version` defaults to 1;
   an unknown version is refused with the path of the version this build ships. One non-conforming
@@ -116,6 +122,7 @@ this table fails the suite, so a new CLI-only capability cannot ship undocumente
 | `ncs build-input` | window: the input preview | The exact bytes the queue would write for one block. |
 | `ncs run` | window: **Run workflow** / **Run selected block** | Queue the workflow and run it. |
 | `ncs report` | window: **Report…** and the figure set beside it | `report.html` + `report.json` for the newest queue. |
+| `ncs validation` | **CLI only** | A recorded method ladder across reference cases: per-case spread, aggregate MAE/RMSE, `not computed` preserved. |
 | `ncs convert` | window: **Export as…** | A finished run as extxyz, xyz, sdf, JCAMP or Molden. |
 | `ncs cube` | window: **Write cube…** on the wavefunction card | One orbital's cube from a checkpoint, without `cubegen`. |
 | `ncs smiles` | window: SMILES in the molecule drawer | A SMILES string as a bond graph: formula, charges, hydrogens. |
