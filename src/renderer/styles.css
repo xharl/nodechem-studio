@@ -1072,6 +1072,8 @@ kbd {
   white-space: nowrap;
 }
 .run-detected[hidden] { display: none; }
+/* Issue 258: a companion the PATH probe did not find says so, next to Browse. */
+.run-detected.is-missing { color: var(--tone-red-13); border-color: var(--tone-red-7a); }
 .drop-zone .run-actions {
   /* Pinned to the bottom of the pane: the fields above may scroll, the actions
      never disappear under the fold. */

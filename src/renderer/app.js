@@ -98,6 +98,7 @@ import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
 import { ORCA_BASES, ORCA_METHODS, ORCA_PNO_THRESHOLDS, buildOrcaInput } from '../shared/engines/orca.js';
 import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../shared/engines/psi4.js';
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
+import { prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
 import { SPIN_SWEEP_MAX, multiplicitiesFor, spinSweepFor } from '../shared/spinSweep.js';
@@ -171,6 +172,11 @@ import {
   runEngineLabel,
 } from './engineCopy.js';
 import { executableSeed } from './runExecutable.js';
+import {
+  companionPlaceholderFor,
+  companionSeed,
+  detectedCompanionPath,
+} from './runTools.js';
 
 const desktop = window.desktop || null;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
@@ -645,6 +651,15 @@ function nodeFoot(node) {
     return { left: [gateChips(node).join(' · '), sweep].filter(Boolean).join(' · '), right: output };
   }
   if (node.type === 'condition') return { left: `unknown → ${node.condition.unknown.replace('-', ' ')}`, right: '2 branches' };
+  if (node.type === 'prepare') {
+    // issue 257: the card footer uses the same tri-state summary as the queue log
+    // and the inspector; a dry run never appears as a failed relaxation.
+    const output = node.output && typeof node.output === 'object' ? node.output : null;
+    const atoms = Number(output?.atomCount);
+    return output
+      ? { left: prepareSummaryLine(output), right: Number.isFinite(atoms) ? `${atoms} atom${atoms === 1 ? '' : 's'}` : '' }
+      : { left: prepareLabel(node.settings), right: 'no output' };
+  }
   if (node.type === 'generate') {
     // Issue 129: the footer names what produced the ensemble — an imported
     // file's declared program, or the CREST method that ran here.
@@ -2992,9 +3007,7 @@ function prepareInspector(node) {
   const kind = s.kind === 'embed3d' ? 'embed3d' : 'relax';
   const converter = kind === 'embed3d' ? 'openbabel' : (s.converter === 'openbabel' ? 'openbabel' : 'uff');
   const detail = output
-    ? `${output.kind === 'embed3d' ? '3D embedded' : 'relaxed'} · ${output.converter}`
-      + `${Number.isFinite(output.energyKcal) ? ` · ${output.energyKcal.toFixed(3)} kcal/mol` : ''}`
-      + `${output.kind === 'relax' && !output.converged ? ' · not converged' : ''}`
+    ? prepareSummaryLine(output)
     : (kind === 'embed3d' ? 'SMILES → one 3D structure' : 'one structure → one relaxed structure');
   return `${inspectorHead('Structure · prepare', node.title, detail)}
   <div class="inspector-scroll">
@@ -3027,7 +3040,7 @@ function prepareInspector(node) {
         ? `<div class="field full"><div class="card">
             <div class="kv"><span>Outcome</span><code>${esc(output.kind)} · ${esc(output.converter)} · ${esc(output.forceField)}</code></div>
             <div class="kv"><span>Energy</span><code>${Number.isFinite(output.energyKcal) ? `${output.energyKcal.toFixed(3)} kcal/mol` : 'not reported'}</code></div>
-            <div class="kv"><span>Converged</span><code>${output.converged ? 'yes' : `no${output.reason ? ` · ${esc(output.reason)}` : ''}`}</code></div>
+            <div class="kv"><span>Converged</span><code>${esc(prepareConvergenceText(output))}</code></div>
             <div class="kv"><span>Iterations</span><code>${esc(output.iterations)}</code></div>
           </div></div>`
         : '<div class="field full"><span class="inspector-note">Run the block to write <code>prepared.xyz</code>. A downstream calculate reads that file, not the geometry this block was planned with.</span></div>',
@@ -5896,6 +5909,60 @@ function syncRunExecutableDetected(engineId) {
   if (visible) marker.title = `Detected at ${seed.path}`;
 }
 
+/**
+ * Issue 258: the engine field's seeded marker exists; every companion path
+ * field needs the same affordance. The map is also what the regression test
+ * walks, so a field cannot be added without its marker.
+ */
+const COMPANION_FIELDS = Object.freeze({
+  crest: { field: '#run-crest', marker: '#run-crest-detected', label: 'CREST' },
+  obabel: { field: '#run-obabel', marker: '#run-obabel-detected', label: 'Open Babel' },
+  scorer: { field: '#run-scorer', marker: '#run-scorer-detected', label: 'ML scorer' },
+  tautomer: { field: '#run-tautomer', marker: '#run-tautomer-detected', label: 'Tautomer sidecar' },
+});
+
+/** The platform main reports, falling back to the user agent before it lands. */
+function rendererPlatform() {
+  const reported = state.engineStatus?.platform;
+  if (reported === 'win32' || reported === 'darwin' || reported === 'linux') return reported;
+  const agent = String(globalThis.navigator?.userAgent || '');
+  if (/Windows/i.test(agent)) return 'win32';
+  if (/Macintosh|Mac OS X/i.test(agent)) return 'darwin';
+  return 'linux';
+}
+
+/**
+ * Seed CREST, Open Babel, the scorer and the tautomer interpreter from the
+ * same detection answer as the engine field. A stored/typed path is never
+ * overwritten; an undetected tool says so instead of showing a Windows path
+ * on Linux (issue 258).
+ */
+function syncCompanionExecutables() {
+  const platform = rendererPlatform();
+  const status = state.engineStatus;
+  for (const [toolId, ui] of Object.entries(COMPANION_FIELDS)) {
+    const input = $(ui.field);
+    if (!input) continue;
+    input.placeholder = companionPlaceholderFor(toolId, platform);
+    if (!input.value.trim() && document.activeElement !== input) {
+      const seed = companionSeed({ toolId, stored: '', status });
+      if (seed.detected) input.value = seed.value;
+    }
+    const marker = $(ui.marker);
+    if (!marker) continue;
+    const visible = input.value.trim();
+    const detected = detectedCompanionPath(status, toolId);
+    const isDetected = Boolean(detected) && visible === detected;
+    const missing = Boolean(status) && !visible && !detected;
+    marker.hidden = !isDetected && !missing;
+    marker.textContent = isDetected ? 'detected' : (missing ? 'not found on PATH' : '');
+    marker.classList.toggle('is-missing', missing);
+    marker.title = isDetected
+      ? `Detected at ${detected}`
+      : (missing ? `No ${ui.label} found on PATH; use Browse to choose it.` : '');
+  }
+}
+
 /** Point the run-console copy at the engine the selected block will run. */
 function updateRunConsoleCopy() {
   const engineId = activeRunEngineId();
@@ -5933,6 +6000,7 @@ function updateRunConsoleCopy() {
       ? 'Dry run writes synthetic fixture output. Uncheck to run the engine.'
       : 'A real engine binary will be launched.';
   }
+  syncCompanionExecutables();
 }
 
 /** Queue progress for the console header, e.g. `7/16`. */
@@ -6386,6 +6454,7 @@ function readRunConfig() {
       status: state.engineStatus,
     }).value;
   }
+  syncCompanionExecutables();
 }
 
 function saveRunConfig() {
@@ -6433,6 +6502,7 @@ async function pickObabel() {
       saveRunConfig();
       toast('Open Babel executable selected.');
     }
+    syncCompanionExecutables();
   } catch (error) {
     toast(`Could not choose the Open Babel executable: ${error.message}`);
   }
@@ -6447,8 +6517,27 @@ async function pickCrest() {
       saveRunConfig();
       toast('CREST executable selected.');
     }
+    syncCompanionExecutables();
   } catch (error) {
     toast(`Could not choose the CREST executable: ${error.message}`);
+  }
+}
+
+/** issue 258: the scorer and tautomer fields use one generic executable picker. */
+async function pickCompanionTool(toolId) {
+  const ui = COMPANION_FIELDS[toolId];
+  if (!ui) return;
+  if (!desktop?.pickToolExecutable) { toast('Open the Electron app to choose an executable.'); return; }
+  try {
+    const selected = await desktop.pickToolExecutable(toolId);
+    if (selected) {
+      $(ui.field).value = selected;
+      saveRunConfig();
+      toast(`${ui.label} selected.`);
+    }
+    syncCompanionExecutables();
+  } catch (error) {
+    toast(`Could not choose ${ui.label}: ${error.message}`);
   }
 }
 
@@ -8794,6 +8883,8 @@ function handleAction(action, element) {
     case 'pick-ensemble': pickEnsembleFile(); break;
     case 'pick-crest': pickCrest(); break;
     case 'pick-obabel': pickObabel(); break;
+    case 'pick-scorer': pickCompanionTool('scorer'); break;
+    case 'pick-tautomer': pickCompanionTool('tautomer'); break;
     case 'pause-workflow': pauseWorkflow(); break;
     case 'export-workflow-report': exportWorkflowReportAction(); break;
     case 'resume-workflow': resumeWorkflow(); break;
@@ -9795,6 +9886,7 @@ export {
   inputInspector,
   nodeDetail,
   nodeFoot,
+  prepareInspector,
   renderFlowTabs,
   renderRecordSummary,
   resultFacts,

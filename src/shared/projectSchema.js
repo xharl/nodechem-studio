@@ -945,7 +945,12 @@ function normalizePrepareOutput(c, raw, path, legacy) {
     energyKcal: source.energyKcal === undefined || source.energyKcal === null || source.energyKcal === ''
       ? null
       : readNumber(c, source.energyKcal, `${path}.energyKcal`, { legacy, fallback: null, min: -1e9, max: 1e9 }),
-    converged: readBoolean(c, source.converged, `${path}.converged`, { legacy, fallback: false }),
+    // `converged` is tri-state: true/false are relaxation verdicts, null means
+    // the converter never ran (a dry run). Collapsing null to false made a
+    // saved dry-run record read as a failed relaxation after reload (#257).
+    converged: source.converged === null
+      ? null
+      : readBoolean(c, source.converged, `${path}.converged`, { legacy, fallback: false }),
     reason: readString(c, source.reason, `${path}.reason`, { legacy, fallback: '', max: 80 }),
     iterations: readInteger(c, source.iterations, `${path}.iterations`, { legacy, fallback: 0, min: 0, max: 100000 }),
     atomCount: readInteger(c, source.atomCount, `${path}.atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),

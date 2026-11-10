@@ -6,6 +6,7 @@ import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { RunManager } from './runner/runManager.js';
 import { QueueManager } from './runner/queue.js';
+import { companionToolStatus } from './runner/companionTools.js';
 import { preflight } from './runner/preflight.js';
 import { defaultGaussianExecutablePath } from './runner/gaussianPlatform.js';
 import { writeClusterExport, importClusterExport } from './runner/clusterFiles.js';
@@ -472,6 +473,37 @@ async function chooseObabelExecutable() {
     properties: ['openFile'],
     filters: process.platform === 'win32'
       ? [{ name: 'Open Babel for Windows', extensions: ['exe', 'bat', 'cmd'] }, { name: 'All files', extensions: ['*'] }]
+      : [{ name: 'All files', extensions: ['*'] }],
+  });
+  return result.canceled ? null : result.filePaths[0];
+}
+
+/**
+ * Issue #258: the optional scorer and tautomer sidecar are executable
+ * programs, not presets, so they share one picker. The dialog is only a
+ * fallback for a machine where detection found nothing.
+ */
+const COMPANION_DIALOG = Object.freeze({
+  scorer: {
+    title: 'Locate the ML scorer executable',
+    windows: 'C:\\scorer\\aimnet2-scorer.exe',
+    posix: '/opt/scorer/aimnet2-scorer',
+  },
+  tautomer: {
+    title: 'Locate the tautomer sidecar interpreter',
+    windows: 'C:\\Python\\python.exe',
+    posix: '/usr/bin/python3',
+  },
+});
+
+async function chooseCompanionExecutable(tool) {
+  const copy = COMPANION_DIALOG[tool] || COMPANION_DIALOG.scorer;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: copy.title,
+    defaultPath: process.platform === 'win32' ? copy.windows : copy.posix,
+    properties: ['openFile'],
+    filters: process.platform === 'win32'
+      ? [{ name: 'Executables', extensions: ['exe', 'bat', 'cmd'] }, { name: 'All files', extensions: ['*'] }]
       : [{ name: 'All files', extensions: ['*'] }],
   });
   return result.canceled ? null : result.filePaths[0];
@@ -1076,7 +1108,13 @@ app.whenReady().then(async () => {
   await queueManager.init();
 
   ipcMain.handle('app:info', () => currentAppInfo());
-  ipcMain.handle('engines:status', () => engineStatus());
+  // Issue #258: the engine answer keeps its shape and gains the companion
+  // probes plus the platform, so one call seeds every path field in the console.
+  ipcMain.handle('engines:status', () => ({
+    ...engineStatus(),
+    tools: companionToolStatus(),
+    platform: process.platform,
+  }));
   // Issue #82: one user-triggered request. Nothing else in the app calls out.
   ipcMain.handle('updates:check', () => checkForUpdates());
   // Theme switching (#52): repaint the native chrome, record the launch cache.
@@ -1133,6 +1171,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('gaussian:pick-executable', (_event, config) => chooseExecutable(config || {}));
   ipcMain.handle('crest:pick-executable', () => chooseCrestExecutable());
   ipcMain.handle('obabel:pick-executable', () => chooseObabelExecutable());
+  ipcMain.handle('tool:pick-executable', (_event, tool) => chooseCompanionExecutable(tool));
   ipcMain.handle('conformers:pick-ensemble', () => chooseEnsembleFile());
   /**
    * A user-supplied volume file for the wavefunction viewport. The renderer
