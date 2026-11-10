@@ -2637,15 +2637,22 @@ function calcInspector(node) {
   const nmrGroup = group('NMR', s.nmrSpinSpin ? 'shieldings + couplings' : 'shieldings only', s.nmrSpinSpin, [
     switchRow(
       'Spin-spin couplings',
-      'adds SpinSpin to the NMR keyword; Gaussian then prints the K and J tables',
+      isOrca
+        ? 'adds SSALL to the %EPRNMR block; ORCA then prints the isotropic J matrix'
+        : 'adds SpinSpin to the NMR keyword; Gaussian then prints the K and J tables',
       'nmrSpinSpin',
       s.nmrSpinSpin,
     ),
     '<div class="field full"><span class="inspector-note">'
-      + 'A coupling run costs more than shieldings alone and prints one K and one J '
-      + 'table for every nucleus pair: on a 20-nucleus molecule that is 190 pairs. '
-      + 'Without this, the results card says couplings were not requested rather '
-      + 'than reporting none.'
+      + (isOrca
+        ? 'ORCA prints one J value for every nucleus pair in the coupling summary: '
+          + 'on a 20-nucleus molecule that is 190 pairs, each with its own tensor '
+          + 'calculation. Without this the results card says couplings were not '
+          + 'requested rather than reporting none.'
+        : 'A coupling run costs more than shieldings alone and prints one K and one J '
+          + 'table for every nucleus pair: on a 20-nucleus molecule that is 190 pairs. '
+          + 'Without this, the results card says couplings were not requested rather '
+          + 'than reporting none.')
       + '</span></div>',
   ]);
   const ramanGroup = group('Raman', s.raman ? 'activities on' : 'off', s.raman, [
@@ -2766,7 +2773,7 @@ function calcInspector(node) {
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : excitedGroup}
     ${psi4TdGroup}
     ${orcaTdGroup}
-    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob || !nmrJob ? '' : nmrGroup}
+    ${isXtb || isPsi4 || isPyscf || compositeJob || !nmrJob ? '' : nmrGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : ramanGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : vcdGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : roaGroup}

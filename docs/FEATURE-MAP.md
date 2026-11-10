@@ -87,8 +87,8 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | Frequency + thermochemistry | Freq | **Implemented** | QRRHO recorded |
 | Optimise then frequency | Opt Freq | **Implemented** | |
 | DLPNO-CCSD(T) single point | DLPNO-CCSD(T) | **Implemented** | PNO threshold recorded; real log fixture |
-| **NMR shieldings (GIAO)** | `! NMR` + `%EPRNMR` | **Absent** | `ORCA_UNSUPPORTED_JOB_TYPES` lists `NMR`; the TE agent hit this |
-| NMR spin-spin couplings | `%EPRNMR … SSALL` | **Keyword-only** | couplings are parsed from *imported* logs (issue 222), but the builder never requests them |
+| **NMR shieldings (GIAO)** | `! NMR` + `%EPRNMR` | **Implemented** | `nmrBlockFor()` writes the block, `parseOrcaShieldings()` reads the summary; real 6.1.1 fixture (#284) |
+| NMR spin-spin couplings | `%EPRNMR … SSALL` | **Implemented** | `nmrSpinSpin` writes `SHIFT, SSALL`; the J summary is parsed into `nmr.couplings` (#284) |
 | **TD-DFT / excited states** | `%tddft` block (ORCA 6 has no route keyword) | **Implemented** | `tddftBlockFor()` + `parseOrcaExcitedStates()`; real 6.1.1 fixtures (#285) |
 | **Transition-state search** | OptTS | **Absent** | refused by name |
 | **IRC** | `%irc` | **Absent** | refused by name |
@@ -209,23 +209,22 @@ Effort is engineering time, not calendar, and assumes the parser work is done ag
 
 | Rank | Gap | Issue | Why it matters | Effort |
 |---|---|---|---|---|
-| 1 | **ORCA NMR** (shieldings + couplings) | #284 | the free engine cannot do NMR at all; the analysis side (DP4, TMS, spectra) already exists | ~3 days |
-| 2 | **ORCA OptTS / IRC / Scan** | #286 | no reaction paths at all on ORCA, although the path logic is written | ~1 week |
-| 3 | **ORCA CASSCF / NEVPT2** | #287 | the practical MR engine; PySCF covers only a single-point CASSCF | ~2 weeks |
-| 4 | **Gaussian Polar, IRCMax, Force, Volume, EET** | #290 | closes the job-type surface on the licensed engine | ~3–5 days |
-| 5 | **Psi4 SAPT2 family + counterpoise** | #291 | SAPT0 is the cheapest rung; interaction energy is the app's strength | ~1 week |
-| 6 | **Psi4 EOM-CCSD / ADC(2) / FNO-CCSD(T)** | #292 | excited-state accuracy beyond TD-DFT and cheaper CC on large systems | ~2 weeks |
-| 7 | **xTB scan / NEB / sTDA / fixed atoms** | #293 | cheap paths and UV-Vis without a licence | 3–5 days each |
-| 8 | **Relativistic DKH / ZORA / X2C** | #294 | heavy elements are ECP-only today | 1–2 weeks |
-| 9 | **Anharmonic frequencies** | #295 | improves thermochemistry and spectra on both engines | 1–2 weeks |
-| 10 | **PySCF TD-DFT** | #296 | the permissive engine cannot produce a UV-Vis spectrum | ~4 days |
-| 11 | **ORCA EDA / LED** | #289 | interaction-energy decomposition beside SAPT | ~1 week |
-| 12 | **ONIOM input builder** | #67 | result reader shipped; layer/region construction open | 2–4 weeks |
-| 13 | **Dynamics** (BOMD/ADMP, ORCA/xTB MD, metadynamics) | #67 | needs a trajectory model and viewer; the app has none | 1–3 weeks |
+| 1 | **ORCA OptTS / IRC / Scan** | #286 | no reaction paths at all on ORCA, although the path logic is written | ~1 week |
+| 2 | **ORCA CASSCF / NEVPT2** | #287 | the practical MR engine; PySCF covers only a single-point CASSCF | ~2 weeks |
+| 3 | **Gaussian Polar, IRCMax, Force, Volume, EET** | #290 | closes the job-type surface on the licensed engine | ~3–5 days |
+| 4 | **Psi4 SAPT2 family + counterpoise** | #291 | SAPT0 is the cheapest rung; interaction energy is the app's strength | ~1 week |
+| 5 | **Psi4 EOM-CCSD / ADC(2) / FNO-CCSD(T)** | #292 | excited-state accuracy beyond TD-DFT and cheaper CC on large systems | ~2 weeks |
+| 6 | **xTB scan / NEB / sTDA / fixed atoms** | #293 | cheap paths and UV-Vis without a licence | 3–5 days each |
+| 7 | **Relativistic DKH / ZORA / X2C** | #294 | heavy elements are ECP-only today | 1–2 weeks |
+| 8 | **Anharmonic frequencies** | #295 | improves thermochemistry and spectra on both engines | 1–2 weeks |
+| 9 | **PySCF TD-DFT** | #296 | the permissive engine cannot produce a UV-Vis spectrum | ~4 days |
+| 10 | **ORCA EDA / LED** | #289 | interaction-energy decomposition beside SAPT | ~1 week |
+| 11 | **ONIOM input builder** | #67 | result reader shipped; layer/region construction open | 2–4 weeks |
+| 12 | **Dynamics** (BOMD/ADMP, ORCA/xTB MD, metadynamics) | #67 | needs a trajectory model and viewer; the app has none | 1–3 weeks |
 
 Closed since the first draft: **#226** tautomers, **#227** DLPNO-CCSD(T), **#228** explicit
 solvation (deterministic cluster), **#229** uncertainty, **#230** validation harness, **#269**
-PySCF, **#270** Multiwfn sidecar, **#273** cclib converter, **#285** ORCA TD-DFT, **#288** ORCA Raman/VCD.
+PySCF, **#270** Multiwfn sidecar, **#273** cclib converter, **#284** ORCA NMR, **#285** ORCA TD-DFT, **#288** ORCA Raman/VCD.
 
 Deliberately not a gap: **Psi4 NMR** (does not exist), **Psi4 SMD/CPCM** (not DDX models),
 **Psi4 CC frequencies** (no analytic Hessian). ROA has a G09 fixture and a reader; G16 B.01+ is

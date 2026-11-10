@@ -85,7 +85,7 @@ describe('ORCA engine registry', () => {
     expect(ORCA_CAPABILITIES.inputExtension).toBe('.inp');
     expect(ORCA_CAPABILITIES.capturesStdout).toBe(true);
     expect(ORCA_CAPABILITIES.restartArtifact).toBe('.gbw');
-    expect(ORCA_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Opt Freq', 'Freq', 'TD-DFT']);
+    expect(ORCA_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Opt Freq', 'Freq', 'NMR', 'TD-DFT']);
     expect(ORCA_CAPABILITIES.unsupportedJobTypes).toContain('Opt=TS');
     expect(ORCA_METHODS.map((method) => method.id)).toContain('CCSD(T)');
     expect(ORCA_BASES.find((basis) => basis.id === '6-31G(d)').keyword).toBe('6-31G*');
@@ -156,7 +156,7 @@ describe('ORCA input builder', () => {
   });
 
   it('refuses job types simple input cannot express instead of degrading them', () => {
-    for (const jobType of ['Opt=TS', 'IRC', 'Scan', 'NMR']) {
+    for (const jobType of ['Opt=TS', 'IRC', 'Scan']) {
       expect(() => build({ jobType })).toThrow(/ORCA simple input cannot express/);
     }
   });
@@ -205,6 +205,33 @@ describe('ORCA input builder', () => {
     const built = build({}, 'node-1.gjf');
     expect(built.inputName).toBe('node-1.inp');
     expect(built.outputName).toBe('node-1.out');
+  });
+
+  it('writes the %EPRNMR block for an NMR job', () => {
+    const built = buildOrcaInput({
+      settings: settings({ jobType: 'NMR', nmrSpinSpin: true }),
+      molecule: molecule(),
+      inputName: 'nmr.inp',
+    });
+    expect(built.route).toBe('B3LYP def2-SVP NMR');
+    expect(built.inputText).toContain('%EPRNMR');
+    expect(built.inputText).toContain('NUCLEI = ALL H { SHIFT, SSALL }');
+    expect(built.inputText).toContain('NUCLEI = ALL O { SHIFT, SSALL }');
+    // The block belongs after the coordinates, where ORCA's NMR examples put it.
+    expect(built.inputText.indexOf('%EPRNMR')).toBeGreaterThan(built.inputText.indexOf('* xyz'));
+    expect(built.nmr).toEqual({ elements: ['H', 'O'], couplings: true });
+
+    const shiftOnly = buildOrcaInput({
+      settings: settings({ jobType: 'NMR' }), molecule: molecule(), inputName: 'nmr.inp',
+    });
+    expect(shiftOnly.inputText).toContain('NUCLEI = ALL H { SHIFT }');
+    expect(shiftOnly.inputText).not.toContain('SSALL');
+    expect(shiftOnly.nmr.couplings).toBe(false);
+
+    expect(() => buildOrcaInput({
+      settings: settings({ jobType: 'NMR' }),
+      molecule: molecule({ coords: [{ element: 'He', x: 0, y: 0, z: 0 }] }),
+    })).toThrow(/NMR-active/);
   });
 });
 
@@ -536,6 +563,34 @@ describe('ORCA output parser — synthetic fixtures in documented format', () =>
   it('carries the route through when the caller supplies one', () => {
     const parsed = parseOrcaOutput(fixture('water-sp.out'), { route: '! B3LYP def2-SVP' });
     expect(parsed.route).toBe('! B3LYP def2-SVP');
+  });
+
+  it('reads shieldings and couplings from the recorded ORCA 6.1.1 NMR log', () => {
+    const parsed = parseOrcaOutput(fixture('methanol-nmr.out'));
+    expect(parsed.status).toBe('completed');
+    expect(parsed.program.version).toBe('6.1.1');
+    expect(parsed.extras.jobType).toBe('NMR');
+    expect(parsed.nmr.gauge).toBe('GIAO');
+    expect(parsed.nmr.count).toBe(6);
+
+    // ORCA numbers nuclei from 0; the shielding table is normalised to the
+    // app's 1-based atom order, so C is atom 1 and O is atom 2.
+    const carbon = parsed.nmr.atoms.find((atom) => atom.element === 'C');
+    expect(carbon.index).toBe(1);
+    expect(carbon.isotropic).toBeCloseTo(141.174, 3);
+    expect(carbon.anisotropy).toBeCloseTo(72.277, 3);
+    const oxygen = parsed.nmr.atoms.find((atom) => atom.element === 'O');
+    expect(oxygen.index).toBe(2);
+    expect(oxygen.isotropic).toBeCloseTo(342.467, 3);
+    const hydroxyl = parsed.nmr.atoms.find((atom) => atom.element === 'H' && atom.isotropic > 30);
+    expect(hydroxyl.isotropic).toBeCloseTo(32.237, 3);
+
+    expect(parsed.nmr.couplings.atoms).toBe(6);
+    expect(parsed.nmr.couplings.units).toBe('Hz');
+    // The coupling matrix keeps ORCA's 0-based order, as its `indexing` field says.
+    expect(parsed.nmr.couplings.matrix[0 * 6 + 2]).toBeCloseTo(179.858, 3);
+    expect(parsed.nmr.couplings.matrix[1 * 6 + 5]).toBeCloseTo(-91.723, 3);
+    expect(parsed.scf.energyHartree).toBeCloseTo(-115.56211637243774, 10);
   });
 });
 
