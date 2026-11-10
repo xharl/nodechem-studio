@@ -51,6 +51,7 @@ import {
 } from '../../src/shared/obabelConformers.js';
 import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 import { optimizeUff } from '../../src/shared/uff.js';
+import { prepareSummaryLine } from '../../src/shared/prepare.js';
 import { relaxWithForces } from '../../src/shared/mlRelax.js';
 import {
   SCORER_SPECS,
@@ -3481,9 +3482,7 @@ export class QueueManager {
       task.prepared = summary;
       task.outputName = 'prepared.xyz';
       task.finishedAt = new Date().toISOString();
-      task.summary = `${summary.kind === 'embed3d' ? '3D embedded' : 'relaxed'} · ${summary.converter}`
-        + `${Number.isFinite(summary.energyKcal) ? ` · ${summary.energyKcal.toFixed(3)} kcal/mol` : ''}`
-        + (summary.kind === 'relax' && !summary.converged ? ' · not converged' : '');
+      task.summary = prepareSummaryLine(summary);
       this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Prepared structure: ${task.summary}.` });
     } catch (error) {
       task.status = 'failed';

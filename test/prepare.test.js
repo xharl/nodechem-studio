@@ -87,6 +87,25 @@ describe('prepare outputs the report could not value', () => {
     expect(validated.project.nodes[0].output.energyKcal).toBeNull();
     expect(validated.project.nodes[0].output.reason).toBe('converter-did-not-report-convergence');
   });
+
+  it('preserves a null converged, so a saved dry run reloads as a dry run', () => {
+    // #257: null is "never ran"; coercing it to false made the reloaded record
+    // read as a relaxation that hit its cap.
+    const validated = validateProject(project([prepareNode({}, {
+      kind: 'relax', converter: 'openbabel', forceField: 'MMFF94',
+      energyKcal: null, converged: null,
+      reason: 'dry-run (converter not run)', iterations: 0, atomCount: 3,
+    })]));
+    expect(validated.ok).toBe(true);
+    expect(validated.project.nodes[0].output.converged).toBeNull();
+    // A missing boolean is still an error; only an explicit null is allowed.
+    const missing = validateProject(project([prepareNode({}, {
+      kind: 'relax', converter: 'openbabel', forceField: 'MMFF94',
+      energyKcal: null, reason: 'dry-run (converter not run)', iterations: 0, atomCount: 3,
+    })]));
+    expect(missing.ok).toBe(false);
+    expect(missing.errors.some((error) => /output\.converged/.test(error.path))).toBe(true);
+  });
 });
 
 describe('prepare under a dry run', () => {
@@ -113,6 +132,9 @@ describe('prepare under a dry run', () => {
     expect(prep.prepared.reason).toBe('dry-run (converter not run)');
     expect(prep.prepared.converged).toBeNull();
     expect(prep.prepared.energyKcal).toBeNull();
+    // #257: the summary line must not claim a relaxation that never ran.
+    expect(prep.summary).toBe('dry run · converter not run (geometry unchanged)');
+    expect(prep.summary).not.toMatch(/converged/i);
   });
 });
 
