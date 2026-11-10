@@ -706,7 +706,7 @@ async function exportRunFormat(runId, formatId, spectrum) {
       if (!checkpoint) {
         throw new Error(
           'Molden needs the basis functions and MO coefficients, which the saved output does not carry. '
-          + 'This run folder holds no .fchk: run formchk on the job\'s .chk, copy the .fchk beside run.json, '
+          + 'This run folder holds no .fchk: run formchk -3 on the job\'s .chk, copy the .fchk beside run.json, '
           + 'and export again.',
         );
       }

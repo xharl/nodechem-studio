@@ -28,10 +28,24 @@
 import { ELEMENTS } from './elements.js';
 import { BOHR_TO_ANGSTROM } from './cubeFile.js';
 
-/** Characters, not bytes: the guard bounds the work on text that is already decoded. */
-export const MAX_FCHK_CHARS = 64 * 1024 * 1024;
-/** No field in the subset needs more than a few thousand values; this is a guard, not a target. */
-export const MAX_FCHK_VALUES = 2_000_000;
+/**
+ * Characters, not bytes: the guard bounds the work on text that is already
+ * decoded. It is sized from the largest legitimate file this app is expected to
+ * read, not from the subset's own small fields (#243): a 2000-basis-function
+ * open-shell fchk carries alpha and beta MO blocks of 4,000,000 values each
+ * plus a 2,001,000-value density triangle. Gaussian writes five 16-character
+ * reals per line, which is about 160 MB for that file; the old 64 MiB cap
+ * refused it. A caller with more memory can raise the bound through
+ * `parseFchk`'s `maxChars`, and a file beyond this ceiling is refused with that
+ * remedy rather than told to trim a line-oriented format it cannot trim.
+ */
+export const MAX_FCHK_CHARS = 256 * 1024 * 1024;
+/**
+ * Values per field. The largest legitimate block is `NBasis²` (an MO
+ * coefficient set): 4,000,000 at 2000 functions, 16,000,000 at 4000. The guard
+ * is a ceiling, not a target, and `parseFchk` lets a caller raise it.
+ */
+export const MAX_FCHK_VALUES = 16_000_000;
 
 export class FchkFormatError extends Error {
   constructor(message) {
@@ -199,11 +213,14 @@ function looksLikeFieldHeader(line) {
   return /^[A-Za-z$]/.test(trimmed) && /\s[NICR]\s+(?:N\s*=\s*\d+|-?\d)/.test(` ${trimmed}`);
 }
 
-function readArray(lines, located, field) {
+function readArray(lines, located, field, maxValues) {
   const declared = located.count;
-  if (declared > MAX_FCHK_VALUES) {
+  if (declared > maxValues) {
     throw new FchkFormatError(
-      `Field "${field.label}" declares ${declared} values; the limit is ${MAX_FCHK_VALUES}.`,
+      `Field "${field.label}" declares ${declared} values; the limit is ${maxValues}. `
+      + 'That ceiling bounds memory, not the format: the block is legitimate. Raise it with '
+      + '`parseFchk(text, { maxValues })` when the host has the room, or convert the checkpoint '
+      + 'with `formchk -matrix`, which keeps the same data in the binary matrix-element file.',
     );
   }
   const collected = [];
@@ -235,20 +252,43 @@ function readArray(lines, located, field) {
 }
 
 /**
+ * The largest count a field can legitimately declare, given the basis the file
+ * itself states, or `null` when the field's length is not fixed by `NBasis`.
+ *
+ * This is the early half of the shape checks at the bottom of `parseFchk`: an
+ * `N=` that no `NBasis`-function basis could produce is a disagreement between
+ * the header and the block, and reporting it as such is more useful — and much
+ * cheaper — than collecting millions of values and then discovering that the
+ * block is not a matrix (#243). Gaussian writes `NBasis × NBsUse` MO
+ * coefficients, which is at most `NBasis²` because `NBsUse ≤ NBasis`.
+ */
+function basisShapeLimit(field, parsed) {
+  const nbf = parsed.numberOfBasisFunctions;
+  if (!Number.isInteger(nbf) || nbf <= 0) return null;
+  if (field.key === 'alphaMOCoefficients' || field.key === 'betaMOCoefficients') return nbf * nbf;
+  if (field.triangular) return (nbf * (nbf + 1)) / 2;
+  return null;
+}
+
+/**
  * Parse a formatted checkpoint.
  *
  * @param {string} text
- * @param {{ maxChars?: number }} [options] `maxChars` lets the bound be tested
- *   without a 64 MB fixture; callers should leave it alone.
+ * @param {{ maxChars?: number, maxValues?: number }} [options] `maxChars` and
+ *   `maxValues` let the guards be tested without a 160 MB fixture, and let an
+ *   embedding with more memory raise the ceiling for a large basis. Callers
+ *   should leave them alone unless they mean it.
  */
-export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
+export function parseFchk(text, { maxChars = MAX_FCHK_CHARS, maxValues = MAX_FCHK_VALUES } = {}) {
   if (typeof text !== 'string' || !text.trim()) {
     throw new FchkFormatError('The checkpoint file is empty.');
   }
   if (text.length > maxChars) {
     throw new FchkFormatError(
       `The checkpoint is ${text.length} characters; the limit is ${maxChars}. `
-      + 'This reader only needs the summary fields, so trim the file or export it from a smaller job.',
+      + 'That ceiling bounds memory, not the format: a large basis is legitimate and this file may be valid. '
+      + 'Raise the limit with `parseFchk(text, { maxChars })` when the host has the room, or convert the '
+      + 'checkpoint with `formchk -matrix`, which keeps the same data in the binary matrix-element file.',
     );
   }
 
@@ -283,9 +323,21 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
       if (located.count === undefined) {
         throw new FchkFormatError(`Line ${located.line}: field "${shown}" carries one value in this file, but the reader expects an array.`);
       }
+      // #243: fail on a declared count that the file's own NBasis cannot
+      // produce before collecting the block. Checking after the read would
+      // allocate millions of values for a shape that is already known to be
+      // wrong.
+      const shapeLimit = basisShapeLimit(field, parsed);
+      if (shapeLimit !== null && located.count > shapeLimit) {
+        throw new FchkFormatError(
+          `Field "${shown}" declares ${located.count} values, but a ${parsed.numberOfBasisFunctions}-function `
+          + `basis allows at most ${shapeLimit}. The declared count and the basis dimensions disagree, `
+          + 'so the block is not a matrix over this basis.',
+        );
+      }
       parsed[field.key] = field.triangular
-        ? Float64Array.from(readArray(lines, located, { ...field, label: shown }))
-        : readArray(lines, located, { ...field, label: shown });
+        ? Float64Array.from(readArray(lines, located, { ...field, label: shown }, maxValues))
+        : readArray(lines, located, { ...field, label: shown }, maxValues);
     }
     found.push(field.key);
   }
@@ -293,7 +345,8 @@ export function parseFchk(text, { maxChars = MAX_FCHK_CHARS } = {}) {
   if (found.length === 0) {
     throw new FchkFormatError(
       'No checkpoint field was recognised, so this is not a formatted checkpoint '
-      + '(a binary .chk has to be converted with `formchk` first).',
+      + '(a binary .chk has to be converted with `formchk -3` first: bare `formchk` writes only '
+      + 'the backward-compatibility subset, and `-3` is the flag that emits the full v3 layout).',
     );
   }
 

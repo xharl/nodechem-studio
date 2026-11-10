@@ -284,7 +284,8 @@ export function convertWavefunctionFile(text, formatId, { title = '', filename =
     throw new ConversionError(
       `${filename || 'the file'} is ${kind ? `a ${kind} file` : 'not a formatted checkpoint'}, and ${formatId} `
       + 'needs the basis functions and MO coefficients that only a formatted checkpoint carries. '
-      + 'Run formchk on the job\'s .chk first.',
+      + 'Run `formchk -3` on the job\'s .chk first: bare `formchk` writes only the '
+      + 'backward-compatibility subset, which can lack exactly those blocks.',
     );
   }
   return convertFchk(parseFchk(text, { filename }), formatId, { title });
