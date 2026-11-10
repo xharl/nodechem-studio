@@ -197,12 +197,18 @@ describe('RFC 0001 — the queue keeps the family on disk and runs it', () => {
   it('names the engine whose executable is missing instead of one generic message', async () => {
     const { exe, queueManager } = await makeStack();
     const tasks = [task('sp', { engine: 'psi4', inputName: 'sp.dat', outputName: 'sp.out', argv: ['sp.dat'] })];
-    await expect(queueManager.start({
-      projectName: 'missing psi4',
-      tasks,
-      edges: [],
-      options: { executables: { xtb: exe }, scratchDir: '' },
-    })).rejects.toThrow(/Psi4 executable/);
+    const savedPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      await expect(queueManager.start({
+        projectName: 'missing psi4',
+        tasks,
+        edges: [],
+        options: { executables: { xtb: exe }, scratchDir: '' },
+      })).rejects.toThrow(/Psi4 executable/);
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 
   it('reports partial when one record fails and the other finishes', async () => {

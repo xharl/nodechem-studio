@@ -376,7 +376,7 @@ async function commandRun({ positional, flags }) {
       status: task.status,
       gates: record?.gates?.overall || null,
       termination: record?.parsed?.termination || null,
-      error: record?.error || null,
+      error: record?.error || task.error || null,
       runDir: task.runDir || null,
     };
   }));

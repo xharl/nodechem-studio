@@ -938,9 +938,13 @@ function normalizePrepareOutput(c, raw, path, legacy) {
     kind: readEnum(c, source.kind, PREPARE_KINDS, `${path}.kind`, { legacy, fallback: 'relax' }),
     converter: readEnum(c, source.converter, PREPARE_CONVERTERS, `${path}.converter`, { legacy, fallback: 'uff' }),
     forceField: readEnum(c, source.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, { legacy, fallback: 'UFF' }),
-    energyKcal: readNumber(c, source.energyKcal, `${path}.energyKcal`, {
-      legacy, fallback: null, min: -1e9, max: 1e9,
-    }),
+    // A converter that reports no final energy (Open Babel on a non-converged
+    // minimisation) is an honest result, not a missing field: the summary's
+    // `reason` explains it. Refusing null here made the whole project unsaveable
+    // after such a run — the work was lost at save time (#260).
+    energyKcal: source.energyKcal === undefined || source.energyKcal === null || source.energyKcal === ''
+      ? null
+      : readNumber(c, source.energyKcal, `${path}.energyKcal`, { legacy, fallback: null, min: -1e9, max: 1e9 }),
     converged: readBoolean(c, source.converged, `${path}.converged`, { legacy, fallback: false }),
     reason: readString(c, source.reason, `${path}.reason`, { legacy, fallback: '', max: 80 }),
     iterations: readInteger(c, source.iterations, `${path}.iterations`, { legacy, fallback: 0, min: 0, max: 100000 }),

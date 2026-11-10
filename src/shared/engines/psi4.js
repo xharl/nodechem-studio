@@ -243,7 +243,14 @@ export const PSI4_DDX_RADII_SCALING = 1.1;
 const MODEL_BY_KEY = new Map(PSI4_SOLVATION_MODELS.map((label) => [label.toLowerCase(), label]));
 
 const METHOD_BY_KEY = new Map(PSI4_METHODS.map((entry) => [entry.key, entry]));
+// The inspector writes the label, not the key. For most methods the two are the
+// same string; ωB97X-D is not (`wb97x-d` vs `ωB97X-D`), so a project that named
+// the label was refused with "cannot run method ... Supported: ... ωB97X-D".
+// `w` is also accepted for the Greek letter, which no keyboard types by habit.
+const methodAlias = (text) => String(text).toLowerCase().replace(/^w(?=b97)/, 'ω');
+const METHOD_BY_LABEL = new Map(PSI4_METHODS.map((entry) => [methodAlias(entry.label), entry]));
 const BASIS_BY_KEY = new Map(PSI4_BASES.map((entry) => [entry.key, entry]));
+const BASIS_BY_LABEL = new Map(PSI4_BASES.map((entry) => [entry.label.toLowerCase(), entry]));
 const BASIS_BY_PSI4 = new Map(PSI4_BASES.map((entry) => [entry.psi4.toLowerCase(), entry]));
 
 export const PSI4_CAPABILITIES = Object.freeze({
@@ -347,8 +354,8 @@ function freezeCoreChoice(settings = {}) {
 
 /** Method entry for a settings object, or throw naming the field. */
 export function psi4MethodFor(settings = {}) {
-  const key = oneLine(settings.method, 'b3lyp').toLowerCase();
-  const method = METHOD_BY_KEY.get(key);
+  const key = methodAlias(oneLine(settings.method, 'b3lyp'));
+  const method = METHOD_BY_KEY.get(key) || METHOD_BY_LABEL.get(key);
   if (!method) {
     throw new Error(`Psi4 cannot run method "${oneLine(settings.method)}". Supported: `
       + `${PSI4_METHODS.map((entry) => entry.label).join(', ')}.`);
@@ -358,7 +365,7 @@ export function psi4MethodFor(settings = {}) {
 
 export function psi4BasisFor(settings = {}) {
   const key = oneLine(settings.basis, 'def2-svp').toLowerCase();
-  const basis = BASIS_BY_KEY.get(key);
+  const basis = BASIS_BY_KEY.get(key) || BASIS_BY_LABEL.get(key);
   if (!basis) {
     throw new Error(`Psi4 cannot run basis "${oneLine(settings.basis)}". Supported: `
       + `${PSI4_BASES.map((entry) => entry.label).join(', ')}.`);
@@ -434,7 +441,7 @@ export function psi4SolvationFor(settings = {}) {
       + `so it must be SP; "${jobType}" has no such pair in this builder.`);
   }
 
-  const method = METHOD_BY_KEY.get(oneLine(settings.method, 'b3lyp').toLowerCase());
+  const method = METHOD_BY_KEY.get(methodAlias(oneLine(settings.method, 'b3lyp'))) || METHOD_BY_LABEL.get(methodAlias(oneLine(settings.method, 'b3lyp')));
   if (method && method.kind !== 'scf' && method.kind !== 'dft') {
     fail('solvation',
       `DDX couples to the SCF in Psi4 1.11, so an ${method.label} solvated energy would be `

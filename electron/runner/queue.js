@@ -288,6 +288,34 @@ function queueExecutableFor(queue, task) {
  * implements `checkpointArtifact`; the capability fallback keeps a future
  * engine working without a queue change.
  */
+/**
+ * Resolve a companion binary the way a shell would.
+ *
+ * The run console demanded an explicit path for Open Babel and CREST even when
+ * the binary sat on PATH, so the first run on a correctly configured machine
+ * failed with "Choose the ... executable" (#233 sibling). An explicit setting
+ * still wins; PATH is only the fallback.
+ */
+async function resolveOnPath(names) {
+  const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const name of names) {
+    for (const dir of dirs) {
+      const candidate = path.join(dir, name);
+      // eslint-disable-next-line no-await-in-loop
+      const stat = await fsp.stat(candidate).catch(() => null);
+      if (stat?.isFile()) return candidate;
+    }
+  }
+  return '';
+}
+
+const ENGINE_BINARIES = Object.freeze({
+  gaussian: ['g16', 'g09'],
+  xtb: ['xtb'],
+  psi4: ['psi4'],
+  orca: ['orca'],
+});
+
 function canonicalRestartArtifact(engine) {
   if (typeof engine?.checkpointArtifact === 'function') {
     return String(engine.checkpointArtifact({ checkpointName: '', nodeId: 'task' }) || '');
@@ -1276,14 +1304,16 @@ export class QueueManager {
     // Per-engine executables (#98): one project can mix engines, and each task
     // must launch its own binary. The map is keyed by engine id; the single
     // `executable` stays as the fallback for callers that only know one engine.
-    const executables = options.executables && typeof options.executables === 'object'
+    let executables = options.executables && typeof options.executables === 'object'
       ? Object.fromEntries(Object.entries(options.executables)
         .map(([engine, value]) => [String(engine), String(value || '').trim()])
         .filter(([, value]) => value))
       : null;
     const executableFor = (engineId) => executables?.[String(engineId || '')] || executable;
-    const crestExecutable = String(options.crestExecutable || '').trim();
-    const obabelExecutable = String(options.obabelExecutable || '').trim();
+    const crestExecutable = String(options.crestExecutable || '').trim()
+      || await resolveOnPath(process.platform === 'win32' ? ['crest.exe'] : ['crest']);
+    const obabelExecutable = String(options.obabelExecutable || '').trim()
+      || await resolveOnPath(process.platform === 'win32' ? ['obabel.exe'] : ['obabel']);
     const scratchDir = String(options.scratchDir || '').trim();
     // RFC 0001: 1 keeps the sequential drain every existing queue had.
     const maxParallel = Math.max(1, Math.min(Number(options.maxParallel) || 1, LIMITS.maxParallel));
@@ -1325,6 +1355,24 @@ export class QueueManager {
     const needsTautomer = tasks.some((task) => task.type === 'generate'
       && task.generate?.produces === 'tautomers'
       && !task.generate?.member);
+
+    // PATH fallback (#233 sibling): an engine that is on PATH should not require
+    // the same absolute path in every run. Explicit settings still win.
+    if (!dryRun && needsCalcEngine) {
+      const resolved = { ...(executables || {}) };
+      for (const engineId of calcEngines) {
+        if (String(resolved[engineId] || executable || '').trim()) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const found = await resolveOnPath(ENGINE_BINARIES[engineId] || []);
+        if (found) resolved[engineId] = found;
+      }
+      if (Object.keys(resolved).some((key) => resolved[key] && resolved[key] !== executables?.[key])) {
+        executables = resolved;
+        options.executables = resolved;
+      }
+    }
+
+
     if (!dryRun) {
       for (const engineId of calcEngines) {
         const path = executableFor(engineId);
@@ -1859,6 +1907,9 @@ export class QueueManager {
     const dir = path.join(this.queueDir(queue.id), 'generate', task.nodeId);
     await fsp.mkdir(dir, { recursive: true });
 
+    // Set before the work starts: a stage that fails still leaves artifacts, and
+    // a record whose runDir is null hides them.
+    task.runDir = dir;
     task.status = 'running';
     task.attempts += 1;
     task.startedAt = new Date().toISOString();
@@ -3273,7 +3324,28 @@ export class QueueManager {
       }
       let atoms = parsed.frames[0].atoms;
       let summary;
-      if (conf.kind === 'embed3d') {
+      if (queue.options.dryRun && conf.converter !== 'uff') {
+        // A dry run spawns nothing — the queue records no binaries for it — so a
+        // prepare block must not spawn either. It used to call Open Babel anyway
+        // and fail with "No Open Babel executable is configured", which made
+        // `--dry-run` unusable on exactly the projects it exists to check.
+        summary = {
+          kind: conf.kind,
+          converter: conf.converter,
+          forceField: conf.forceField || '',
+          energyKcal: null,
+          converged: null,
+          reason: 'dry-run (converter not run)',
+          iterations: 0,
+          atomCount: atoms.length,
+        };
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: 'Dry run: geometry carried forward unchanged; no converter was run.',
+        });
+      } else if (conf.kind === 'embed3d') {
         const outName = 'prepared.xyz';
         const result = await new ObabelRunner().convert({
           executable: queue.options.obabelExecutable,
