@@ -1,0 +1,42 @@
+                         Program Version 6.1.1  -  RELEASE   -
+FINAL SINGLE POINT ENERGY       -56.139540860974
+
+                      ***********************HURRAY********************
+                      ***            THE IRC HAS CONVERGED          ***
+                      *************************************************
+
+
+---------------------------------------------------------------
+                       IRC PATH SUMMARY              
+---------------------------------------------------------------
+All gradients are in Eh/Bohr.
+
+Step        E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G) 
+   1       -56.148878   -5.859396    0.000769  0.000405
+   2       -56.148874   -5.856341    0.000920  0.000548
+   3       -56.148865   -5.851140    0.001399  0.000764
+   4       -56.148850   -5.841728    0.002505  0.001273
+   5       -56.148793   -5.805504    0.002333  0.001434
+   6       -56.147424   -4.946710    0.014000  0.004836
+   7       -56.144423   -3.063884    0.017226  0.006422
+   8       -56.141311   -1.110821    0.013623  0.005530
+   9       -56.139541    0.000000    0.000002  0.000001 <= TS
+  10       -56.141306   -1.107816    0.013582  0.005557
+  11       -56.144408   -3.053918    0.017263  0.006419
+  12       -56.147414   -4.940276    0.013922  0.004831
+  13       -56.148793   -5.806045    0.002455  0.001431
+  14       -56.148852   -5.842555    0.002283  0.001138
+  15       -56.148867   -5.852514    0.001429  0.000715
+  16       -56.148875   -5.857334    0.000945  0.000519
+  17       -56.148879   -5.859826    0.000716  0.000377
+
+--------------------------------
+SUGGESTED CITATIONS FOR THIS RUN
+--------------------------------
+
+Below you find a list of papers that are relevant to this ORCA run
+We neither can nor want to force you to cite these papers, but we appreciate if you do
+You receive ORCA, which is the product of decades of hard work by many enthusiastic individuals, for free
+The only thing we kindly ask in return is that you cite our papers,
+
+                             ****ORCA TERMINATED NORMALLY****

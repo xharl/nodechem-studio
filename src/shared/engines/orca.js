@@ -39,6 +39,9 @@ import {
   parseOrcaExcitedStates,
   parseOrcaRaman,
   parseOrcaVcd,
+  parseOrcaScan,
+  parseOrcaIrc,
+  parseOrcaSaddle,
   parseOrcaGTensor,
   parseOrcaHyperfine,
   parseOrcaShieldings,
@@ -205,18 +208,28 @@ export const ORCA_JOB_KEYWORDS = Object.freeze({
    * `%tddft` block alone, so the keyword list is empty and the block carries it.
    */
   'TD-DFT': Object.freeze([]),
+  /**
+   * Issue 286. A saddle search is `! OptTS`; with no `%geom Calc_Hess` ORCA
+   * falls back to the Almloef model Hessian and follows the wrong curvature, so
+   * the builder always writes `Calc_Hess true` (see `geomLinesFor`).
+   */
+  'Opt=TS': Object.freeze(['OptTS']),
+  IRC: Object.freeze(['IRC']),
+  /**
+   * A relaxed surface scan is an optimisation with a `%geom Scan` constraint;
+   * `! Scan` is not an ORCA keyword and a bare `%geom Scan` without `Opt` is
+   * silently ignored (real 6.1.1 run: the output banner read "Single Point
+   * Calculation" and no table was printed).
+   */
+  Scan: Object.freeze(['Opt']),
 });
 
-export const ORCA_UNSUPPORTED_JOB_TYPES = Object.freeze(['Opt=TS', 'IRC', 'Scan']);
+export const ORCA_UNSUPPORTED_JOB_TYPES = Object.freeze([]);
 
 /** Methods this builder will not run a TD-DFT response calculation for. */
 const CORRELATED_NO_TDDFT = new Set(['MP2', 'CCSD(T)', 'DLPNO-CCSD(T)']);
 
-export const ORCA_UNSUPPORTED_JOB_REASONS = Object.freeze({
-  'Opt=TS': 'a transition-state search needs an initial Hessian and mode specification written in a %geom block',
-  IRC: 'an IRC needs a %irc block naming the transition mode and direction',
-  Scan: 'a relaxed PES scan needs a %geom Scan block naming the scanned coordinate',
-});
+export const ORCA_UNSUPPORTED_JOB_REASONS = Object.freeze({});
 
 export const ORCA_CAPABILITIES = Object.freeze({
   id: ORCA_ENGINE_ID,
@@ -240,9 +253,6 @@ export const ORCA_CAPABILITIES = Object.freeze({
   jobTypes: Object.freeze(Object.keys(ORCA_JOB_KEYWORDS)),
   unsupportedJobTypes: ORCA_UNSUPPORTED_JOB_TYPES,
   unsupportedFeatures: Object.freeze([
-    'transition-state search (OptTS)',
-    'IRC',
-    'relaxed PES scan',
     'population analysis (NBO/ESP)',
     'Gaussian-style checkpoint hand-off (%Chk)',
     'Gaussian PCM keyword (ORCA implements CPCM/SMD)',
@@ -421,6 +431,126 @@ function optKeywordFor(settings = {}, jobType = 'SP') {
   if (requested === 'Tight') return 'TightOpt';
   if (requested === 'VeryTight') return 'VeryTightOpt';
   throw new Error(`ORCA has no optimisation keyword for "${requested}". Supported: Tight, VeryTight.`);
+}
+
+/* ── Reaction-path blocks (issue 286) ─────────────────────── */
+
+/** ORCA's one-letter internal-coordinate codes and the atom count each needs. */
+const ORCA_COORDINATE_CODES = Object.freeze({ bond: 'B', angle: 'A', dihedral: 'D' });
+const ORCA_COORDINATE_ATOMS = Object.freeze({ bond: 2, angle: 3, dihedral: 4 });
+
+/** Six decimals is ORCA's own print width for a scan limit. */
+function scanNumber(value) {
+  return Number(Number(value).toFixed(6)).toFixed(6);
+}
+
+/**
+ * The one coordinate a Scan job scans, translated to ORCA's 0-based `%geom Scan`
+ * form.
+ *
+ * ORCA takes `Scan B 0 1 = start, end, steps`, so the step size the block
+ * records is converted to an end point. Indices are shifted from the app's
+ * 1-based atom order because ORCA numbers atoms from 0 (a real 6.1.1 run with
+ * `B 0 1` scanned the O-H bond of water).
+ */
+function scanCoordinateFor(settings = {}, jobType = 'SP') {
+  const constraints = Array.isArray(settings?.constraints) ? settings.constraints : [];
+  const scanned = constraints.filter((entry) => String(entry?.mode ?? 'freeze') === 'scan');
+  if (jobType !== 'Scan') {
+    if (scanned.length > 0) {
+      throw new Error(
+        'A constraint is marked "scan" but the job type is not Scan: ORCA reads a scanned '
+        + 'coordinate only in a Scan job. Set the job type to Scan, or mark the constraint "freeze".',
+      );
+    }
+    return null;
+  }
+  if (scanned.length === 0) {
+    throw new Error(
+      'An ORCA relaxed scan needs one coordinate marked "scan" (a bond, angle or dihedral with '
+      + 'a starting value, a step size and a step count). Add it under constraints, or use a '
+      + 'different job type.',
+    );
+  }
+  if (scanned.length > 1) {
+    throw new Error(
+      `This builder writes one %geom Scan column and ${scanned.length} coordinates are marked `
+      + '"scan". ORCA can scan several, but the profile reader assumes one coordinate per point; '
+      + 'mark all but one "freeze".',
+    );
+  }
+  const entry = scanned[0];
+  const kind = String(entry?.kind ?? '');
+  const code = ORCA_COORDINATE_CODES[kind];
+  const atoms = Array.isArray(entry?.atoms) ? entry.atoms : [];
+  if (!code || atoms.length !== ORCA_COORDINATE_ATOMS[kind]) {
+    throw new Error(
+      `A scanned coordinate must be a bond, an angle or a dihedral with ${ORCA_COORDINATE_ATOMS[kind] ?? 2}-4 `
+      + `atom indices; got ${JSON.stringify(entry)}.`,
+    );
+  }
+  const steps = Number(entry?.steps);
+  const size = Number(entry?.size);
+  const start = Number(entry?.value);
+  if (!Number.isInteger(steps) || steps < 1) {
+    throw new Error('A scanned coordinate needs a positive integer step count.');
+  }
+  if (!Number.isFinite(size) || size === 0) {
+    throw new Error('A scanned coordinate needs a non-zero step size.');
+  }
+  if (!Number.isFinite(start)) {
+    throw new Error('A scanned coordinate needs the starting value of the coordinate.');
+  }
+  const indices = atoms.map((index) => {
+    const value = Number(index);
+    if (!Number.isInteger(value) || value < 1) {
+      throw new Error(`Constraint atom indices are 1-based; got ${JSON.stringify(index)}.`);
+    }
+    return value - 1;
+  });
+  return {
+    kind,
+    code,
+    atoms: indices,
+    start,
+    end: Number((start + steps * size).toFixed(6)),
+    steps,
+    size,
+    line: `Scan ${code} ${indices.join(' ')} = ${scanNumber(start)}, ${scanNumber(start + steps * size)}, ${steps} end`,
+  };
+}
+
+/** `%geom` lines a job type needs: an exact Hessian for a saddle, a scan line for a scan. */
+function geomFor(settings = {}, jobType = 'SP') {
+  if (jobType === 'Opt=TS') {
+    return { scan: null, lines: ['%geom', '  Calc_Hess true', 'end'] };
+  }
+  if (jobType === 'Scan') {
+    const scan = scanCoordinateFor(settings, jobType);
+    return { scan, lines: ['%geom', `  ${scan.line}`, 'end'] };
+  }
+  scanCoordinateFor(settings, jobType);
+  return { scan: null, lines: [] };
+}
+
+/** ORCA's `%irc Direction` values, keyed by the app's direction setting. */
+const ORCA_IRC_DIRECTIONS = Object.freeze({ forward: 'forward', reverse: 'backward', both: 'both' });
+
+/** `%irc` lines: the iteration cap and which side of the saddle to follow. */
+function ircFor(settings = {}, jobType = 'SP') {
+  if (jobType !== 'IRC') return { maxIter: null, direction: null, lines: [] };
+  const requested = oneLine(settings.ircDirection, 'both');
+  const direction = ORCA_IRC_DIRECTIONS[requested];
+  if (!direction) {
+    throw new Error(
+      `ORCA has no IRC direction "${requested}". Supported: forward, reverse, both.`,
+    );
+  }
+  return {
+    maxIter: 50,
+    direction,
+    lines: ['%irc', `  Direction ${direction}`, '  MaxIter 50', 'end'],
+  };
 }
 
 /* ── Input builder ────────────────────────────────────────── */
@@ -670,6 +800,12 @@ export function buildOrcaInput({
   if (tddft) blocks.push(...tddft.lines);
   if (wantsRaman) blocks.push('%elprop', '  Polar 1', 'end');
   if (wantsVcd) blocks.push('%freq', '  DOVCD true', 'end');
+  // Issue 286: the reaction-path blocks. A saddle search needs an exact
+  // Hessian, a scan needs its coordinate, and an IRC needs its iteration cap.
+  const geom = geomFor(settings, jobType);
+  if (geom.lines.length > 0) blocks.push(...geom.lines);
+  const irc = ircFor(settings, jobType);
+  if (irc.lines.length > 0) blocks.push(...irc.lines);
 
   // `! NMR` needs a %EPRNMR nucleus list; without it ORCA shields nothing.
   // Written after the coordinates, as ORCA's NMR examples do.
@@ -714,6 +850,7 @@ export function buildOrcaInput({
       : { model: null, solvent: null, label: null },
     resources,
     nmr: nmr ? { elements: nmr.elements, couplings: nmr.couplings } : null,
+    scan: geom.scan,
     /**
      * Human-readable simple-input line, for the inspector preview. A TD-DFT job
      * has no route keyword in ORCA 6, so its block is appended here — otherwise
@@ -1079,10 +1216,20 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
   // block is the request — so the log's own banner is the only evidence that
   // the run was a response calculation rather than a single point.
   const ranResponse = /TD-DFT(?:\/TDA)?\s+EXCITED STATES/i.test(body);
-  const jobType = ranResponse ? 'TD-DFT' : echo ? (/\bopt\b/i.test(echo) && /\bfreq\b/i.test(echo) ? 'Opt Freq'
-    : /\bopt\b/i.test(echo) ? 'Opt'
-      : /\bfreq\b/i.test(echo) ? 'Freq'
-        : /\bnmr\b/i.test(echo) ? 'NMR' : 'SP') : null;
+  // Issue 286: a path job is identified by its own section first. An IRC log
+  // also contains optimisation and SCF blocks, and a scan log's echo is just
+  // `! ... Opt`, so the echo alone would mislabel both.
+  const looksSaddle = /Taking P-RFO step/i.test(body) || /\boptts\b/i.test(echo || '');
+  const looksIrc = /IRC PATH SUMMARY/i.test(body) || /\birc\b/i.test(echo || '');
+  const looksScan = /RELAXED SURFACE SCAN RESULTS/i.test(body);
+  const jobType = ranResponse ? 'TD-DFT'
+    : looksSaddle ? 'Opt=TS'
+      : looksIrc ? 'IRC'
+        : looksScan ? 'Scan'
+          : echo ? (/\bopt\b/i.test(echo) && /\bfreq\b/i.test(echo) ? 'Opt Freq'
+            : /\bopt\b/i.test(echo) ? 'Opt'
+              : /\bfreq\b/i.test(echo) ? 'Freq'
+                : /\bnmr\b/i.test(echo) ? 'NMR' : 'SP') : null;
 
   // Issue 222: ORCA's magnetic properties. The hyperfine section and the
   // spin-spin summary live after the SCF and are not part of the canonical
@@ -1103,6 +1250,12 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
   // VCD table (from `%freq DOVCD true` on a Freq job). Absent unless requested.
   const ramanModes = parseOrcaRaman(body);
   const vcdModes = parseOrcaVcd(body);
+  // Issue 286: the reaction-path records. Each is null unless the log carries
+  // its own section, so "this job had no scan" never reads as "a scan of zero
+  // points".
+  const scanProfile = parseOrcaScan(body);
+  const ircPath = parseOrcaIrc(body);
+  const saddle = parseOrcaSaddle(body);
 
   const result = canonicalResult({
     engine: ORCA_ENGINE_ID,
@@ -1181,6 +1334,9 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
       errorModule,
       optimizationFailed,
       scfNotConverged: scfStatus === 'failed',
+      scan: scanProfile,
+      irc: ircPath,
+      saddle,
     },
     lineCount: lines.length,
   });

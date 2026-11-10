@@ -1,0 +1,24 @@
+                         Program Version 6.1.1  -  RELEASE   -
+FINAL SINGLE POINT ENERGY       -56.138663745888
+
+================================================================================
+
+                       *****************************
+                       * Geometry Optimization Run *
+                       *****************************
+
+
+Lowest eigenvalues of the Hessian:
+ -0.021825072  0.121696887  0.121697743  0.494769449  0.506081613
+Hessian has   1 negative eigenvalues
+Taking P-RFO step
+Searching for lambda that maximizes along the lowest mode
+
+
+                    ***********************HURRAY********************
+                    ***        THE OPTIMIZATION HAS CONVERGED     ***
+                    *************************************************
+
+
+
+                             ****ORCA TERMINATED NORMALLY****
