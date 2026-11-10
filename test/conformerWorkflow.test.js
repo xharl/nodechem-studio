@@ -458,12 +458,18 @@ describe('conformer queue path', () => {
     const project = conformerProject({ output: selection() });
     const plan = buildWorkflowPlan(project);
     const { queueManager } = await stack();
-    await expect(queueManager.start({
-      projectName: project.name,
-      tasks: plan.tasks.filter((task) => task.type === 'generate'),
-      edges: [],
-      options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
-    })).rejects.toThrow(/CREST executable/i);
+    const savedPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      await expect(queueManager.start({
+        projectName: project.name,
+        tasks: plan.tasks.filter((task) => task.type === 'generate'),
+        edges: [],
+        options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
+      })).rejects.toThrow(/CREST executable/i);
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 
   it.skipIf(onWindows)('spawns CREST in the folder where its input was staged (#100)', async () => {

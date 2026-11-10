@@ -252,12 +252,20 @@ describe.skipIf(onWindows)('the Open Babel route through the queue', () => {
     const project = projectWith();
     const plan = buildWorkflowPlan(project);
     const { queueManager } = await stack();
-    await expect(queueManager.start({
-      projectName: project.name,
-      tasks: plan.tasks,
-      edges: plan.edges,
-      options: { dryRun: false, executable: null, crestExecutable: null, obabelExecutable: '', scratchDir: '' },
-    })).rejects.toThrow(/Choose the Open Babel executable/);
+    // The queue falls back to PATH now; this test is about a machine without the
+    // binary, so give it one.
+    const savedPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      await expect(queueManager.start({
+        projectName: project.name,
+        tasks: plan.tasks,
+        edges: plan.edges,
+        options: { dryRun: false, executable: null, crestExecutable: null, obabelExecutable: '', scratchDir: '' },
+      })).rejects.toThrow(/Choose the Open Babel executable/);
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 
   it('labels a dry run with the fixture, not as an Open Babel result', async () => {
