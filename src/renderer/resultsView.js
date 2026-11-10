@@ -168,9 +168,11 @@ function programBanner(program) {
 function methodSummary(method) {
   if (!isObject(method)) return null;
   const parts = [];
-  if (text(method.functional) || text(method.basis)) {
-    parts.push([text(method.functional), text(method.basis)].filter(Boolean).join('/'));
+  const level = text(method.functional) || text(method.method);
+  if (level || text(method.basis)) {
+    parts.push([level, text(method.basis)].filter(Boolean).join('/'));
   }
+  if (text(method.pnoThreshold)) parts.push(text(method.pnoThreshold));
   if (text(method.dispersion)) parts.push(text(method.dispersion));
   if (text(method.solvation)) parts.push(`solvation ${text(method.solvation)}`);
   if (text(method.grid)) parts.push(`grid ${text(method.grid)}`);

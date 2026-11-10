@@ -23,6 +23,7 @@ one of them is not named (literally, or by a glob row) in this README.
 | `xtb-6.6.1-water-optfreq/` | xtb | 6.6.1 | `scc`, `opt-converged`, `frequencies`, `thermochemistry`, `opt-freq` |
 | `orca-5.0-dvb-ir/` | ORCA | 5.0.1 | `scf`, `frequencies`, `thermochemistry` |
 | `orca-5.0-water-mp2/` | ORCA | 5.0.0 | `final-single-point` |
+| `orca-6.1-water-dlpno/` | ORCA | 6.1.1 | `dlpno-header`, `dlpno-ccsd(t)` — real DLPNO-CCSD(T) header, PNO cutoff, correlation and triples energies |
 | `psi4-mp2-freeze-core/` | Psi4 | 1.11 | `mp2` — frozen-core vs all-electron pair (issue 174) |
 
 ## Gaussian

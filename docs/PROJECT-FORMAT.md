@@ -132,7 +132,12 @@ Type-specific payloads:
 `raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`, `provider`,
-`recordTransitionDipoles`, `nmrSpinSpin`.
+`recordTransitionDipoles`, `nmrSpinSpin`, `pnoThreshold`.
+
+`pnoThreshold` is `"NormalPNO"` or `"TightPNO"` and applies only to an ORCA
+`DLPNO-CCSD(T)` block. It is absent when never set; the ORCA builder writes
+`NormalPNO` explicitly in that case and refuses the key on a method with no PNO
+truncation.
 
 `provider` is absent (run the engine) or `"ml:aimnet2"`. With a provider the block stays a
 `calculate` block but does not spawn the engine: one structure is scored, `run.json` carries
