@@ -87,6 +87,12 @@ function readCase(value, path, index) {
     id,
     name,
     reference,
+    // Issue 230 live mode: an optional molecule makes the rung runnable. It is
+    // carried through untouched; the live runner refuses a malformed one by
+    // name instead of inventing coordinates.
+    ...(item.molecule && typeof item.molecule === 'object' && !Array.isArray(item.molecule)
+      ? { molecule: item.molecule }
+      : {}),
     rungs: rungs.map((rung, rungIndex) => readRung(rung, `${path}.rungs[${rungIndex}]`, rungIndex)),
   };
 }

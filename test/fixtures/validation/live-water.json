@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "water-live",
+      "name": "Water (live)",
+      "reference": -75.0,
+      "molecule": {
+        "charge": 0,
+        "multiplicity": 1,
+        "coords": [
+          { "element": "O", "x": 0, "y": 0, "z": 0.1173 },
+          { "element": "H", "x": 0, "y": 0.7572, "z": -0.4692 },
+          { "element": "H", "x": 0, "y": -0.7572, "z": -0.4692 }
+        ]
+      },
+      "rungs": [
+        { "label": "HF/STO-3G", "method": "HF", "basis": "STO-3G" },
+        { "label": "B3LYP/STO-3G", "method": "B3LYP", "basis": "STO-3G" }
+      ]
+    }
+  ]
+}

@@ -46,7 +46,7 @@ import {
   structureFromQcschema,
 } from '../src/shared/qcschema.js';
 import { parseFchk } from '../src/shared/fchk.js';
-import { ValidationFormatError, validationMatrix, validationMatrixText } from '../src/shared/validationMatrix.js';
+import { ValidationFormatError, buildValidationMatrix, parseValidationCases, validationMatrixText } from '../src/shared/validationMatrix.js';
 import {
   EXPORT_ENGINE_IDS,
   exporterFor,
@@ -67,6 +67,8 @@ import { parseMolden } from '../src/shared/molden.js';
 import { parseWfn } from '../src/shared/wfn.js';
 import { parseWfx } from '../src/shared/wfx.js';
 import { CCLIB_SCRIPT_RELATIVE, cclibOutputName, parseCclibSummary } from '../src/shared/cclib.js';
+import { PyscfRunner } from '../electron/runner/pyscfRunner.js';
+import { buildPyscfInput, parsePyscfOutput } from '../src/shared/engines/pyscf.js';
 import { FIGURE_LEVELS, cubeVolumesFor, surfacesFor } from '../src/shared/report.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
@@ -87,6 +89,7 @@ import {
 
 const EXIT = Object.freeze({ ok: 0, usage: 1, invalid: 2, gate: 3, engine: 4, conflict: 5, partial: 5 });
 const TERMINAL = new Set(['completed', 'failed', 'needs-review', 'partial', 'blocked', 'cancelled']);
+const oneLine = (value, max = 400) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 const USAGE = `ncs — headless NodeChem Studio
 
@@ -98,7 +101,8 @@ const USAGE = `ncs — headless NodeChem Studio
       [--settings <file>]
       [--timeout <seconds>] [--json]
   ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
-  ncs validation <cases.json> [--out <file>] [--json]
+  ncs validation <cases.json> [--run] [--executable <python>] [--work <dir>] [--timeout <seconds>]
+      [--out <file>] [--json]
   ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
   ncs record import --program <name> --version <version> --method <method>
       --basis <basis> --energy <hartree> (--source <file>|--source-sha256 <hex>)
@@ -698,13 +702,103 @@ async function commandReport({ positional, flags }) {
 }
 
 /**
+ * The live half of issue 230: run one ladder rung for one case with PySCF.
+ *
+ * The validation case file can carry a molecule; when it does, `--run` builds
+ * the same fixed deck the engine uses elsewhere, runs it in a fresh folder and
+ * reads the JSON record. A refusal is returned as a reason, not thrown through
+ * the table: the whole point of the matrix is to keep the rung visible.
+ */
+async function runValidationRung({ entry, rung, executable, workRoot, timeoutSeconds }) {
+  const engine = String(rung.engine || 'pyscf').trim().toLowerCase();
+  if (engine !== 'pyscf') {
+    return {
+      status: 'not computed',
+      reason: `live validation supports PySCF rungs in this build; rung engine "${engine}" was not run`,
+    };
+  }
+  const molecule = entry.molecule;
+  if (!molecule || typeof molecule !== 'object') {
+    return { status: 'not computed', reason: 'case has no molecule to run' };
+  }
+  const sourceAtoms = Array.isArray(molecule.coords)
+    ? molecule.coords
+    : (Array.isArray(molecule.atoms) ? molecule.atoms : null);
+  if (!sourceAtoms || sourceAtoms.length === 0) {
+    return { status: 'not computed', reason: 'case molecule has no Cartesian coordinates' };
+  }
+  const coords = sourceAtoms.map((atom) => ({
+    element: String(atom?.element || '').trim(),
+    x: Number(atom?.x),
+    y: Number(atom?.y),
+    z: Number(atom?.z),
+  }));
+  const slug = (value) => String(value || 'rung').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 48) || 'rung';
+  const rungDir = path.join(workRoot, slug(entry.id), slug(rung.label));
+  await fs.mkdir(rungDir, { recursive: true });
+  let built;
+  try {
+    built = buildPyscfInput({
+      title: `${entry.name || entry.id} — ${rung.label}`,
+      settings: {
+        method: rung.method || 'HF',
+        basis: rung.basis || 'STO-3G',
+        jobType: rung.jobType || 'SP',
+        ...(rung.activeSpace ? { pyscfActiveSpace: rung.activeSpace } : {}),
+      },
+      molecule: {
+        charge: Number.isInteger(Number(molecule.charge)) ? Number(molecule.charge) : 0,
+        multiplicity: Number.isInteger(Number(molecule.multiplicity)) ? Number(molecule.multiplicity) : 1,
+        coords,
+      },
+      inputName: `${slug(entry.id)}-${slug(rung.label)}.gjf`,
+    });
+  } catch (error) {
+    return { status: 'not computed', reason: oneLine(error.message, 400) };
+  }
+  await fs.writeFile(path.join(rungDir, built.inputName), built.inputText, 'utf8');
+  const runner = new PyscfRunner();
+  let raw;
+  try {
+    raw = await runner.run({
+      executable,
+      argv: built.argv,
+      cwd: rungDir,
+      outputName: built.outputName,
+      threads: 1,
+      timeoutMs: timeoutSeconds * 1000,
+    });
+  } catch (error) {
+    return { status: 'not computed', reason: oneLine(error.message, 400), runDir: rungDir };
+  }
+  const parsed = parsePyscfOutput(raw.outputText, { recordText: raw.recordText });
+  const energy = Number(parsed?.finalEnergy?.hartree);
+  if (Number.isFinite(energy) && parsed?.status === 'completed') {
+    return {
+      status: 'computed',
+      energyHartree: energy,
+      runDir: rungDir,
+      method: rung.method || 'HF',
+      basis: rung.basis || 'STO-3G',
+      jobType: rung.jobType || 'SP',
+    };
+  }
+  return {
+    status: 'not computed',
+    reason: oneLine(parsed?.termination || `PySCF exited ${raw.exitCode} without a final energy`, 400),
+    runDir: rungDir,
+  };
+}
+
+/**
  * `ncs validation` — tabulate a recorded method ladder across reference cases.
  *
- * This command does not launch an engine: the case file records the rung
- * energies a previous run produced, and this pass validates that record and
- * computes the spread and error table. That is deliberate (issue #230): the
- * output has to be reproducible from recorded inputs with no network, and a
- * table that silently launched a different binary would not be.
+ * Without `--run`, this command does not launch an engine: the case file records
+ * the rung energies a previous run produced, and this pass validates that record
+ * and computes the spread and error table. That is deliberate (issue #230): the
+ * output has to be reproducible from recorded inputs with no network. With
+ * `--run`, PySCF rungs that have no recorded energy are actually run, and every
+ * failure stays in the table as `not computed` with its reason.
  */
 async function commandValidation({ positional, flags }) {
   const [file] = positional;
@@ -715,14 +809,65 @@ async function commandValidation({ positional, flags }) {
   } catch (error) {
     fail(`could not read ${file}: ${error.message}`, EXIT.invalid);
   }
-  let matrix;
+  let parsedCases;
   try {
-    matrix = validationMatrix(text);
+    parsedCases = parseValidationCases(text);
   } catch (error) {
     const message = error instanceof ValidationFormatError ? error.message : `invalid JSON: ${error.message}`;
     fail(`validation case set: ${message}`, EXIT.invalid);
   }
-  const table = validationMatrixText(matrix);
+
+  let liveRuns = null;
+  if (flags.run) {
+    const needsLive = parsedCases.cases.some((entry) => entry.rungs.some((rung) => rung.energyHartree === null));
+    if (!needsLive) {
+      liveRuns = [];
+    } else {
+      const settings = await readRunSettings(flags);
+      const executable = flags.executable
+        ? String(flags.executable)
+        : String(settings?.engines?.pyscf || '').trim();
+      if (!executable) {
+        fail('validation --run needs a PySCF interpreter: pass --executable <python> or set Settings → Engines → PySCF.',
+          EXIT.engine);
+      }
+      const timeoutSeconds = flags.timeout === undefined ? 600 : Number(flags.timeout);
+      if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 86400) {
+        fail('--timeout needs seconds between 1 and 86400.', EXIT.usage);
+      }
+      const workRoot = path.resolve(String(flags.work || './ncs-validation'));
+      await fs.mkdir(workRoot, { recursive: true });
+      liveRuns = [];
+      const cases = [];
+      for (const entry of parsedCases.cases) {
+        const rungs = [];
+        for (const rung of entry.rungs) {
+          if (rung.energyHartree !== null) {
+            rungs.push(rung);
+            continue;
+          }
+          const outcome = await runValidationRung({
+            entry, rung, executable, workRoot, timeoutSeconds,
+          });
+          liveRuns.push({ caseId: entry.id, label: rung.label, ...outcome });
+          rungs.push({
+            ...rung,
+            energyHartree: Number.isFinite(outcome.energyHartree) ? outcome.energyHartree : null,
+            reason: outcome.reason || rung.reason || 'not computed',
+          });
+        }
+        cases.push({ ...entry, rungs });
+      }
+      parsedCases = { ...parsedCases, cases };
+    }
+  }
+
+  const matrix = buildValidationMatrix(parsedCases);
+  if (liveRuns) matrix.liveRuns = liveRuns;
+  const table = validationMatrixText(matrix)
+    + (liveRuns?.length
+      ? `\nlive runs:\n${liveRuns.map((run) => `  ${run.caseId}\\t${run.label}\\t${run.status}${run.reason ? ` — ${run.reason}` : ''}`).join('\n')}\n`
+      : '');
   if (flags.out !== undefined) {
     const out = path.resolve(String(flags.out));
     await fs.mkdir(path.dirname(out), { recursive: true });
