@@ -2659,6 +2659,21 @@ function calcInspector(node) {
       + '</span></div>',
   ].join(''));
 
+  // ROA (issue 127) is the third frequency-keyword flag. It is Gaussian-only and
+  // needs a frequency job; the panel makes the user choose one of the three
+  // printed scattering geometries rather than averaging them.
+  const roaGroup = group('ROA', s.roa ? 'intensities on' : 'off', s.roa, [
+    switchRow('ROA intensities', 'adds =ROA to the frequency keyword', 'roa', s.roa, { disabled: !frequencyJob }),
+    '<div class="field full"><span class="inspector-note">'
+      + (frequencyJob
+        ? 'Gaussian prints three ROA intensities per mode: <code>ROA1</code> ICPu/SCPu(180), '
+          + '<code>ROA2</code> ICPd/SCPd(90) and <code>ROA3</code> DCPI(180), plus <code>RC180</code>. '
+          + 'The results panel plots the one you choose and names its geometry; the units are the ones the log states.<br>'
+          + 'With Raman and VCD also on, one keyword carries all three: <code>Freq=(Raman,VCD,ROA)</code>.'
+        : 'Requires a frequency job: choose Freq or Opt Freq. The input builder refuses the keyword otherwise.')
+      + '</span></div>',
+  ].join(''));
+
   const gates = s.gates;
   const gatesGroup = group('Gates', `${[gates.thermo, gates.finalEnergy, gates.imaginary !== null, gates.scf].filter(Boolean).length} active`, true, [
     switchRow('Normal termination', 'always required', 'termination', true, { gate: true, disabled: true }),
@@ -2738,6 +2753,7 @@ function calcInspector(node) {
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob || !nmrJob ? '' : nmrGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : ramanGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : vcdGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : roaGroup}
     ${isXtb ? xtbSolvationGroup : isPsi4 ? '' : isPyscf ? pyscfSolvationGroup : compositeJob ? '' : isOrca ? orcaSolvationGroup : gaussianSolvationGroup}
     ${moleculeGroup}
     ${spinGroup}
@@ -4981,6 +4997,7 @@ function updateNodeField(node, key, value) {
         node.settings.orbitals = false;
         node.settings.raman = false;
         node.settings.vcd = false;
+        node.settings.roa = false;
         node.settings.grid = '';
         node.settings.scf = '';
         node.settings.tdStates = 0;
@@ -5011,6 +5028,7 @@ function updateNodeField(node, key, value) {
         node.settings.orbitals = false;
         node.settings.raman = false;
         node.settings.vcd = false;
+        node.settings.roa = false;
         node.settings.grid = '';
         node.settings.scf = '';
         node.settings.tdStates = 0;
@@ -5045,6 +5063,7 @@ function updateNodeField(node, key, value) {
         node.settings.stableOpt = false;
         node.settings.raman = false;
         node.settings.vcd = false;
+        node.settings.roa = false;
         node.settings.tdStates = 0;
         node.settings.tdTriplets = '';
         node.settings.tdRoot = 0;

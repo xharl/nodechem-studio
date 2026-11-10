@@ -25,6 +25,7 @@ const KINDS = {
   uvvis: { xLabel: 'Wavelength / nm', invert: true, signed: false, yLabel: 'ε (rel.)' },
   ecd: { xLabel: 'Wavelength / nm', invert: true, signed: true, yLabel: 'Δε (rel.)' },
   vcd: { xLabel: 'Wavenumber / cm⁻¹', invert: true, signed: true, yLabel: 'Δε (rel.)' },
+  roa: { xLabel: 'Wavenumber / cm⁻¹', invert: true, signed: true, yLabel: 'ROA (rel.)' },
   nmr: { xLabel: 'Chemical shift / ppm', invert: true, signed: false, yLabel: 'intensity (rel.)' },
 };
 
@@ -339,6 +340,24 @@ export function fromVcd(spectrum, { title = 'VCD (simulated)' } = {}) {
     range: [spectrum.minCm, spectrum.maxCm],
     fwhm: `Lorentzian, FWHM ${fmtNum(spectrum.fwhmCm, 1)} cm⁻¹`,
     quantity: 'rotational strength, signed',
+  });
+}
+
+/** ROA from `roaSpectrum()` — one printed scattering geometry, signed. */
+export function fromRoa(spectrum, { title = 'ROA (simulated)' } = {}) {
+  if (!spectrum || !Array.isArray(spectrum.curve) || spectrum.curve.length === 0) return null;
+  const sticks = normaliseSticks(
+    (spectrum.peaks ?? []).map((peak) => ({ x: peak.wavenumber, height: peak.intensity })),
+    { signed: true },
+  );
+  return spectrumFigure({
+    kind: 'roa',
+    title,
+    curve: spectrum.curve.map((point) => ({ x: point.wavenumber, y: point.intensity })),
+    sticks,
+    range: [spectrum.minCm, spectrum.maxCm],
+    fwhm: `Lorentzian, FWHM ${fmtNum(spectrum.fwhmCm, 1)} cm⁻¹`,
+    quantity: spectrum.quantity || 'ROA intensity, signed',
   });
 }
 

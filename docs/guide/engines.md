@@ -48,9 +48,11 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
   **signed**, and the panel draws it around a zero line instead of a magnitude. Gaussian 16 prints
   the unit (`10⁻⁴⁴ esu² cm²`) but **no velocity/length representation label**, so the record keeps
   `representation: null` and the panel says the representation is not stated rather than choosing
-  one: the two agree only in a complete basis. Raman and VCD combine into one keyword,
-  `Freq=(Raman,VCD)`. ROA is a Gaussian 16 B.01+ feature and is not read here — this repository has
-  no real ROA log to write a parser against, and it does not guess layouts.
+  one: the two agree only in a complete basis. Raman, VCD and ROA combine into one keyword,
+  `Freq=(Raman;VCD;ROA)` — written `Freq=(Raman,VCD,ROA)` — and ROA is read per mode with its
+  three printed scattering geometries (`ROA1` ICPu/SCPu(180), `ROA2` ICPd/SCPd(90), `ROA3`
+  DCPI(180)) plus `RC180`. The pinned ROA fixture is a real Gaussian 09 E.01 log; a G16 B.01+
+  log was not found, so that revision is not claimed.
 - **Validity checks** — the pre- and post-run checks in [Results](results.md#validity-checks), including
   `excited-state-root` (a root the TD job computes, and a `Pop=NTO` source with a TD record).
 - **Effective core potentials.** A basis with an ECP (def2 or SDD for any element above krypton)

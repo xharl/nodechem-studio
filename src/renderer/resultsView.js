@@ -32,10 +32,11 @@ import { elementForNucleus, nmrSpectrum } from '../shared/nmr.js';
 import { SHIPPED_REFERENCES, levelLabel, lookupReference, shiftFor } from '../shared/nmrReferences.js';
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
 import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
+import { ROA_UNITS, roaSpectrum } from '../shared/roa.js';
 import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
 import { scaleToSpectrum } from '../shared/overlay.js';
 import {
-  fromEcd, fromNmr, fromRaman, fromUvVis, fromVcd, orbitalLevelsFigure,
+  fromEcd, fromNmr, fromRaman, fromRoa, fromUvVis, fromVcd, orbitalLevelsFigure,
 } from '../shared/figures/index.js';
 import {
   importMeasuredSpectrum, importSpectrumText, overlayFromRecord, placeMeasuredOverlay,
@@ -2056,6 +2057,70 @@ export function vcdSectionHtml(modes, { fwhmCm = 12 } = {}) {
 }
 
 /**
+ * ROA (issue 127). Three scattering geometries are printed; the card plots one at a
+ * time and names it. ROA intensities are signed, so the curve is signed and the
+ * table keeps the sign. Units are carried from the log; no unit is invented.
+ */
+function roaCard(parsed, flags) {
+  const modes = parsed?.roa;
+  if (!Array.isArray(modes) || modes.length === 0) return '';
+  const usable = modes.filter((mode) => Number.isFinite(mode.roa1)
+    || Number.isFinite(mode.roa2) || Number.isFinite(mode.roa3));
+  if (usable.length === 0) return '';
+  const meta = parsed?.roaMeta || {};
+  const geometries = meta.geometries || {};
+  const options = [
+    ['roa1', `ROA1 · ${geometries.roa1 || 'ICPu/SCPu(180)'}`],
+    ['roa2', `ROA2 · ${geometries.roa2 || 'ICPd/SCPd(90)'}`],
+    ['roa3', `ROA3 · ${geometries.roa3 || 'DCPI(180)'}`],
+  ];
+  const body = '<p class="results-note">Per-mode Raman optical activity as printed by Gaussian: '
+    + `ROA intensity, ${esc(meta.units || ROA_UNITS)}, and the invariants AlphaG, Gamma2 and Delta2 `
+    + `(${esc(meta.invariantUnits || '10⁴ Å⁵ amu⁻¹')}). The three rows are <strong>different scattering `
+    + 'geometries</strong>, not repeats: choosing one names it in the caption and never averages the three. '
+    + `RC180 is a degree of circularity. Incident light: ${meta.incidentWavenumber == null
+      ? '<strong>not stated in the output</strong>'
+      : `${esc(Number(meta.incidentWavenumber).toFixed(2))} cm⁻¹`}.`
+    + (meta.release === null ? ' The table does not name a Gaussian release.' : '') + '</p>'
+    + '<div class="nmr-controls">'
+    + `<label>Geometry <select data-roa-geometry>${options.map(([value, label]) => `<option value="${value}">${esc(label)}</option>`).join('')}</select></label>`
+    + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-roa-fwhm value="12"></label>'
+    + '</div>'
+    + `<div data-field="roa-figure">${roaSectionHtml(modes, { geometry: 'roa1', fwhmCm: 12, meta })}</div>`
+    + caveatHtml(flags, 'These ROA intensities');
+  return card('ROA', body, 'is-wide');
+}
+
+/** The signed figure and per-mode table for the selected ROA geometry. */
+export function roaSectionHtml(modes, { geometry = 'roa1', fwhmCm = 12, meta = null } = {}) {
+  const spectrum = roaSpectrum(modes, { geometry, fwhmCm });
+  if (!spectrum) {
+    return '<p class="results-missing">No ROA intensity was printed for this geometry, so there is nothing to plot.</p>';
+  }
+  const drawn = fromRoa(spectrum, { title: `ROA (${spectrum.geometryLabel})` });
+  const figure = '<figure class="results-spectrum" data-field="roa-spectrum">'
+    + (drawn ? drawn.svg : '')
+    + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(spectrum.counts.total)} modes `
+    + `(${esc(spectrum.counts.positive)} positive, ${esc(spectrum.counts.negative)} negative) · `
+    + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
+    + (meta?.incidentWavenumber == null ? '' : ` · incident light ${esc(Number(meta.incidentWavenumber).toFixed(2))} cm⁻¹`)
+    + '</figcaption></figure>';
+  const rows = spectrum.peaks.map((peak, index) => '<tr>'
+    + `<td>${esc(index + 1)}</td>`
+    + `<td>${esc(peak.wavenumber.toFixed(4))}</td>`
+    + `<td>${esc(peak.roa1 == null ? MISSING_TEXT : peak.roa1.toFixed(4))}</td>`
+    + `<td>${esc(peak.roa2 == null ? MISSING_TEXT : peak.roa2.toFixed(4))}</td>`
+    + `<td>${esc(peak.roa3 == null ? MISSING_TEXT : peak.roa3.toFixed(4))}</td>`
+    + `<td>${esc(peak.rc180 == null ? MISSING_TEXT : peak.rc180.toFixed(4))}</td>`
+    + '</tr>').join('');
+  const table = '<table class="results-table" data-field="roa-modes">'
+    + `<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th><th>ROA1 / ${esc(ROA_UNITS)}</th>`
+    + `<th>ROA2 / ${esc(ROA_UNITS)}</th><th>ROA3 / ${esc(ROA_UNITS)}</th><th>RC180</th></tr></thead>`
+    + `<tbody>${rows}</tbody></table>`;
+  return figure + table;
+}
+
+/**
  * ECD (#75). Rotatory strength is signed, so the curve is too.
  * (velocity vs length) is chosen by the reader and printed, because the two
  * numbers agree only in a complete basis and mixing them is meaningless.
@@ -2706,6 +2771,7 @@ export function resultsPanelHtml(record, options = {}) {
       nmrCard(parsed, flags, record),
       ramanCard(parsed, flags),
       vcdCard(parsed, flags),
+      roaCard(parsed, flags),
       ecdCard(parsed, flags),
       chargesCard(parsed, flags),
       dp4Card(record, flags),
@@ -2942,6 +3008,18 @@ export function installResultsView({
     holder.innerHTML = vcdSectionHtml(modes, { fwhmCm });
   };
 
+  /** ROA (issue 127): the selected printed geometry and the FWHM drive one redraw. */
+  const rerenderRoa = () => {
+    const parsed = currentRecord?.parsed;
+    const modes = parsed?.roa;
+    const holder = container.querySelector('[data-field="roa-figure"]');
+    if (!modes || !holder) return;
+    const raw = container.querySelector('[data-roa-fwhm]')?.value ?? '';
+    const fwhmCm = Number(raw) > 0 ? Number(raw) : 12;
+    const geometry = container.querySelector('[data-roa-geometry]')?.value || 'roa1';
+    holder.innerHTML = roaSectionHtml(modes, { geometry, fwhmCm, meta: parsed?.roaMeta || null });
+  };
+
   const rerenderThermo = () => {
     const parsed = currentRecord?.parsed;
     const options = thermoControls();
@@ -3033,6 +3111,7 @@ export function installResultsView({
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-provenance], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
     if (target.matches('[data-vcd-fwhm]')) rerenderVcd();
+    if (target.matches('[data-roa-fwhm]')) rerenderRoa();
     if (target.matches('[data-ecd-convention], [data-ecd-fwhm]')) rerenderEcd();
     if (target.matches('[data-thermo-temperature], [data-thermo-pressure], [data-thermo-term], [data-ensemble-run]')) rerenderThermo();
   });
@@ -3042,6 +3121,7 @@ export function installResultsView({
     if (target.matches('[data-nmr-nucleus], [data-nmr-reference], [data-nmr-provenance], [data-nmr-fwhm]')) rerenderNmr();
     if (target.matches('[data-raman-fwhm]')) rerenderRaman();
     if (target.matches('[data-vcd-fwhm]')) rerenderVcd();
+    if (target.matches('[data-roa-geometry], [data-roa-fwhm]')) rerenderRoa();
     if (target.matches('[data-spectrum-overlay]') && target.files && target.files[0]) {
       importSpectrumOverlay(target.files[0]);
     }

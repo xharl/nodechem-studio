@@ -61,7 +61,7 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | NMR spin-rotation | — | **Absent** | not parsed |
 | VCD rotational strengths | Freq=VCD | **Implemented** | `vcd.js` |
 | Raman activities | Freq=Raman | **Implemented** | `raman.js` |
-| **ROA** | Freq=ROA (G16 B.01+) | **Absent (blocked)** | no real ROA log to write a parser against; issue #127 |
+| **ROA** | Freq=ROA | **Implemented (G09 E.01 fixture)** | `roa.js`; three geometries, `RC180`, signed card; G16 B.01+ unverified |
 | ECD / exciton coupling | TD | **Implemented** | `ecd.js`, `exciton.js` |
 | Hyperfine couplings | open-shell output | **Absent** | no hyperfine branch in `gaussianOutput.js`; the EPR card is fed by Psi4 and ORCA only |
 | **Spin-orbit coupling** | — | **Absent** | only referenced in `epr.js` prose |
@@ -199,8 +199,9 @@ Effort is engineering time, not calendar, and assumes the parser work is done ag
 | 13 | **Relativistic (DKH/ZORA/X2C)** | heavy elements are currently ECP-only | ~1 week |
 | 14 | **Anharmonic frequencies** | improves thermochemistry and spectra | 1–2 weeks |
 
-Deliberately not a gap: **ROA** (no real log; issue #127), **Psi4 NMR** (does not exist),
-**Psi4 SMD/CPCM** (not DDX models), **Psi4 CC frequencies** (no analytic Hessian).
+Deliberately not a gap: **Psi4 NMR** (does not exist), **Psi4 SMD/CPCM** (not DDX models),
+**Psi4 CC frequencies** (no analytic Hessian). ROA has a G09 fixture and a reader; G16 B.01+ is
+unverified, not absent.
 
 ---
 

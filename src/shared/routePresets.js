@@ -244,6 +244,8 @@ export function compositeSettingConflicts(settings = {}) {
   if (text(settings.customKeywords)) conflicts.push('extra route keywords');
   if (settings.orbitals === true) conflicts.push('frontier-orbital descriptors');
   if (settings.raman === true) conflicts.push('Raman activities');
+  if (settings.vcd === true) conflicts.push('VCD rotational strengths');
+  if (settings.roa === true) conflicts.push('ROA intensities');
   if (settings.stableOpt === true) conflicts.push('Stable=Opt');
   if (text(settings.optConvergence)) conflicts.push(`Opt=${text(settings.optConvergence)}`);
   if (counterpoiseCount(settings) !== 0) conflicts.push('Counterpoise');

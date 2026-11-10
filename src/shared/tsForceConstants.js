@@ -205,10 +205,17 @@ export function jobKeywordFor(settings = {}) {
   // A.03 runs; separate keywords (`Freq=Raman=VCD`) it does not.
   const raman = settings.raman === true;
   const vcd = settings.vcd === true;
-  const freqKeyword = raman && vcd
-    ? 'Freq=(Raman,VCD)'
-    : raman ? 'Freq=Raman'
-      : vcd ? 'Freq=VCD' : 'Freq';
+  const roa = settings.roa === true;
+  const frequencyFlags = [
+    ...(raman ? ['Raman'] : []),
+    ...(vcd ? ['VCD'] : []),
+    ...(roa ? ['ROA'] : []),
+  ];
+  const freqKeyword = frequencyFlags.length === 0
+    ? 'Freq'
+    : (frequencyFlags.length === 1
+      ? `Freq=${frequencyFlags[0]}`
+      : `Freq=(${frequencyFlags.join(',')})`);
   if (jobType === 'Freq') return freqKeyword;
   if (jobType === 'Opt' || jobType === 'Opt Freq') {
     const [head, ...rest] = jobType.split(/\s+/);
