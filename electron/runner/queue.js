@@ -4457,6 +4457,42 @@ export class QueueManager {
     return { resumed: true };
   }
 
+  /**
+   * Stop a queue that is still healthy (issue 305).
+   *
+   * This is not `cancel`: the work was never judged, so nothing here is a
+   * result. A running task is stopped and marked `interrupted` — the state the
+   * queue already resumes from — and the queue is left `paused` with the reason
+   * that stopped it. The alternative, the old behaviour, left the task
+   * `running` behind a process nobody was waiting for any more.
+   */
+  async abandon(queueId, reason = 'the watch deadline expired') {
+    const queue = this.queues.get(queueId);
+    if (!queue) return { abandoned: false, interrupted: [] };
+    const running = queue.tasks.filter((task) => task.status === 'running');
+    for (const task of running) {
+      if (task.runId) {
+        // eslint-disable-next-line no-await-in-loop
+        await this.runManager.cancel(task.runId).catch(() => {});
+      }
+    }
+    const interrupted = [];
+    for (const task of queue.tasks) {
+      if (task.status !== 'running') continue;
+      task.status = 'interrupted';
+      task.error = `Stopped while running: ${String(reason).replace(/[.\s]+$/, '')}. Resume to run it again.`;
+      task.finishedAt = new Date().toISOString();
+      interrupted.push(task.label || task.record?.label || task.nodeId);
+    }
+    if (interrupted.length === 0) return { abandoned: false, interrupted };
+    queue.status = 'paused';
+    queue.reason = reason;
+    queue.currentTaskId = null;
+    await this.persist(queue);
+    this.publish(queue, 'queue-done');
+    return { abandoned: true, interrupted };
+  }
+
   async cancel(queueId) {
     const queue = this.queues.get(queueId);
     if (!queue) throw new Error('Unknown workflow queue.');

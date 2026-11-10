@@ -404,3 +404,54 @@ setInterval(() => {}, 1000);
     expect(onDisk.parsed).toBe(null);
   });
 });
+
+
+describe('a watch deadline that expires (issue 305)', () => {
+  it('stops the running task and leaves it interrupted and resumable, not running', async () => {
+    const { exe, queueManager } = await makeStack({
+      createRunner: hangingRunner({ lines: [' #p B3LYP/6-31G(d) SP', ' SCF Done:  E(RB3LYP) =  -76.0267608317'] }),
+    });
+    const started = await queueManager.start({
+      projectName: 'watch queue',
+      tasks: [taskPayload('one')],
+      edges: [],
+      // A generous task budget: the watcher, not the task limit, stops this.
+      options: { dryRun: false, executable: exe, scratchDir: '', timeoutSeconds: 3600 },
+    });
+
+    await waitFor(async () => (await queueManager.get(started.id)).tasks[0].runId, {
+      label: 'the task to start running',
+    });
+
+    const result = await queueManager.abandon(started.id, '--timeout 60 elapsed while block 1 (one) was running');
+    expect(result.abandoned).toBe(true);
+    expect(result.interrupted).toEqual(['one']);
+
+    const queue = await queueManager.get(started.id);
+    expect(queue.status).toBe('paused');
+    expect(queue.reason).toContain('--timeout 60 elapsed');
+    const task = queue.tasks.find((item) => item.nodeId === 'one');
+    expect(task.status).toBe('interrupted');
+    expect(task.status).not.toBe('running');
+    expect(task.error).toMatch(/Resume to run it again/);
+    expect(task.finishedAt).toBeTruthy();
+  });
+
+  it('does nothing to a queue whose task already finished', async () => {
+    const { exe, queueManager } = await makeStack({ createRunner: fixtureRunner() });
+    const started = await queueManager.start({
+      projectName: 'settled queue',
+      tasks: [taskPayload('one')],
+      edges: [],
+      options: { dryRun: false, executable: exe, scratchDir: '', timeoutSeconds: 3600 },
+    });
+    await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return ['completed', 'failed', 'needs-review'].includes(queue.status) ? queue : null;
+    }, { label: 'the queue to settle' });
+
+    const result = await queueManager.abandon(started.id, 'too late');
+    expect(result.abandoned).toBe(false);
+    expect((await queueManager.get(started.id)).status).not.toBe('paused');
+  });
+});

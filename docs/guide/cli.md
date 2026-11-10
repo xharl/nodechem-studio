@@ -51,6 +51,12 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   (the project's active flow is the default), `--record` runs one record's subgraph plus the control
   blocks, and `--max-parallel` overrides `runner.maxParallel`. Output blocks write their artifacts
   under `--out` (`reports/…` and `manifest.json`).
+  **`--timeout` is the watcher's clock, not a task limit.** Without it the command waits as long as
+  the queue needs, because each task already has its own budget (`runner.timeoutSeconds` in the
+  project, then Settings → Runs, then 3600 s). Passing `--timeout N` stops the wait after N seconds;
+  the running block is stopped, its task is recorded `interrupted` and the queue is left `paused`, so
+  a later `ncs run` or the app can resume it. The message names the flag, the block that was running
+  and — when the project declares one — the value to pass to let it finish.
 - `report` rebuilds the HTML report from the newest queue under `<out-dir>/queues/` and writes
   `<out-dir>/reports/index.html` unless `--out` names another file. `--flow` restricts it to one
   flow; without it every flow that has a queue is combined into one document.

@@ -33,6 +33,7 @@ import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from
 import { parseGaussianOutput, geometryToXyz } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
 import { kineticsSummary } from '../src/shared/kinetics.js';
+import { watchExpiryMessage, watchLimitFor } from '../src/shared/watchLimit.js';
 import { convertFchk, convertParsed, convertStructure } from '../src/shared/converters/index.js';
 import {
   QCSchemaError,
@@ -401,8 +402,15 @@ async function commandRun({ positional, flags }) {
   const queueId = started?.id;
   if (!queueId) fail('the queue started without an id.', EXIT.engine);
 
-  const timeoutSeconds = Number(flags.timeout || 3600);
-  const deadline = Date.now() + timeoutSeconds * 1000;
+  // Issue 305: `--timeout` is the only clock that may stop a healthy queue.
+  // `runner.timeoutSeconds` is a per-task budget the queue enforces itself, so a
+  // watcher deadline derived from a 3600 s default killed 12-hour projects at
+  // one hour. No flag means no deadline.
+  const watch = watchLimitFor({
+    explicitTimeoutSeconds: flags.timeout === undefined ? null : flags.timeout,
+    projectTimeoutSeconds: Number(result.project?.runner?.timeoutSeconds) || null,
+  });
+  const deadline = watch.seconds === null ? Infinity : Date.now() + watch.seconds * 1000;
   let queue = await queueManager.get(queueId);
   while (queue && !TERMINAL.has(String(queue.status)) && Date.now() < deadline) {
     // eslint-disable-next-line no-await-in-loop
@@ -410,8 +418,27 @@ async function commandRun({ positional, flags }) {
     queue = await queueManager.get(queueId);
   }
   if (!queue || !TERMINAL.has(String(queue.status))) {
+    const tasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
+    const runningIndex = tasks.findIndex((task) => task.status === 'running');
+    const running = runningIndex >= 0 ? tasks[runningIndex] : null;
+    const reason = watch.seconds === null
+      ? `the queue stopped reporting (status: ${queue?.status || 'unknown'})`
+      : watchExpiryMessage({
+        seconds: watch.seconds,
+        runningTask: running
+          ? (running.label || running.record?.label || running.nodeId || null)
+          : null,
+        taskIndex: runningIndex >= 0 ? runningIndex + 1 : null,
+        projectTimeoutSeconds: watch.projectTimeoutSeconds,
+      });
+    try {
+      await queueManager.abandon?.(queueId, reason);
+    } catch {
+      // The resumable record is a courtesy; the exit code still says the run
+      // stopped, and swallowing this must not hide the reason below.
+    }
     runManager.cancelAll?.();
-    fail(`the queue did not finish within ${timeoutSeconds}s (status: ${queue?.status || 'unknown'}).`, EXIT.engine);
+    fail(reason, EXIT.engine);
   }
 
   // A project may declare combined reports (`reports[]`). They are written from
