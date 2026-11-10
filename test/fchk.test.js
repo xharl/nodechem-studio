@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BOHR_TO_ANGSTROM } from '../src/shared/cubeFile.js';
-import { MAX_FCHK_CHARS, parseFchk } from '../src/shared/fchk.js';
+import { MAX_FCHK_CHARS, MAX_FCHK_VALUES, parseFchk } from '../src/shared/fchk.js';
 
 /**
  * A formatted checkpoint with the subset this reader claims to support. The
@@ -163,9 +163,31 @@ describe('fchk refusals', () => {
     expect(() => parseFchk(broken)).toThrow(/has 5 values for 3 atoms|stops after/);
   });
 
-  it('refuses a file over the size bound', () => {
-    expect(() => parseFchk(FCHK, { maxChars: 40 })).toThrow(/characters; the limit is 40/);
-    expect(MAX_FCHK_CHARS).toBe(64 * 1024 * 1024);
+  it('refuses a file over the size bound and names how to raise it', () => {
+    let message = '';
+    try {
+      parseFchk(FCHK, { maxChars: 40 });
+    } catch (error) {
+      message = error.message;
+    }
+    expect(message).toMatch(/characters; the limit is 40/);
+    // #243: "trim the file" is impossible for a line-oriented format, and
+    // "export it from a smaller job" blames the calculation for a reader
+    // limit. The refusal names the option that actually raises the ceiling.
+    expect(message).toMatch(/maxChars/);
+    expect(message).not.toMatch(/trim the file|smaller job/);
+    expect(MAX_FCHK_CHARS).toBe(256 * 1024 * 1024);
+  });
+
+  it('refuses a block over the value bound and names how to raise it', () => {
+    let message = '';
+    try {
+      parseFchk(FCHK, { maxValues: 5 });
+    } catch (error) {
+      message = error.message;
+    }
+    expect(message).toMatch(/declares 9 values; the limit is 5/);
+    expect(message).toMatch(/maxValues/);
   });
 
   it('refuses an empty file', () => {
@@ -177,7 +199,95 @@ describe('fchk refusals', () => {
       .toThrow(/not a formatted checkpoint/);
   });
 
+  it('names `formchk -3` when the file is not a formatted checkpoint', () => {
+    // #242: a user who already ran bare `formchk` has a file that can still
+    // parse, so this refusal has to tell them the flag is the fix.
+    expect(() => parseFchk('this is a cube, not a checkpoint\n1 2 3'))
+      .toThrow(/formchk -3/);
+  });
+
   it('refuses a binary checkpoint by name', () => {
-    expect(() => parseFchk('\u0000\u0001binary')).toThrow(/formchk|not a formatted checkpoint/);
+    expect(() => parseFchk('\u0000\u0001binary')).toThrow(/formchk -3|not a formatted checkpoint/);
+  });
+});
+
+/** A field header padded to column 43, the way `formchk` writes it. */
+function fieldLine(label, type, rest) {
+  return `${label.padEnd(43)}${type}   ${rest}`;
+}
+
+/**
+ * One zero block. Each value is the single token `0` rather than a
+ * 16-character real: the parser tokenises on whitespace, so the compact form
+ * declares and decodes the exact `NBasis²` count without building the ~128 MB
+ * of text a real 2000-function open-shell file carries.
+ */
+function zeroValues(count) {
+  const lines = [];
+  for (let written = 0; written < count; written += 200) {
+    lines.push(new Array(Math.min(200, count - written)).fill('0').join(' '));
+  }
+  return lines.join('\n');
+}
+
+function largeCheckpoint({ nbf, openShell }) {
+  const atoms = 2;
+  const values = nbf * nbf;
+  const count = (number) => String(number).padStart(12);
+  const lines = [
+    'synthetic large-basis checkpoint',
+    '',
+    fieldLine('Number of atoms', 'I', String(atoms)),
+    fieldLine('Number of basis functions', 'I', String(nbf)),
+    fieldLine('Atomic numbers', 'I', `N= ${count(atoms)}`),
+    '6 6',
+    fieldLine('Current cartesian coordinates', 'R', `N= ${count(atoms * 3)}`),
+    '0 0 0 0 0 0',
+    fieldLine('Alpha MO coefficients', 'R', `N= ${count(values)}`),
+    zeroValues(values),
+  ];
+  if (openShell) {
+    lines.push(
+      fieldLine('Beta MO coefficients', 'R', `N= ${count(values)}`),
+      zeroValues(values),
+    );
+  }
+  return lines.join('\n');
+}
+
+describe('fchk large bases (#243)', () => {
+  it('parses a 2000-basis-function closed-shell checkpoint', () => {
+    const fchk = parseFchk(largeCheckpoint({ nbf: 2000, openShell: false }));
+    expect(fchk.numberOfBasisFunctions).toBe(2000);
+    expect(fchk.alphaMOCoefficients).toHaveLength(4_000_000);
+    expect(fchk.betaMOCoefficients).toBeUndefined();
+    expect(fchk.missing).toContain('betaMOCoefficients');
+  }, 120_000);
+
+  it('parses a 2000-basis-function open-shell checkpoint, beta block included', () => {
+    const fchk = parseFchk(largeCheckpoint({ nbf: 2000, openShell: true }));
+    expect(fchk.alphaMOCoefficients).toHaveLength(4_000_000);
+    expect(fchk.betaMOCoefficients).toHaveLength(4_000_000);
+    expect(fchk.missing).not.toContain('betaMOCoefficients');
+  }, 120_000);
+
+  it('sizes the default guards for a realistic 2000-bf open-shell file', () => {
+    // Five 16-character reals per line: alpha MO + beta MO + the density
+    // triangle. An open-shell file must not hit a ceiling a closed-shell file
+    // of the same dimensions would clear.
+    const realistic = 2 * 2000 ** 2 * 16 + ((2000 * 2001) / 2) * 16;
+    expect(MAX_FCHK_CHARS).toBeGreaterThan(realistic);
+    expect(MAX_FCHK_VALUES).toBeGreaterThan(2000 ** 2);
+  });
+
+  it('refuses a declared count the file\'s own NBasis cannot produce, before reading it', () => {
+    const broken = largeCheckpoint({ nbf: 2, openShell: false }).replace(
+      fieldLine('Alpha MO coefficients', 'R', `N= ${String(4).padStart(12)}`),
+      fieldLine('Alpha MO coefficients', 'R', `N= ${String(5).padStart(12)}`),
+    );
+    // Four values of data remain: an unshaped reader would report "declares 5
+    // but the file ends after 4". The shape error names the basis instead.
+    expect(() => parseFchk(broken))
+      .toThrow(/declares 5 values, but a 2-function basis allows at most 4/);
   });
 });

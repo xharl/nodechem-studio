@@ -5,11 +5,24 @@ carry the wavefunction itself. Five files do:
 
 | File | Written by | What it holds |
 | --- | --- | --- |
-| `.fchk` (formatted checkpoint) | `formchk run.chk run.fchk` | Scalars and arrays: geometry, orbital energies, charges, electron counts, total energy, and the basis/MO arrays the Molden writer needs |
+| `.fchk` (formatted checkpoint) | `formchk -3 run.chk run.fchk` | Scalars and arrays: geometry, orbital energies, charges, electron counts, total energy, and the basis/MO arrays the Molden writer needs |
 | `.cube` | `cubegen` | One scalar field sampled on a regular 3D grid, plus the nuclei |
 | `.molden` | ORCA (`orca_2mkl -molden`), Psi4 (`psi4.molden(wfn)`), PySCF, Q-Chem, GAMESS via Molden2AIM, or this app's own `ncs convert job.fchk --format molden` | Atoms, the Gaussian basis, spherical/Cartesian markers, and the molecular-orbital coefficients |
 | `.wfn` (traditional AIM wavefunction) | Gaussian (`output=wfn`), GAMESS, Q-Chem, ORCA, Molden2AIM and other AIM-era writers | Atoms, an uncontracted Cartesian Gaussian basis, orbital energies and occupations (occupied orbitals only) |
 | `.wfx` (AIM extended wavefunction) | AIMAll; Gaussian 09 B.01 and later (`output=wfx`); Multiwfn | The same data as WFN in tagged sections, plus explicit electron counts, spin types, total energy, virial ratio and optional ECP core-density (EDF) sections |
+
+The `-3` is not optional. Gaussian's own description of the format says that running `formchk`
+without options produces, for backward compatibility, a **subset** of the full information, and
+that `formchk -3 chkfile fchkfile` is what writes the current, most full-featured version 3 file.
+The subset is dangerous precisely because it does not announce itself: it still carries the
+geometry and `Total Energy`, so the file imports and shows an energy, and then the ESP and Molden
+paths refuse with a missing-field error that points at the reader rather than at the conversion.
+What the subset leaves out is the large, late-version blocks this app needs — `Total SCF Density`,
+`Alpha MO coefficients`, the shell/basis tables — so convert with `-3` before concluding that a
+checkpoint is incomplete.
+
+Version 1 and version 2 files still parse: Psi4's `fchk()` writer and several third-party tools
+emit them, and the version is a property of the producer, not a validity flag.
 
 This page describes what the app reads from each, what it deliberately refuses, and what it does
 **not** do yet. Everything on this page happens offline on files you already have; the app never
@@ -697,7 +710,8 @@ The readers are bounded, and they say what they refused instead of returning a p
 - **Inconsistent arrays.** An fchk whose `Atomic numbers`, `Mulliken Charges` or coordinate array
   disagrees with `Number of atoms` is refused: the reader and the file disagree, and guessing which
   is right would turn a parsing bug into a chemistry result.
-- **Not a checkpoint.** A binary `.chk` is refused with the reason and the fix (`formchk`).
+- **Not a checkpoint.** A binary `.chk` is refused with the reason and the fix (`formchk -3`:
+  bare `formchk` writes only the backward-compatibility subset).
 
 For a Molden file, the refusals name the section and the offending value:
 

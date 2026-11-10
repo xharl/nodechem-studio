@@ -5,6 +5,7 @@ import {
   ConversionError,
   convertParsed,
   convertStructure,
+  convertWavefunctionFile,
   framesFromParsed,
   formatById,
   spectrumFromParsed,
@@ -201,6 +202,13 @@ describe('the conversion surface', () => {
     expect(() => convertParsed(optimisation, 'cif')).toThrow(/unknown format/);
     // Molden is a format the app writes, just not from a log.
     expect(() => convertParsed(optimisation, 'molden')).toThrow(/needs basis functions and MO coefficients/);
+  });
+
+  it('names `formchk -3` when a Molden source is not a formatted checkpoint', () => {
+    // #242: a user who already converted with bare `formchk` has a file this
+    // reader will not take; the refusal has to name the flag that fixes it.
+    expect(() => convertWavefunctionFile('Gaussian log text\n', 'molden', { filename: 'run.log' }))
+      .toThrow(/formchk -3/);
   });
 
   it('converts an imported structure without a parsed run', () => {
