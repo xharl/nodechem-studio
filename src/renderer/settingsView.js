@@ -25,6 +25,7 @@ const ENGINE_COPY = Object.freeze({
   xtb: 'xTB',
   psi4: 'Psi4',
   orca: 'ORCA',
+  pyscf: 'PySCF',
 });
 
 const TOOL_COPY = Object.freeze({

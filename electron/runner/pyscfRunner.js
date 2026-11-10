@@ -129,8 +129,10 @@ export class PyscfRunner {
 
     let text = stdout;
     // A capture that lost the markers (truncated head, a wrapper that swallowed
-    // stdout) is completed from the file, so the artifact and the parser agree.
-    if (recordText && !text.includes(RECORD_BEGIN)) {
+    // stdout) or kept the opening marker but lost the closing one is completed
+    // from the file, so the artifact and the parser agree.
+    const hasCompleteRecord = text.includes(RECORD_BEGIN) && text.includes(RECORD_END);
+    if (recordText && !hasCompleteRecord) {
       text += `\n${RECORD_BEGIN}\n${recordText.trim()}\n${RECORD_END}\n`;
     }
     if (text.length > MAX_OUTPUT_BYTES) {
