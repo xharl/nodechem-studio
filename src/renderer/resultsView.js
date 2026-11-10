@@ -488,6 +488,8 @@ function solvationCard(parsed, flags) {
 function energyCard(parsed, flags) {
   const finalEnergy = isObject(parsed?.finalEnergy) ? parsed.finalEnergy : {};
   const scf = isObject(parsed?.scf) ? parsed.scf : {};
+  const oniom = isObject(parsed?.oniom) ? parsed.oniom : null;
+  const oniomTotal = finite(oniom?.extrapolatedEnergyHartree);
   const source = text(finalEnergy.source);
   const sourceLabel = source
     ? (Object.hasOwn(ENERGY_SOURCE_LABELS, source) ? ENERGY_SOURCE_LABELS[source] : source)
@@ -497,7 +499,14 @@ function energyCard(parsed, flags) {
     fieldValue('Final energy', hartreeText(finalEnergy.hartree) ?? missingHtml(), 'final-energy'),
     fieldValue('Source', sourceLabel ? esc(sourceLabel) : missingHtml(), 'final-energy-source'),
   ];
-  if (scfApplicable) {
+  if (oniomTotal !== null) {
+    // An ONIOM log prints several layer/gridpoint SCFs. The last one is not a
+    // total and must not sit beside the extrapolated energy as if it were.
+    rows.push(
+      fieldValue('SCF energy', missingHtml(), 'scf-energy'),
+      fieldValue('SCF status', 'not the ONIOM total; see the ONIOM card', 'scf-status'),
+    );
+  } else if (scfApplicable) {
     rows.push(
       fieldValue('SCF energy', hartreeText(scf.energyHartree) ?? missingHtml(), 'scf-energy'),
       fieldValue('SCF status', safeText(scf.status), 'scf-status'),

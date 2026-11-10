@@ -80,5 +80,6 @@ describe('ONIOM parsing (issue 67)', () => {
     expect(html).toContain('54');
     expect(html).toContain('20');
     expect(html).toContain('B3LYP/6-31G(d)');
+    expect(html).toContain('not the ONIOM total; see the ONIOM card');
   });
 });
