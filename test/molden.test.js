@@ -189,6 +189,14 @@ describe('Molden writer', () => {
     delete noMo.alphaMOCoefficients;
     expect(() => moldenFromFchk(noMo)).toThrow(/no MO coefficients/);
   });
+
+  it('refuses to write an error-terminated checkpoint as a finished wavefunction (#244)', () => {
+    // The fixture's Job Status is 1; a job killed in Link 9999 leaves the same
+    // basis and MO blocks but no completed result, so Molden is not written.
+    const failed = parseFchk(FCHK.replace(/^Job Status\s+I\s+1$/m, 'Job Status                                 I                3'));
+    expect(() => moldenFromFchk(failed)).toThrow(/Job Status 3 \(error termination in Link 9999\)/);
+    expect(() => convertFchk(failed, 'molden')).toThrow(/Job Status 3/);
+  });
 });
 
 describe('convertFchk', () => {

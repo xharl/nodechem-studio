@@ -313,6 +313,15 @@ function orbitalsFromFchk(fchk, nbf) {
 
 /** Convert a parsed formatted checkpoint into Molden text. */
 export function moldenFromFchk(fchk, { title = '', bohrToAngstrom = 0.529177210903 } = {}) {
+  // #244: the writer exists to carry a finished wavefunction to another
+  // program. A `Job Status 3` checkpoint records an error termination, so its
+  // orbitals are not a result and a Molden file would launder a failed job.
+  if (fchk?.jobStatus === 3) {
+    throw new ConversionError(
+      'The checkpoint reports Job Status 3 (error termination in Link 9999); its orbitals are not a '
+      + 'completed result, so no Molden file is written.',
+    );
+  }
   const atoms = atomsFromFchk(fchk, bohrToAngstrom);
   const shells = shellsFromFchk(fchk);
   const nbf = shells.reduce((sum, shell) => sum + functionsPerShell(shell.type), 0);

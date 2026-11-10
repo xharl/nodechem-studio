@@ -108,13 +108,40 @@ reads is the one the results surface can use:
 | `Mulliken Charges`, `ESP Charges` | Charge-sum sanity check |
 | `Charge`, `Multiplicity` | The stated total charge and spin multiplicity |
 | `Total Energy`, `Virial Ratio` | The energy the checkpoint belongs to, and its virial check |
-| `Number of basis functions` | The size of the orbital space, for context |
+| `Job Status` | Completion evidence: 1/2 finished (or a step finished), -1 in progress, 0 undefined/old, 3 error termination in Link 9999. Absent is reported as absent, never as 0 (#244) |
+| `Number of basis functions`, `Number of independent functions`, `IOpCl` | The basis dimensions and spin case the MO blocks are checked against (#246) |
+| `Gaussian Version`, `Full Title`, `Route` | Character fields: the program revision and the provenance header (#245) |
 | `Shell types`, `Number of primitives per shell`, `Shell to atom map` | The basis, for the Molden writer (#113) |
 | `Primitive exponents`, `Contraction coefficients`, `P(S=P) Contraction coefficients` | The contracted Gaussian primitives |
 | `Alpha MO coefficients`, `Beta MO coefficients` | The orbital coefficient matrices |
 
 Polarisabilities and the two-electron integrals are still ignored: nothing in the app reads them,
 and they are large enough that copying them would make a checkpoint read feel slow for no result.
+
+### Completion, revision and the dimension checks
+
+`Job Status` is the checkpoint's own completion evidence. The reader records it when the file
+carries it and grades it as a warning when the value is `-1` (in progress), `0` (undefined or an
+old checkpoint) or `3` (error termination in Link 9999). A `3` also refuses the density-consuming
+paths — the ESP, the density-dependent analyses and the Molden writer — because a job that ended
+in Link 9999 still leaves a density block, and presenting it would launder a failed job as a
+result. A file that omits `Job Status` stays absent: third-party writers do not all emit it, and
+the reader never turns absence into `0`. The results surface prints the value next to the run and
+falls back to it for the `Termination` row when the record has no log termination line; the two
+are separate evidence and neither is inferred from the exit code.
+
+Character fields (`C N= k`) are read as fixed-width 12-character elements, five per line
+(`5A12`), concatenated and right-trimmed — not tokenised, because a title contains spaces. The
+fixture's `Gaussian Version C N= 2` is therefore `ES64L-G16RevA.03`, and `Full Title`, `Route`
+and the revision travel with the record. A zero-count character block is treated as an absent
+field, not as an empty string.
+
+`Number of independent functions` (`NBsUse`) and `IOpCl` are read as well. The MO coefficient
+block is exactly `NBasis × NBsUse`; a block that does not match is refused with both numbers in
+the message, because a truncated block that happens to be divisible by `NBasis` would otherwise
+look like a smaller, valid set of orbitals. `IOpCl = 0` with a beta MO block or a spin density is
+a warning, as is `IOpCl ≥ 1` with no beta block; `IOpCl = -1` means unspecified and draws no
+conclusion. The older `independant` spelling is accepted as an alias.
 
 ## What a Molden file contains
 
@@ -366,8 +393,8 @@ A finished run can carry a `wavefunction` block in its `run.json`. It is produce
 - `artifacts`: one entry per file with its kind (`cube`, `fchk`, `molden`, `wfn` or `wfx`), its name,
   its **SHA-256** and its size in bytes — the same provenance idea as `inputSha256` and `outputSha256`;
 - `cube`: dimensions, origin, axes, spacing, cell volume, atom count and the statistics above;
-- `fchk`: which fields were found and which were missing, the optional scalars, and the derived
-  gap, spin and charge blocks.
+- `fchk`: which fields were found and which were missing, the warnings the reader raised, the
+  optional scalars, and the derived gap, spin and charge blocks.
 
 The Molden reader returns the same fchk-shaped object (`format: 'molden'`), so a caller can pass it
 straight to `orbitalGap`, `spinFromElectrons` or `shellsFromFchk`. `wavefunctionRecord` puts it in

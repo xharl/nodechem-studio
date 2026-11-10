@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { evaluateGates, parseGaussianOutput } from '../src/shared/gaussianOutput.js';
+import { parseFchk } from '../src/shared/fchk.js';
 import { parseXtbOutput } from '../src/shared/engines/xtb.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 import { resultsPanelHtml, installResultsView } from '../src/renderer/resultsView.js';
@@ -365,6 +366,41 @@ describe('results surface — missing fields', () => {
     // The renderer module is imported by app.js; tests and the check script
     // load it in Node. Installation is the only DOM-aware entry point.
     expect(installResultsView()).toBeNull();
+  });
+});
+
+describe('results surface — checkpoint evidence (#244-#246)', () => {
+  const text = readFileSync(
+    fileURLToPath(new URL('./fixtures/fchk/dvb-g16-b3lyp-sto3g.fchk', import.meta.url)),
+    'utf8',
+  );
+
+  it('shows the checkpoint Job Status, version and dimensions next to the run', () => {
+    const html = resultsPanelHtml({ id: 'dvb-fchk', status: 'completed', parsed: parseFchk(text) });
+    expect(html).toContain('data-field="checkpoint-job-status"');
+    expect(field(html, 'checkpoint-job-status')).toBe('finished successfully (Job Status 1)');
+    expect(field(html, 'checkpoint-version')).toBe('ES64L-G16RevA.03');
+    expect(field(html, 'checkpoint-nbasis')).toBe('60');
+    expect(field(html, 'checkpoint-nbsuse')).toBe('60');
+    expect(field(html, 'checkpoint-iopcl')).toBe('0');
+    // The run card has no log termination line, so the same evidence fills the
+    // Termination row and says where it came from.
+    expect(field(html, 'termination')).toBe('Checkpoint Job Status 1 — finished successfully');
+  });
+
+  it('prints an error-termination checkpoint as a warning, not a completed result', () => {
+    const broken = text.replace(/^Job Status\s+I\s+1$/m, 'Job Status                                 I                3');
+    const html = resultsPanelHtml({ id: 'dvb-failed', status: 'completed', parsed: parseFchk(broken) });
+    expect(field(html, 'checkpoint-job-status')).toBe('error termination in Link 9999 (Job Status 3)');
+    expect(html).toContain('data-field="checkpoint-warnings"');
+    expect(html).toContain('Job Status is 3');
+  });
+
+  it('does not invent a Job Status for a file that omits it', () => {
+    const without = text.replace(/^Job Status.*\r?\n/m, '');
+    const html = resultsPanelHtml({ id: 'dvb-psi4', status: 'completed', parsed: parseFchk(without) });
+    expect(field(html, 'checkpoint-job-status')).toBe('<span class="results-missing">not reported</span>');
+    expect(field(html, 'checkpoint-fields')).toContain('jobStatus');
   });
 });
 
