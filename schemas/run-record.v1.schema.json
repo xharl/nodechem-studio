@@ -554,7 +554,7 @@
               "additionalProperties": true,
               "required": ["status"],
               "properties": {
-                "status": { "type": "string", "enum": ["refused"] },
+                "status": { "type": "string", "enum": ["refused", "reported"] },
                 "engine": { "type": "string" },
                 "message": { "type": "string" }
               }

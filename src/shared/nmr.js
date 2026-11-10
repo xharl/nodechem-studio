@@ -390,6 +390,9 @@ export const COUPLING_ATOM_INDEXING = 'Gaussian numbers nuclei from 1 in input o
 /** `NaN` → `null`, so an unprinted pair stays absent across JSON. */
 const jsonNumber = (value) => (Number.isFinite(value) ? value : null);
 
+/** A string that survives JSON; null stays null rather than becoming "null". */
+const jsonString = (value) => (value === null || value === undefined ? null : String(value));
+
 /**
  * The JSON-safe form of a coupling result, for `run.json` and the report.
  *
@@ -408,11 +411,22 @@ export function couplingSummary(couplings) {
     units: couplings.units,
     kUnits: couplings.kUnits,
     convention: couplings.convention,
-    indexing: COUPLING_ATOM_INDEXING,
+    // ORCA numbers nuclei from 0; Gaussian from 1. The parser that read the
+    // table owns this sentence, and it travels with the numbers so a consumer
+    // cannot assume the Gaussian convention and shift every pair by one.
+    indexing: couplings.indexing ?? COUPLING_ATOM_INDEXING,
     verified: couplings.verified === true,
     complete: couplings.complete === true,
     problems: Array.isArray(couplings.problems) ? [...couplings.problems] : [],
     printed: couplings.printed ?? null,
+    // Optional provenance the ORCA reader carries beside the numbers. A
+    // Gaussian table has none of these and the keys are simply absent.
+    ...(couplings.source ? { source: String(couplings.source) } : {}),
+    ...(couplings.note ? { note: String(couplings.note) } : {}),
+    ...(Array.isArray(couplings.elements) ? { elements: couplings.elements.map(jsonString) } : {}),
+    ...(couplings.verification && typeof couplings.verification === 'object'
+      ? { verification: couplings.verification }
+      : {}),
     pairs: couplings.pairs.map((pair) => ({
       i: pair.i,
       j: pair.j,

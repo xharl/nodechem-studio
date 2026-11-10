@@ -344,6 +344,18 @@ In this app ORCA gives you:
   `%cpcm` block with `smdsolvent "SOLVENT"`.
 - **Resources**: `Cores (nproc)` becomes `%pal nprocs N end`, and the block's total memory is
   divided by the core count into ORCA's per-process `%maxcore` (MB).
+- **Magnetic properties in an imported ORCA log** (issue 222): if the log carries
+  `Hyperfine couplings ... YES` and the `ELECTRIC AND MAGNETIC HYPERFINE STRUCTURE` section, the
+  parser reads each nucleus's `A(iso)` (MHz), the `A(SD)` dipolar components, the 3×3 total HFC
+  matrix and the isotope/spin into the same `epr.hyperfine[]` rows the Psi4 path produces, so the
+  EPR card and the report render ORCA without a branch. The sign is the log's own; ORCA states the
+  `SAI` spin-Hamiltonian convention. A run whose `g-Tensor (aka g-matrix)` line is `YES` and which
+  prints the `ELECTRONIC G-MATRIX` block carries that tensor; a `NO` is refused by name, not
+  filled with 2.0023. An `NMR spin-spin couplings ... 1` run is read from
+  `SUMMARY OF ISOTROPIC COUPLING CONSTANTS (Hz)` into `nmr.couplings.matrix` in Hz, with
+  `kMatrix: null` because the logs print J and the per-pair `gnA`/`gnB` constants but **no reduced
+  K table**. ORCA numbers nuclei from **0**, so `indexing` says so explicitly; Gaussian's tables
+  are 1-based and the two must not be mixed.
 
 The builder writes ORCA's **simple input** — a `!` keyword line, optional `%pal`/`%maxcore`/
 `%cpcm`/`%moinp` blocks, and a `* xyz charge multiplicity` coordinate block:
@@ -421,6 +433,21 @@ the optimisation banner: `test/fixtureCoverage.test.js` prints that branch as a 
 captured ORCA optimisation log is committed (issue 176). So the single-point, SCF, frequency and
 thermochemistry readings are checked against real output; the optimisation verdict is checked against
 the 6.0 manual's documented shape only.
+
+The magnetic-property readers added for issue 222 are pinned by two more public logs, both verbatim
+and both under `test/fixtures/real-public/`:
+
+- `orca-6.0-nh2-hyperfine/NH2_A.out` (ORCA 6.0.0, radicalpy's MIT-licensed example data) — three
+  nuclei, `A(iso)` = 28.4976 (¹⁴N), −61.6134 and −61.5964 MHz (¹H). The test checks the trace of the
+  printed 3×3 matrix against `A(iso)` (worst 3.3 × 10⁻⁵ MHz) and
+  `A(FC)+A(SD)+A(ORB+DIA)` against `A(Tot)` (worst 1.0 × 10⁻⁴ MHz). The log prints `g-Tensor ... NO`
+  and no gauss column, so the gauss value is the stated MHz→G conversion, not a log check.
+- `orca-5.0-dvb-spin-spin/dvb_coupling_nmr.out` (ORCA 5.0.4, cclib's BSD-3-Clause corpus) — 20
+  nuclei, 190 pairs, J(0,1) = 9.451 Hz. The summary table and every pair block's
+  `Total … iso=` value agree for all 190 pairs (worst 0 Hz at print precision); the per-pair
+  `gnA`/`gnB` constants agree with the isotope table to 1.26 × 10⁻⁴ relative. No reduced K table is
+  printed, so `kMatrix` is null and the record says why.
+
 
 The same limit applies to execution: the runner is tested against a stand-in driver script that
 prints those fixtures, exits 0 after an error banner, prints nothing, sleeps and gets cancelled. It

@@ -1518,7 +1518,7 @@ function nmrSectionHtml(entries, headingTag = 'h2') {
         + '<th class="num">σ<sub>iso</sub> / ppm</th><th class="num">δ / ppm</th><th>Source</th>'
         + `</tr></thead><tbody>${shieldingRows}</tbody></table>`;
 
-    const referenceLine = reference
+    const referenceLine = atoms.length === 0 ? '' : reference
       ? `<p class="note" data-field="nmr-reference">Reference: σ_ref = ${escapeHtml(String(reference.ppm))} ppm`
         + `${text(reference.provenance) ? ` — ${escapeHtml(text(reference.provenance))}` : ' — provenance not reported'}.`
         + ` δ = σ_ref − σ<sub>iso</sub>.</p>`
@@ -1532,11 +1532,17 @@ function nmrSectionHtml(entries, headingTag = 'h2') {
       couplingHtml = '<p class="meta" data-field="nmr-couplings-absent">This record carries no coupling '
         + 'block, so couplings are not reported.</p>';
     } else if (!couplings) {
-      couplingHtml = '<p class="meta" data-field="nmr-couplings-absent">No spin–spin coupling table was '
-        + 'printed: the route did not ask for NMR=(GIAO,SpinSpin). Couplings are not reported — an '
-        + 'absence, not a zero matrix.</p>';
+      couplingHtml = text(nmr.couplingsError)
+        ? '<p class="meta" data-field="nmr-couplings-absent">The spin–spin coupling block could not be '
+          + `read: ${escapeHtml(text(nmr.couplingsError))}. Couplings are not reported — an absence, `
+          + 'not a zero matrix.</p>'
+        : '<p class="meta" data-field="nmr-couplings-absent">No spin–spin coupling table was '
+          + 'printed: the route did not ask for NMR=(GIAO,SpinSpin). Couplings are not reported — an '
+          + 'absence, not a zero matrix.</p>';
     } else {
-      const elementOf = (index) => atoms.find((atom) => atom.index === index)?.element ?? '#';
+      const elements = Array.isArray(couplings.elements) ? couplings.elements : null;
+      const elementOf = (index) => (elements ? elements[index] ?? '#' : null)
+        ?? atoms.find((atom) => atom.index === index)?.element ?? '#';
       const pairs = Array.isArray(couplings.pairs) ? couplings.pairs : [];
       const possible = (Number(couplings.atoms) * (Number(couplings.atoms) - 1)) / 2;
       const coverage = couplings.complete === true
@@ -1552,18 +1558,24 @@ function nmrSectionHtml(entries, headingTag = 'h2') {
         + `<td class="num">${Number.isFinite(pair.hz) ? escapeHtml(value(pair.hz, 6)) : MISSING}</td>`
         + `<td class="num">${Number.isFinite(pair.k) ? escapeHtml(value(pair.k, 6)) : MISSING}</td>`
         + '</tr>').join('');
-      couplingHtml = `<p class="note" data-field="nmr-couplings-note">J in Hz, sign as Gaussian prints it `
-        + '(FC + SD + PSO + DSO totals, never normalised); K is the reduced constant exactly as printed — '
-        + 'Gaussian labels its table “(Hz)” but it is not a frequency and no K→J conversion is made.</p>'
+      const unitsNote = couplings.note
+        || 'J in Hz, sign as Gaussian prints it (FC + SD + PSO + DSO totals, never normalised).';
+      const kNote = couplings.kUnits
+        ? ` K: ${couplings.kUnits}.`
+        : ' K is the reduced constant exactly as printed; no K→J conversion is made.';
+      couplingHtml = `<p class="note" data-field="nmr-couplings-note">${escapeHtml(unitsNote)}${escapeHtml(kNote)}</p>`
         + `<p class="meta" data-field="nmr-couplings-coverage">${coverage} ${verification}</p>`
         + `<p class="meta" data-field="nmr-couplings-indexing">${escapeHtml(couplings.indexing || MISSING)}</p>`
         + '<table data-field="nmr-couplings"><thead><tr><th>Pair</th><th class="num">J / Hz</th>'
         + `<th class="num">K (reduced)</th></tr></thead><tbody>${pairRows}</tbody></table>`;
     }
 
+    const nucleiCount = atoms.length || (couplings && Number.isFinite(Number(couplings.atoms))
+      ? Number(couplings.atoms)
+      : 0);
     const head = `<p class="meta" data-field="nmr-level">${escapeHtml(text(nmr.gauge) || 'gauge not reported')}`
       + ` · ${escapeHtml(level ? `${level.method}/${level.basis}` : MISSING)}`
-      + `${programText ? ` · ${escapeHtml(programText)}` : ''} · ${escapeHtml(String(atoms.length))} nuclei</p>`;
+      + `${programText ? ` · ${escapeHtml(programText)}` : ''} · ${escapeHtml(String(nucleiCount))} nuclei</p>`;
     return title + head + referenceLine + shieldingTable + couplingHtml;
   }).join('');
   return `<${headingTag}>NMR</${headingTag}>`
@@ -1759,7 +1771,7 @@ function eprSectionHtml(entries, headingTag = 'h2') {
       + `<td class="num">${escapeHtml(value(row.mulliken, 4))}</td>`
       + `<td class="num">${escapeHtml(value(row.lowdin, 4))}</td>`
       + '</tr>').join('');
-    const populationTable = '<table data-field="epr-populations"><thead><tr><th>Atom</th><th>Element</th>'
+    const populationTable = populations.length === 0 ? '' : '<table data-field="epr-populations"><thead><tr><th>Atom</th><th>Element</th>'
       + '<th class="num">Mulliken / e</th><th class="num">Löwdin / e</th></tr></thead>'
       + `<tbody>${populationRows}</tbody></table>`;
     const hyperfine = Array.isArray(epr.hyperfine) ? epr.hyperfine : [];
@@ -1777,12 +1789,15 @@ function eprSectionHtml(entries, headingTag = 'h2') {
       + '<th class="num">A_iso / MHz</th><th class="num">A_iso / gauss</th><th>Note</th></tr></thead>'
       + `<tbody>${hyperfineRows}</tbody></table>`;
     const sum = Number.isFinite(epr.populationSum) ? epr.populationSum.toFixed(6) : MISSING;
+    const source = epr.provenance?.spinDensityBlock || epr.provenance?.hyperfineBlock || MISSING;
+    const sumText = Number.isFinite(epr.populationSum)
+      ? `, sum ${escapeHtml(sum)} electrons (n_alpha − n_beta)`
+      : '';
     return title
       + `<p class="meta" data-field="epr-level">${escapeHtml(epr.level || MISSING)} · `
       + `${escapeHtml(String(epr.electrons?.alpha ?? '?'))} alpha, ${escapeHtml(String(epr.electrons?.beta ?? '?'))} beta, `
-      + `${escapeHtml(String(epr.electrons?.unpaired ?? '?'))} unpaired · populations from `
-      + `${escapeHtml(epr.provenance?.spinDensityBlock || MISSING)}, sum ${escapeHtml(sum)} electrons `
-      + `(n_alpha − n_beta)</p>`
+      + `${escapeHtml(String(epr.electrons?.unpaired ?? '?'))} unpaired · from `
+      + `${escapeHtml(source)}${sumText}</p>`
       + populationTable
       + hyperfineTable
       + `<p class="note" data-field="epr-hyperfine-method">${escapeHtml(epr.hyperfineMethod || MISSING)}</p>`
