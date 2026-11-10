@@ -1333,6 +1333,20 @@ kbd {
   padding: 12px 14px;
   border-bottom: 1px solid var(--tone-blue-71a);
   background: color-mix(in srgb, var(--tone-blue-33) 84%, transparent);
+  cursor: grab;
+}
+body.is-dragging-run-console { cursor: grabbing; user-select: none; }
+body.is-dragging-run-console .run-head { cursor: grabbing; }
+/* Issue 253: the console is a floating window, with the same clamping contract as
+   the modal. `resize: both` supplies the size handle; the renderer persists the
+   resulting box on pointer-up. */
+.run-console.is-floating {
+  right: auto;
+  bottom: auto;
+  max-height: none;
+  min-width: 420px;
+  min-height: 280px;
+  resize: both;
 }
 .run-head-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .run-eyebrow { font-size: var(--text-size-xs); letter-spacing: .12em; text-transform: uppercase; color: var(--text-secondary); }
@@ -1514,6 +1528,19 @@ kbd {
 .record-status.is-partial { color: var(--kind-condition); border-color: color-mix(in srgb, var(--kind-condition) 40%, var(--tone-blue-71a)); }
 @media (max-width: 820px) {
   .run-console { right: 0; bottom: 0; width: 100%; max-height: 82dvh; border-radius: 14px 14px 0 0; }
+  .run-console.is-floating {
+    left: 0 !important;
+    top: auto !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: 82dvh !important;
+    min-width: 0;
+    min-height: 0;
+    resize: none;
+  }
+  .run-head { cursor: default; }
   .run-body { grid-template-columns: 1fr; grid-template-rows: auto auto auto; overflow-y: auto; }
   .run-config { border-right: 0; border-bottom: 1px solid var(--tone-blue-71a); }
   .run-queue-panel { grid-column: auto; max-height: none; }
