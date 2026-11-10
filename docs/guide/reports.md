@@ -55,7 +55,15 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    and some failed, and `failed` when nothing usable came out.
 4. **Method ladders, conformer ensembles, spin sweeps and reaction energetics** — unchanged from
    the single-molecule report, printed after the record sections.
-5. **Provenance** — run ids and the input/output SHA-256 prefixes.
+5. **Uncertainty** — the measured error bar, one row per method ladder, retained conformer ensemble
+   and reaction path. A ladder contributes the spread across the rungs that actually ran; an
+   ensemble contributes the lowest member and the Boltzmann-weighted value side by side; a reaction
+   path contributes the rate factor its recorded barrier error buys through Eyring. A quantity with
+   nothing measured is printed as `not measured` with the reason — never a literature average. The
+   list under the table, *What would change the conclusion*, is derived from each measured number:
+   the ladder's headroom against its tolerance, the population a conformer would need to dominate,
+   or the rate ratio the barrier error cannot resolve.
+6. **Provenance** — run ids and the input/output SHA-256 prefixes.
 
 A v1 project (no dataset) is unchanged: one table of blocks, no record sections.
 

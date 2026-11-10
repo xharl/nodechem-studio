@@ -130,6 +130,14 @@ A value that came from a ladder or an ensemble is shown with its spread and what
 
 A ladder whose rungs did not all run keeps its existing verdict `unknown`, and no mean is taken over the rungs that happened to finish.
 
+**The uncertainty module.** `src/shared/uncertainty.js` assembles the report's *Uncertainty* section from the numbers a queue already recorded; it is pure and the report is its only caller. Three rules hold:
+
+- **Method spread** is the max − min of the final energies of the rungs that carried a parsed energy, in kcal/mol. It is `measured` only with at least two such rungs; one rung — or two declared with one unparsed — prints `not measured` and the reason. No mean over rungs is returned, and no table of literature error bars is consulted.
+- **Conformer spread** prints the lowest member at 0.00 kcal/mol and the Boltzmann-weighted value above it, side by side, with the retained spread and the largest population. The lowest member is never replaced by the average; the population table is the one the search assigned, and a member without a population is a refusal rather than a re-normalisation.
+- **Barrier to rate** calls `eyringRate()` at the recorded barrier and at barrier ± the error recorded with the path, so the factor is the app's own arithmetic and the temperature is printed with it. At 298.15 K one kcal/mol is a factor **5.41** in k. When no barrier error was recorded the row says `not measured`; the report reads `reaction.barrierErrorKcal` and `reaction.barrierErrorSource` when a producer writes them.
+
+Each measured row yields one *what would change the conclusion* sentence, computed from the number beside it: a ladder's headroom against its tolerance, the 95 % population at which one conformer is representative, or the rate ratio the barrier error cannot resolve.
+
 ## Spin-state comparison
 
 A block with **Spin states** switched on runs one calculation per multiplicity over the same

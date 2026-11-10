@@ -23,6 +23,16 @@ import { nciFigure } from './figures/nci.js';
 import { nciAnalysis } from './nci.js';
 import { bcpTable, bcpTableHtml, qtaimAnalysis } from './qtaim.js';
 import { shiftFor } from './nmrReferences.js';
+import { STANDARD_STATE_TEMPERATURE_K } from './thermochemistry.js';
+import {
+  NOT_MEASURED,
+  UNCERTAINTY_NOTE,
+  conformerUncertainty,
+  eyringFactorPerKcal,
+  methodSpread,
+  rateUncertainty,
+  whatWouldChange,
+} from './uncertainty.js';
 
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
@@ -383,6 +393,67 @@ function derivedParagraph(model) {
 }
 
 /**
+ * Issue #229: the measured uncertainty section.
+ *
+ * One row per method ladder, retained conformer ensemble and reaction path.
+ * Every row is built by `uncertainty.js` from numbers the queue recorded: a
+ * ladder's rungs, an ensemble's members, a reaction's barrier and the error
+ * recorded with it. A quantity with nothing measured is a row too, carrying
+ * `not measured` and its reason, so the section cannot look complete by
+ * omission and never borrows a literature error bar.
+ */
+function buildUncertaintySection({ ladders = [], conformers = [], reactions = [] } = {}) {
+  const rows = [];
+  for (const ladder of Array.isArray(ladders) ? ladders : []) {
+    rows.push(methodSpread(ladder.entries, {
+      title: `Method ladder — ${ladder.id}`,
+      toleranceKcal: ladder.toleranceKcal,
+    }));
+  }
+  for (const conformer of Array.isArray(conformers) ? conformers : []) {
+    const title = `Conformer ensemble — ${conformer.title || conformer.id}`;
+    const ensemble = conformer.ensemble;
+    const members = (Array.isArray(conformer.members) ? conformer.members : []).map((member) => ({
+      id: member.memberId || member.nodeId,
+      relativeKcal: member.relativeKcalTarget,
+      population: member.population,
+    }));
+    if (!ensemble?.available) {
+      rows.push(conformerUncertainty(members, {
+        title,
+        temperatureK: ensemble?.temperatureK ?? null,
+        refusalReason: ensemble?.reason || 'the ensemble was not retained, so it is not weighted',
+      }));
+      continue;
+    }
+    rows.push(conformerUncertainty(members, { title, temperatureK: ensemble.temperatureK }));
+  }
+  for (const reaction of Array.isArray(reactions) ? reactions : []) {
+    if (reaction.available !== true) continue;
+    rows.push(rateUncertainty({
+      barrierKcal: reaction.kcalPerMol,
+      barrierErrorKcal: reaction.barrierErrorKcal,
+      temperatureK: reaction.temperatureK,
+      title: `Reaction path — ${reaction.nodeId}`,
+      errorSource: reaction.barrierErrorSource
+        || (Number.isFinite(reaction.barrierErrorKcal) ? 'recorded with the reaction path' : null),
+    }));
+  }
+  const rateRow = rows.find((row) => row.kind === 'rate');
+  const temperatureK = Number.isFinite(rateRow?.temperatureK)
+    ? rateRow.temperatureK : STANDARD_STATE_TEMPERATURE_K;
+  return {
+    note: UNCERTAINTY_NOTE,
+    temperatureK,
+    perKcalFactor: eyringFactorPerKcal(temperatureK),
+    rows,
+    statements: whatWouldChange(rows, { temperatureK }),
+    measuredCount: rows.filter((row) => row.measured).length,
+    notMeasuredCount: rows.filter((row) => !row.measured).length,
+  };
+}
+
+/**
  * The wavefunction half of the report (issue 59): QTAIM bond critical points and
  * the NCI figure, from a parsed checkpoint the caller supplies.
  *
@@ -632,6 +703,59 @@ export function buildWorkflowReport(queue, records = {}, {
   // Issue 59: the QTAIM table and the NCI figure, when a checkpoint is supplied.
   const analysis = wavefunctionAnalysis({ wavefunction, figureBudgetBytes });
 
+  // Issue #229: the ladder and reaction models are built before the return so
+  // the uncertainty section reads exactly the numbers the sections below print.
+  const ladders = Object.entries(source.ladders && typeof source.ladders === 'object' ? source.ladders : {})
+    .map(([id, ladder]) => {
+      const entries = (Array.isArray(ladder?.entries) ? ladder.entries : []).map((entry) => {
+        const row = rowByNodeId.get(entry?.id);
+        const record = recordByNodeId.get(entry?.id);
+        return {
+          id: text(entry?.id),
+          label: text(entry?.label),
+          energyHartree: Number.isFinite(entry?.energyHartree) ? entry.energyHartree : null,
+          relativeKcalPerMol: Number.isFinite(entry?.relativeKcalPerMol) ? entry.relativeKcalPerMol : null,
+          method: row?.method ?? null,
+          basis: row?.basis ?? null,
+          scfEnergyHartree: num(record?.parsed?.scf?.energyHartree),
+        };
+      });
+      return {
+        id,
+        status: text(ladder?.status) || 'unknown',
+        toleranceKcal: Number.isFinite(ladder?.toleranceKcal) ? ladder.toleranceKcal : null,
+        spreadKcal: Number.isFinite(ladder?.spreadKcal) ? ladder.spreadKcal : null,
+        reason: text(ladder?.reason),
+        entries,
+        cbs: cbsExtrapolate(entries),
+      };
+    });
+  const reactionModels = Object.entries(source.reactions && typeof source.reactions === 'object' ? source.reactions : {})
+    .map(([nodeId, reaction]) => ({
+      nodeId,
+      available: reaction?.available === true,
+      kcalPerMol: Number.isFinite(reaction?.kcalPerMol) ? reaction.kcalPerMol : null,
+      scheme: text(reaction?.scheme),
+      reason: text(reaction?.reason),
+      transitionStateNodeId: text(reaction?.transitionStateNodeId),
+      reactantNodeId: text(reaction?.reactantNodeId),
+      temperatureK: Number.isFinite(reaction?.temperatureK) ? reaction.temperatureK : null,
+      // Issue #229: the error recorded with the barrier, when a producer wrote
+      // one. Absent stays null: the report says `not measured` rather than
+      // borrowing a textbook spread.
+      barrierErrorKcal: num(reaction?.barrierErrorKcal),
+      barrierErrorSource: text(reaction?.barrierErrorSource),
+      endpointCheck: reaction?.endpointCheck
+        ? {
+          status: ['pass', 'fail', 'unknown'].includes(reaction.endpointCheck.status) ? reaction.endpointCheck.status : 'unknown',
+          detail: text(reaction.endpointCheck.detail),
+          end: text(reaction.endpointCheck.end) || null,
+          deltaKcal: Number.isFinite(reaction.endpointCheck.deltaKcal) ? reaction.endpointCheck.deltaKcal : null,
+        }
+        : null,
+    }));
+  const uncertainty = buildUncertaintySection({ ladders, conformers, reactions: reactionModels });
+
   return {
     schemaVersion: WORKFLOW_REPORT_SCHEMA_VERSION,
     kind: 'nodechem-studio.workflow-report',
@@ -734,31 +858,7 @@ export function buildWorkflowReport(queue, records = {}, {
     // Issue #96: each entry also carries the level of theory and SCF energy, so
     // a basis-set pair can be extrapolated; a ladder that is not such a pair
     // keeps `cbs.available === false` with the missing input named.
-    ladders: Object.entries(source.ladders && typeof source.ladders === 'object' ? source.ladders : {})
-      .map(([id, ladder]) => {
-        const entries = (Array.isArray(ladder?.entries) ? ladder.entries : []).map((entry) => {
-          const row = rowByNodeId.get(entry?.id);
-          const record = recordByNodeId.get(entry?.id);
-          return {
-            id: text(entry?.id),
-            label: text(entry?.label),
-            energyHartree: Number.isFinite(entry?.energyHartree) ? entry.energyHartree : null,
-            relativeKcalPerMol: Number.isFinite(entry?.relativeKcalPerMol) ? entry.relativeKcalPerMol : null,
-            method: row?.method ?? null,
-            basis: row?.basis ?? null,
-            scfEnergyHartree: num(record?.parsed?.scf?.energyHartree),
-          };
-        });
-        return {
-          id,
-          status: text(ladder?.status) || 'unknown',
-          toleranceKcal: Number.isFinite(ladder?.toleranceKcal) ? ladder.toleranceKcal : null,
-          spreadKcal: Number.isFinite(ladder?.spreadKcal) ? ladder.spreadKcal : null,
-          reason: text(ladder?.reason),
-          entries,
-          cbs: cbsExtrapolate(entries),
-        };
-      }),
+    ladders,
     // Issue 186: one entry per spin-state sweep, with each state's own queue
     // status so a state that failed is reported by name instead of vanishing.
     // `expected` is the number of member tasks the plan queued for this block.
@@ -792,26 +892,13 @@ export function buildWorkflowReport(queue, records = {}, {
         };
       }),
     // ΔG‡ for a reaction path, only where the queue computed one and only with
-    // the correction scheme attached.
-    reactions: Object.entries(source.reactions && typeof source.reactions === 'object' ? source.reactions : {})
-      .map(([nodeId, reaction]) => ({
-        nodeId,
-        available: reaction?.available === true,
-        kcalPerMol: Number.isFinite(reaction?.kcalPerMol) ? reaction.kcalPerMol : null,
-        scheme: text(reaction?.scheme),
-        reason: text(reaction?.reason),
-        transitionStateNodeId: text(reaction?.transitionStateNodeId),
-        reactantNodeId: text(reaction?.reactantNodeId),
-        temperatureK: Number.isFinite(reaction?.temperatureK) ? reaction.temperatureK : null,
-        endpointCheck: reaction?.endpointCheck
-          ? {
-            status: ['pass', 'fail', 'unknown'].includes(reaction.endpointCheck.status) ? reaction.endpointCheck.status : 'unknown',
-            detail: text(reaction.endpointCheck.detail),
-            end: text(reaction.endpointCheck.end) || null,
-            deltaKcal: Number.isFinite(reaction.endpointCheck.deltaKcal) ? reaction.endpointCheck.deltaKcal : null,
-          }
-          : null,
-      })),
+    // the correction scheme attached. Issue #229: `barrierErrorKcal` is the
+    // error recorded with the path, when one was.
+    reactions: reactionModels,
+    // Issue #229: the measured error bar, assembled from the ladders,
+    // conformer ensembles and reaction paths above. A quantity that was not
+    // measured keeps a row with the reason; nothing is averaged or borrowed.
+    uncertainty,
     fixtures: rows.filter((row) => row.dryRun).length,
   };
 }
@@ -1032,6 +1119,75 @@ function conformerBlocksHtml(entries, headingTag) {
       headingTag,
     );
   }).join('');
+}
+
+/**
+ * Issue #229: the measured uncertainty section.
+ *
+ * The table is one row per method ladder, retained conformer ensemble and
+ * reaction path; the list below it is the explicit "what would change the
+ * conclusion" sentence for each. A row that was not measured prints
+ * `not measured` and the reason instead of a number, so the section cannot be
+ * read as a complete error budget when part of it never ran.
+ */
+function uncertaintySectionHtml(section, headingTag = 'h2') {
+  if (!section || !Array.isArray(section.rows) || section.rows.length === 0) return '';
+  const subHeading = headingTag === 'h2' ? 'h3' : 'h4';
+  const body = section.rows.map((row) => {
+    const status = row.measured ? 'measured' : NOT_MEASURED;
+    const statusClass = row.measured ? 'gates-pass' : 'warn-text';
+    let spreadText = NOT_MEASURED;
+    let valueText = '';
+    let overText = '';
+    if (row.kind === 'method') {
+      spreadText = row.measured ? `${value(row.spreadKcal, 2)} kcal/mol` : NOT_MEASURED;
+      valueText = Number.isFinite(row.toleranceKcal)
+        ? `tolerance ${value(row.toleranceKcal, 2)} kcal/mol`
+        : 'no tolerance declared';
+      overText = row.measured ? row.over : `${row.rungs} of ${row.declaredRungs} rungs carried an energy`;
+    } else if (row.kind === 'conformer') {
+      spreadText = row.measured ? `${value(row.spreadKcal, 2)} kcal/mol` : NOT_MEASURED;
+      valueText = Number.isFinite(row.boltzmann?.relativeKcal)
+        ? `lowest ${row.lowest?.id ?? MISSING} ${value(row.lowest?.relativeKcal, 2)} · `
+          + `Boltzmann ${value(row.boltzmann.relativeKcal, 2)} kcal/mol`
+        : '';
+      overText = `${row.count} retained conformer${row.count === 1 ? '' : 's'} at ${value(row.temperatureK, 2)} K`;
+    } else if (row.kind === 'rate') {
+      spreadText = row.measured ? `± ${value(row.errorKcal, 2)} kcal/mol` : NOT_MEASURED;
+      valueText = row.measured
+        ? `factor ${value(row.factor, 2)}×${row.units && row.kText ? ` · k = ${row.kText} ${row.units}` : ''}`
+        : '';
+      overText = Number.isFinite(row.barrierKcal)
+        ? `ΔG‡ ${value(row.barrierKcal, 2)} kcal/mol at ${value(row.temperatureK, 2)} K`
+        : '';
+    }
+    return '<tr data-field="uncertainty-row" data-kind="' + escapeHtml(row.kind) + '"'
+      + ` data-measured="${row.measured ? 'true' : 'false'}">`
+      + `<td><strong>${escapeHtml(row.title)}</strong><div class="sub">${escapeHtml(row.text)}</div></td>`
+      + `<td class="${statusClass}">${escapeHtml(status)}</td>`
+      + `<td class="num">${escapeHtml(spreadText)}</td>`
+      + `<td>${escapeHtml(valueText)}</td>`
+      + `<td>${escapeHtml(overText)}</td>`
+      + '</tr>';
+  }).join('');
+  const statements = (Array.isArray(section.statements) ? section.statements : []).map((statement) => (
+    `<li data-field="uncertainty-statement" data-kind="${escapeHtml(statement.kind)}">${escapeHtml(statement.text)}</li>`
+  )).join('');
+  const factor = Number.isFinite(section.perKcalFactor)
+    ? ` At ${value(section.temperatureK, 2)} K one kcal/mol is a factor ${value(section.perKcalFactor, 2)} in k `
+      + "(Eyring, from this app's constants)."
+    : '';
+  return `<${headingTag} data-field="uncertainty-heading">Uncertainty — measured</${headingTag}>`
+    + `<p class="note" data-field="uncertainty-note">${escapeHtml(section.note)}${factor}</p>`
+    + `<p class="meta" data-field="uncertainty-counts">${section.measuredCount} of ${section.rows.length} `
+    + `quantities measured; ${section.notMeasuredCount} not measured.</p>`
+    + '<table data-field="uncertainty"><thead><tr><th>Quantity</th><th>Status</th>'
+    + '<th class="num">Spread / error</th><th>Value</th><th>Measured over</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`
+    + (statements
+      ? `<${subHeading}>What would change the conclusion</${subHeading}>`
+        + `<ul data-field="uncertainty-conclusion">${statements}</ul>`
+      : '');
 }
 
 /**
@@ -1316,6 +1472,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + eprSectionHtml(model.epr, sectionHeading)
     + nmrSectionHtml(model.nmr, sectionHeading)
     + reactionBlocks
+    + uncertaintySectionHtml(model.uncertainty, sectionHeading)
     + derivedBlocks
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')
