@@ -272,6 +272,10 @@ plans cleanly as a job that has been shown to converge.
 xTB is an open-source (LGPL) family of fast approximate methods. In this app it gives you:
 
 - **GFN2-xTB** (default), **GFN1-xTB**, **GFN0-xTB** and the **GFN-FF** force field.
+  GFN-FF is the supported force-field pre-optimisation path: optimise in an xTB block, then pass
+  the geometry to a QM block. It is not ONIOM/QM-MM: there are no layers, link atoms or point
+  charges, and no force-field parameterisation (GAFF or otherwise) is written. Those remain out of
+  scope in #67.
 - **Job types** `SP`, `Opt`, `Opt Freq` and `Freq`, with xTB optimisation levels `crude`, `sloppy`,
   `loose`, `lax`, `normal`, `tight`, `vtight`, `extreme`.
 - **Implicit solvation**: `ALPB` (analytical linearised Poisson–Boltzmann) or `GBSA` (generalised
