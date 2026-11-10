@@ -4,6 +4,8 @@ import path from 'node:path';
 import os from 'node:os';
 import fsp from 'node:fs/promises';
 import fs from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { RunManager } from './runner/runManager.js';
 import { QueueManager } from './runner/queue.js';
 import { companionToolStatus } from './runner/companionTools.js';
@@ -32,6 +34,7 @@ import {
   withProjectExtension,
 } from '../src/shared/projectFile.js';
 import { ENGINES, engineOrDefault } from '../src/shared/engines/index.js';
+import { createSettingsStore } from './settingsStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -93,6 +96,61 @@ function engineStatus() {
     status[engine] = { ok: Boolean(found), path: found };
   }
   return status;
+}
+
+/**
+ * Issue #252 — the Settings window shows the version a binary reports next to
+ * its detection status. This probe is user-triggered (opening Settings or
+ * clicking Detect again); startup stays presence-only for the reason above.
+ * A binary that does not answer within the timeout keeps an empty version
+ * rather than blocking the window.
+ */
+const execFileAsync = promisify(execFile);
+
+function firstVersionLine(text) {
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed.slice(0, 160);
+  }
+  return '';
+}
+
+async function probeVersion(executable) {
+  try {
+    const { stdout, stderr } = await execFileAsync(executable, ['--version'], {
+      timeout: 1500,
+      windowsHide: true,
+      maxBuffer: 64 * 1024,
+    });
+    return firstVersionLine(stdout) || firstVersionLine(stderr);
+  } catch (error) {
+    // Some drivers print their banner and then exit non-zero; keep the banner.
+    return firstVersionLine(error?.stdout) || firstVersionLine(error?.stderr);
+  }
+}
+
+async function detectSettings() {
+  const status = engineStatus();
+  const tools = companionToolStatus();
+  let settings = null;
+  try {
+    settings = (await settingsStore?.get())?.settings || null;
+  } catch {
+    settings = null;
+  }
+  const paths = new Set();
+  for (const entry of Object.values(status)) if (entry?.path) paths.add(entry.path);
+  for (const entry of Object.values(tools)) if (entry?.path) paths.add(entry.path);
+  for (const value of Object.values(settings?.engines || {})) if (String(value || '').trim()) paths.add(String(value).trim());
+  for (const id of ['crest', 'obabel', 'scorer', 'tautomer']) {
+    const value = String(settings?.tools?.[id] || '').trim();
+    if (value) paths.add(value);
+  }
+  const versions = {};
+  await Promise.all([...paths].slice(0, 16).map(async (executable) => {
+    versions[executable] = await probeVersion(executable);
+  }));
+  return { ...status, tools, platform: process.platform, versions };
 }
 
 function currentAppInfo() {
@@ -279,6 +337,7 @@ function writeThemeCache(payload) {
 
 let runManager = null;
 let queueManager = null;
+let settingsStore = null;
 let windowDirty = false;
 
 /**
@@ -1103,13 +1162,19 @@ app.whenReady().then(async () => {
   // duplicates it (it also draws a second "View" next to the app's own). macOS
   // keeps its menu — the OS requires an app menu for Cmd+Q and the Edit roles.
   if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+  // Issue #252: machine settings live outside every project. The store is read
+  // before the runners are constructed so a configured data directory applies
+  // to the runs and queues this launch will write.
+  settingsStore = createSettingsStore({ userDataDir: app.getPath('userData') });
+  const startupSettings = (await settingsStore.get()).settings;
+  const dataRoot = String(startupSettings?.advanced?.dataDir || '').trim() || app.getPath('userData');
   runManager = new RunManager({
-    runsRoot: path.join(app.getPath('userData'), 'runs'),
+    runsRoot: path.join(dataRoot, 'runs'),
     emit: emitRunEvent,
     appInfo: { version: app.getVersion(), commit: APP_COMMIT },
   });
   queueManager = new QueueManager({
-    queuesRoot: path.join(app.getPath('userData'), 'queues'),
+    queuesRoot: path.join(dataRoot, 'queues'),
     runManager,
     emit: emitQueueEvent,
   });
@@ -1123,6 +1188,13 @@ app.whenReady().then(async () => {
     tools: companionToolStatus(),
     platform: process.platform,
   }));
+  // Issue #252: the one machine/app settings file. `get` includes its path so
+  // the Settings window can show where the values are stored; `set` returns
+  // field-level reasons for anything refused (unknown value, missing binary).
+  ipcMain.handle('settings:get', () => settingsStore.get());
+  ipcMain.handle('settings:set', (_event, patch) => settingsStore.set(patch));
+  ipcMain.handle('settings:path', () => ({ path: settingsStore.path }));
+  ipcMain.handle('settings:detect', () => detectSettings());
   // Issue #82: one user-triggered request. Nothing else in the app calls out.
   ipcMain.handle('updates:check', () => checkForUpdates());
   // Theme switching (#52): repaint the native chrome, record the launch cache.
