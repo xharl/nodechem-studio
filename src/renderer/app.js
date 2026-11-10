@@ -399,6 +399,17 @@ const state = {
     output: '',
     gates: [],
     validity: [],
+    // Issue 256: after a run the hint line reports the outcome rather than the
+    // pre-run mode. `hintPinned` makes that survive the copy refreshes that
+    // follow a selection change.
+    hintPinned: false,
+    hintText: '',
+    hintWarn: false,
+    hintAction: null,
+    // Issue 255: after a project switch, run events already in flight belong to
+    // the previous project's single run. They stay ignored until this project
+    // starts its own run.
+    ignoreEvents: false,
   },
   queue: {
     id: null,
@@ -408,6 +419,9 @@ const state = {
     starting: false,
     spins: {},
   },
+  // Issue 255: the newest queue that belongs to another project. The header
+  // names it instead of painting its state over the open project.
+  lastForeignQueue: null,
 };
 
 let nodeSequence = 0;
@@ -5980,6 +5994,49 @@ function syncCompanionExecutables() {
   }
 }
 
+/** Issue 256: the hint line reports an outcome until the next run starts. */
+function renderRunHint() {
+  const hint = $('#run-hint');
+  if (!hint) return;
+  hint.classList.remove('is-warn');
+  if (!state.run.hintPinned) {
+    hint.textContent = desktop ? dryRunHintFor(activeRunEngineId()) : BROWSER_PREVIEW_CONSOLE_HINT;
+    if (!desktop) hint.classList.add('is-warn');
+    return;
+  }
+  hint.textContent = state.run.hintText || '';
+  if (state.run.hintWarn) hint.classList.add('is-warn');
+  const action = state.run.hintAction;
+  if (!action) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn small run-hint-action';
+  button.dataset.action = 'failure-fix';
+  button.textContent = action.label;
+  if (action.kind) button.dataset.fixKind = action.kind;
+  if (action.field) button.dataset.fixField = action.field;
+  if (action.nodeId) button.dataset.fixNode = action.nodeId;
+  if (action.nodeTitle) button.dataset.fixTitle = action.nodeTitle;
+  if (action.taskId) button.dataset.fixTask = action.taskId;
+  hint.appendChild(button);
+}
+
+function setRunHint(text, { warn = false, action = null } = {}) {
+  state.run.hintPinned = true;
+  state.run.hintText = String(text || '');
+  state.run.hintWarn = Boolean(warn);
+  state.run.hintAction = action;
+  renderRunHint();
+}
+
+function clearRunHint() {
+  state.run.hintPinned = false;
+  state.run.hintText = '';
+  state.run.hintWarn = false;
+  state.run.hintAction = null;
+  renderRunHint();
+}
+
 /** Point the run-console copy at the engine the selected block will run. */
 function updateRunConsoleCopy() {
   const engineId = activeRunEngineId();
@@ -6000,11 +6057,9 @@ function updateRunConsoleCopy() {
     }
     syncRunExecutableDetected(engineId);
   }
-  const hint = $('#run-hint');
-  if (hint && desktop) {
-    hint.textContent = dryRunHintFor(engineId);
-    hint.classList.remove('is-warn');
-  }
+  // Issue 256: an outcome hint belongs to the run that just finished, so a
+  // later selection change refreshes the copy around it without erasing it.
+  renderRunHint();
   const engineChip = $('#run-engine');
   if (engineChip) engineChip.textContent = engineOrDefault(engineId).label;
   const modeChip = $('#run-mode');
@@ -6518,6 +6573,109 @@ function setRunState(status, label) {
   el.className = `run-state is-${status}`;
 }
 
+const RUN_HEADER_IDLE = Object.freeze({ status: 'idle', label: 'idle', progress: '0/0' });
+
+/**
+ * Issue 255: a queue names the project and flow it was started from, and only
+ * that queue may speak for the console on screen. Matching by name is what the
+ * reported build lacked: a completed 16-task queue painted its state over a
+ * freshly opened project whose own queue had failed.
+ */
+function queueBelongsToProject(queue, project = state.project) {
+  if (!queue || !project) return false;
+  const queueName = String(queue.projectName || '').trim();
+  const projectName = String(project.name || '').trim();
+  if (!queueName || !projectName || queueName !== projectName) return false;
+  const queueFlow = String(queue.flowId || '').trim();
+  const projectFlow = String(activeFlowId(project) || '').trim();
+  // A single-flow project has nothing to disambiguate. With several flows the
+  // queue's flow has to be the one the window is showing, or switching tabs
+  // would leave another flow's progress in the header.
+  const flowCount = Array.isArray(project.flows) ? project.flows.length : 0;
+  if (queueFlow && projectFlow && flowCount > 1 && queueFlow !== projectFlow) return false;
+  return true;
+}
+
+/**
+ * What a queue is allowed to paint in the header. `paint: false` is the answer
+ * for a queue from another project (and for a finished queue whose state is
+ * restored only to populate the Queue tab): the caller leaves the visible
+ * header alone rather than copying someone else's numbers.
+ */
+function runHeaderFor(queue, project = state.project) {
+  if (!queueBelongsToProject(queue, project)) return { paint: false, ...RUN_HEADER_IDLE };
+  const status = String(queue.status || 'idle');
+  if (!['running', 'queued', 'paused', 'completed', 'failed', 'cancelled', 'partial'].includes(status)) {
+    return { paint: false, ...RUN_HEADER_IDLE };
+  }
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  const done = tasks.filter((task) => ['completed', 'failed', 'skipped', 'blocked', 'cancelled', 'timed out'].includes(task.status)).length;
+  return { paint: true, status, label: status, progress: `${done}/${tasks.length}` };
+}
+
+function emptyQueueState() {
+  return {
+    id: null,
+    status: 'idle',
+    flowId: null,
+    projectName: null,
+    createdAt: null,
+    finishedAt: null,
+    tasks: [],
+    reason: null,
+    timeoutSeconds: null,
+    spins: {},
+  };
+}
+
+/** Reset the console header to the empty project state (issue 255). */
+function resetRunHeader({ ignoreEvents = false } = {}) {
+  state.run.id = null;
+  state.run.dir = null;
+  state.run.nodeId = null;
+  state.run.gates = [];
+  state.run.validity = [];
+  state.run.ignoreEvents = ignoreEvents;
+  setRunState('idle', 'idle');
+  const title = $('#run-title');
+  if (title) title.textContent = 'No run yet';
+  const progress = $('#run-progress');
+  if (progress) {
+    progress.hidden = true;
+    progress.textContent = RUN_HEADER_IDLE.progress;
+    progress.classList.remove('is-live');
+  }
+}
+
+/** Issue 255: name the last queue when it belongs to another project. */
+function noteForeignQueue(queue) {
+  if (!queue?.id) return;
+  state.lastForeignQueue = {
+    id: queue.id || null,
+    projectName: String(queue.projectName || '').trim() || 'Untitled project',
+    status: queue.status || 'idle',
+    createdAt: queue.createdAt || null,
+    flowId: queue.flowId || null,
+  };
+  renderRunLast();
+}
+
+function renderRunLast() {
+  const el = $('#run-last');
+  if (!el) return;
+  const foreign = state.lastForeignQueue;
+  // A queue that belongs to the open project is already on screen; the note is
+  // only for the one that does not.
+  const visible = Boolean(foreign) && !state.queue?.id;
+  el.hidden = !visible;
+  el.textContent = visible ? `last run: ${foreign.projectName} (other project)` : '';
+  if (visible) {
+    el.title = `The last queue belongs to ${foreign.projectName}; its state is not shown for the open project.`;
+  } else {
+    el.removeAttribute('title');
+  }
+}
+
 function setStatusMessage(text) {
   state.statusMessage = text;
   const el = $('#status-message');
@@ -6705,6 +6863,79 @@ async function pickCompanionTool(toolId) {
     syncCompanionExecutables();
   } catch (error) {
     toast(`Could not choose ${ui.label}: ${error.message}`);
+  }
+}
+
+/**
+ * Issue 256: the three common failures each have a control that fixes them.
+ * These helpers are the "where to look" half; the hint text is the "what
+ * happened" half.
+ */
+function selectNodeForTask(taskId) {
+  const base = String(taskId || '').split('~')[0];
+  if (!base) return null;
+  const node = nodeById(base);
+  if (node) selectNode(node.id);
+  return node;
+}
+
+function focusRunField(selector, taskId = '') {
+  selectNodeForTask(taskId);
+  setRunPane('setup');
+  updateRunConsoleCopy();
+  const field = $(selector) || $('#run-exe');
+  if (!field) return;
+  field.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  field.focus?.();
+}
+
+function focusConformerSource(nodeId, nodeTitle = '') {
+  let target = nodeId ? nodeById(nodeId) : null;
+  if (!target && nodeTitle) {
+    target = state.project.nodes.find((node) => node.type === 'generate' && node.title === nodeTitle) || null;
+  }
+  if (!target) target = state.project.nodes.find((node) => node.type === 'generate') || null;
+  if (target) selectNode(target.id);
+  setRunPane('setup');
+  const control = $('#inspector [data-action="select-conformer"]')
+    || $('#inspector [data-conformer-field="produces"]')
+    || $('#inspector');
+  if (!control) return;
+  if (!control.matches?.('button, select, input, [tabindex]')) control.setAttribute('tabindex', '-1');
+  control.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  control.focus?.();
+}
+
+function focusQueueTask(taskId) {
+  setRunPane('queue');
+  const base = String(taskId || '').split('~')[0];
+  const row = [...document.querySelectorAll('#queue-list .queue-item')]
+    .find((item) => item.dataset.nodeId === taskId || item.dataset.nodeId === base) || null;
+  if (row) {
+    row.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    row.focus?.();
+    return;
+  }
+  const gate = $('#run-gates .run-gate.fail');
+  if (gate) {
+    gate.setAttribute('tabindex', '-1');
+    gate.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    gate.focus?.();
+  }
+}
+
+function applyRunHintFix(button) {
+  const kind = button?.dataset?.fixKind;
+  if (kind === 'executable') {
+    focusRunField(button.dataset.fixField || '#run-exe', button.dataset.fixTask || '');
+    return;
+  }
+  if (kind === 'conformer') {
+    focusConformerSource(button.dataset.fixNode || '', button.dataset.fixTitle || '');
+    return;
+  }
+  if (kind === 'gate') {
+    focusQueueTask(button.dataset.fixTask || '');
   }
 }
 
@@ -6993,6 +7224,7 @@ async function startSelectedRun() {
   state.run.nodeId = node.id;
   state.run.id = null;
   state.run.dir = null;
+  state.run.ignoreEvents = false;
   syncVerifyButton($('#verify-run'), null);
   $('#run-output').textContent = 'Starting local runner…\n';
   $('#run-gates').innerHTML = '';
@@ -7001,6 +7233,7 @@ async function startSelectedRun() {
   $('#run-path').textContent = '';
   $('#cancel-run')?.removeAttribute('disabled');
   setRunState('running', dryRun ? 'dry run' : 'running');
+  clearRunHint();
 
   try {
     const response = await desktop.runTask({
@@ -7083,6 +7316,7 @@ async function startSelectedConformerRun(node) {
   state.run.nodeId = node.id;
   state.run.id = null;
   state.run.dir = null;
+  state.run.ignoreEvents = false;
   syncVerifyButton($('#verify-run'), null);
   $('#run-output').textContent = 'Starting conformer search…\n';
   $('#run-gates').innerHTML = '';
@@ -7091,6 +7325,7 @@ async function startSelectedConformerRun(node) {
   $('#run-path').textContent = '';
   $('#cancel-run')?.setAttribute('disabled', '');
   setRunState('running', dryRun ? 'dry run' : 'running');
+  clearRunHint();
 
   try {
     const queue = await desktop.startQueue({
@@ -7127,6 +7362,9 @@ async function startSelectedConformerRun(node) {
 
 function handleRunEvent(event) {
   if (!event) return;
+  // Issue 255: a run started before the project was swapped still emits events;
+  // they belong to the previous project and may not paint this header.
+  if (state.run.ignoreEvents && !state.run.id) return;
   if (event.type === 'started') {
     if (!state.run.id) state.run.id = event.runId;
   } else if (event.runId !== state.run.id) {
@@ -7156,6 +7394,24 @@ function handleRunEvent(event) {
       appendRunOutput(`Validity [${finding.severity || finding.status}] ${finding.title || finding.id}: ${finding.message}\n`);
     }
     appendRunOutput(`\n${provenanceSummary(record)}\n`);
+    // Issue 256: the hint line reports the outcome of this run, not the mode
+    // the console was in before it started.
+    if (['failed', 'needs-review', 'timed out'].includes(String(record.status))) {
+      const failure = taskFailure({
+        title: record.title,
+        nodeId: state.run.nodeId,
+        status: record.status,
+        gateVerdict: record.gates?.overall,
+        error: record.error,
+      });
+      if (failure) {
+        setRunHint(failureHint(failure, record.status), { warn: true, action: failure.action });
+      } else {
+        setRunHint(`Run ${record.status}${record.error ? ` — ${record.error}` : ''}.`, { warn: true });
+      }
+    } else {
+      setRunHint(`Run ${record.status}${verdict !== 'unknown' ? ` · gates ${verdict}` : ''}.`);
+    }
     syncVerifyButton($('#verify-run'), state.run.id);
     toast(`Run ${record.status}${verdict !== 'unknown' ? ` · ${verdict}` : ''}.`);
   }
@@ -7225,12 +7481,23 @@ function reconcileNodesWithQueue() {
   return true;
 }
 
-function applyQueue(queue) {
+function applyQueue(queue, { paintHeader = true } = {}) {
   if (!queue) return;
+  // Issue 255: a queue event from another project may not touch the visible
+  // console. Its state is remembered only so the header can say where the last
+  // run went, never copied over the open project's header.
+  if (!queueBelongsToProject(queue)) {
+    noteForeignQueue(queue);
+    return;
+  }
+  if (state.lastForeignQueue?.id === queue.id) state.lastForeignQueue = null;
   state.queue = {
     id: queue.id || null,
     status: queue.status || 'idle',
     flowId: queue.flowId || null,
+    projectName: queue.projectName || null,
+    createdAt: queue.createdAt || null,
+    finishedAt: queue.finishedAt || null,
     tasks: Array.isArray(queue.tasks) ? queue.tasks : [],
     reason: queue.reason || null,
     // Issue 177: the queue's per-task wall clock, so a running row can show
@@ -7242,15 +7509,14 @@ function applyQueue(queue) {
   };
   const reconciled = syncNodeStatesFromQueue(queue);
   renderQueue();
-  updateRunProgressChip();
   updateRunTabBadges();
-  // While a queue owns the console, the header shows the queue's state: a
-  // finished single run must not read 'COMPLETED' over a draining workflow.
-  const queueStatus = String(queue.status || '');
-  if (['running', 'queued', 'paused', 'completed', 'failed', 'cancelled', 'partial'].includes(queueStatus)) {
-    // A finished queue must release the header too, or it reads 'running' for
-    // ever after the last task is done.
-    setRunState(queueStatus, queueStatus);
+  const header = runHeaderFor(queue);
+  // A restored, already-finished queue populates the Queue tab and its badge,
+  // but it is history: the header stays idle until that project actually runs
+  // something in this window (issue 255).
+  if (paintHeader && header.paint) {
+    updateRunProgressChip();
+    setRunState(header.status, header.label);
   }
   // Live cards: the running block gets its progress rail, a finished one its
   // numbers. Cheap enough at canvas scale and it keeps the workbench honest
@@ -7258,6 +7524,7 @@ function applyQueue(queue) {
   renderGraph();
   // ...and the Next Action is computed from those states, so it follows them.
   if (reconciled) renderInspector();
+  renderRunLast();
 }
 
 /** A duration a person reads at a glance: `1.4 s`, `3m 12s`. */
@@ -7306,6 +7573,181 @@ function syncQueueTicker() {
   }, 1000);
 }
 
+function firstQuoted(text) {
+  const match = String(text || '').match(/"([^"]+)"/);
+  return match ? match[1] : '';
+}
+
+/**
+ * Issue 256: which of the three actionable failures a task hit, if any.
+ * The order matters: the missing-conformer message also names the block it
+ * would have run, so it has to win before the generic gate/executable tests.
+ */
+function classifyTaskFailure(task, reason) {
+  const message = String(reason || '');
+  if (/(no selected conformer|has no selected conformer|choose a member)/i.test(message)) return 'conformer';
+  if (/(choose the .*(executable|sidecar)|(executable|sidecar).*(not found|not chosen|not configured))/i.test(message)) return 'executable';
+  if (task?.gateVerdict === 'fail' || /(gates? (did not pass|failed)|gate failed)/i.test(message)) return 'gate';
+  return 'other';
+}
+
+/** The Setup field a missing executable should send the user to. */
+function executableFixFor(reason, task = null) {
+  const message = String(reason || '');
+  if (/crest/i.test(message)) return { field: '#run-crest', label: 'CREST' };
+  if (/open babel|obabel/i.test(message)) return { field: '#run-obabel', label: 'Open Babel' };
+  if (/scorer/i.test(message)) return { field: '#run-scorer', label: 'ML scorer' };
+  if (/tautomer/i.test(message)) return { field: '#run-tautomer', label: 'tautomer sidecar' };
+  return { field: '#run-exe', label: engineOrDefault(task?.engine).label };
+}
+
+function failureActionFor(kind, task, reason) {
+  if (kind === 'conformer') {
+    return {
+      kind,
+      label: 'Select conformer…',
+      nodeId: String(task?.pendingInput?.conformerId || ''),
+      nodeTitle: String(task?.pendingInput?.conformerTitle || firstQuoted(reason) || ''),
+    };
+  }
+  if (kind === 'executable') {
+    const fix = executableFixFor(reason, task);
+    return { kind, label: `Set ${fix.label} path…`, field: fix.field, taskId: String(task?.nodeId || '') };
+  }
+  if (kind === 'gate') {
+    return { kind, label: 'Review gate…', taskId: String(task?.nodeId || '') };
+  }
+  return null;
+}
+
+/** The failure of one queue task, or null when the row carries no reason. */
+function taskFailure(task) {
+  if (!task) return null;
+  // A completed condition also carries a `reason` ("true — …"); that is an
+  // outcome, not a failure, and must not be rendered as one.
+  if (!['failed', 'needs-review', 'timed out', 'interrupted'].includes(String(task.status))) return null;
+  const reason = String(task.error || task.reason || '').trim();
+  if (!reason) return null;
+  const kind = classifyTaskFailure(task, reason);
+  return {
+    task,
+    block: String(task.title || task.nodeId || 'block'),
+    reason,
+    kind,
+    action: failureActionFor(kind, task, reason),
+  };
+}
+
+/** The first failed task in a queue that has a reason to show. */
+function queueFailure(queue) {
+  const tasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
+  const failed = tasks.find((task) => ['failed', 'needs-review', 'timed out'].includes(String(task?.status))
+    && (task.error || task.reason));
+  const failure = taskFailure(failed);
+  if (failure) return failure;
+  const reason = String(queue?.reason || '').trim();
+  if (!reason) return null;
+  return {
+    task: null,
+    block: '',
+    reason,
+    kind: classifyTaskFailure(null, reason),
+    action: failureActionFor(classifyTaskFailure(null, reason), null, reason),
+  };
+}
+
+/** One sentence for the log/hint: what failed and which block. */
+function failureDetail(failure) {
+  if (!failure) return '';
+  if (!failure.block) return failure.reason;
+  return failure.reason.includes(failure.block)
+    ? failure.reason
+    : `"${failure.block}" — ${failure.reason}`;
+}
+
+function failureHint(failure, verdict = 'failed') {
+  if (!failure) return '';
+  const prefix = `Workflow ${verdict} — `;
+  if (failure.kind === 'conformer') {
+    const source = failure.action?.nodeTitle || failure.action?.nodeId || 'the Generate block';
+    return `${prefix}"${failure.block}" has no selected conformer. Choose a member in "${source}".`;
+  }
+  if (failure.kind === 'executable') {
+    return `${prefix}"${failure.block}" could not start: ${failure.reason}`;
+  }
+  if (failure.kind === 'gate') {
+    return `${prefix}"${failure.block}" finished, but its gates did not pass. Review the gate row.`;
+  }
+  return `${prefix}${failureDetail(failure)}`;
+}
+
+/**
+ * Issue 256: one queue row. The failure reason is real text in the row body
+ * (clamped to two lines, with a keyboard-reachable expander); `title` keeps the
+ * complete message as a secondary tooltip.
+ */
+function queueRowHtml(task, queue = {}) {
+  const branch = task.conditionResult === true ? '→ true' : task.conditionResult === false ? '→ false' : '';
+  const retry = task.loopAttempts
+    ? `retry ${Math.min(task.loopAttempts, task.loop?.maxAttempts ?? task.loopAttempts)}/${task.loop?.maxAttempts ?? '?'}`
+    : '';
+  // Issue 177: the running row shows the wall clock it is spending against the
+  // limit it was given. Nothing is estimated here — the elapsed side is
+  // `startedAt` and the limit is what the queue enforces.
+  const limit = Number(task.timeoutSeconds ?? queue.timeoutSeconds) || null;
+  const startedMs = task.status === 'running' ? Date.parse(task.startedAt || '') : NaN;
+  const budget = Number.isFinite(startedMs) && limit ? budgetLabel(startedMs, limit) : '';
+  const timedOut = task.timeout && typeof task.timeout === 'object' ? task.timeout : null;
+  const timeoutNote = timedOut
+    ? `after ${formatDuration(timedOut.elapsedSeconds)}${timedOut.limitSeconds ? ` · limit ${formatDuration(timedOut.limitSeconds)}` : ''}`
+    : '';
+  // Issue 186: a sweep member row names the state it runs, so three rows from
+  // one block are three multiplicities, not three anonymous runs.
+  const spinMeta = spinTaskMeta(task);
+  const meta = [task.status, spinMeta, timeoutNote, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
+    .filter(Boolean).join(' · ');
+  // The last output line a stopped task wrote is the evidence of where it was,
+  // so the row's tooltip carries it rather than the meta line.
+  const title = [task.error || task.reason || '', timedOut?.lastOutput ? `Last output: ${timedOut.lastOutput}` : '']
+    .filter(Boolean).join('\n');
+  // Issue 154: a finished row opens its results, so it must be reachable and
+  // activatable from the keyboard. An empty data-run-id is not a run.
+  const runId = String(task.runId || '');
+  const interactive = runId
+    ? ` tabindex="0" role="button" aria-label="Open results for ${esc(task.title)}"`
+    : '';
+  // `timed out` has a space; a class attribute would split it in two.
+  const statusClass = esc(String(task.status).replace(/\s+/g, '-'));
+  const budgetAttrs = Number.isFinite(startedMs) && limit
+    ? ` data-elapsed="${Math.trunc(startedMs)}" data-limit="${Math.trunc(limit)}"`
+    : '';
+  const budgetHtml = budget ? ` · <span class="queue-budget"${budgetAttrs}>${esc(budget)}</span>` : '';
+  // Issue 256: the reason is ordinary text in the row, not a tooltip-only
+  // field. The toggle is a button so a keyboard user can expand the clamp.
+  const failure = taskFailure(task);
+  const reasonId = `queue-reason-${String(task.nodeId || 'task').replace(/[^A-Za-z0-9_-]/g, '-')}`;
+  const action = failure?.action;
+  const actionAttrs = action
+    ? [
+      'data-action="failure-fix"',
+      `data-fix-kind="${esc(action.kind || '')}"`,
+      action.field ? `data-fix-field="${esc(action.field)}"` : '',
+      action.nodeId ? `data-fix-node="${esc(action.nodeId)}"` : '',
+      action.nodeTitle ? `data-fix-title="${esc(action.nodeTitle)}"` : '',
+      action.taskId ? `data-fix-task="${esc(action.taskId)}"` : '',
+    ].filter(Boolean).join(' ')
+    : '';
+  const reasonHtml = failure
+    ? `<span class="queue-reason" id="${esc(reasonId)}">${esc(failure.reason)}</span>`
+      + '<span class="queue-failure-actions">'
+      + `<button type="button" class="queue-reason-toggle" data-action="toggle-queue-reason" aria-expanded="false" aria-controls="${esc(reasonId)}">Show full reason</button>`
+      + (action ? `<button type="button" class="btn small queue-fix" ${actionAttrs}>${esc(action.label)}</button>` : '')
+      + '</span>'
+    : '';
+  const describedBy = failure && runId ? ` aria-describedby="${esc(reasonId)}"` : '';
+  return `<li class="queue-item is-${statusClass}" data-run-id="${esc(runId)}" data-node-id="${esc(task.nodeId || '')}"${interactive}${describedBy} title="${esc(title)}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}${budgetHtml}</span>${reasonHtml}</li>`;
+}
+
 function renderQueue() {
   const queue = state.queue;
   const stateEl = $('#queue-state');
@@ -7316,44 +7758,7 @@ function renderQueue() {
   const listEl = $('#queue-list');
   if (listEl) {
     listEl.innerHTML = queue.tasks.length
-      ? queue.tasks.map((task) => {
-        const branch = task.conditionResult === true ? '→ true' : task.conditionResult === false ? '→ false' : '';
-        const retry = task.loopAttempts
-          ? `retry ${Math.min(task.loopAttempts, task.loop?.maxAttempts ?? task.loopAttempts)}/${task.loop?.maxAttempts ?? '?'}`
-          : '';
-        // Issue 177: the running row shows the wall clock it is spending
-        // against the limit it was given. Nothing is estimated here — the
-        // elapsed side is `startedAt` and the limit is what the queue enforces.
-        const limit = Number(task.timeoutSeconds ?? queue.timeoutSeconds) || null;
-        const startedMs = task.status === 'running' ? Date.parse(task.startedAt || '') : NaN;
-        const budget = Number.isFinite(startedMs) && limit ? budgetLabel(startedMs, limit) : '';
-        const timedOut = task.timeout && typeof task.timeout === 'object' ? task.timeout : null;
-        const timeoutNote = timedOut
-          ? `after ${formatDuration(timedOut.elapsedSeconds)}${timedOut.limitSeconds ? ` · limit ${formatDuration(timedOut.limitSeconds)}` : ''}`
-          : '';
-        // Issue 186: a sweep member row names the state it runs, so three rows
-        // from one block are three multiplicities, not three anonymous runs.
-        const spinMeta = spinTaskMeta(task);
-        const meta = [task.status, spinMeta, timeoutNote, task.attempts > 1 ? `×${task.attempts}` : '', retry, branch, task.gateVerdict ? `gates ${task.gateVerdict}` : '']
-          .filter(Boolean).join(' · ');
-        // The last output line a stopped task wrote is the evidence of where it
-        // was, so the row's tooltip carries it rather than the meta line.
-        const title = [task.error || task.reason || '', timedOut?.lastOutput ? `Last output: ${timedOut.lastOutput}` : '']
-          .filter(Boolean).join('\n');
-        // Issue 154: a finished row opens its results, so it must be reachable
-        // and activatable from the keyboard. An empty data-run-id is not a run.
-        const runId = String(task.runId || '');
-        const interactive = runId
-          ? ` tabindex="0" role="button" aria-label="Open results for ${esc(task.title)}"`
-          : '';
-        // `timed out` has a space; a class attribute would split it in two.
-        const statusClass = esc(String(task.status).replace(/\s+/g, '-'));
-        const budgetAttrs = Number.isFinite(startedMs) && limit
-          ? ` data-elapsed="${Math.trunc(startedMs)}" data-limit="${Math.trunc(limit)}"`
-          : '';
-        const budgetHtml = budget ? ` · <span class="queue-budget"${budgetAttrs}>${esc(budget)}</span>` : '';
-        return `<li class="queue-item is-${statusClass}" data-run-id="${esc(runId)}"${interactive} title="${esc(title)}"><span class="queue-dot"></span><span class="queue-title">${esc(task.title)}</span><span class="queue-meta">${esc(meta)}${budgetHtml}</span></li>`;
-      }).join('')
+      ? queue.tasks.map((task) => queueRowHtml(task, queue)).join('')
       : '<li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li>';
   }
   syncQueueTicker();
@@ -7454,9 +7859,11 @@ async function startWorkflowUnlocked() {
   }
 
   state.run.output = '';
+  state.run.ignoreEvents = false;
   appendRunOutput(`Queued workflow · ${tasks.filter((task) => task.executable).length} calculation block(s)\n`);
   $('#run-gates').innerHTML = '';
   $('#run-title').textContent = state.project.name || 'Workflow';
+  clearRunHint();
 
   try {
     const queue = await desktop.startQueue({
@@ -7642,11 +8049,19 @@ function scheduleAttachParsed(queue) {
 function handleQueueEvent(event) {
   if (!event) return;
   if (event.type === 'queue-output') {
+    // Issue 255: output from a queue that is not the visible one must not be
+    // pasted into this project's log.
+    if (event.queueId && event.queueId !== state.queue.id) return;
     const task = state.queue.tasks.find((item) => item.nodeId === event.nodeId);
     appendRunOutput(`\n[${task?.title || event.nodeId}]\n${event.text}`);
     return;
   }
   if (!event.queue) return;
+  // A live queue from another project is remembered, never painted (issue 255).
+  if (!queueBelongsToProject(event.queue)) {
+    noteForeignQueue(event.queue);
+    return;
+  }
   applyQueue(event.queue);
   attachQueueEnsembles(event.queue);
   if (event.type === 'queue-started') {
@@ -7662,10 +8077,26 @@ function handleQueueEvent(event) {
   if (event.type === 'queue-done') {
     const verdict = event.queue.status;
     autoRunPane('results');
-    appendRunOutput(`\nWorkflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
-    setStatusMessage(`Workflow ${verdict}${event.queue.reason ? ` · ${event.queue.reason}` : ''}`);
+    // Issue 256: "Workflow failed" without the reason is not an outcome. The
+    // line names the first failed block and the same text goes to the hint.
+    const failure = ['failed', 'needs-review', 'partial', 'timed out'].includes(String(verdict))
+      ? queueFailure(event.queue)
+      : null;
+    if (failure) {
+      appendRunOutput(`\nWorkflow ${verdict} — ${failureDetail(failure)}\n`);
+      setRunHint(failureHint(failure, verdict), {
+        warn: true,
+        action: failure.action,
+      });
+      setStatusMessage(`Workflow ${verdict} · ${failure.block || 'queue'}: ${failure.reason}`);
+      toast(`Workflow ${verdict} · ${failure.block || 'see the queue'}`);
+    } else {
+      appendRunOutput(`\nWorkflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
+      setRunHint(`Workflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}.`);
+      setStatusMessage(`Workflow ${verdict}${event.queue.reason ? ` · ${event.queue.reason}` : ''}`);
+      toast(`Workflow ${verdict}.`);
+    }
     attachQueueParsed(event.queue).catch(() => {});
-    toast(`Workflow ${verdict}.`);
     refreshHistory();
   }
 }
@@ -7704,28 +8135,84 @@ async function refreshEngineChips() {
   updateRunConsoleCopy();
 }
 
+const HISTORY_MONTHS = Object.freeze(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']);
+
+/** `09 Nov 21:04` in the user's local time, or '' for an unknown stamp. */
+function formatRunStart(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${pad(date.getDate())} ${HISTORY_MONTHS[date.getMonth()]} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Issue 255: attribute each run row to the queue that produced it, so the list
+ * says which project (and flow) a run belongs to and when it started. Runs
+ * outside a queue keep their own `startedAt` and simply have no project name.
+ */
+function historyRows(runs, queues, { limit = 6 } = {}) {
+  const byRunId = new Map();
+  for (const queue of Array.isArray(queues) ? queues : []) {
+    for (const task of Array.isArray(queue?.tasks) ? queue.tasks : []) {
+      const runId = String(task?.runId || '');
+      if (!runId || byRunId.has(runId)) continue;
+      byRunId.set(runId, {
+        queueId: queue.id || null,
+        projectName: String(queue.projectName || '').trim(),
+        flowId: queue.flowId || null,
+        startedAt: task.startedAt || queue.createdAt || null,
+      });
+    }
+  }
+  return (Array.isArray(runs) ? runs : []).slice(0, limit).map((run) => {
+    const attribution = byRunId.get(String(run.id || '')) || null;
+    const startedAt = run.startedAt || attribution?.startedAt || '';
+    return {
+      run,
+      runId: String(run.id || ''),
+      queueId: attribution?.queueId || run.queueId || null,
+      projectName: String(run.projectName || attribution?.projectName || '').trim(),
+      flowId: attribution?.flowId || run.flowId || null,
+      startedAt,
+      date: formatRunStart(startedAt),
+    };
+  });
+}
+
+function historyRowHtml(row) {
+  const { run } = row;
+  // Issue 131: an imported record in the runs folder is listed, but its row
+  // says where the number came from instead of adopting the run's status/engine
+  // meta. Issue 255: a queue-produced run also names its project and start.
+  const meta = isImportedRecord(run)
+    ? [row.projectName, row.date, importedSummary(run)?.badge].filter(Boolean).join(' · ')
+    : [
+      row.projectName,
+      row.date,
+      run.status,
+      run.gates?.overall ? `gates ${run.gates.overall}` : '',
+      run.dryRun ? 'dry' : engineOrDefault(run.engine).label,
+    ].filter(Boolean).join(' · ');
+  // Issue 154: the same keyboard contract as the queue rows.
+  const interactive = row.runId
+    ? ` tabindex="0" role="button" aria-label="Open results for ${esc(run.title || row.runId)}${row.projectName ? ` from ${esc(row.projectName)}` : ''}"`
+    : '';
+  const queueAttr = row.queueId ? ` data-queue-id="${esc(row.queueId)}"` : '';
+  return `<li class="queue-item is-${esc(run.status)}" data-run-id="${esc(row.runId)}"${queueAttr}${interactive} title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
+}
+
 async function refreshHistory() {
   if (!desktop?.listRuns) return;
   try {
-    const runs = (await desktop.listRuns()).slice(0, 6);
+    const [runList, queueList] = await Promise.all([
+      desktop.listRuns(),
+      desktop.listQueues ? desktop.listQueues().catch(() => []) : Promise.resolve([]),
+    ]);
+    const rows = historyRows(Array.isArray(runList) ? runList : [], Array.isArray(queueList) ? queueList : []);
     const el = $('#run-history');
     if (!el) return;
-    el.innerHTML = runs.length
-      ? runs.map((run) => {
-        // Issue 131: an imported record in the runs folder is listed, but its
-        // row says where the number came from instead of adopting the run's
-        // status/engine meta.
-        const meta = isImportedRecord(run)
-          ? importedSummary(run)?.badge
-          : [run.status, run.gates?.overall ? `gates ${run.gates.overall}` : '', run.dryRun ? 'dry' : engineOrDefault(run.engine).label]
-            .filter(Boolean).join(' · ');
-        // issue 154: the same keyboard contract as the queue rows.
-        const runId = String(run.id || '');
-        const interactive = runId
-          ? ` tabindex="0" role="button" aria-label="Open results for ${esc(run.title || runId)}"`
-          : '';
-        return `<li class="queue-item is-${esc(run.status)}" data-run-id="${esc(runId)}"${interactive} title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
-      }).join('')
+    el.innerHTML = rows.length
+      ? rows.map((row) => historyRowHtml(row)).join('')
       : '<li class="queue-empty">No runs recorded yet.</li>';
   } catch {
     // History is optional; a failure must not break the console.
@@ -7736,8 +8223,20 @@ async function restoreQueue() {
   if (!desktop?.listQueues) return;
   try {
     const queues = await desktop.listQueues();
-    const active = queues.find((queue) => ['running', 'paused'].includes(queue.status)) || queues[0];
-    if (active) applyQueue(active);
+    if (!Array.isArray(queues)) return;
+    // Issue 255: restore the queue that belongs to the open project, not
+    // whichever queue happens to be newest. A finished queue fills the Queue
+    // tab and badge; only a live one may paint the header.
+    const matching = queues.filter((queue) => queueBelongsToProject(queue));
+    const live = matching.find((queue) => ['running', 'queued', 'paused'].includes(String(queue.status)));
+    const target = live || matching[0] || null;
+    if (target) {
+      applyQueue(target, { paintHeader: ['running', 'queued', 'paused'].includes(String(target.status)) });
+      return;
+    }
+    const other = queues[0] || null;
+    if (other) noteForeignQueue(other);
+    renderRunLast();
   } catch {
     // No queue history yet.
   }
@@ -7749,6 +8248,14 @@ function applyOpenedProject(result) {
     toast(`Could not open project: ${result.error.message}`);
     return false;
   }
+  // Issue 255: capture where the previous queue went before replacing the
+  // project, then clear the console. A fresh project must not inherit counters,
+  // a title or an outcome hint from the one that was on screen.
+  const previousQueue = state.queue?.id ? { ...state.queue } : null;
+  resetRunHeader({ ignoreEvents: true });
+  state.queue = emptyQueueState();
+  state.lastForeignQueue = null;
+  clearRunHint();
   state.project = result.project;
   hydrateProject(state.project);
   // Issue 160: the queue may already be restored — it is read at start up, before
@@ -7765,11 +8272,17 @@ function applyOpenedProject(result) {
   state.statusMessage = result.migrated
     ? `Opened ${result.path} · migrated from v0.1 to schema v${state.project.schemaVersion}${warnings ? ` · ${warnings} warning${warnings === 1 ? '' : 's'}` : ''}`
     : `Opened ${result.path}`;
+  if (previousQueue && !queueBelongsToProject(previousQueue)) noteForeignQueue(previousQueue);
+  renderQueue();
+  updateRunTabBadges();
+  renderRunLast();
   renderGraph();
   renderInspector();
   updateCounts();
   updateRunConsoleCopy();
   syncRunnerInputs();
+  // Attach the new project's own queue (if any) after the shell has reset.
+  restoreQueue().catch(() => {});
   toast(result.migrated ? 'Project opened and migrated to schema v1.' : 'Project opened.');
   return true;
 }
@@ -9058,6 +9571,17 @@ function handleAction(action, element) {
     case 'resume-workflow': resumeWorkflow(); break;
     case 'cancel-workflow': cancelWorkflow(); break;
     case 'refresh-history': refreshHistory(); break;
+    case 'toggle-queue-reason': {
+      const item = element.closest('.queue-item');
+      if (item) {
+        const expanded = item.classList.toggle('is-expanded');
+        element.setAttribute('aria-expanded', String(expanded));
+        element.textContent = expanded ? 'Show less' : 'Show full reason';
+      }
+      break;
+    }
+    case 'run-hint-fix': applyRunHintFix(element); break;
+    case 'failure-fix': applyRunHintFix(element); break;
     case 'cancel-run': cancelRun(); break;
     case 'verify-run': verifyCurrentRun(); break;
     case 'export-run-bundle':
@@ -10055,17 +10579,31 @@ function wireEvents() {
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
 export {
+  applyQueue,
   calcInspector,
   costCardText,
+  failureDetail,
+  failureHint,
   formatCostDuration,
+  formatRunStart,
+  handleQueueEvent,
+  historyRowHtml,
+  historyRows,
   inputInspector,
   nodeDetail,
   nodeFoot,
   prepareInspector,
+  queueBelongsToProject,
+  queueFailure,
+  queueRowHtml,
   renderFlowTabs,
   renderRecordSummary,
+  resetRunHeader,
   resultFacts,
+  runHeaderFor,
   runStateOf,
+  setRunHint,
+  clearRunHint,
   simpleInspector,
   spinMultiplicitiesForNode,
   spinSweepLabel,
@@ -10073,7 +10611,9 @@ export {
   state,
   syncNodeStatesFromQueue,
   reconcileNodesWithQueue,
+  taskFailure,
   updateNodeField,
+  updateRunConsoleCopy,
   updateSpinSweepState,
 };
 
