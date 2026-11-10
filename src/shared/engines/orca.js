@@ -24,6 +24,11 @@
  * logs (`test/fixtures/real/orca-5.0-water-mp2/`, `.../orca-5.0-dvb-ir/`). The optimisation banner
  * has no captured log (issue 176 prints it as a named gap), so it is still taken from the manual and
  * must not be described as verified against a running ORCA.
+ *
+ * Issue 227 adds DLPNO-CCSD(T) single points. The DLPNO header, PNO threshold, correlation energy
+ * and triples correction are pinned by a real ORCA 6.1.1 water log
+ * (`test/fixtures/real/orca-6.1-water-dlpno/`), which prints the same `DLPNO SETTINGS` and
+ * `DLPNO BASED TRIPLES CORRECTION` blocks the manual documents.
  */
 
 import { isElementSymbol, atomicNumber } from '../elements.js';
@@ -35,11 +40,11 @@ export const ORCA_ENGINE_ID = 'orca';
  * ORCA releases whose output lines this parser was written against.
  *
  * Issue 176: `test/fixtureCoverage.test.js` refuses a fixture whose
- * PROVENANCE.md names a release missing here. `5.0` is now pinned by two real
- * cclib captures (`dvb_ir.out`, `water_mp2.out`); `6.0` is the manual the
- * remaining line shapes were taken from and still has no captured log.
+ * PROVENANCE.md names a release missing here. `5.0` and `6.1` are each pinned
+ * by real captures (`dvb_ir.out`, `water_mp2.out`, and the DLPNO-CCSD(T)
+ * water log); `6.0` is the manual the remaining line shapes were taken from.
  */
-export const ORCA_SUPPORTED_VERSIONS = Object.freeze(['5.0', '6.0']);
+export const ORCA_SUPPORTED_VERSIONS = Object.freeze(['5.0', '6.0', '6.1']);
 
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.inp$/i;
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
@@ -92,6 +97,18 @@ export const ORCA_METHODS = Object.freeze([
   { id: 'MP2', label: 'MP2' },
   { id: 'CCSD(T)', label: 'CCSD(T)' },
   { id: 'HF', label: 'Hartree-Fock' },
+  /**
+   * Issue 227: local coupled cluster. It is a single-point method here because
+   * this build does not write gradients or Hessians for it; `buildOrcaInput`
+   * refuses Freq/Opt by name rather than dropping the job keyword.
+   */
+  {
+    id: 'DLPNO-CCSD(T)',
+    label: 'DLPNO-CCSD(T)',
+    singlePointOnly: true,
+    correlated: true,
+    requiresCorrelationAuxBasis: true,
+  },
 ]);
 
 const METHOD_BY_KEY = new Map(ORCA_METHODS.map((method) => [method.id.toLowerCase(), method.id]));
@@ -104,9 +121,20 @@ const METHOD_BY_KEY = new Map(ORCA_METHODS.map((method) => [method.id.toLowerCas
  * guessed.
  */
 export const ORCA_BASES = Object.freeze([
-  { id: 'def2-SVP', label: 'def2-SVP', keyword: 'def2-SVP' },
-  { id: 'def2-TZVP', label: 'def2-TZVP', keyword: 'def2-TZVP' },
-  { id: 'cc-pVTZ', label: 'cc-pVTZ', keyword: 'cc-pVTZ' },
+  { id: 'def2-SVP', label: 'def2-SVP', keyword: 'def2-SVP', auxiliary: 'def2-SVP/C' },
+  // `def2-TZVP(PP)` is the def2-TZVP set as ORCA distributes it: the Stuttgart
+  // effective core potentials are used wherever the all-electron set is not
+  // defined. The simple-input keyword is still `def2-TZVP`; the id keeps the
+  // pseudopotential choice visible in the record.
+  {
+    id: 'def2-TZVP(PP)',
+    label: 'def2-TZVP(PP)',
+    keyword: 'def2-TZVP',
+    auxiliary: 'def2-TZVP/C',
+    pseudopotential: 'def2 ECP where defined',
+  },
+  { id: 'def2-TZVP', label: 'def2-TZVP', keyword: 'def2-TZVP', auxiliary: 'def2-TZVP/C' },
+  { id: 'cc-pVTZ', label: 'cc-pVTZ', keyword: 'cc-pVTZ', auxiliary: 'cc-pVTZ/C' },
   { id: '6-31G(d)', label: '6-31G(d)', keyword: '6-31G*' },
   { id: '6-311+G(d,p)', label: '6-311+G(d,p)', keyword: '6-311+G(d,p)' },
 ]);
@@ -119,6 +147,23 @@ export const ORCA_DISPERSION_KEYWORDS = Object.freeze({
   GD3: 'D3ZERO',
   D4: 'D4',
 });
+
+/**
+ * Issue 227: the PNO truncation preset. `TCutPNO` is the main knob controlling
+ * the truncation error of the local correlation treatment, so the preset (and
+ * the value ORCA printed for it) travels in the provenance block and the parse.
+ * The values are ORCA's documented NormalPNO/TightPNO cutoffs.
+ */
+export const ORCA_PNO_THRESHOLDS = Object.freeze([
+  { id: 'NormalPNO', label: 'NormalPNO', tCutPNO: 3.33e-7 },
+  { id: 'TightPNO', label: 'TightPNO', tCutPNO: 1e-7 },
+]);
+
+const PNO_BY_KEY = new Map(ORCA_PNO_THRESHOLDS.map((entry) => [entry.id.toLowerCase(), entry]));
+
+/** ORCA 6 uses RIJCOSX for the SCF and a correlation-fitting `/C` basis. */
+export const ORCA_RI_APPROXIMATION = 'RIJCOSX';
+export const ORCA_COULOMB_BASIS = 'def2/J';
 
 export const ORCA_SOLVATION_MODELS = Object.freeze(['CPCM', 'SMD']);
 
@@ -182,6 +227,7 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'population analysis (NBO/ESP)',
     'Gaussian-style checkpoint hand-off (%Chk)',
     'Gaussian PCM keyword (ORCA implements CPCM/SMD)',
+    'DLPNO-CCSD(T) gradients, analytical frequencies and optimisations (single points only)',
   ]),
 });
 
@@ -244,6 +290,31 @@ export function orcaBasisFor(settings = {}) {
     );
   }
   return basis;
+}
+
+export function orcaMethodEntryFor(settings = {}) {
+  const id = orcaMethodFor(settings);
+  return ORCA_METHODS.find((entry) => entry.id === id) || null;
+}
+
+export function isDlpnoCcsdt(settings = {}) {
+  return orcaMethodEntryFor(settings)?.id === 'DLPNO-CCSD(T)';
+}
+
+/**
+ * The PNO preset for a DLPNO-CCSD(T) block. NormalPNO is ORCA's default and is
+ * written explicitly, so the route preview always states the truncation level
+ * instead of leaving it to the program.
+ */
+export function orcaPnoThresholdFor(settings = {}) {
+  const requested = oneLine(settings.pnoThreshold, 'NormalPNO');
+  const entry = PNO_BY_KEY.get(requested.toLowerCase());
+  if (!entry) {
+    throw new Error(
+      `PNO threshold "${requested}" is not available. Choose ${ORCA_PNO_THRESHOLDS.map((item) => item.id).join(' or ')}.`,
+    );
+  }
+  return entry;
 }
 
 function dispersionKeywordFor(settings = {}) {
@@ -369,6 +440,7 @@ export function buildOrcaInput({
   }
 
   const method = orcaMethodFor(settings);
+  const methodEntry = ORCA_METHODS.find((entry) => entry.id === method) || null;
   const basis = orcaBasisFor(settings);
   const jobType = oneLine(settings.jobType, 'SP');
   const jobKeywords = ORCA_JOB_KEYWORDS[jobType];
@@ -381,7 +453,52 @@ export function buildOrcaInput({
     );
   }
 
+  const requestedPno = oneLine(settings.pnoThreshold);
+  if (methodEntry?.singlePointOnly && jobType !== 'SP') {
+    const requested = {
+      Freq: 'analytical frequencies (a Hessian)',
+      Opt: 'a geometry optimisation (an analytic gradient)',
+      'Opt Freq': 'a geometry optimisation (an analytic gradient) and analytical frequencies (a Hessian)',
+    }[jobType] || `the "${jobType}" job`;
+    throw new Error(
+      `DLPNO-CCSD(T) is a single-point method in this builder: ${requested} `
+      + 'is not available for it. Set the job type to SP, or choose a method whose '
+      + 'gradient/Hessian ORCA implements (for example MP2, B3LYP or HF).',
+    );
+  }
+  if (!methodEntry?.singlePointOnly && requestedPno) {
+    throw new Error(
+      `PNO threshold "${requestedPno}" applies only to DLPNO-CCSD(T); `
+      + `method "${method}" has no PNO truncation. Clear the setting or select DLPNO-CCSD(T).`,
+    );
+  }
+
+  let dlpno = null;
+  if (methodEntry?.singlePointOnly) {
+    const pno = orcaPnoThresholdFor(settings);
+    if (!basis.auxiliary) {
+      throw new Error(
+        `DLPNO-CCSD(T) needs a correlation-fitting auxiliary basis, and this builder `
+        + `defines one for ${ORCA_BASES.filter((item) => item.auxiliary).map((item) => item.id).join(', ')}; `
+        + `"${basis.id}" has none. Choose one of those basis sets (def2-TZVP(PP) is the documented production choice).`,
+      );
+    }
+    dlpno = {
+      method: 'DLPNO-CCSD(T)',
+      pnoThreshold: pno.id,
+      tCutPNO: pno.tCutPNO,
+      auxiliaryBasis: basis.auxiliary,
+      coulombBasis: ORCA_COULOMB_BASIS,
+      riApproximation: ORCA_RI_APPROXIMATION,
+    };
+  }
+
   const keywords = ['!', method, basis.keyword, ...jobKeywords];
+  if (dlpno) {
+    // Written out rather than left to ORCA: the RI approximation and the two
+    // auxiliary bases decide how the SCF and the local correlation are fitted.
+    keywords.push(ORCA_COULOMB_BASIS, dlpno.auxiliaryBasis, ORCA_RI_APPROXIMATION, dlpno.pnoThreshold);
+  }
   const dispersion = dispersionKeywordFor(settings);
   if (dispersion) keywords.push(dispersion);
   const scf = scfKeywordFor(settings);
@@ -433,6 +550,11 @@ export function buildOrcaInput({
     method,
     basis: basis.id,
     basisKeyword: basis.keyword,
+    pnoThreshold: dlpno?.pnoThreshold || null,
+    tCutPNO: dlpno?.tCutPNO ?? null,
+    auxiliaryBasis: dlpno?.auxiliaryBasis || null,
+    coulombBasis: dlpno?.coulombBasis || null,
+    riApproximation: dlpno?.riApproximation || null,
     jobType,
     charge,
     multiplicity,
@@ -465,15 +587,25 @@ export function orcaMethodBlock(settings = {}, { argv = null, jobType = null } =
   const type = oneLine(jobType, '') || oneLine(settings.jobType, 'SP');
   const basis = BASIS_BY_KEY.get(oneLine(settings.basis, 'def2-SVP').toLowerCase()) || null;
   const solvation = solvationFor(settings);
+  const method = METHOD_BY_KEY.get(oneLine(settings.method, 'B3LYP').toLowerCase()) || null;
+  const dlpno = method === 'DLPNO-CCSD(T)' ? orcaPnoThresholdFor(settings) : null;
   return {
     program: 'ORCA',
-    method: METHOD_BY_KEY.get(oneLine(settings.method, 'B3LYP').toLowerCase()) || null,
-    basis: basis ? basis.keyword : null,
+    method,
+    basis: basis ? basis.id : null,
+    basisKeyword: basis ? basis.keyword : null,
     jobType: type,
     dispersion: dispersionKeywordFor(settings),
     solvation: solvation ? `${solvation.model}/${solvation.solvent}` : null,
     scf: scfKeywordFor(settings),
     grid: gridKeywordFor(settings),
+    // Issue 227: the threshold controls the truncation error, so the record
+    // carries it beside the method instead of only inside the input text.
+    pnoThreshold: dlpno ? dlpno.id : null,
+    tCutPNO: dlpno ? dlpno.tCutPNO : null,
+    auxiliaryBasis: dlpno && basis ? basis.auxiliary : null,
+    coulombBasis: dlpno ? ORCA_COULOMB_BASIS : null,
+    riApproximation: dlpno ? ORCA_RI_APPROXIMATION : null,
     resources: resourcesFor(settings),
     argv: Array.isArray(argv) && argv.length > 0 ? argv.map(String) : null,
   };
@@ -507,7 +639,12 @@ function levelFromEcho(echo) {
   let basis = null;
   for (const token of tokens) {
     const key = token.toLowerCase();
-    if (!method && METHOD_BY_KEY.has(key)) method = METHOD_BY_KEY.get(key);
+    if (!method && METHOD_BY_KEY.has(key)) {
+      const entry = ORCA_METHODS.find((item) => item.id.toLowerCase() === key);
+      // DLPNO-CCSD(T) is the correlation treatment, not the SCF reference;
+      // `parsed.dlpno.method` records it, `scf.method` must not claim it.
+      if (!entry?.singlePointOnly) method = METHOD_BY_KEY.get(key);
+    }
     if (!basis && BASIS_BY_KEYWORD.has(key)) basis = BASIS_BY_KEYWORD.get(key).keyword;
   }
   return { method, basis };
@@ -530,6 +667,97 @@ function lastFrequencyBlock(lines) {
     }
   }
   return values;
+}
+
+/**
+ * Map the `TCutPNO` ORCA printed to the preset that produced it.
+ *
+ * The printed value, not the keyword, is authoritative: an input that says
+ * `NormalPNO` but overrides `%mdci TCutPNO` prints the override, and reporting
+ * the keyword would misstate the truncation error. A value that matches no
+ * preset is reported as `custom` with the number beside it.
+ */
+export function orcaPnoThresholdLabel(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+  const match = ORCA_PNO_THRESHOLDS.find((entry) => Math.abs(number - entry.tCutPNO) / entry.tCutPNO < 0.01);
+  return match ? match.id : 'custom';
+}
+
+/**
+ * The DLPNO record, when the log carries one.
+ *
+ * ORCA prints the method in the echoed input (`! DLPNO-CCSD(T) ...`), the
+ * cutoffs in `DLPNO SETTINGS`, and the correlation/triples energies at the end
+ * of `DLPNO BASED TRIPLES CORRECTION`. Nothing here is inferred from the final
+ * single-point energy: a DLPNO-CCSD log without triples has no `E(CCSD(T))`
+ * line and must not be labelled DLPNO-CCSD(T).
+ */
+function dlpnoBlock({ body, lines, echo, version }) {
+  const triplesHeaderLine = lines.findIndex((line) => /DLPNO BASED TRIPLES CORRECTION/i.test(line));
+  const settingsLine = lines.findIndex((line) => /DLPNO SETTINGS/i.test(line));
+  // The method must come from the echoed input, never from the banner's
+  // contributor list: every ORCA log names "DLPNO-CCSD(T)" in that list.
+  const echoed = /\b(?:STEOM-)?DLPNO-CCSD(?:\(T1?\))?/i.exec(echo || '')?.[0] || null;
+  const method = echoed ? echoed.toUpperCase() : (triplesHeaderLine >= 0 ? 'DLPNO-CCSD(T)' : null);
+  const correlationEnergy = lastNumber(body, String.raw`Final correlation energy\s+\.{0,}\s*(${NUMBER})`)
+    ?? lastNumber(body, String.raw`Final correlation energy\s+(${NUMBER})`);
+  const tCutPNO = lastNumber(body, String.raw`TCutPNO:\s*(${NUMBER})`)
+    ?? lastNumber(body, String.raw`TCutPNO\s*=\s*(${NUMBER})`);
+  if (!method || (settingsLine < 0 && triplesHeaderLine < 0 && correlationEnergy === null && tCutPNO === null)) {
+    return null;
+  }
+
+  const tokens = String(echo || '').split(/\s+/)
+    .map((token) => token.replace(/^!+/, '').replace(/[,;]+$/, ''))
+    .filter(Boolean);
+  const auxiliaryBasis = tokens.find((token) => /\/C$/i.test(token))
+    || tokens.find((token) => /^autoaux$/i.test(token))
+    || null;
+  const basis = tokens.find((token) => BASIS_BY_KEYWORD.has(token.toLowerCase())) || null;
+  const coulombBasis = tokens.find((token) => /\/J$/i.test(token)) || null;
+  const riKeyword = tokens.find((token) => /^(?:RIJCOSX|RIJK|RI-JK|RIJDX|RI-J)$/i.test(token)) || null;
+
+  const energyLine = /E\(CCSD\(T\)\)/i.exec(body)?.index;
+  const inputLine = /\|\s*\d+>\s*!.*DLPNO/i.exec(body)?.index;
+  const triplesIndex = /DLPNO BASED TRIPLES CORRECTION/i.exec(body)?.index;
+  const settingsIndex = /DLPNO SETTINGS/i.exec(body)?.index;
+  const lineAt = (index) => (Number.isInteger(index) ? body.slice(0, index).split('\n').length : null);
+
+  return {
+    method,
+    pnoThreshold: orcaPnoThresholdLabel(tCutPNO),
+    tCutPNO,
+    tCutPairs: lastNumber(body, String.raw`TCutPairs:\s*(${NUMBER})`)
+      ?? lastNumber(body, String.raw`TCutPairs\s*=\s*(${NUMBER})`),
+    tCutMKN: lastNumber(body, String.raw`TCutMKN:\s*(${NUMBER})`)
+      ?? lastNumber(body, String.raw`TCutMKN\s*=\s*(${NUMBER})`),
+    basis,
+    auxiliaryBasis,
+    coulombBasis,
+    riApproximation: riKeyword,
+    kCFormation: /K\(C\) Formation\s+\.\.\.\s+([^\r\n]+)/i.exec(body)?.[1]?.trim() || null,
+    correlationEnergyHartree: correlationEnergy,
+    triplesCorrectionHartree: lastNumber(body, String.raw`Triples Correction \(T\)\s+\.{0,}\s*(${NUMBER})`)
+      ?? lastNumber(body, String.raw`Triples Correction \(T\)\s+(${NUMBER})`),
+    ccsdEnergyHartree: lastNumber(body, String.raw`E\(CCSD\)\s+\.{0,}\s*(${NUMBER})`)
+      ?? lastNumber(body, String.raw`E\(CCSD\)\s+(${NUMBER})`),
+    eCcsdTHartree: lastNumber(body, String.raw`E\(CCSD\(T\)\)\s+\.{0,}\s*(${NUMBER})`)
+      ?? lastNumber(body, String.raw`E\(CCSD\(T\)\)\s+(${NUMBER})`),
+    triplesHeader: triplesHeaderLine >= 0,
+    /**
+     * Where each fact came from, so a record can be checked against the log.
+     * 1-based line numbers; `null` when the block is absent.
+     */
+    provenance: {
+      source: 'orca-output',
+      programVersion: version || null,
+      inputLine: lineAt(inputLine),
+      settingsLine: lineAt(settingsIndex),
+      triplesHeaderLine: lineAt(triplesIndex),
+      energyLine: lineAt(energyLine),
+    },
+  };
 }
 
 /**
@@ -571,6 +799,22 @@ export const ORCA_PARSE_BRANCHES = Object.freeze([
     versions: ['5.0'],
     fixture: 'blocked: no ORCA optimisation log captured; cclib\'s dvb_gopt.out is 514 kB and was not committed',
     taken: (parsed) => parsed.optimization?.completed === true,
+  },
+  {
+    id: 'dlpno-header',
+    line: '`DLPNO SETTINGS (2015 fully linear scaling implementation)` with `TCutPNO:           3.330e-07`',
+    versions: ['6.1'],
+    taken: (parsed) => Boolean(parsed.dlpno?.method)
+      && Boolean(parsed.dlpno?.pnoThreshold)
+      && Boolean(parsed.dlpno?.basis),
+  },
+  {
+    id: 'dlpno-ccsd(t)',
+    line: '`DLPNO BASED TRIPLES CORRECTION`, `Final correlation energy ... -0.275822870` and `E(CCSD(T)) ... -76.331959339`',
+    versions: ['6.1'],
+    taken: (parsed) => Number.isFinite(parsed.dlpno?.correlationEnergyHartree)
+      && Number.isFinite(parsed.dlpno?.eCcsdTHartree)
+      && parsed.dlpno?.triplesHeader === true,
   },
 ]);
 
@@ -645,6 +889,7 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
 
   const echo = simpleInputLine(body);
   const level = levelFromEcho(echo);
+  const dlpno = dlpnoBlock({ body, lines, echo, version: versionMatch?.[1] || null });
   // "Did this run ask for an optimisation?" must not be true for a Freq-only
   // job: ORCA prints a Hessian for Freq, but no geometry is relaxed.
   const echoOpt = /\bopt\b/i.test(echo) ? true : echo ? false : null;
@@ -721,6 +966,7 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
       hartree: finalEnergy,
       source: finalEnergy !== null ? 'final-single-point' : null,
     },
+    dlpno,
     extras: {
       simpleInput: echo || null,
       basis: level.basis,
