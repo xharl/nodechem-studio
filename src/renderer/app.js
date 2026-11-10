@@ -23,6 +23,7 @@ import {
 } from '../shared/draft.js';
 import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
 import { applyQueueToProject, nextAction } from '../shared/queueReconcile.js';
+import { clampFloatingRect, readFloatingRect } from '../shared/floatingWindow.js';
 import {
   DERIVATIVE_MAX_EDITS,
   DERIVATIVE_OPS,
@@ -371,6 +372,10 @@ const state = {
   // Last engineStatus() answer, used to seed the run-console executable field
   // without a second probe (issue issue 233).
   engineStatus: null,
+  // Run console geometry (issue 253): null means docked to the CSS corner.
+  runConsoleRect: null,
+  runConsoleDrag: null,
+  runConsolePersistTimer: null,
   projectPath: null,
   savedSnapshot: null,
   // Snapshot of the project as loaded, used to tell "untitled and untouched"
@@ -6204,10 +6209,159 @@ function updateCostEstimate() {
   el.textContent = `${parts.join(' · ')}.`;
 }
 
+const RUN_CONSOLE_RECT_KEY = 'nodechem-studio.run-console-pos';
+
+function readStoredRunConsoleRect() {
+  try {
+    return readFloatingRect(JSON.parse(localStorage.getItem(RUN_CONSOLE_RECT_KEY) || 'null'));
+  } catch {
+    return null;
+  }
+}
+
+function storeRunConsoleRect(rect) {
+  if (!rect) return;
+  try {
+    localStorage.setItem(RUN_CONSOLE_RECT_KEY, JSON.stringify(rect));
+  } catch {
+    // Window position is a convenience, not state the app depends on.
+  }
+}
+
+function forgetRunConsoleRect() {
+  try {
+    localStorage.removeItem(RUN_CONSOLE_RECT_KEY);
+  } catch {
+    // nothing to clear
+  }
+}
+
+function runConsoleViewport() {
+  return { width: window.innerWidth, height: window.innerHeight };
+}
+
+/** Put the console at a geometry and keep it fully reachable. */
+function applyRunConsoleRect(consoleEl, rect) {
+  const next = clampFloatingRect(rect, runConsoleViewport(), {
+    margin: 8,
+    minWidth: 420,
+    minHeight: 280,
+    headerHeight: 56,
+  });
+  consoleEl.classList.add('is-floating');
+  consoleEl.style.left = `${next.x}px`;
+  consoleEl.style.top = `${next.y}px`;
+  consoleEl.style.right = 'auto';
+  consoleEl.style.bottom = 'auto';
+  consoleEl.style.width = `${next.width}px`;
+  consoleEl.style.height = `${next.height}px`;
+  consoleEl.style.maxHeight = 'none';
+  state.runConsoleRect = next;
+  return next;
+}
+
+function placeRunConsole() {
+  const consoleEl = $('#run-console');
+  if (!consoleEl) return;
+  const stored = state.runConsoleRect || readStoredRunConsoleRect();
+  if (!stored) return;
+  applyRunConsoleRect(consoleEl, stored);
+}
+
+/** Return the window to its CSS corner and forget the custom geometry. */
+function dockRunConsole() {
+  const consoleEl = $('#run-console');
+  state.runConsoleRect = null;
+  state.runConsoleDrag = null;
+  document.body.classList.remove('is-dragging-run-console');
+  forgetRunConsoleRect();
+  if (!consoleEl) return;
+  consoleEl.classList.remove('is-floating');
+  for (const property of ['left', 'top', 'right', 'bottom', 'width', 'height', 'maxHeight']) {
+    consoleEl.style[property] = '';
+  }
+}
+
+function beginRunConsoleDrag(event) {
+  const head = event.target?.closest?.('.run-head');
+  if (!head || event.target.closest('button, input, select, textarea, a')) return;
+  if (window.innerWidth <= 820) return;
+  const consoleEl = $('#run-console');
+  if (!consoleEl || consoleEl.hidden) return;
+  const rect = consoleEl.getBoundingClientRect();
+  applyRunConsoleRect(consoleEl, {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+  });
+  state.runConsoleDrag = {
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  };
+  document.body.classList.add('is-dragging-run-console');
+  event.preventDefault();
+}
+
+function moveRunConsoleDrag(event) {
+  if (!state.runConsoleDrag) return;
+  const consoleEl = $('#run-console');
+  if (!consoleEl) return;
+  state.runConsoleRect = clampFloatingRect({
+    x: event.clientX - state.runConsoleDrag.offsetX,
+    y: event.clientY - state.runConsoleDrag.offsetY,
+    width: state.runConsoleRect?.width,
+    height: state.runConsoleRect?.height,
+  }, runConsoleViewport(), {
+    margin: 8,
+    minWidth: 420,
+    minHeight: 280,
+    headerHeight: 56,
+  });
+  applyRunConsoleRect(consoleEl, state.runConsoleRect);
+}
+
+function endRunConsoleDrag() {
+  if (!state.runConsoleDrag) return;
+  state.runConsoleDrag = null;
+  document.body.classList.remove('is-dragging-run-console');
+  storeRunConsoleRect(state.runConsoleRect);
+}
+
+/** Native CSS resize changes the box; remember it on pointer-up. */
+function persistRunConsoleSize() {
+  if (state.runConsoleDrag) return;
+  const consoleEl = $('#run-console');
+  if (!consoleEl || consoleEl.hidden || !consoleEl.classList.contains('is-floating')) return;
+  const rect = consoleEl.getBoundingClientRect();
+  state.runConsoleRect = clampFloatingRect({
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+  }, runConsoleViewport(), {
+    margin: 8,
+    minWidth: 420,
+    minHeight: 280,
+    headerHeight: 56,
+  });
+  storeRunConsoleRect(state.runConsoleRect);
+}
+
+/** A smaller display must not strand a floating console off-screen. */
+function clampRunConsoleToViewport() {
+  if (!state.runConsoleRect) return;
+  const consoleEl = $('#run-console');
+  if (!consoleEl || consoleEl.hidden) return;
+  applyRunConsoleRect(consoleEl, state.runConsoleRect);
+  storeRunConsoleRect(state.runConsoleRect);
+}
+
 function openRunConsole() {
   const consoleEl = $('#run-console');
   if (!consoleEl) return;
   consoleEl.hidden = false;
+  placeRunConsole();
   // A fresh console starts following the run, not a section picked last time.
   state.runPanePinned = false;
   const results = $('#run-results');
@@ -6224,6 +6378,7 @@ function openRunConsole() {
 function closeRunConsole() {
   const consoleEl = $('#run-console');
   if (consoleEl) consoleEl.hidden = true;
+  if (state.runConsoleRect) storeRunConsoleRect(state.runConsoleRect);
 }
 
 /* ── Run console sections ─────────────────────────────────── */
@@ -8786,6 +8941,7 @@ function handleAction(action, element) {
     case 'save-molecule': saveMolecule(); break;
     case 'open-run-console': openRunConsole(); break;
     case 'close-run-console': closeRunConsole(); break;
+    case 'dock-run-console': dockRunConsole(); break;
     case 'pick-gaussian': pickGaussian(); break;
     case 'preflight': preflightRun(); break;
     case 'run-selected': startSelectedRun(); break;
@@ -9623,6 +9779,14 @@ function wireEvents() {
   document.addEventListener('pointermove', moveModalDrag);
   document.addEventListener('pointerup', endModalDrag);
   document.addEventListener('pointercancel', endModalDrag);
+  // Issue 253: the run console is a second floating window with its own stored
+  // geometry. It is not modal, so Esc never closes it.
+  document.addEventListener('pointerdown', beginRunConsoleDrag);
+  document.addEventListener('pointermove', moveRunConsoleDrag);
+  document.addEventListener('pointerup', endRunConsoleDrag);
+  document.addEventListener('pointerup', persistRunConsoleSize);
+  document.addEventListener('pointercancel', endRunConsoleDrag);
+  window.addEventListener('resize', clampRunConsoleToViewport);
   document.addEventListener('dblclick', (event) => {
     if (event.target?.closest?.('.modal-head') && !event.target.closest('button, input, select')) resetModalPosition();
   });
@@ -9688,7 +9852,6 @@ function wireEvents() {
       if (!$('#app-menu')?.hidden) { closeAppMenu(); return; }
       if (!$('#export-menu')?.hidden) { closeExportMenu(); return; }
       if (state.paletteOpen) { togglePalette(false); return; }
-      if (!$('#run-console')?.hidden) { closeRunConsole(); return; }
       if (state.keyboardConnect) { cancelKeyboardConnect(); return; }
       if (state.connecting) { state.connecting = null; clearDropHighlight(); renderPreview(); }
     }
