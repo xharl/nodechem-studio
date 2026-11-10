@@ -26,7 +26,7 @@ ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--tautomer <path>] [--tautomer-script <path>] [--timeout <seconds>]
 ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
-ncs validation <cases.json> [--out <file>] [--json]
+ncs validation <cases.json> [--run] [--executable <python>] [--work <dir>] [--timeout <seconds>] [--out <file>] [--json]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
 ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--json]
 ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicity <n>] [--out <file>] [--json]
@@ -56,9 +56,13 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   flow; without it every flow that has a queue is combined into one document.
 - `validation` reads a case set that records a method ladder (method, basis, energy in hartree, or
   `null` plus a reason) and prints the per-case spread, the aggregate MAE/RMSE and every
-  `not computed` rung. It launches no engine: the input is the recorded result, so the table is
-  reproducible offline. The case set is refused as a whole when a reference, a rung or the schema
-  version is malformed; a rung that was not computed stays in the table with its reason.
+  `not computed` rung. `--run` executes any rung whose energy is `null` with PySCF, in its own
+  folder under `--work`, using `--executable` or Settings → Engines → PySCF. Every run that fails or
+  is refused (missing molecule, unsupported rung engine) stays in the table as `not computed` with
+  its reason, and a `liveRuns` array in `--json` names the run folder. Without `--run` the command
+  launches no engine, so a recorded table is reproducible offline. The case file itself is never
+  rewritten. The case set is refused as a whole when a reference, a rung or the schema version is
+  malformed.
 - `export` prints every `run.json` under `<out-dir>/runs/` in one versioned envelope, with the
   absolute path of the schema the records were validated against. `--schema-version` defaults to 1;
   an unknown version is refused with the path of the version this build ships. One non-conforming
