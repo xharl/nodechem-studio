@@ -8,6 +8,15 @@ The history starts at **0.2.1**, the first release after this repository was pre
 0.1.0 was published and then withdrawn; it is not listed. Sections for released versions summarise
 what the build contains — the GitHub release for each tag carries the long form.
 
+## [Unreleased]
+
+### Fixed
+
+- The Settings window's version column reads the version a program states, not the first line of
+  its banner: xTB no longer shows its 59-character rule and ORCA no longer shows ASCII art. An engine
+  whose output carries no version token reads `version unknown` instead of a fragment, and a row that
+  was never probed says nothing about a version at all (#314).
+
 ## [0.5.1] - 2026-11-10
 
 Thirty-nine non-merge commits since 0.5.0. There is no format change: `schemaVersion` stays 3, and a

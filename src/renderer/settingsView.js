@@ -95,27 +95,41 @@ function errorFor(errors, field) {
     : '';
 }
 
+/**
+ * The version suffix a row prints.
+ *
+ * `undefined` means "nothing was probed" (a script path, an engine that is not
+ * installed): the row says nothing about a version. `''` means the probe ran
+ * and the output carried no version token — issue 314: say *unknown* rather
+ * than print the banner line the old code mistook for one.
+ */
+function versionSuffix(version) {
+  if (version === undefined || version === null) return '';
+  return ` · version ${trimmed(version) || 'unknown'}`;
+}
+
 function statusFor({ configured, detected, version }) {
   const path = trimmed(configured) || trimmed(detected?.path);
+  const suffix = versionSuffix(version);
   if (configured && detected?.ok && trimmed(detected.path) === trimmed(configured)) {
     return {
       tone: 'ok',
       label: 'detected',
-      detail: `Found at ${detected.path}${version ? ` · version ${version}` : ''}`,
+      detail: `Found at ${detected.path}${suffix}`,
     };
   }
   if (configured) {
     return {
       tone: 'set',
       label: 'set',
-      detail: `Using ${configured}${version ? ` · version ${version}` : ''}`,
+      detail: `Using ${configured}${suffix}`,
     };
   }
   if (detected?.ok) {
     return {
       tone: 'ok',
       label: 'detected on PATH',
-      detail: `Found at ${detected.path}${version ? ` · version ${version}` : ''}`,
+      detail: `Found at ${detected.path}${suffix}`,
     };
   }
   return {
@@ -123,6 +137,21 @@ function statusFor({ configured, detected, version }) {
     label: 'not found',
     detail: path ? `Not found at ${path}` : 'Not found on PATH. Set it if this machine has it.',
   };
+}
+
+/**
+ * The probed version for a row: the configured path first, then the detected
+ * one. Undefined when neither was probed, so `versionSuffix` can tell "no
+ * probe" from "probe found nothing".
+ */
+function probedVersion(detection, candidates) {
+  const versions = detection?.versions;
+  if (!versions) return undefined;
+  for (const candidate of candidates) {
+    const key = trimmed(candidate);
+    if (key && Object.prototype.hasOwnProperty.call(versions, key)) return versions[key];
+  }
+  return undefined;
 }
 
 function textField(label, field, value, {
@@ -179,8 +208,7 @@ function enginesPage(draft, detection, errors) {
     field: `engines.${id}`,
     value: draft?.engines?.[id] || '',
     detected: detection?.[id] || null,
-    version: detection?.versions?.[trimmed(draft?.engines?.[id])]
-      || detection?.versions?.[trimmed(detection?.[id]?.path)] || '',
+    version: probedVersion(detection, [draft?.engines?.[id], detection?.[id]?.path]),
     browse: `engine:${id}`,
     errors,
   })).join('')}
@@ -201,8 +229,7 @@ function toolsPage(draft, detection, errors) {
     field: `tools.${id}`,
     value: draft?.tools?.[id] || '',
     detected: toolStatus[id] || null,
-    version: detection?.versions?.[trimmed(draft?.tools?.[id])]
-      || detection?.versions?.[trimmed(toolStatus[id]?.path)] || '',
+    version: probedVersion(detection, [draft?.tools?.[id], toolStatus[id]?.path]),
     browse: `tool:${id}`,
     errors,
   })).join('')}
