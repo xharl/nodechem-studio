@@ -72,6 +72,33 @@ async function waitFor(check, timeout = 5000) {
   throw new Error('timed out waiting for the queue');
 }
 
+describe('prepare under a dry run', () => {
+  it('spawns no converter and records why', async () => {
+    // `--dry-run` records no binaries, so a prepare block that spawns anyway made
+    // a dry run of any Open Babel project fail with "No Open Babel executable".
+    const validated = validateProject(project([prepareNode({ converter: 'openbabel', forceField: 'MMFF94' })]));
+    expect(validated.ok).toBe(true);
+    const plan = buildWorkflowPlan(validated.project);
+    const { queueManager } = await stack();
+    const started = await queueManager.start({
+      projectName: 'dry prepare',
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { dryRun: true, obabelExecutable: '', scratchDir: '' },
+    });
+    await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return queue.tasks.every((task) => !['pending', 'running'].includes(task.status));
+    });
+    const queue = await queueManager.get(started.id);
+    const prep = queue.tasks.find((task) => task.nodeId === 'prep');
+    expect(prep.status).toBe('completed');
+    expect(prep.prepared.reason).toBe('dry-run (converter not run)');
+    expect(prep.prepared.converged).toBeNull();
+    expect(prep.prepared.energyKcal).toBeNull();
+  });
+});
+
 describe('prepare block schema (ADR 0001 §2.9)', () => {
   it('defaults to an in-app UFF relaxation and fills the documented settings', () => {
     const result = validateProject(project([{

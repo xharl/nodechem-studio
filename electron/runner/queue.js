@@ -3273,7 +3273,28 @@ export class QueueManager {
       }
       let atoms = parsed.frames[0].atoms;
       let summary;
-      if (conf.kind === 'embed3d') {
+      if (queue.options.dryRun && conf.converter !== 'uff') {
+        // A dry run spawns nothing — the queue records no binaries for it — so a
+        // prepare block must not spawn either. It used to call Open Babel anyway
+        // and fail with "No Open Babel executable is configured", which made
+        // `--dry-run` unusable on exactly the projects it exists to check.
+        summary = {
+          kind: conf.kind,
+          converter: conf.converter,
+          forceField: conf.forceField || '',
+          energyKcal: null,
+          converged: null,
+          reason: 'dry-run (converter not run)',
+          iterations: 0,
+          atomCount: atoms.length,
+        };
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: 'Dry run: geometry carried forward unchanged; no converter was run.',
+        });
+      } else if (conf.kind === 'embed3d') {
         const outName = 'prepared.xyz';
         const result = await new ObabelRunner().convert({
           executable: queue.options.obabelExecutable,
