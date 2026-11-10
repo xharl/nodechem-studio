@@ -158,10 +158,10 @@ multiplicity, and a geometry with a `dimension`.
 | `.pdb` / `.pdbqt` | atoms (CONECT is reported, not used as topology) | reliable bond orders |
 | `.gjf` / `.com` | atoms, charge, multiplicity (Cartesian only) | bond orders |
 | `.cdxml` | atoms, bonds, charges, 2D positions | a 3D geometry |
+| `.cdx` | atoms, bonds, charges, 2D positions, read from the binary tags (#221) | a 3D geometry |
 | Gaussian `.log` / `.out` | every frame of the optimisation | bond orders |
 | `.nw`, `.inp`, `.qcin` | atoms, charge, multiplicity from a deck this app exported | bond orders |
 | `.smi` / `.smiles` | **a bond graph only** — see below | coordinates, which is why it is refused |
-| `.cdx` | **nothing** — no reader exists | everything |
 
 **A SMILES string is refused as a geometry, by name.** The reader in
 `src/shared/interop/smiles.js` understands the OpenSMILES organic subset: B, C, N, O, P, S, F, Cl,
@@ -188,9 +188,12 @@ Deck import is CLI-only for now: the project format has no `geometry.format` id 
 `gamess` or `qchem`, so importing one in the window would produce a project that cannot be saved.
 The importer says that instead, and `ncs convert job.nw --format xyz` reads it.
 
-`.cdx` is refused for the same kind of reason with a different answer: ChemDraw's binary form has no
-public specification, so there is no reader here, and a reader written against a guessed tag stream
-would mis-read bond orders. Save the drawing as CDXML (File → Save As → CDXML) and import that.
+`.cdx` is the same drawing in ChemDraw's binary tagged form. The reader in `src/shared/cdx.js`
+walks the tag stream directly — nodes, bonds, charge, isotope, fragment names and wedge/hash cues —
+and produces the same record as the CDXML reader. It is a drawing import: coordinates are page
+units, y up, `z = 0`, and the record says so. It refuses unsupported node types, bond orders and
+truncated streams by name rather than guessing. The file picker passes the bytes to this reader; a
+`.cdx` decoded as text first would lose the tag stream.
 
 ## Handing a job to NWChem, GAMESS or Q-Chem
 

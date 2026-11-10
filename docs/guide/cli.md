@@ -68,7 +68,8 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   an unknown version is refused with the path of the version this build ships. One non-conforming
   record refuses the whole export instead of returning the readable subset. `--out` writes the
   envelope to a file and prints its path.
-- `convert` turns a finished log (`.log`/`.out`), a formatted checkpoint, a structure file or a saved
+- `convert` turns a finished log (`.log`/`.out`), a formatted checkpoint, a structure file (including
+  binary ChemDraw `.cdx`) or a saved
   `.ncs` into a format other software reads: `extxyz`, `xyz`, `sdf`, `jcamp`, `molden` or `cjson`.
   `--spectrum` picks the spectrum written from a log (`ir`, `raman` or `uv`, default `ir`); `molden`
   needs the basis and MO coefficients, so it is only offered for a formatted checkpoint. Without

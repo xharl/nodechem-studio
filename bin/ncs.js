@@ -1327,7 +1327,8 @@ async function commandConvert({ positional, flags }) {
   }
 
   try {
-    const text = await fs.readFile(file, 'utf8');
+    const raw = await fs.readFile(file);
+    const text = raw.toString('utf8');
     const extension = path.extname(file).toLowerCase();
     let converted;
     const deckExporter = exporterFor(formatId);
@@ -1386,7 +1387,9 @@ async function commandConvert({ positional, flags }) {
         title: path.basename(file, extension),
       });
     } else {
-      const { records } = parseStructureRecords(text, { filename: path.basename(file), allowDecks: true });
+      // .cdx is binary; every other structure format in this branch is text.
+      const source = extension === '.cdx' ? raw : text;
+      const { records } = parseStructureRecords(source, { filename: path.basename(file), allowDecks: true });
       const first = records[0];
       if (!first) fail('the structure file contained no records.');
       converted = convertStructure({ atoms: first.atoms, bonds: first.bonds }, formatId, { title: first.name });

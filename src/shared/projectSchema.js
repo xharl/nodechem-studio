@@ -211,7 +211,7 @@ export const MERGE_POLICIES = Object.freeze(['all', 'any']);
 export const GEOMETRY_SOURCES = Object.freeze(['demo', 'imported', 'manual']);
 /** Issue #93: where an extra QST2/QST3 structure was copied from. */
 export const QST_SOURCES = Object.freeze(['copy', 'block', 'file']);
-export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'mol2', 'pdb', 'pdbqt', 'cjson', 'gjf', 'com', 'log', 'cdxml']);
+export const GEOMETRY_FORMATS = Object.freeze(['', 'xyz', 'mol', 'sdf', 'mol2', 'pdb', 'pdbqt', 'cjson', 'gjf', 'com', 'log', 'cdxml', 'cdx']);
 // What the coordinates are, when the file says so. A CDXML drawing is 2D: its
 // bond lengths are page units and every atom sits at z = 0, so the claim has to
 // survive a save rather than only the session that imported it.

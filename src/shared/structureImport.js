@@ -2,13 +2,15 @@
  * Structure import for NodeChem Studio.
  *
  * Reads Cartesian geometries from .xyz, .mol, .sdf, .gjf, .com and the extra
- * readers in `structureParsers.js`, ChemDraw drawings from .cdxml, and the
+ * readers in `structureParsers.js`, ChemDraw drawings from .cdxml/.cdx, and the
  * input decks this app exports for NWChem (.nw/.nwi), GAMESS (`$CONTRL`/`$DATA`)
  * and Q-Chem (.qcin). Pure module: text in, validated molecule out. Z-matrices
- * are refused with a specific message rather than converted silently.
+ * are refused with a specific message rather than converted silently. A .cdx is
+ * binary, so its path accepts bytes and never passes through the text parser.
  *
- * A CDXML record is the exception to "geometry": it is a 2D drawing, so it
- * carries `geometry.dimension = '2d'` and must never be treated as a conformer.
+ * A ChemDraw record (CDXML or binary CDX) is the exception to "geometry": it is
+ * a 2D drawing, so it carries `geometry.dimension = '2d'` and must never be
+ * treated as a conformer.
  *
  * A SMILES string is **not** importable as a geometry and is refused by name,
  * with the graph it parsed (issue #148). `interop/smiles.js` reads the graph;
@@ -22,7 +24,7 @@
  */
 
 import { atomicNumber, isElementSymbol } from './elements.js';
-import { isCdxmlDocument, logFrames, parseCdxml, parseCjson, parseMol2, parsePdb, parsePdbModels } from './structureParsers.js';
+import { isCdxDocument, isCdxmlDocument, logFrames, parseCdxml, parseCdxRecords, parseCjson, parseMol2, parsePdb, parsePdbModels } from './structureParsers.js';
 import { parseGamessInput, parseNwchemInput, parseQchemInput } from './interop/deckImport.js';
 import { describeSmilesGraph, parseSmiles, parseSmilesList } from './interop/smiles.js';
 import { parseTrajectory } from './trajectory.js';
@@ -43,16 +45,15 @@ function integer(value) {
   return Number.isInteger(number) ? number : null;
 }
 
-const SUPPORTED_EXTENSIONS = Object.freeze(['xyz', 'mol', 'sdf', 'gjf', 'com', 'cdxml']);
+const SUPPORTED_EXTENSIONS = Object.freeze(['xyz', 'mol', 'sdf', 'gjf', 'com', 'cdxml', 'cdx']);
 // Extension → deck format id. GAMESS has no extension of its own (ORCA also
 // uses .inp), so a .inp deck is recognised by its `$CONTRL` header instead.
 const DECK_EXTENSIONS = Object.freeze({ nw: 'nwchem', nwi: 'nwchem', qcin: 'qchem' });
 const EXTRA_EXTENSIONS = Object.freeze(['mol2', 'pdb', 'ent', 'pdbqt', 'cjson', 'log', 'out']);
 // Extensions we recognise only in order to refuse them with a reason (#59/#58).
-// `cdx` is refused by name too: it is ChemDraw's binary form (#148) — the
-// reader does not exist, and the message says so rather than guessing a tag
-// layout.
-const REFUSED_EXTENSIONS = Object.freeze(['chk', 'fchk', 'inchi', 'inchi1', 'cdx']);
+// `cdx` is binary (#221): it has its own reader and is routed by bytes, never
+// through the text path.
+const REFUSED_EXTENSIONS = Object.freeze(['chk', 'fchk', 'inchi', 'inchi1']);
 // SMILES is recognised by extension and then parsed — to name what was read —
 // before it is refused as a geometry. It left REFUSED_EXTENSIONS with #148
 // because "refused before anything is read" was the wrong message for a
@@ -71,7 +72,7 @@ function formatFor(filename, text) {
   if (/@<TRIPOS>MOLECULE/i.test(text)) return 'mol2';
   // A .cdxml may arrive under any name (or pasted), and the header is
   // unambiguous, so content wins over the extension here too. A real .cdx is
-  // binary and is refused above, by extension, before anything is sniffed.
+  // binary and takes the bytes branch above, never this text sniffer.
   if (isCdxmlDocument(text)) return 'cdxml';
   if (/^\s*Standard orientation:/m.test(text) && /Gaussian|GINC|Entering Link 1/i.test(text)) return 'log';
   if (/^\{"molecule"|"conformer"\s*:\s*\{/m.test(text)) return 'cjson';
@@ -396,9 +397,37 @@ function periodicFormatFor(filename, text) {
  * behaviour — parse record 1 and drop the rest — lost a 5-conformer file
  * without saying so.
  */
-export function parseStructureRecords(text, { filename = '', allowDecks = false } = {}) {
-  if (typeof text !== 'string' || !text.trim()) throw new StructureError('The structure file is empty.');
-  const normalized = text.replace(/^\uFEFF/, '');
+export function parseStructureRecords(input, { filename = '', allowDecks = false } = {}) {
+  // Issue 221: .cdx is a binary tagged stream. It must not be decoded as a
+  // string first — that would turn every object tag into a replacement
+  // character — so the bytes take their own branch and never enter `formatFor`.
+  const binary = input instanceof Uint8Array
+    || input instanceof ArrayBuffer
+    || ArrayBuffer.isView(input);
+  if (binary) {
+    const bytes = input instanceof Uint8Array
+      ? input
+      : (input instanceof ArrayBuffer ? new Uint8Array(input) : new Uint8Array(input.buffer, input.byteOffset, input.byteLength));
+    if (!isCdxDocument(bytes)) {
+      throw new StructureError('Binary structure import supports ChemDraw .cdx only, and this file does not '
+        + 'start with the "VjCD0100" header.');
+    }
+    const format = 'cdx';
+    const entries = cdxEntries(bytes, filename);
+    const records = entries.map((entry) => {
+      if (entry.error) return entry;
+      try {
+        return finalize({ ...entry, format, parity: 'adjust' });
+      } catch (error) {
+        return { error: error.message };
+      }
+    });
+    if (records.length === 0) throw new StructureError('The CDX contains no fragment to import.');
+    return { format, records };
+  }
+
+  if (typeof input !== 'string' || !input.trim()) throw new StructureError('The structure file is empty.');
+  const normalized = input.replace(/^\uFEFF/, '');
   const periodic = periodicFormatFor(filename, normalized);
   if (periodic) throw periodicError(filename, periodic);
   const format = formatFor(filename, normalized);
@@ -457,7 +486,7 @@ export function parseStructureRecords(text, { filename = '', allowDecks = false 
     return { format: 'log', records: frames.map((frame) => finalize({ ...frame, format: 'xyz', parity: 'adjust' })) };
   }
 
-  const single = parseSingle(text, { filename, allowDecks });
+  const single = parseSingle(normalized, { filename, allowDecks });
   return { format: single.format, records: [single] };
 }
 
@@ -469,6 +498,15 @@ function baseName(filename) {
 function cdxmlEntries(text, filename) {
   try {
     return parseCdxml(text, { name: baseName(filename) });
+  } catch (error) {
+    throw new StructureError(error.message);
+  }
+}
+
+/** Binary CDX failures are structure-import failures, like every other reader. */
+function cdxEntries(bytes, filename) {
+  try {
+    return parseCdxRecords(bytes, { name: baseName(filename) });
   } catch (error) {
     throw new StructureError(error.message);
   }
@@ -500,11 +538,9 @@ function unsupportedFormatError(format, filename, text = '') {
       + '(`obabel -iinchi molecule.inchi -oxyz -O molecule.xyz`) and import the .xyz.');
   }
   if (format === 'cdx') {
-    return new StructureError(`${filename || 'This file'} is a ChemDraw .cdx document, the binary form of the `
-      + 'drawing. This build has no CDX reader: the format is proprietary and its tag stream is not publicly '
-      + 'specified, and a reader written against a guessed layout would silently mis-read bond orders — the one '
-      + 'failure this project refuses. Open the file in ChemDraw and save it as CDXML (File → Save As → CDXML), '
-      + 'the documented XML form this reader does parse; an SDF export also imports.');
+    return new StructureError(`${filename || 'This file'} is a binary ChemDraw .cdx document. It must be read `
+      + 'from its bytes, not decoded as text: use the structure picker or drop the file, which passes the '
+      + 'bytes to the CDX reader. Save it as CDXML if you need a text form.');
   }
   return null;
 }

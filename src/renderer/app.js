@@ -5860,7 +5860,7 @@ function renderDrawer() {
                 <button type="button" class="btn small" data-action="import-structure">Import structure file</button>
                 ${draft.coords.length ? '<button type="button" class="btn small" data-action="clear-geometry">Use demo water</button>' : ''}
               </div>
-              <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out,.cdxml" hidden>
+              <input type="file" id="structure-file" accept=".xyz,.mol,.sdf,.mol2,.pdb,.pdbqt,.cjson,.gjf,.com,.log,.out,.cdxml,.cdx" hidden>
               ${(draft.records?.length || 0) > 1 ? `
                 <label class="field-label" style="margin-top:8px">Record
                   <select data-record-select>
@@ -6127,8 +6127,11 @@ function saveMolecule() {
 async function importStructureFile(file) {
   if (!state.drawer || !file) return;
   try {
-    const text = await file.text();
-    const { format, records } = parseStructureRecords(text, { filename: file.name });
+    // .cdx is a binary tagged stream. Reading it with file.text() destroys the
+    // bytes before the reader sees them, so binary files take the byte path.
+    const binary = /\.cdx$/i.test(file.name);
+    const payload = binary ? new Uint8Array(await file.arrayBuffer()) : await file.text();
+    const { format, records } = parseStructureRecords(payload, { filename: file.name });
     const usable = records.filter((record) => !record.error);
     if (usable.length === 0) {
       throw new Error(records[0]?.error || 'No record in this file could be read.');
@@ -6141,7 +6144,7 @@ async function importStructureFile(file) {
       bonds: record.bonds || [],
       charge: record.charge,
       multiplicity: record.multiplicity,
-      // A CDXML record says its coordinates are a drawing; carrying the flag
+      // A ChemDraw record says its coordinates are a drawing; carrying the flag
       // keeps the structure all the way to the notice below instead of
       // silently becoming a geometry a calculation can start from.
       dimension: record.geometry?.dimension || '',

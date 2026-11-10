@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE CDXML SYSTEM "http://www.cambridgesoft.com/xml/cdxml.dtd" >
+<CDXML CreationProgram="CDXML Slide Generator 0.0.1" Name="ACS 1996" BoundingBox="0.0 0.0 220.19 79.29" WindowPosition="0.0 0.0" WindowSize="-32768.0 0.0" WindowIsZoomed="yes" FractionalWidths="yes" InterpretChemically="yes" ShowAtomQuery="yes" ShowAtomStereo="no" ShowAtomEnhancedStereo="yes" ShowAtomNumber="no" ShowResidueID="no" ShowBondQuery="yes" ShowBondRxn="yes" ShowBondStereo="no" ShowTerminalCarbonLabels="no" ShowNonTerminalCarbonLabels="no" HideImplicitHydrogens="no" HashSpacing="2.5" MarginWidth="1.6" LineWidth="0.6" BoldWidth="2.0" BondLength="14.4" BondSpacing="18" ChainAngle="120" LabelJustification="Auto" CaptionJustification="Left" AminoAcidTermini="HOH" ShowSequenceTermini="yes" ShowSequenceBonds="yes" ShowSequenceUnlinkedBranches="no" ResidueWrapCount="40" ResidueBlockCount="10" ResidueZigZag="yes" NumberResidueBlocks="no" PrintMargins="36.0 36.0 36.0 36.0" color="0" bgcolor="1" LabelFont="1" LabelSize="10.0" LabelFace="96" CaptionFont="1" CaptionSize="10.0" CaptionFace="0">
+	<colortable>
+		<color r="1.0" g="1.0" b="1.0"/>
+		<color r="0.0" g="0.0" b="0.0"/>
+	</colortable>
+	<fonttable>
+		<font id="1" charset="iso-8859-1" name="Arial"/>
+	</fonttable>
+	<page id="1" BoundingBox="0.0 0.0 540.0 719.75" HeaderPosition="36.0" FooterPosition="36.0" PrintTrimMarks="yes" HeightPages="1" WidthPages="1">
+		<fragment id="2" BoundingBox="28.35 28.35 93.84 80.24" Z="20">
+			<n id="3" p="28.35 66.94" Z="23" Element="6" AS="N"/>
+			<n id="4" p="39.04 57.29" Z="24" Element="6" AS="N"/>
+			<n id="5" p="36.03 43.21" Z="25" Element="8" AS="N" NumHydrogens="0">
+				<t id="6">
+					<s font="1" size="10.0" face="96" color="0">O</s>
+				</t>
+			</n>
+			<n id="7" p="52.74 61.72" Z="27" Element="8" AS="N" NumHydrogens="0">
+				<t id="8">
+					<s font="1" size="10.0" face="96" color="0">O</s>
+				</t>
+			</n>
+			<n id="9" p="63.43 52.08" Z="29" Element="6" AS="N"/>
+			<n id="10" p="60.42 37.99" Z="30" Element="6" AS="N"/>
+			<n id="11" p="71.11 28.35" Z="31" Element="6" AS="N"/>
+			<n id="12" p="84.81 32.78" Z="32" Element="6" AS="N"/>
+			<n id="13" p="87.82 46.86" Z="33" Element="6" AS="N"/>
+			<n id="14" p="77.13 56.51" Z="34" Element="6" AS="N"/>
+			<n id="15" p="80.14 70.59" Z="35" Element="6" AS="N"/>
+			<n id="16" p="93.84 75.03" Z="36" Element="8" AS="N" NumHydrogens="0">
+				<t id="17">
+					<s font="1" size="10.0" face="96" color="0">O</s>
+				</t>
+			</n>
+			<n id="18" p="69.45 80.24" Z="38" Element="8" AS="N" NumHydrogens="1">
+				<t id="19">
+					<s font="1" size="10.0" face="96" color="0">OH</s>
+				</t>
+			</n>
+			<b id="20" Z="40" B="3" E="4" BS="N"/>
+			<b id="21" Z="41" B="4" E="5" BS="N" Order="2"/>
+			<b id="22" Z="42" B="4" E="7" BS="N"/>
+			<b id="23" Z="43" B="7" E="9" BS="N"/>
+			<b id="24" Z="44" B="9" E="10" BS="N" Order="2"/>
+			<b id="25" Z="45" B="10" E="11" BS="N"/>
+			<b id="26" Z="46" B="11" E="12" BS="N" Order="2"/>
+			<b id="27" Z="47" B="12" E="13" BS="N"/>
+			<b id="28" Z="48" B="13" E="14" BS="N" Order="2"/>
+			<b id="29" Z="49" B="14" E="15" BS="N"/>
+			<b id="30" Z="50" B="15" E="16" BS="N" Order="2"/>
+			<b id="31" Z="51" B="15" E="18" BS="N"/>
+			<b id="32" Z="52" B="14" E="9" BS="N"/>
+		</fragment>
+		<annotation id="0" Keyword="CpdIndex" Content="Aspirin"/>
+	</page>
+</CDXML>

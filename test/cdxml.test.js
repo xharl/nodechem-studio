@@ -119,14 +119,15 @@ describe('CDXML — stereo is a drawing cue, not a computed assignment', () => {
 });
 
 describe('CDXML — refusals name what they refuse', () => {
-  it('refuses a .cdx by name and asks for CDXML', () => {
-    // CDX is ChemDraw's binary form; only the extension is needed to refuse it.
+  it('refuses a .cdx string path and says the bytes must reach the reader', () => {
+    // CDX is binary (#221); a string that happens to start with the magic is
+    // not a CDX, and the text path must not pretend to decode one.
     expect(() => parseStructureRecords('VjCD010007000000', { filename: 'sketch.cdx' }))
-      .toThrow(/\.cdx/);
+      .toThrow(/binary ChemDraw/);
     expect(() => parseStructureRecords('VjCD010007000000', { filename: 'sketch.cdx' }))
-      .toThrow(/CDXML/);
+      .toThrow(/bytes/);
     expect(() => parseStructure('VjCD010007000000', { filename: 'sketch.cdx' }))
-      .toThrow(/save it as CDXML/);
+      .toThrow(/bytes/);
   });
 
   it('refuses an unrecognised atom label by naming it, instead of calling it carbon', () => {

@@ -12,9 +12,10 @@
  *      write a deck from the same settings and molecule a Gaussian block uses,
  *      and refuse — by name, naming the field — anything they cannot spell.
  *
- * The third edge, ChemDraw's binary `.cdx`, is **not** implemented: see the
- * refusal in `structureImport.js`, which names the missing reader and the
- * supported CDXML path.
+ * The third edge, ChemDraw's binary `.cdx`, is implemented in
+ * `structureImport.js` plus `cdx.js`: the structure picker passes the file
+ * bytes, and the reader returns the same 2D drawing record the CDXML reader
+ * produces. It is not a text format, so it never enters the text seam.
  *
  * `renderInput()` is the one entry point. It never throws for a bad request:
  * a refusal is a value, so a caller cannot mistake "not written" for "written".

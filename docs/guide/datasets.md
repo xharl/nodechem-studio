@@ -120,9 +120,9 @@ Arrows, curves, TLC plates and other non-molecule graphics are not chemistry and
 first record's warnings name the element types that were ignored, so nothing disappears in silence. A
 text block drawn near a fragment is used as that record's label.
 
-`.cdx` — the proprietary binary ChemDraw document — is **not** read. The refusal names the format and
-asks for a CDXML save (or an SDF export): the binary layout has no public specification and this
-reader does not guess at one.
+`.cdx` — the binary ChemDraw document — is read by the structure picker, which passes the file bytes
+to `src/shared/cdx.js`; the dataset importer is text-only, so for a dataset save the drawing as CDXML
+first. The structure import handles both forms as the same 2D drawing.
 
 ## Records in the inspector
 

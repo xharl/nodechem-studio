@@ -64,6 +64,7 @@ function elementFromPdbName(name) {
  * module, and `structureImport.js` should not grow a second back door.
  */
 export { isCdxmlDocument, parseCdxmlRecords as parseCdxml } from './cdxml.js';
+export { isCdxDocument, parseCdxRecords } from './cdx.js';
 
 /* ── PDB / PDBQT ──────────────────────────────────────────── */
 
