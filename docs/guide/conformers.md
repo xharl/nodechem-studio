@@ -145,10 +145,11 @@ block and the block changes accordingly:
 
 - **The enumerator is external.** `scripts/tautomer-enumerator.py` drives RDKit's
   `rdMolStandardize.TautomerEnumerator` (BSD-3; RDKit is not bundled and not installed by this app).
-  Point the run console's **Tautomer sidecar** at a Python that has `rdkit` — or at the interpreter
-  with **Tautomer script** naming the file. The sidecar reads one JSON object on stdin (XYZ, charge,
-  multiplicity, title, options) and writes one JSON object on stdout; the request is kept in the
-  task folder as `request.json`, and the raw answer as `tautomers.json`.
+  The installer does not embed the script: download it from the repository at the release tag, or use
+  a source checkout. Point the run console's **Tautomer sidecar** at a Python that has `rdkit` — or at
+  the interpreter with **Tautomer script** naming the file. The sidecar reads one JSON object on
+  stdin (XYZ, charge, multiplicity, title, options) and writes one JSON object on stdout; the request
+  is kept in the task folder as `request.json`, and the raw answer as `tautomers.json`.
 - **Bonds come from the geometry.** The structure arrives as XYZ with no bond table, so the sidecar
   perceives bonds and bond orders with RDKit's `rdDetermineBonds`. Multiplicity other than 1 is
   refused: the perception assumes a closed shell, and guessing an open-shell structure would invent

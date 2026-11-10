@@ -158,7 +158,8 @@ describe('tautomer enumeration in the queue (#226)', () => {
 
     const done = await runOne(queueManager, [generateTask], {
       dryRun: false,
-      tautomerExecutable: sidecar,
+      tautomerExecutable: process.execPath,
+      tautomerScript: sidecar,
     });
     const task = done.tasks.find((entry) => entry.nodeId === 'gen');
     expect(task.error).toBeNull();
@@ -231,7 +232,8 @@ describe('tautomer enumeration in the queue (#226)', () => {
     const generateTask = buildWorkflowPlan(p).tasks.find((task) => task.nodeId === 'gen');
     const done = await runOne(queueManager, [generateTask], {
       dryRun: false,
-      tautomerExecutable: sidecar,
+      tautomerExecutable: process.execPath,
+      tautomerScript: sidecar,
     });
     const ensemble = done.tasks.find((entry) => entry.nodeId === 'gen').ensemble;
 
@@ -290,7 +292,8 @@ describe('tautomer enumeration in the queue (#226)', () => {
     const generateTask = buildWorkflowPlan(p).tasks.find((task) => task.nodeId === 'gen');
     const done = await runOne(queueManager, [generateTask], {
       dryRun: false,
-      tautomerExecutable: sidecar,
+      tautomerExecutable: process.execPath,
+      tautomerScript: sidecar,
     });
     const task = done.tasks.find((entry) => entry.nodeId === 'gen');
     expect(task.status).toBe('failed');
@@ -311,7 +314,8 @@ describe('tautomer enumeration in the queue (#226)', () => {
     const generateTask = buildWorkflowPlan(p).tasks.find((task) => task.nodeId === 'gen');
     const done = await runOne(queueManager, [generateTask], {
       dryRun: false,
-      tautomerExecutable: sidecar,
+      tautomerExecutable: process.execPath,
+      tautomerScript: sidecar,
     });
     const task = done.tasks.find((entry) => entry.nodeId === 'gen');
     expect(task.status).toBe('failed');
@@ -327,7 +331,8 @@ describe('tautomer enumeration in the queue (#226)', () => {
     expect(generateTask.generate.maxConformers).toBe(3);
     const done = await runOne(queueManager, [generateTask], {
       dryRun: false,
-      tautomerExecutable: sidecar,
+      tautomerExecutable: process.execPath,
+      tautomerScript: sidecar,
     });
     // The fixture carries five candidates; a cap of three is a protocol
     // violation, not a silent truncation, so the block refuses.

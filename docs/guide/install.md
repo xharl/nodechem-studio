@@ -1,5 +1,8 @@
 # Install
 
+> **Upgrading from 0.4.0?** 0.5.0 uses project `schemaVersion: 3`. A 0.4.0 project (`schemaVersion: 2`)
+> is refused by version, not migrated. Finish or export it in 0.4.0 before upgrading.
+
 NodeChem Studio is a desktop application. There is no server, no account and no install step for
 either calculation engine — the app drives Gaussian 16 or xTB **where they already are**.
 
@@ -30,8 +33,8 @@ download. Every release publishes `SHA256SUMS` and a build-provenance attestatio
 Download `nodechem-studio-<version>-x86_64.AppImage`, make it executable and run it:
 
 ```bash
-chmod +x nodechem-studio-0.4.0-x86_64.AppImage
-./nodechem-studio-0.4.0-x86_64.AppImage
+chmod +x nodechem-studio-0.5.0-x86_64.AppImage
+./nodechem-studio-0.5.0-x86_64.AppImage
 ```
 
 The AppImage bundles Electron and needs no Node installation on the target machine. It is unsigned
@@ -52,7 +55,7 @@ Download `SHA256SUMS` from the same release as the installer and keep both in on
 Windows, in Command Prompt or PowerShell:
 
 ```powershell
-certutil -hashfile nodechem-studio-0.4.0-x64.exe SHA256
+certutil -hashfile nodechem-studio-0.5.0-x64.exe SHA256
 ```
 
 The output is the SHA-256 of the file you have. Compare it, character for character, with the line
@@ -70,7 +73,7 @@ the release published. On macOS, use `shasum -a 256 <file>` and compare the valu
 ### Provenance
 
 ```bash
-gh attestation verify nodechem-studio-0.4.0-x64.exe --repo xharl/nodechem-studio
+gh attestation verify nodechem-studio-0.5.0-x64.exe --repo xharl/nodechem-studio
 ```
 
 `gh attestation verify` asks GitHub's transparency log whether this exact file was built by this
@@ -115,7 +118,7 @@ npm test
 npm run dist
 ```
 
-`release\nodechem-studio-0.4.0-x64.exe` is a per-user NSIS installer; the target machine does not
+`release\nodechem-studio-0.5.0-x64.exe` is a per-user NSIS installer; the target machine does not
 need Node. The build is unsigned, so SmartScreen warns on first launch.
 
 On a Linux machine with Node 22:
@@ -126,7 +129,7 @@ npm test
 npm run dist:linux
 ```
 
-`release/nodechem-studio-0.4.0-x86_64.AppImage` is a portable, unsigned AppImage; it bundles Electron
+`release/nodechem-studio-0.5.0-x86_64.AppImage` is a portable, unsigned AppImage; it bundles Electron
 and needs no Node on the target machine. It is not a Gaussian installer and contains no Gaussian
 binaries or licence files — it drives an installation the user already has on that Linux machine.
 

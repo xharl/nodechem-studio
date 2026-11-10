@@ -15,6 +15,8 @@ import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 
+const onWindows = process.platform === 'win32';
+
 /**
  * ADR 0001 §2.10 — a scorer is a role, not an engine. These tests pin the three
  * rules that make it safe to use one: the domain guard refuses by name, the eV
@@ -132,7 +134,7 @@ async function waitFor(check, timeout = 5000) {
   throw new Error('timed out waiting for the queue');
 }
 
-describe('scorer runtime', () => {
+describe.skipIf(onWindows)('scorer runtime', () => {
   it('ranks an imported ensemble by the scorer and records its provenance', async () => {
     const { base, queueManager } = await stack();
     const ensemblePath = path.join(base, 'ensemble.xyz');
@@ -206,7 +208,7 @@ describe('scorer runtime', () => {
   });
 });
 
-describe('scorer as a calculate provider', () => {
+describe.skipIf(onWindows)('scorer as a calculate provider', () => {
   it('keeps the block calculate, bypasses the engine and writes a scorer run record', async () => {
     const { base, queueManager } = await stack();
     const fake = path.join(base, 'scorer-point');

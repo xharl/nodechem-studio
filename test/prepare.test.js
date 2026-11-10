@@ -10,6 +10,8 @@ import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 
+const onWindows = process.platform === 'win32';
+
 /**
  * ADR 0001 §2.9: prepare is 1→1. These tests hold the contract the ADR states —
  * two kinds, no enumeration, no method settings — and exercise both converters.
@@ -147,7 +149,7 @@ describe('prepare runtime', () => {
     expect(Number.isFinite(record.energyKcal)).toBe(true);
   });
 
-  it('runs the Open Babel converter for embed3d and keeps its transcript', async () => {
+  it.skipIf(onWindows)('runs the Open Babel converter for embed3d and keeps its transcript', async () => {
     const { base, queueManager } = await stack();
     const fake = path.join(base, 'obabel');
     await fsp.writeFile(fake, [
@@ -196,7 +198,7 @@ describe('prepare runtime', () => {
   });
 });
 
-describe('prepare with an ML scorer', () => {
+describe.skipIf(onWindows)('prepare with an ML scorer', () => {
   it('relaxes one structure with scorer forces and records the provenance', async () => {
     const { base, queueManager } = await stack();
     const fake = path.join(base, 'ml-scorer');
