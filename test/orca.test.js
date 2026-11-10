@@ -85,7 +85,7 @@ describe('ORCA engine registry', () => {
     expect(ORCA_CAPABILITIES.inputExtension).toBe('.inp');
     expect(ORCA_CAPABILITIES.capturesStdout).toBe(true);
     expect(ORCA_CAPABILITIES.restartArtifact).toBe('.gbw');
-    expect(ORCA_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Opt Freq', 'Freq']);
+    expect(ORCA_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Opt Freq', 'Freq', 'TD-DFT']);
     expect(ORCA_CAPABILITIES.unsupportedJobTypes).toContain('Opt=TS');
     expect(ORCA_METHODS.map((method) => method.id)).toContain('CCSD(T)');
     expect(ORCA_BASES.find((basis) => basis.id === '6-31G(d)').keyword).toBe('6-31G*');
@@ -206,6 +206,37 @@ describe('ORCA input builder', () => {
     expect(built.outputName).toBe('node-1.out');
   });
 });
+
+  it('writes the %tddft block instead of a route keyword', () => {
+    const built = build({ jobType: 'TD-DFT', tdStates: 5 });
+    expect(built.inputText).toContain('%tddft');
+    expect(built.inputText).toContain('  NRoots 5');
+    // Full response, matching the Gaussian, Psi4 and PySCF blocks.
+    expect(built.inputText).toContain('  TDA false');
+    expect(built.tddft).toEqual({ nroots: 5, approximation: 'TD-DFT' });
+    expect(built.route).toBe('B3LYP def2-SVP %tddft NRoots 5');
+    // ORCA 6 stops on `TDDFT` in the simple input line, so the route stays clean.
+    expect(built.inputText.split('\n')[0]).toBe('! B3LYP def2-SVP');
+  });
+
+  it('refuses a TD-DFT job it cannot express honestly', () => {
+    expect(() => build({ jobType: 'TD-DFT' })).toThrow(/positive number of excited states/);
+    expect(() => build({ jobType: 'TD-DFT', tdStates: 0 })).toThrow(/positive number of excited states/);
+    expect(() => build({ jobType: 'TD-DFT', tdStates: 101 })).toThrow(/100 or fewer/);
+    expect(() => build({ jobType: 'TD-DFT', tdStates: 5, method: 'MP2' }))
+      .toThrow(/Hartree-Fock or density-functional reference/);
+    expect(() => build({ jobType: 'TD-DFT', tdStates: 5, method: 'CCSD(T)' }))
+      .toThrow(/Hartree-Fock or density-functional reference/);
+  });
+
+  it('refuses excited-state settings on a job that will not compute them', () => {
+    expect(orcaSettingsOffenders({ jobType: 'SP', tdStates: 5 })).toEqual([
+      { label: 'TD-DFT states', value: '5' },
+    ]);
+    expect(orcaSettingsOffenders({ jobType: 'TD-DFT', tdStates: 5 })).toEqual([]);
+    expect(orcaSettingsOffenders({ jobType: 'TD-DFT', tdTriplets: 3 }).map((item) => item.label))
+      .toEqual(['TD-DFT triplets']);
+  });
 
 describe('ORCA provenance and checkpoint artifacts', () => {
   it('records ORCA vocabulary rather than a Gaussian route', () => {
@@ -395,6 +426,54 @@ describe('ORCA output parser — synthetic fixtures in documented format', () =>
     const imaginary = parseOrcaOutput(makeOrcaFixtureOutput({ imaginary: 1 }));
     expect(imaginary.frequencies.imaginaryCount).toBe(1);
     expect(imaginary.frequencies.minImaginary).toBeCloseTo(-83.22, 2);
+  });
+
+  it('reads the excited states of a real ORCA 6.1.1 TD-DFT log', () => {
+    const parsed = parseOrcaOutput(fixture('water-tddft.out'));
+    expect(parsed.status).toBe('completed');
+    expect(parsed.program.version).toBe('6.1.1');
+    expect(parsed.extras.jobType).toBe('TD-DFT');
+    expect(parsed.scf.energyHartree).toBeCloseTo(-76.32111959665978, 10);
+    // ORCA prints FINAL SINGLE POINT ENERGY as E(SCF)+DE(CIS); the record keeps
+    // the ground state there and carries the decomposition beside the states.
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-76.32111959665978, 10);
+    expect(parsed.finalEnergy.source).toMatch(/scf-ground-state/);
+
+    const es = parsed.excitedStates;
+    expect(es.count).toBe(5);
+    expect(es.source).toBe('orca-tddft');
+    expect(es.verified).toBe(true);
+    expect(es.transitionDipoleCount).toBe(5);
+    expect(es.totalEnergy.hartree).toBeCloseTo(-76.042399842, 9);
+    expect(es.totalEnergy.scfHartree).toBeCloseTo(-76.321119597, 9);
+    expect(es.totalEnergy.excitationHartree).toBeCloseTo(0.278719754, 9);
+    expect(es.totalEnergy.root).toBe(1);
+
+    const first = es.states[0];
+    expect(first.index).toBe(1);
+    expect(first.energyEv).toBeCloseTo(7.58435, 5);
+    expect(first.wavelengthNm).toBeCloseTo(163.5, 4);
+    expect(first.oscillatorStrength).toBeCloseTo(0.018099348, 9);
+    expect(first.transitionDipoleAu.x).toBeCloseTo(0.3121, 4);
+    expect(first.transitions[0]).toMatchObject({ from: '4a', to: '5a' });
+    // A dark state keeps its zero vector rather than losing the field.
+    expect(es.states[1].oscillatorStrength).toBe(0);
+    expect(es.states[1].transitionDipoleAu).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('reads the ethene pi-pi* root from the same layout', () => {
+    const parsed = parseOrcaOutput(fixture('ethene-tddft.out'));
+    expect(parsed.extras.jobType).toBe('TD-DFT');
+    expect(parsed.excitedStates.count).toBe(5);
+    const first = parsed.excitedStates.states[0];
+    expect(first.energyEv).toBeCloseTo(8.136085, 5);
+    expect(first.wavelengthNm).toBeCloseTo(152.4, 4);
+    expect(first.oscillatorStrength).toBeCloseTo(0.375187279, 8);
+    expect(Math.abs(first.transitionDipoleAu.x)).toBeCloseTo(1.37195, 4);
+  });
+
+  it('has no excited-state block when the log carries none', () => {
+    expect(parseOrcaOutput(fixture('water-sp.out')).excitedStates).toBeUndefined();
   });
 
   it('carries the route through when the caller supplies one', () => {

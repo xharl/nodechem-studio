@@ -36,6 +36,7 @@ import { canonicalResult, TERMINATION } from './canonical.js';
 import {
   orcaEprBlock,
   orcaNmrBlock,
+  parseOrcaExcitedStates,
   parseOrcaGTensor,
   parseOrcaHyperfine,
   parseOrcaSpinSpin,
@@ -193,9 +194,19 @@ export const ORCA_JOB_KEYWORDS = Object.freeze({
   Opt: Object.freeze(['Opt']),
   'Opt Freq': Object.freeze(['Opt', 'Freq']),
   Freq: Object.freeze(['Freq']),
+  /**
+   * Issue 285. ORCA 6 does **not** accept `TDDFT` (or `TD-DFT`) on the simple
+   * input line: a real 6.1.1 run stops with `UNRECOGNIZED OR DUPLICATED
+   * KEYWORD(S) IN SIMPLE INPUT LINE — TDDFT`. The job is switched on by the
+   * `%tddft` block alone, so the keyword list is empty and the block carries it.
+   */
+  'TD-DFT': Object.freeze([]),
 });
 
 export const ORCA_UNSUPPORTED_JOB_TYPES = Object.freeze(['Opt=TS', 'IRC', 'Scan', 'NMR']);
+
+/** Methods this builder will not run a TD-DFT response calculation for. */
+const CORRELATED_NO_TDDFT = new Set(['MP2', 'CCSD(T)', 'DLPNO-CCSD(T)']);
 
 export const ORCA_UNSUPPORTED_JOB_REASONS = Object.freeze({
   'Opt=TS': 'a transition-state search needs an initial Hessian and mode specification written in a %geom block',
@@ -229,7 +240,6 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'transition-state search (OptTS)',
     'IRC',
     'relaxed PES scan',
-    'TD-DFT excited states',
     'NMR shieldings',
     'population analysis (NBO/ESP)',
     'Gaussian-style checkpoint hand-off (%Chk)',
@@ -246,6 +256,7 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'hyperfine couplings (A(iso), A(SD), total HFC matrix)',
     'g-tensor when the log prints one',
     'isotropic spin-spin couplings J (no reduced K table)',
+    'vertical excitation energies, oscillator strengths and transition dipoles (TD-DFT)',
   ]),
 });
 
@@ -262,9 +273,16 @@ export const ORCA_CAPABILITIES = Object.freeze({
 export function orcaSettingsOffenders(settings = {}) {
   const source = settings && typeof settings === 'object' ? settings : {};
   const text = (value) => (value === undefined || value === null ? '' : String(value).trim());
+  /**
+   * Issue 285: the excited-state fields are no longer Gaussian-only. On a
+   * TD-DFT block they are the job; on every other ORCA job they stay refused,
+   * because ORCA would run a plain single point and the record would claim a
+   * spectrum that was never computed.
+   */
+  const isTddft = oneLine(source.jobType) === 'TD-DFT';
   return [
     ['Custom route keywords', text(source.customKeywords)],
-    ['TD-DFT states', Number(source.tdStates) > 0 ? String(source.tdStates) : ''],
+    ['TD-DFT states', isTddft ? '' : Number(source.tdStates) > 0 ? String(source.tdStates) : ''],
     ['TD-DFT triplets', Number(source.tdTriplets) > 0 ? String(source.tdTriplets) : ''],
     ['Stable=Opt', source.stableOpt === true ? 'true' : ''],
     ['Raman activities', source.raman === true ? 'true' : ''],
@@ -362,6 +380,36 @@ function gridKeywordFor(settings = {}) {
   if (requested === 'Fine') return 'DEFGRID2';
   if (requested === 'UltraFine') return 'DEFGRID3';
   throw new Error(`ORCA has no integration-grid keyword for "${requested}". Supported: Fine, UltraFine.`);
+}
+
+/**
+ * Issue 285: the `%tddft` block. ORCA 6 switches the job on with this block and
+ * refuses a `TDDFT` keyword on the route line, so the block is the whole
+ * request. `TDA false` asks for the full response rather than the
+ * Tamm-Dancoff approximation, which is what the Gaussian, Psi4 and PySCF
+ * blocks in this app compute; the banner in the log (`TD-DFT` vs `TD-DFT/TDA`)
+ * is what the parser uses to label an imported log that chose otherwise.
+ */
+function tddftBlockFor(settings = {}, jobType = 'SP') {
+  if (jobType !== 'TD-DFT') return null;
+  const requested = Number(settings.tdStates);
+  if (!Number.isInteger(requested) || requested < 1) {
+    throw new Error(
+      'TD-DFT needs a positive number of excited states: set "States" to at least 1 '
+      + `(received ${settings.tdStates === undefined ? 'nothing' : JSON.stringify(settings.tdStates)}).`,
+    );
+  }
+  if (requested > 100) {
+    throw new Error(
+      `TD-DFT asked for ${requested} states. ORCA converges a block of roots together and `
+      + 'the cost grows steeply; request 100 or fewer.',
+    );
+  }
+  return {
+    lines: ['%tddft', `  NRoots ${requested}`, '  TDA false', 'end'],
+    nroots: requested,
+    approximation: 'TD-DFT',
+  };
 }
 
 function optKeywordFor(settings = {}, jobType = 'SP') {
@@ -471,6 +519,14 @@ export function buildOrcaInput({
     );
   }
 
+  if (jobType === 'TD-DFT' && CORRELATED_NO_TDDFT.has(method)) {
+    throw new Error(
+      `TD-DFT needs a Hartree-Fock or density-functional reference; "${method}" is a `
+      + 'correlated wavefunction method with no response theory in this builder. '
+      + 'Choose B3LYP, PBE0, M06-2X or HF, or run a single point at this level.',
+    );
+  }
+
   const requestedPno = oneLine(settings.pnoThreshold);
   if (methodEntry?.singlePointOnly && jobType !== 'SP') {
     const requested = {
@@ -546,6 +602,8 @@ export function buildOrcaInput({
   if (solvation && solvation.model === 'SMD') {
     blocks.push('%cpcm', '  smd true', `  smdsolvent "${solvation.solvent}"`, 'end');
   }
+  const tddft = tddftBlockFor(settings, jobType);
+  if (tddft) blocks.push(...tddft.lines);
 
   const inputText = [
     keywords.join(' '),
@@ -574,6 +632,7 @@ export function buildOrcaInput({
     coulombBasis: dlpno?.coulombBasis || null,
     riApproximation: dlpno?.riApproximation || null,
     jobType,
+    tddft: tddft ? { nroots: tddft.nroots, approximation: tddft.approximation } : null,
     charge,
     multiplicity,
     dispersion,
@@ -581,8 +640,15 @@ export function buildOrcaInput({
       ? { model: solvation.model, solvent: solvation.solvent, label: solvation.label }
       : { model: null, solvent: null, label: null },
     resources,
-    /** Human-readable simple-input line, for the inspector preview. */
-    route: keywords.join(' ').replace(/^!\s*/, ''),
+    /**
+     * Human-readable simple-input line, for the inspector preview. A TD-DFT job
+     * has no route keyword in ORCA 6, so its block is appended here — otherwise
+     * the preview would be indistinguishable from a plain single point.
+     */
+    route: [
+      keywords.join(' ').replace(/^!\s*/, ''),
+      tddft ? `%tddft NRoots ${tddft.nroots}` : '',
+    ].filter(Boolean).join(' '),
   };
 }
 
@@ -935,7 +1001,11 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
     ? 'QRRHO'
     : null;
 
-  const jobType = echo ? (/\bopt\b/i.test(echo) && /\bfreq\b/i.test(echo) ? 'Opt Freq'
+  // Issue 285: a TD-DFT job carries no route keyword in ORCA 6 — the `%tddft`
+  // block is the request — so the log's own banner is the only evidence that
+  // the run was a response calculation rather than a single point.
+  const ranResponse = /TD-DFT(?:\/TDA)?\s+EXCITED STATES/i.test(body);
+  const jobType = ranResponse ? 'TD-DFT' : echo ? (/\bopt\b/i.test(echo) && /\bfreq\b/i.test(echo) ? 'Opt Freq'
     : /\bopt\b/i.test(echo) ? 'Opt'
       : /\bfreq\b/i.test(echo) ? 'Freq' : 'SP') : null;
 
@@ -950,6 +1020,9 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
   const epr = orcaEprBlock({ hyperfine, gTensor, level: echo || hyperfine?.method || null });
   const spinSpin = parseOrcaSpinSpin(body);
   const nmr = orcaNmrBlock({ couplings: spinSpin, text: body });
+  // Issue 285: the excited-state block. Absent when the log carries no TD-DFT
+  // banner; the reader never turns "no section" into "zero states".
+  const excitedStates = parseOrcaExcitedStates(body);
 
   const result = canonicalResult({
     engine: ORCA_ENGINE_ID,
@@ -986,16 +1059,29 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
       scalingFactor,
       entropyTreatment,
     },
+    excitedStates,
     thermochemistry: {
       freeEnergyHartree: freeEnergy,
       enthalpyHartree: enthalpy,
       zpeHartree: zeroPoint,
       entropyTreatment,
     },
-    finalEnergy: {
-      hartree: finalEnergy,
-      source: finalEnergy !== null ? 'final-single-point' : null,
-    },
+    /**
+     * Issue 285: a TD-DFT log ends with `FINAL SINGLE POINT ENERGY = E(SCF) +
+     * DE(CIS)`, the total of the root ORCA followed. Reporting that as the
+     * final energy would hand a downstream block an excited-state total labelled
+     * as a ground state, so the ground-state SCF energy is reported instead and
+     * the decomposition stays in `excitedStates.totalEnergy`.
+     */
+    finalEnergy: excitedStates?.totalEnergy
+      ? {
+        hartree: scfEnergy ?? excitedStates.totalEnergy.scfHartree,
+        source: 'scf-ground-state (TD-DFT total printed separately)',
+      }
+      : {
+        hartree: finalEnergy,
+        source: finalEnergy !== null ? 'final-single-point' : null,
+      },
     // Issue 227: absent unless the log printed a DLPNO header and triples.
     dlpno,
     // Issue 222: absent unless the log printed a hyperfine section or a

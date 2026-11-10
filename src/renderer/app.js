@@ -2450,6 +2450,21 @@ function calcInspector(node) {
     ].join(''))
     : '';
 
+  // Issue 285: ORCA 6 has no `TDDFT` route keyword — the `%tddft` block is the
+  // whole request — so the group is shown only when the job type is TD-DFT and
+  // it names the block it writes.
+  const orcaTdGroup = isOrca && s.jobType === 'TD-DFT'
+    ? group('Excited states (TD-DFT)', `${Number(s.tdStates) || 0} states`, true, [
+      inputField('States', 'tdStates', s.tdStates ?? 10, { type: 'number', min: 1, max: 100 }),
+      '<div class="field full"><span class="inspector-note">Writes <code>%tddft</code> with '
+        + '<code>NRoots N</code> and <code>TDA false</code> — the full response, like the Gaussian, '
+        + 'Psi4 and PySCF blocks, not the Tamm-Dancoff approximation. ORCA 6 rejects a '
+        + '<code>TDDFT</code> keyword on the route line, so the block is the whole request. '
+        + 'Singlets only. The log closes with <code>E(tot) = E(SCF) + DE(CIS)</code>; the record reports the '
+        + 'SCF energy as the final energy and keeps that decomposition with the states.</span></div>',
+    ].join(''))
+    : '';
+
   // Issue #60: TD-DFT is a route keyword on a wavefunction job. The group is
   // always present for Gaussian so the setting is discoverable; the note says
   // why a Freq/TS/IRC/Scan block cannot carry it.
@@ -2750,6 +2765,7 @@ function calcInspector(node) {
     ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : isPyscf ? pyscfMethodGroup : isOrca ? orcaMethodGroup : compositeJob ? compositeNote : methodGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : excitedGroup}
     ${psi4TdGroup}
+    ${orcaTdGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob || !nmrJob ? '' : nmrGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : ramanGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : vcdGroup}
@@ -4956,6 +4972,9 @@ function updateNodeField(node, key, value) {
     } else if (key === 'jobType') {
       const wasComposite = isCompositeJobType(node.settings.jobType);
       node.settings.jobType = value;
+      // Issue 285: a TD-DFT node needs a state count. The builders refuse zero
+      // rather than guessing, so seed the default when the job type is chosen.
+      if (value === 'TD-DFT' && !(Number(node.settings.tdStates) > 0)) node.settings.tdStates = 10;
       node.kind = kindForJob(value);
       const nowComposite = isCompositeJobType(value);
       // A composite keyword carries its own method, basis, dispersion and job

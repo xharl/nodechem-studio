@@ -209,6 +209,21 @@ export function canonicalResult({
            */
           transitionDipoleCount: integerOrNull(excitedStates.transitionDipoleCount),
           /**
+           * Issue 285: ORCA ends a TD-DFT job with `E(tot) = E(SCF) + DE(CIS)`
+           * and prints that as the final single point. The decomposition travels
+           * with the states so a consumer can see which root the total belongs
+           * to instead of mistaking it for a ground-state energy.
+           */
+          totalEnergy: excitedStates.totalEnergy
+            && Number.isFinite(excitedStates.totalEnergy.hartree)
+            ? {
+              hartree: excitedStates.totalEnergy.hartree,
+              scfHartree: finiteOrNull(excitedStates.totalEnergy.scfHartree),
+              excitationHartree: finiteOrNull(excitedStates.totalEnergy.excitationHartree),
+              root: integerOrNull(excitedStates.totalEnergy.root),
+            }
+            : null,
+          /**
            * Issue 173, route B: how many states carry a transition-density block,
            * and the fragment label of each atom as the deck declared it. Kept
            * beside the states for the same reason as the dipole count: the CT

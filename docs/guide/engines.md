@@ -349,8 +349,18 @@ In this app ORCA gives you:
   written explicitly so the route preview states the truncation level instead of leaving it to ORCA's
   default. The parsed header, PNO settings and triples correction are pinned to a real ORCA 6.1 log
   (`test/fixtures/real/orca-6.1-water-dlpno/`).
-- **Job types** `SP`, `Opt`, `Freq` and `Opt Freq`. `Opt Freq` is ORCA's compound job: optimise,
-  then compute the Hessian at the minimum.
+- **Job types** `SP`, `Opt`, `Freq`, `Opt Freq` and `TD-DFT`. `Opt Freq` is ORCA's compound job:
+  optimise, then compute the Hessian at the minimum.
+- **TD-DFT**: ORCA 6 takes no `TDDFT` keyword on the route line — it stops with
+  `UNRECOGNIZED OR DUPLICATED KEYWORD(S) IN SIMPLE INPUT LINE` — so the builder writes a
+  `%tddft` block (`NRoots N`, `TDA false`) and leaves the route alone. The parser reads the
+  `TD-DFT EXCITED STATES` table (energies in au/eV/cm⁻¹, `<S**2>`, multiplicity, excitation
+  composition) and the electric-dipole absorption table (oscillator strength, transition dipole),
+  merging them by state. Only singlets are requested. The log ends with
+  `E(tot) = E(SCF) + DE(CIS)` and prints that total as `FINAL SINGLE POINT ENERGY`; the record
+  reports the SCF energy as the final energy and keeps the decomposition in
+  `excitedStates.totalEnergy`. Pinned to real 6.1.1 logs (`test/fixtures/orca/water-tddft.out`,
+  `ethene-tddft.out`).
 - **Dispersion** `D3(BJ)` → `D3BJ`, `D3` → `D3ZERO` and `D4` → `D4`.
 - **SCF** `Tight` → `TightSCF` / `VeryTight` → `VeryTightSCF`; **grid** `Fine` → `DEFGRID2` /
   `UltraFine` → `DEFGRID3`; optimisation convergence `Tight` → `TightOpt` /
@@ -389,9 +399,8 @@ H     0.000000   -0.757200   -0.469200
 
 What ORCA does **not** give you through this builder:
 
-- No transition-state search, IRC, relaxed PES scan or NMR job. Those need `%geom`, `%irc` or
-  `%elprop` blocks, so the input builder refuses them instead of writing a keyword that runs a
-  different job.
+- No transition-state search, IRC or relaxed PES scan. Those need `%geom` or `%irc` blocks, so the
+  input builder refuses them instead of writing a keyword that runs a different job.
 - No TD-DFT excited states, population analysis (NBO/ESP), Raman activities, `Stable=Opt` or custom
   route keywords. Those are Gaussian-only form fields in this app; a block that carries one is
   refused with a message naming the field.
