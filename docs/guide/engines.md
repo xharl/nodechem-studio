@@ -349,8 +349,25 @@ In this app ORCA gives you:
   written explicitly so the route preview states the truncation level instead of leaving it to ORCA's
   default. The parsed header, PNO settings and triples correction are pinned to a real ORCA 6.1 log
   (`test/fixtures/real/orca-6.1-water-dlpno/`).
-- **Job types** `SP`, `Opt`, `Freq`, `Opt Freq`, `NMR` and `TD-DFT`. `Opt Freq` is ORCA's compound
-  job: optimise, then compute the Hessian at the minimum.
+- **Job types** `SP`, `Opt`, `Freq`, `Opt Freq`, `NMR`, `TD-DFT`, `Opt=TS`, `IRC` and `Scan`.
+  `Opt Freq` is ORCA's compound job: optimise, then compute the Hessian at the minimum.
+- **Opt=TS**: `! OptTS` plus `%geom Calc_Hess true end`. The exact Hessian is not optional here —
+  with the Almloef model Hessian ORCA follows the wrong curvature, and the builder therefore always
+  writes `Calc_Hess`. A real 6.1.1 NH3 inversion saddle printed `Hessian has 1 negative eigenvalues`,
+  `Taking P-RFO step` and a lowest eigenvalue of −0.021825072; the confirming `Freq` on that geometry
+  gives exactly one imaginary mode, **−907.22 cm⁻¹**. The parser reads the eigenvalue count, the
+  lowest eigenvalue, the P-RFO marker and convergence as `extras.saddle`.
+- **IRC**: `! IRC` plus `%irc Direction <both|forward|backward> / MaxIter 50 end`. The app's
+  `reverse` maps to ORCA's `backward`. ORCA prints no per-step table during the run; it writes one
+  `IRC PATH SUMMARY` at the end, an **ordered list from the backward end through the transition state
+  (marked `<= TS`) to the forward end**, with absolute `E(Eh)` and `dE(kcal/mol)` referenced to the TS.
+  There is no reaction coordinate column, so `rxCoord` is `null` rather than an invented ordering.
+- **Scan**: `! Opt` plus `%geom Scan <B|A|D> <i> <j> = start, end, steps end end`, built from a
+  constraint marked `scan` (its starting value, step size and step count). Indices are shifted to
+  ORCA's **0-based** atom order. A `%geom Scan` without `! Opt` is silently ignored by ORCA 6.1.1 —
+  the banner reads "Single Point Calculation" and no table is printed — and `! Scan` is not a keyword.
+  The parser reads the `RELAXED SURFACE SCAN RESULTS` table (`'Actual Energy'` copy only; ORCA prints
+  the same numbers twice).
 - **NMR**: `! NMR` plus a `%EPRNMR` block listing every NMR-active element in the geometry
   (H, C, N, O, F, P, Si) with `SHIFT`, and `SHIFT, SSALL` when **Spin-spin couplings** is on.
   The parser reads `CHEMICAL SHIELDING SUMMARY (ppm)` — isotropic and anisotropy per nucleus, with

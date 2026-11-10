@@ -82,6 +82,7 @@ import {
   mhzToGauss,
 } from '../epr.js';
 import { couplingSummary } from '../nmr.js';
+import { HARTREE_TO_KCAL_PER_MOL } from '../runCompare.js';
 
 const NUMBER = String.raw`[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?`;
 const NUMBER_RE = new RegExp(`^${NUMBER}$`);
@@ -1249,5 +1250,140 @@ export function parseOrcaVcd(text) {
     modes,
     source: 'orca-vcd',
     unit: VCD_UNIT.test(source) ? '1E-44 esu^2 cm^2' : null,
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// Reaction paths: relaxed surface scan, IRC, saddle search (issue 286)
+//
+// ORCA prints none of these as a per-step table in the way Gaussian does. The
+// scan summary is a two-column (coordinate, energy) list, the IRC summary is a
+// five-column step table whose energies are absolute hartree, and a saddle
+// search is proven only by the Hessian eigenvalue line plus the P-RFO step
+// banner. Absent sections return null: "no scan in this job" is not "a scan
+// with zero points".
+// ---------------------------------------------------------------------------
+
+const SCAN_RESULTS = /^RELAXED SURFACE SCAN RESULTS\s*$/;
+const SCAN_SECTION = /The Calculated Surface using the '(?:Actual|SCF) Energy'/i;
+const SCAN_ROW = /^\s*(-?\d+\.\d+)\s+(-?\d+\.\d+)\s*$/;
+const IRC_SUMMARY = /^\s*IRC PATH SUMMARY\s*$/;
+const IRC_ROW = /^\s*(\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s*(<= TS)?\s*$/;
+const IRC_CONVERGED = /THE IRC HAS CONVERGED/;
+const SADDLE_COUNT = /Hessian has\s+(\d+)\s+negative eigenvalues/gi;
+const SADDLE_PRFO = /Taking P-RFO step/;
+const OPT_CONVERGED = /THE OPTIMIZATION HAS CONVERGED/;
+
+/**
+ * Parse the relaxed-surface-scan summary.
+ *
+ * ORCA prints the same surface twice, once under `'Actual Energy'` and once
+ * under `SCF energy`; only the first is read, because a second copy of the same
+ * numbers is not a second dataset. The scanned coordinate is printed as
+ * `Column   1: NONAME` — ORCA does not name it — so the values travel as
+ * `coordinate` and the caller supplies the atom definition it asked for.
+ */
+export function parseOrcaScan(source) {
+  const lines = String(source ?? '').split(/\r\n|\n|\r/);
+  const start = lines.findIndex((line) => SCAN_RESULTS.test(line.trim()));
+  if (start === -1) return null;
+  let index = start + 1;
+  while (index < lines.length && !SCAN_SECTION.test(lines[index])) index += 1;
+  if (index >= lines.length) return null;
+  const points = [];
+  for (index += 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === '') {
+      if (points.length > 0) break;
+      continue;
+    }
+    const row = SCAN_ROW.exec(lines[index]);
+    if (!row) {
+      if (points.length > 0) break;
+      continue;
+    }
+    points.push({
+      point: points.length + 1,
+      energyHartree: num(row[2]),
+      parameters: { coordinate: num(row[1]) },
+    });
+  }
+  if (points.length === 0) return null;
+  return {
+    kind: 'relaxed',
+    parameterNames: ['coordinate'],
+    points,
+    pointCount: points.length,
+    source: 'orca-scan',
+  };
+}
+
+/**
+ * Parse the IRC path summary.
+ *
+ * The table is one ordered list that runs from the backward endpoint through
+ * the transition state (marked `<= TS`) to the forward endpoint, and `E(Eh)` is
+ * absolute. ORCA prints no reaction coordinate, so `rxCoord` is null rather
+ * than an invented ordering, and a consumer that needs a sign must say so.
+ */
+export function parseOrcaIrc(source) {
+  const text = String(source ?? '');
+  const lines = text.split(/\r\n|\n|\r/);
+  const start = lines.findIndex((line) => IRC_SUMMARY.test(line));
+  if (start === -1) return null;
+  const points = [];
+  let tsStep = null;
+  let misses = 0;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const row = IRC_ROW.exec(lines[index]);
+    if (!row) {
+      if (points.length > 0 && ++misses > 4) break;
+      continue;
+    }
+    misses = 0;
+    const relativeKcal = num(row[3]);
+    if (row[6]) tsStep = Number(row[1]);
+    points.push({
+      point: Number(row[1]),
+      energyHartree: num(row[2]),
+      relativeKcal,
+      relativeHartree: relativeKcal === null ? null : relativeKcal / HARTREE_TO_KCAL_PER_MOL,
+      rxCoord: null,
+    });
+  }
+  if (points.length === 0) return null;
+  return {
+    kind: 'irc',
+    points,
+    pointCount: points.length,
+    tsStep,
+    converged: IRC_CONVERGED.test(text),
+    source: 'orca-irc',
+    note: 'ORCA prints no reaction coordinate; steps run backward end -> TS -> forward end.',
+  };
+}
+
+/**
+ * Parse the evidence that a job really was a saddle search.
+ *
+ * Two independent lines are needed: the Hessian eigenvalue count (a minimum has
+ * none negative) and the P-RFO banner, which is the algorithm that follows the
+ * negative mode. A job with one negative eigenvalue but no P-RFO step is a
+ * frequency job on a prepared geometry, not a transition-state search.
+ */
+export function parseOrcaSaddle(source) {
+  const text = String(source ?? '');
+  const counts = [...text.matchAll(SADDLE_COUNT)];
+  if (counts.length === 0) return null;
+  const last = counts[counts.length - 1];
+  const negativeEigenvalues = Number(last[1]);
+  const basket = /Lowest eigenvalues of the Hessian:\s*\n\s*(-?\d+\.\d+)/i.exec(text);
+  return {
+    negativeEigenvalues,
+    lowestEigenvalue: basket ? num(basket[1]) : null,
+    prfo: SADDLE_PRFO.test(text),
+    converged: OPT_CONVERGED.test(text),
+    hessianEvaluations: counts.length,
+    source: 'orca-saddle',
   };
 }

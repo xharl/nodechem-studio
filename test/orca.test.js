@@ -85,8 +85,12 @@ describe('ORCA engine registry', () => {
     expect(ORCA_CAPABILITIES.inputExtension).toBe('.inp');
     expect(ORCA_CAPABILITIES.capturesStdout).toBe(true);
     expect(ORCA_CAPABILITIES.restartArtifact).toBe('.gbw');
-    expect(ORCA_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Opt Freq', 'Freq', 'NMR', 'TD-DFT']);
-    expect(ORCA_CAPABILITIES.unsupportedJobTypes).toContain('Opt=TS');
+    expect(ORCA_CAPABILITIES.jobTypes).toEqual(
+      ['SP', 'Opt', 'Opt Freq', 'Freq', 'NMR', 'TD-DFT', 'Opt=TS', 'IRC', 'Scan'],
+    );
+    // Issue 286 closed the last three: every job type ORCA's simple input can
+    // express is now built rather than refused.
+    expect(ORCA_CAPABILITIES.unsupportedJobTypes).toEqual([]);
     expect(ORCA_METHODS.map((method) => method.id)).toContain('CCSD(T)');
     expect(ORCA_BASES.find((basis) => basis.id === '6-31G(d)').keyword).toBe('6-31G*');
     expect(ORCA_SOLVENTS.THF).toBe('THF');
@@ -155,10 +159,13 @@ describe('ORCA input builder', () => {
     expect(smd.solvation.model).toBe('SMD');
   });
 
-  it('refuses job types simple input cannot express instead of degrading them', () => {
-    for (const jobType of ['Opt=TS', 'IRC', 'Scan']) {
-      expect(() => build({ jobType })).toThrow(/ORCA simple input cannot express/);
+  it('no longer refuses Opt=TS, IRC or Scan, but still refuses a job type it cannot spell', () => {
+    for (const jobType of ['Opt=TS', 'IRC']) {
+      expect(() => build({ jobType })).not.toThrow();
     }
+    // Scan needs its coordinate, so it is refused for a reason of its own.
+    expect(() => build({ jobType: 'Scan' })).toThrow(/needs one coordinate marked "scan"/);
+    expect(() => build({ jobType: 'Opt=QST2' })).toThrow(/ORCA simple input cannot express/);
   });
 
   it('refuses a method or basis this builder cannot spell', () => {
@@ -702,5 +709,123 @@ describe('ORCA preflight', () => {
     const name = result.checks.find((entry) => entry.id === 'executable-name');
     expect(name.ok).toBe(false);
     expect(result.ok).toBe(false);
+  });
+});
+
+
+describe('ORCA reaction paths (issue 286)', () => {
+  const settings = (extra = {}) => ({ method: 'HF', basis: 'def2-SVP', ...extra });
+
+  it('writes a %geom Scan column from a scanned constraint, in ORCA 0-based indices', () => {
+    const built = buildOrcaInput({
+      settings: settings({
+        jobType: 'Scan',
+        constraints: [{ kind: 'bond', atoms: [1, 2], mode: 'scan', value: 0.9, steps: 6, size: 0.05 }],
+      }),
+      molecule: { coords: WATER, charge: 0, multiplicity: 1 },
+      inputName: 'scan.inp',
+    });
+    expect(built.inputText).toContain('! HF def2-SVP Opt');
+    expect(built.inputText).toContain('%geom\n  Scan B 0 1 = 0.900000, 1.200000, 6 end\nend');
+    expect(built.scan).toMatchObject({ kind: 'bond', atoms: [0, 1], start: 0.9, end: 1.2, steps: 6 });
+  });
+
+  it('refuses a Scan job with no scanned coordinate', () => {
+    expect(() => buildOrcaInput({
+      settings: settings({ jobType: 'Scan' }),
+      molecule: { coords: WATER, charge: 0, multiplicity: 1 },
+      inputName: 'scan.inp',
+    })).toThrow(/needs one coordinate marked "scan"/);
+  });
+
+  it('refuses two scanned coordinates, because the profile reader assumes one', () => {
+    expect(() => buildOrcaInput({
+      settings: settings({
+        jobType: 'Scan',
+        constraints: [
+          { kind: 'bond', atoms: [1, 2], mode: 'scan', value: 0.9, steps: 4, size: 0.05 },
+          { kind: 'angle', atoms: [2, 1, 3], mode: 'scan', value: 104.5, steps: 4, size: 2 },
+        ],
+      }),
+      molecule: { coords: WATER, charge: 0, multiplicity: 1 },
+      inputName: 'scan.inp',
+    })).toThrow(/writes one %geom Scan column and 2 coordinates/);
+  });
+
+  it('refuses a scanned constraint on a job that cannot read it', () => {
+    expect(() => buildOrcaInput({
+      settings: settings({
+        jobType: 'Opt',
+        constraints: [{ kind: 'bond', atoms: [1, 2], mode: 'scan', value: 0.9, steps: 4, size: 0.05 }],
+      }),
+      molecule: { coords: WATER, charge: 0, multiplicity: 1 },
+      inputName: 'opt.inp',
+    })).toThrow(/marked "scan" but the job type is not Scan/);
+  });
+
+  it('writes ! OptTS with an exact Hessian, which is what makes it a saddle search', () => {
+    const built = buildOrcaInput({
+      settings: settings({ jobType: 'Opt=TS' }),
+      molecule: { coords: WATER, charge: 0, multiplicity: 1 },
+      inputName: 'ts.inp',
+    });
+    expect(built.inputText).toContain('! HF def2-SVP OptTS');
+    expect(built.inputText).toContain('%geom\n  Calc_Hess true\nend');
+  });
+
+  it('writes a %irc block and maps the app direction onto Direction', () => {
+    const built = buildOrcaInput({
+      settings: settings({ jobType: 'IRC' }),
+      molecule: { coords: WATER, charge: 0, multiplicity: 1 },
+      inputName: 'irc.inp',
+    });
+    expect(built.inputText).toContain('! HF def2-SVP IRC');
+    expect(built.inputText).toContain('%irc\n  Direction both\n  MaxIter 50\nend');
+
+    // The app calls the second side "reverse"; ORCA calls it "backward".
+    const reverse = buildOrcaInput({
+      settings: settings({ jobType: 'IRC', ircDirection: 'reverse' }),
+      molecule: { coords: WATER, charge: 0, multiplicity: 1 },
+      inputName: 'irc.inp',
+    });
+    expect(reverse.inputText).toContain('Direction backward');
+  });
+
+  it('reads the relaxed scan surface from a real ORCA 6.1.1 log', () => {
+    const parsed = parseOrcaOutput(fixture('water-scan.out'));
+    expect(parsed.extras.jobType).toBe('Scan');
+    expect(parsed.extras.scan.kind).toBe('relaxed');
+    expect(parsed.extras.scan.points).toHaveLength(6);
+    expect(parsed.extras.scan.points[0]).toEqual({
+      point: 1, energyHartree: -75.95882048, parameters: { coordinate: 0.9 },
+    });
+    expect(parsed.extras.scan.points[5].parameters.coordinate).toBe(1.2);
+    expect(parsed.extras.scan.points[5].energyHartree).toBe(-75.9182361);
+  });
+
+  it('proves a saddle search from the Hessian count and the P-RFO step', () => {
+    const parsed = parseOrcaOutput(fixture('nh3-optts.out'));
+    expect(parsed.extras.jobType).toBe('Opt=TS');
+    expect(parsed.extras.saddle).toEqual({
+      negativeEigenvalues: 1,
+      lowestEigenvalue: -0.021825072,
+      prfo: true,
+      converged: true,
+      hessianEvaluations: 1,
+      source: 'orca-saddle',
+    });
+  });
+
+  it('reads both IRC directions from one real ORCA summary, ordered with the TS marked', () => {
+    const parsed = parseOrcaOutput(fixture('nh3-irc.out'));
+    expect(parsed.extras.jobType).toBe('IRC');
+    const irc = parsed.extras.irc;
+    expect(irc.points).toHaveLength(17);
+    expect(irc.tsStep).toBe(9);
+    expect(irc.converged).toBe(true);
+    expect(irc.points[0].energyHartree).toBe(-56.148878);
+    expect(irc.points[8].energyHartree).toBe(-56.139541);
+    expect(irc.points[8].relativeKcal).toBe(0);
+    expect(irc.points[8].rxCoord).toBeNull();
   });
 });
