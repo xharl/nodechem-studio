@@ -1012,3 +1012,242 @@ export function orcaNmrBlock({ couplings = null, shieldings = null, text = '' } 
     ...(couplings ? { couplingsSource: couplings.summaryLine } : {}),
   };
 }
+
+
+/* ── TD-DFT excited states (issue 285) ───────────────────────── */
+
+/**
+ * The two banners ORCA 6.1 prints above the state list. `TD-DFT/TDA` means the
+ * Tamm-Dancoff approximation ran; `TD-DFT` means the full response. The builder
+ * asks for the full treatment (`TDA false`) so an ORCA spectrum is comparable
+ * with the Gaussian, Psi4 and PySCF blocks, but an imported log may be either
+ * and the banner is what decides which one this record is.
+ */
+const EXCITED_BANNER = /^\s*TD-DFT(\/TDA)?\s+EXCITED STATES\s*\(([A-Z]+)\)/im;
+const EXCITED_STATE = /^STATE\s+(\d+):\s*E=\s*([-+]?[\d.]+)\s+au\s+([-+]?[\d.]+)\s+eV\s+([-+]?[\d.]+)\s+cm\*\*-1\s+<S\*\*2>\s*=\s*([-+]?[\d.]+)\s+Mult\s+(\d+)/;
+/** `4a ->   5a  :     0.999557 (c=  0.99977849)` */
+const EXCITED_MIX = /^\s+(\d+)([a-zA-Z]?)\s*->\s*(\d+)([a-zA-Z]?)\s*:\s+([\d.]+)(?:\s+\(c=\s*([-+]?[\d.]+)\))?/;
+const SPECTRUM_HEADER = /ABSORPTION SPECTRUM VIA TRANSITION (ELECTRIC|VELOCITY) DIPOLE MOMENTS/i;
+/**
+ * `  0-1A  ->  1-1A    7.612667   61400.3   162.9   0.017916417   0.09606  -0.30994   0.00000  -0.00000`
+ *
+ * GS multiplicity, GS index, GS irrep, state multiplicity, state index, irrep,
+ * eV, cm-1, nm, fosc, |D|^2 (au^2), DX, DY, DZ.
+ */
+const SPECTRUM_ROW = /^\s*(\d+)-(\d+)([A-Z])\s*->\s*(\d+)-(\d+)([A-Z])\s+([-+]?[\d.]+)\s+([-+]?[\d.]+)\s+([-+]?[\d.]+)\s+([-+]?[\d.]+)\s+([-+]?[\d.]+)\s+([-+]?[\d.]+)\s+([-+]?[\d.]+)\s+([-+]?[\d.]+)\s*$/;
+
+const num = (value) => {
+  const parsed = Number(String(value ?? '').trim().replace(/[Dd]/, 'E'));
+  // `+ 0` folds ORCA's `-0.00000` into 0: a signed zero is not a phase.
+  return Number.isFinite(parsed) ? parsed + 0 : null;
+};
+
+/**
+ * Read the excited states ORCA prints after the SCF.
+ *
+ * Returns `null` when the log carries no TD-DFT section at all — an SP run has
+ * no banner, and absent must never look like "zero states". The state list and
+ * the absorption table are printed separately, so they are merged here: the
+ * table's columns are the ones with an oscillator strength and a transition
+ * dipole, and the state list carries the excitation composition.
+ *
+ * The transition dipole is kept in atomic units as ORCA printed it (DX/DY/DZ),
+ * with its sign. A dark state prints an all-zero row; the vector is kept as
+ * zeros rather than dropped, because `D2 = 0` is a measured fact about this
+ * level of theory, while a missing vector would be indistinguishable from a log
+ * that never printed the table. `transitionDipoleCount` on the block counts the
+ * states that carry one.
+ */
+export function parseOrcaExcitedStates(text) {
+  const source = String(text ?? '');
+  const banner = EXCITED_BANNER.exec(source);
+  if (!banner) return null;
+  const approximation = banner[1] ? 'TDA' : 'TD-DFT';
+  const declaredMultiplicity = banner[2] ? banner[2].toUpperCase() : null;
+
+  const states = [];
+  let current = null;
+  let section = null;
+  for (const line of source.split(/\r?\n/)) {
+    const head = SPECTRUM_HEADER.exec(line);
+    if (head) {
+      section = head[1].toUpperCase();
+      continue;
+    }
+    const stateRow = EXCITED_STATE.exec(line);
+    if (stateRow) {
+      current = {
+        index: Number(stateRow[1]),
+        energyHartree: num(stateRow[2]),
+        energyEv: num(stateRow[3]),
+        energyCm: num(stateRow[4]),
+        spinSquared: num(stateRow[5]),
+        multiplicity: Number(stateRow[6]),
+        wavelengthNm: null,
+        oscillatorStrength: null,
+        transitionDipoleAu: null,
+        transitions: [],
+      };
+      states.push(current);
+      continue;
+    }
+    const mix = EXCITED_MIX.exec(line);
+    if (mix && current) {
+      current.transitions.push({
+        from: `${mix[1]}${mix[2] || ''}`,
+        to: `${mix[3]}${mix[4] || ''}`,
+        weight: num(mix[5]),
+        coefficient: num(mix[6]),
+      });
+      continue;
+    }
+    if (section !== 'ELECTRIC') continue;
+    const row = SPECTRUM_ROW.exec(line);
+    if (!row) continue;
+    const target = states.find(
+      (state) => state.index === Number(row[4]) && state.multiplicity === Number(row[5]),
+    );
+    if (!target) continue;
+    // The table prints more digits than the state header, so its energy wins.
+    target.energyEv = num(row[7]);
+    target.energyCm = num(row[8]);
+    target.wavelengthNm = num(row[9]);
+    target.oscillatorStrength = num(row[10]);
+    target.transitionDipoleAu = { x: num(row[12]), y: num(row[13]), z: num(row[14]) };
+    target.transitionDipoleSquaredAu2 = num(row[11]);
+  }
+  if (states.length === 0) return null;
+
+  /**
+   * ORCA closes a TD-DFT job with a `CIS/TD-DFT TOTAL ENERGY` block and then
+   * prints *that* total as `FINAL SINGLE POINT ENERGY` — the ground state plus
+   * the root it followed, not the SCF energy. Reading it here keeps the
+   * decomposition (and the root) beside the states; the caller must not report
+   * it as the ground-state energy.
+   */
+  const cisBlock = /CIS\/TD-DFT TOTAL ENERGY([\s\S]{0,600})/.exec(source);
+  let totalEnergy = null;
+  if (cisBlock) {
+    const scf = new RegExp(String.raw`E\(SCF\)\s*=\s*(${NUMBER})\s*Eh`).exec(cisBlock[1]);
+    const excitation = new RegExp(String.raw`DE\(CIS\)\s*=\s*(${NUMBER})\s*Eh\s*\(Root\s+(\d+)\)`).exec(cisBlock[1]);
+    const total = new RegExp(String.raw`E\(tot\)\s*=\s*(${NUMBER})\s*Eh`).exec(cisBlock[1]);
+    if (total) {
+      totalEnergy = {
+        hartree: num(total[1]),
+        scfHartree: scf ? num(scf[1]) : null,
+        excitationHartree: excitation ? num(excitation[1]) : null,
+        root: excitation ? Number(excitation[2]) : null,
+      };
+    }
+  }
+
+  return {
+    totalEnergy,
+    count: states.length,
+    requested: null,
+    perIrrep: [],
+    states,
+    source: 'orca-tddft',
+    /** Read from a real ORCA 6.1.1 log, not from the manual's example. */
+    verified: true,
+    approximation,
+    declaredMultiplicity,
+    transitionDipoleCount: states.filter((state) => state.transitionDipoleAu !== null).length,
+  };
+}
+
+
+/* ── Raman and VCD (issue 288) ───────────────────────────────── */
+
+const RAMAN_HEADER = /^\s*Mode\s+freq \(cm\*\*-1\)\s+Activity\s+Depolarization/i;
+/** `   6:      1596.13      6.367325      0.524741` — note the colon. */
+const RAMAN_ROW = /^\s*(\d+):\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/;
+const RAMAN_TRAILER = /The first frequency considered to be a vibration is\s+(\d+)/i;
+const RAMAN_TOTAL = /The total number of vibrations considered is\s+(\d+)/i;
+
+const VCD_HEADER = /^VCD SPECTRUM CALCULATION\s*$/i;
+/** `    6   218.8         -0.21` — no colon, and the intensity may be negative. */
+const VCD_ROW = /^\s*(\d+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/;
+const VCD_UNIT = /\(1E-44\*esu\^2\*cm\^2\)/i;
+
+/**
+ * Read ORCA's Raman table (`%elprop Polar 1` on a `NumFreq` job).
+ *
+ * The rows are keyed by ORCA's **mode number**, which is 1-based over the
+ * 3N-6 (or 3N-5) vibrations ORCA reports; the table starts at the first
+ * vibrational mode, which ORCA states below the table. Absent section → null,
+ * so a plain frequency job is distinguishable from a Raman job with no rows.
+ */
+export function parseOrcaRaman(text) {
+  const source = String(text ?? '');
+  const lines = source.split(/\r?\n/);
+  const modes = [];
+  let started = false;
+  let misses = 0;
+  for (const line of lines) {
+    if (!started) {
+      if (RAMAN_HEADER.test(line)) started = true;
+      continue;
+    }
+    const row = RAMAN_ROW.exec(line);
+    if (row) {
+      misses = 0;
+      modes.push({
+        mode: Number(row[1]),
+        frequencyCm: num(row[2]),
+        ramanActivity: num(row[3]),
+        depolarization: num(row[4]),
+      });
+      continue;
+    }
+    if (modes.length > 0 && ++misses > 3) break;
+  }
+  if (modes.length === 0) return null;
+  return {
+    count: modes.length,
+    firstMode: num(RAMAN_TRAILER.exec(source)?.[1]),
+    declaredCount: num(RAMAN_TOTAL.exec(source)?.[1]),
+    modes,
+    source: 'orca-raman',
+    unit: 'A^4/amu',
+  };
+}
+
+/**
+ * Read ORCA's VCD table (`%freq DOVCD true` on a `Freq` job).
+ *
+ * The intensity is ORCA's rotational strength in `1E-44 esu^2 cm^2` and its
+ * **sign is the whole result** — an enantiomer flips it — so it is kept as
+ * printed. Absent section → null.
+ */
+export function parseOrcaVcd(text) {
+  const source = String(text ?? '');
+  const lines = source.split(/\r?\n/);
+  const modes = [];
+  let started = false;
+  let misses = 0;
+  for (const line of lines) {
+    if (!started) {
+      if (VCD_HEADER.test(line)) started = true;
+      continue;
+    }
+    const row = VCD_ROW.exec(line);
+    if (row) {
+      misses = 0;
+      modes.push({
+        mode: Number(row[1]),
+        frequencyCm: num(row[2]),
+        rotationalStrength: num(row[3]),
+      });
+      continue;
+    }
+    if (modes.length > 0 && ++misses > 3) break;
+  }
+  if (modes.length === 0) return null;
+  return {
+    count: modes.length,
+    modes,
+    source: 'orca-vcd',
+    unit: VCD_UNIT.test(source) ? '1E-44 esu^2 cm^2' : null,
+  };
+}

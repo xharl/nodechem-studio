@@ -1,0 +1,50 @@
+
+                                 *****************
+                                 * O   R   C   A *
+                                 *****************
+
+                                            #,                                       
+                                            ###                                      
+                                            ####                                     
+                #########################################################
+
+
+                         Program Version 6.1.1  -  RELEASE   -
+                                (GIT: $487d211c$)
+               *****************************************************
+               *                     SUCCESS                       *
+               *           SCF CONVERGED AFTER   9 CYCLES          *
+               *****************************************************
+
+
+Total Energy       :        -76.32108921965499 Eh           -2076.80242 eV
+
+Density matrix formation    ....       0.036 sec  (  1.3%)
+Total Energy calculation    ....       0.032 sec  (  1.2%)
+Population analysis         ....       0.018 sec  (  0.7%)
+-------------------------   --------------------
+FINAL SINGLE POINT ENERGY       -76.321089219655
+-------------------------   --------------------
+
+--------------
+RAMAN SPECTRUM  
+--------------
+
+ Mode    freq (cm**-1)   Activity   Depolarization
+-------------------------------------------------------------------
+   6:      1596.13      6.367325      0.524741
+   7:      3905.14     74.743698      0.166716
+   8:      4010.94     34.699100      0.749977
+
+The first frequency considered to be a vibration is 6
+The total number of vibrations considered is 3
+
+
+--------------------------
+THERMOCHEMISTRY AT 298.15K
+--------------------------
+Property calculations            ...        1.202 sec (=   0.020 min)   3.3 %
+SCF Gradient evaluation          ...        3.201 sec (=   0.053 min)   8.8 %
+Numerical frequency calculation  ...       20.316 sec (=   0.339 min)  55.7 %
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 0 hours 0 minutes 31 seconds 729 msec

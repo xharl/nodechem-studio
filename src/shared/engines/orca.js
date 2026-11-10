@@ -36,6 +36,9 @@ import { canonicalResult, TERMINATION } from './canonical.js';
 import {
   orcaEprBlock,
   orcaNmrBlock,
+  parseOrcaExcitedStates,
+  parseOrcaRaman,
+  parseOrcaVcd,
   parseOrcaGTensor,
   parseOrcaHyperfine,
   parseOrcaShieldings,
@@ -195,9 +198,19 @@ export const ORCA_JOB_KEYWORDS = Object.freeze({
   'Opt Freq': Object.freeze(['Opt', 'Freq']),
   Freq: Object.freeze(['Freq']),
   NMR: Object.freeze(['NMR']),
+  /**
+   * Issue 285. ORCA 6 does **not** accept `TDDFT` (or `TD-DFT`) on the simple
+   * input line: a real 6.1.1 run stops with `UNRECOGNIZED OR DUPLICATED
+   * KEYWORD(S) IN SIMPLE INPUT LINE — TDDFT`. The job is switched on by the
+   * `%tddft` block alone, so the keyword list is empty and the block carries it.
+   */
+  'TD-DFT': Object.freeze([]),
 });
 
 export const ORCA_UNSUPPORTED_JOB_TYPES = Object.freeze(['Opt=TS', 'IRC', 'Scan']);
+
+/** Methods this builder will not run a TD-DFT response calculation for. */
+const CORRELATED_NO_TDDFT = new Set(['MP2', 'CCSD(T)', 'DLPNO-CCSD(T)']);
 
 export const ORCA_UNSUPPORTED_JOB_REASONS = Object.freeze({
   'Opt=TS': 'a transition-state search needs an initial Hessian and mode specification written in a %geom block',
@@ -230,7 +243,6 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'transition-state search (OptTS)',
     'IRC',
     'relaxed PES scan',
-    'TD-DFT excited states',
     'population analysis (NBO/ESP)',
     'Gaussian-style checkpoint hand-off (%Chk)',
     'Gaussian PCM keyword (ORCA implements CPCM/SMD)',
@@ -247,6 +259,7 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'g-tensor when the log prints one',
     'isotropic spin-spin couplings J (no reduced K table)',
     'chemical shieldings (isotropic and anisotropy) from a ! NMR job',
+    'vertical excitation energies, oscillator strengths and transition dipoles (TD-DFT)',
   ]),
 });
 
@@ -263,12 +276,18 @@ export const ORCA_CAPABILITIES = Object.freeze({
 export function orcaSettingsOffenders(settings = {}) {
   const source = settings && typeof settings === 'object' ? settings : {};
   const text = (value) => (value === undefined || value === null ? '' : String(value).trim());
+  /**
+   * Issue 285: the excited-state fields are no longer Gaussian-only. On a
+   * TD-DFT block they are the job; on every other ORCA job they stay refused,
+   * because ORCA would run a plain single point and the record would claim a
+   * spectrum that was never computed.
+   */
+  const isTddft = oneLine(source.jobType) === 'TD-DFT';
   return [
     ['Custom route keywords', text(source.customKeywords)],
-    ['TD-DFT states', Number(source.tdStates) > 0 ? String(source.tdStates) : ''],
+    ['TD-DFT states', isTddft ? '' : Number(source.tdStates) > 0 ? String(source.tdStates) : ''],
     ['TD-DFT triplets', Number(source.tdTriplets) > 0 ? String(source.tdTriplets) : ''],
     ['Stable=Opt', source.stableOpt === true ? 'true' : ''],
-    ['Raman activities', source.raman === true ? 'true' : ''],
     ['Population analysis', text(source.population)],
   ]
     .filter(([, value]) => value !== '')
@@ -363,6 +382,36 @@ function gridKeywordFor(settings = {}) {
   if (requested === 'Fine') return 'DEFGRID2';
   if (requested === 'UltraFine') return 'DEFGRID3';
   throw new Error(`ORCA has no integration-grid keyword for "${requested}". Supported: Fine, UltraFine.`);
+}
+
+/**
+ * Issue 285: the `%tddft` block. ORCA 6 switches the job on with this block and
+ * refuses a `TDDFT` keyword on the route line, so the block is the whole
+ * request. `TDA false` asks for the full response rather than the
+ * Tamm-Dancoff approximation, which is what the Gaussian, Psi4 and PySCF
+ * blocks in this app compute; the banner in the log (`TD-DFT` vs `TD-DFT/TDA`)
+ * is what the parser uses to label an imported log that chose otherwise.
+ */
+function tddftBlockFor(settings = {}, jobType = 'SP') {
+  if (jobType !== 'TD-DFT') return null;
+  const requested = Number(settings.tdStates);
+  if (!Number.isInteger(requested) || requested < 1) {
+    throw new Error(
+      'TD-DFT needs a positive number of excited states: set "States" to at least 1 '
+      + `(received ${settings.tdStates === undefined ? 'nothing' : JSON.stringify(settings.tdStates)}).`,
+    );
+  }
+  if (requested > 100) {
+    throw new Error(
+      `TD-DFT asked for ${requested} states. ORCA converges a block of roots together and `
+      + 'the cost grows steeply; request 100 or fewer.',
+    );
+  }
+  return {
+    lines: ['%tddft', `  NRoots ${requested}`, '  TDA false', 'end'],
+    nroots: requested,
+    approximation: 'TD-DFT',
+  };
 }
 
 function optKeywordFor(settings = {}, jobType = 'SP') {
@@ -488,13 +537,57 @@ export function buildOrcaInput({
   const methodEntry = ORCA_METHODS.find((entry) => entry.id === method) || null;
   const basis = orcaBasisFor(settings);
   const jobType = oneLine(settings.jobType, 'SP');
-  const jobKeywords = ORCA_JOB_KEYWORDS[jobType];
+  const declaredKeywords = ORCA_JOB_KEYWORDS[jobType];
+  const jobKeywords = declaredKeywords ? [...declaredKeywords] : null;
   if (!jobKeywords) {
     const reason = ORCA_UNSUPPORTED_JOB_REASONS[jobType];
     throw new Error(
       `ORCA simple input cannot express the "${jobType}" job type`
       + `${reason ? `: ${reason}` : ''}. `
       + `Supported: ${Object.keys(ORCA_JOB_KEYWORDS).join(', ')}.`,
+    );
+  }
+
+  /**
+   * Issue 288. ORCA 6 has no Raman/VCD/ROA keyword on the route line: Raman is
+   * a numerical Hessian plus `%elprop Polar 1`, VCD is an analytic Hessian plus
+   * `%freq DOVCD true`, and the two are mutually exclusive because VCD cannot be
+   * computed with `NumFreq`. ROA has no ORCA implementation at all.
+   */
+  const wantsRaman = settings.raman === true;
+  const wantsVcd = settings.vcd === true;
+  if (settings.roa === true) {
+    throw new Error(
+      'ORCA 6 has no ROA (resonance Raman optical activity) implementation; this build '
+      + 'computes ROA in Gaussian only. Clear the setting, or run the block in Gaussian.',
+    );
+  }
+  const frequencyJob = jobType === 'Freq' || jobType === 'Opt Freq';
+  if ((wantsRaman || wantsVcd) && !frequencyJob) {
+    throw new Error(
+      `${wantsRaman ? 'Raman activities' : 'VCD'} need a frequency job: set the job type to `
+      + 'Freq or Opt Freq. A single point prints no modes, so the request would run and '
+      + 'return nothing.',
+    );
+  }
+  if (wantsRaman && wantsVcd) {
+    throw new Error(
+      'Raman and VCD cannot share one ORCA job: Raman needs a numerical Hessian (NumFreq) '
+      + 'and ORCA refuses VCD with NumFreq. Run two blocks.',
+    );
+  }
+  if (wantsRaman) {
+    // ORCA: analytic Hessians are not available for Raman intensities.
+    for (let i = 0; i < jobKeywords.length; i += 1) {
+      if (jobKeywords[i] === 'Freq') jobKeywords[i] = 'NumFreq';
+    }
+  }
+
+  if (jobType === 'TD-DFT' && CORRELATED_NO_TDDFT.has(method)) {
+    throw new Error(
+      `TD-DFT needs a Hartree-Fock or density-functional reference; "${method}" is a `
+      + 'correlated wavefunction method with no response theory in this builder. '
+      + 'Choose B3LYP, PBE0, M06-2X or HF, or run a single point at this level.',
     );
   }
 
@@ -573,6 +666,10 @@ export function buildOrcaInput({
   if (solvation && solvation.model === 'SMD') {
     blocks.push('%cpcm', '  smd true', `  smdsolvent "${solvation.solvent}"`, 'end');
   }
+  const tddft = tddftBlockFor(settings, jobType);
+  if (tddft) blocks.push(...tddft.lines);
+  if (wantsRaman) blocks.push('%elprop', '  Polar 1', 'end');
+  if (wantsVcd) blocks.push('%freq', '  DOVCD true', 'end');
 
   // `! NMR` needs a %EPRNMR nucleus list; without it ORCA shields nothing.
   // Written after the coordinates, as ORCA's NMR examples do.
@@ -606,6 +703,9 @@ export function buildOrcaInput({
     coulombBasis: dlpno?.coulombBasis || null,
     riApproximation: dlpno?.riApproximation || null,
     jobType,
+    tddft: tddft ? { nroots: tddft.nroots, approximation: tddft.approximation } : null,
+    raman: wantsRaman,
+    vcd: wantsVcd,
     charge,
     multiplicity,
     dispersion,
@@ -614,8 +714,15 @@ export function buildOrcaInput({
       : { model: null, solvent: null, label: null },
     resources,
     nmr: nmr ? { elements: nmr.elements, couplings: nmr.couplings } : null,
-    /** Human-readable simple-input line, for the inspector preview. */
-    route: keywords.join(' ').replace(/^!\s*/, ''),
+    /**
+     * Human-readable simple-input line, for the inspector preview. A TD-DFT job
+     * has no route keyword in ORCA 6, so its block is appended here — otherwise
+     * the preview would be indistinguishable from a plain single point.
+     */
+    route: [
+      keywords.join(' ').replace(/^!\s*/, ''),
+      tddft ? `%tddft NRoots ${tddft.nroots}` : '',
+    ].filter(Boolean).join(' '),
   };
 }
 
@@ -968,7 +1075,11 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
     ? 'QRRHO'
     : null;
 
-  const jobType = echo ? (/\bopt\b/i.test(echo) && /\bfreq\b/i.test(echo) ? 'Opt Freq'
+  // Issue 285: a TD-DFT job carries no route keyword in ORCA 6 — the `%tddft`
+  // block is the request — so the log's own banner is the only evidence that
+  // the run was a response calculation rather than a single point.
+  const ranResponse = /TD-DFT(?:\/TDA)?\s+EXCITED STATES/i.test(body);
+  const jobType = ranResponse ? 'TD-DFT' : echo ? (/\bopt\b/i.test(echo) && /\bfreq\b/i.test(echo) ? 'Opt Freq'
     : /\bopt\b/i.test(echo) ? 'Opt'
       : /\bfreq\b/i.test(echo) ? 'Freq'
         : /\bnmr\b/i.test(echo) ? 'NMR' : 'SP') : null;
@@ -985,6 +1096,13 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
   const spinSpin = parseOrcaSpinSpin(body);
   const shieldings = parseOrcaShieldings(body);
   const nmr = orcaNmrBlock({ couplings: spinSpin, shieldings, text: body });
+  // Issue 285: the excited-state block. Absent when the log carries no TD-DFT
+  // banner; the reader never turns "no section" into "zero states".
+  const excitedStates = parseOrcaExcitedStates(body);
+  // Issue 288: the Raman table (from `%elprop Polar 1` on a NumFreq job) and the
+  // VCD table (from `%freq DOVCD true` on a Freq job). Absent unless requested.
+  const ramanModes = parseOrcaRaman(body);
+  const vcdModes = parseOrcaVcd(body);
 
   const result = canonicalResult({
     engine: ORCA_ENGINE_ID,
@@ -1021,16 +1139,31 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
       scalingFactor,
       entropyTreatment,
     },
+    excitedStates,
+    raman: ramanModes ? ramanModes.modes : null,
+    vcd: vcdModes ? vcdModes.modes : null,
     thermochemistry: {
       freeEnergyHartree: freeEnergy,
       enthalpyHartree: enthalpy,
       zpeHartree: zeroPoint,
       entropyTreatment,
     },
-    finalEnergy: {
-      hartree: finalEnergy,
-      source: finalEnergy !== null ? 'final-single-point' : null,
-    },
+    /**
+     * Issue 285: a TD-DFT log ends with `FINAL SINGLE POINT ENERGY = E(SCF) +
+     * DE(CIS)`, the total of the root ORCA followed. Reporting that as the
+     * final energy would hand a downstream block an excited-state total labelled
+     * as a ground state, so the ground-state SCF energy is reported instead and
+     * the decomposition stays in `excitedStates.totalEnergy`.
+     */
+    finalEnergy: excitedStates?.totalEnergy
+      ? {
+        hartree: scfEnergy ?? excitedStates.totalEnergy.scfHartree,
+        source: 'scf-ground-state (TD-DFT total printed separately)',
+      }
+      : {
+        hartree: finalEnergy,
+        source: finalEnergy !== null ? 'final-single-point' : null,
+      },
     // Issue 227: absent unless the log printed a DLPNO header and triples.
     dlpno,
     // Issue 222: absent unless the log printed a hyperfine section or a

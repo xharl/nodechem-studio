@@ -349,14 +349,33 @@ In this app ORCA gives you:
   written explicitly so the route preview states the truncation level instead of leaving it to ORCA's
   default. The parsed header, PNO settings and triples correction are pinned to a real ORCA 6.1 log
   (`test/fixtures/real/orca-6.1-water-dlpno/`).
-- **Job types** `SP`, `Opt`, `Freq`, `Opt Freq` and `NMR`. `Opt Freq` is ORCA's compound job:
-  optimise, then compute the Hessian at the minimum.
+- **Job types** `SP`, `Opt`, `Freq`, `Opt Freq`, `NMR` and `TD-DFT`. `Opt Freq` is ORCA's compound
+  job: optimise, then compute the Hessian at the minimum.
 - **NMR**: `! NMR` plus a `%EPRNMR` block listing every NMR-active element in the geometry
   (H, C, N, O, F, P, Si) with `SHIFT`, and `SHIFT, SSALL` when **Spin-spin couplings** is on.
   The parser reads `CHEMICAL SHIELDING SUMMARY (ppm)` — isotropic and anisotropy per nucleus, with
   ORCA's 0-based nucleus numbers shifted to the app's 1-based atom order — and the
   `SUMMARY OF ISOTROPIC COUPLING CONSTANTS J (Hz)` matrix. Pinned to a real ORCA 6.1.1 methanol
   log (`test/fixtures/orca/methanol-nmr.out`): C 141.174, O 342.467 ppm, J(C,H) 179.858 Hz.
+- **Raman**: ORCA gives Raman intensities only from a **numerical** Hessian, so the builder writes
+  `NumFreq` (replacing `Freq`) plus `%elprop Polar 1 end`. The parser reads the `RAMAN SPECTRUM`
+  table: mode, frequency (cm⁻¹), activity (Å⁴/amu) and depolarization. Pinned to a real 6.1.1
+  water log: 1596.13 / 3905.14 / 4010.94 cm⁻¹ with activities 6.367 / 74.744 / 34.699.
+- **VCD**: `%freq DOVCD true end` on an analytic `Freq` job — ORCA refuses VCD with `NumFreq`, so
+  Raman and VCD cannot share one job and the builder refuses the combination by name. The parser
+  reads `VCD SPECTRUM CALCULATION` and keeps the **signed** rotational strength
+  (1E-44 esu² cm²); the sign is the enantiomer signal. Real 6.1.1 fixture on CHFClBr (9 modes).
+- **ROA** is refused by name: ORCA 6 has no ROA implementation. The Gaussian block computes it.
+- **TD-DFT**: ORCA 6 takes no `TDDFT` keyword on the route line — it stops with
+  `UNRECOGNIZED OR DUPLICATED KEYWORD(S) IN SIMPLE INPUT LINE` — so the builder writes a
+  `%tddft` block (`NRoots N`, `TDA false`) and leaves the route alone. The parser reads the
+  `TD-DFT EXCITED STATES` table (energies in au/eV/cm⁻¹, `<S**2>`, multiplicity, excitation
+  composition) and the electric-dipole absorption table (oscillator strength, transition dipole),
+  merging them by state. Only singlets are requested. The log ends with
+  `E(tot) = E(SCF) + DE(CIS)` and prints that total as `FINAL SINGLE POINT ENERGY`; the record
+  reports the SCF energy as the final energy and keeps the decomposition in
+  `excitedStates.totalEnergy`. Pinned to real 6.1.1 logs (`test/fixtures/orca/water-tddft.out`,
+  `ethene-tddft.out`).
 - **Dispersion** `D3(BJ)` → `D3BJ`, `D3` → `D3ZERO` and `D4` → `D4`.
 - **SCF** `Tight` → `TightSCF` / `VeryTight` → `VeryTightSCF`; **grid** `Fine` → `DEFGRID2` /
   `UltraFine` → `DEFGRID3`; optimisation convergence `Tight` → `TightOpt` /
