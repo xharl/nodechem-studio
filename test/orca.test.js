@@ -178,7 +178,8 @@ describe('ORCA input builder', () => {
     expect(() => build({ customKeywords: 'Geom=Check' })).toThrow(/Custom route keywords cannot be used on an ORCA block/);
     expect(() => build({ tdStates: 5 })).toThrow(/TD-DFT states cannot be used on an ORCA block/);
     expect(() => build({ stableOpt: true })).toThrow(/Stable=Opt cannot be used on an ORCA block/);
-    expect(() => build({ raman: true })).toThrow(/Raman activities cannot be used on an ORCA block/);
+    // Issue 288: Raman is supported now; only the job-type mismatch is refused.
+    expect(() => build({ raman: true })).toThrow(/Raman activities need a frequency job/);
     expect(() => build({ population: 'NBO' })).toThrow(/Population analysis cannot be used on an ORCA block/);
     expect(orcaSettingsOffenders({})).toEqual([]);
   });
@@ -206,6 +207,34 @@ describe('ORCA input builder', () => {
     expect(built.outputName).toBe('node-1.out');
   });
 });
+
+  it('writes a numerical Hessian and %elprop for Raman', () => {
+    const built = build({ jobType: 'Freq', raman: true });
+    // ORCA has no analytic Hessian for Raman intensities.
+    expect(built.inputText.split('\n')[0]).toBe('! B3LYP def2-SVP NumFreq');
+    expect(built.inputText).toContain('%elprop');
+    expect(built.inputText).toContain('  Polar 1');
+    expect(built.raman).toBe(true);
+    expect(built.vcd).toBe(false);
+  });
+
+  it('writes %freq DOVCD for VCD and keeps the analytic Freq keyword', () => {
+    const built = build({ jobType: 'Opt Freq', vcd: true });
+    // VCD cannot be computed with NumFreq, so the analytic keyword stands.
+    expect(built.inputText.split('\n')[0]).toBe('! B3LYP def2-SVP Opt Freq');
+    expect(built.inputText).toContain('%freq');
+    expect(built.inputText).toContain('  DOVCD true');
+    expect(built.vcd).toBe(true);
+    expect(built.raman).toBe(false);
+  });
+
+  it('refuses the Raman/VCD/ROA combinations ORCA cannot run', () => {
+    expect(() => build({ jobType: 'SP', raman: true })).toThrow(/frequency job/);
+    expect(() => build({ jobType: 'SP', vcd: true })).toThrow(/frequency job/);
+    expect(() => build({ jobType: 'Freq', raman: true, vcd: true }))
+      .toThrow(/cannot share one ORCA job/);
+    expect(() => build({ jobType: 'Freq', roa: true })).toThrow(/no ROA/);
+  });
 
   it('writes the %tddft block instead of a route keyword', () => {
     const built = build({ jobType: 'TD-DFT', tdStates: 5 });
@@ -426,6 +455,34 @@ describe('ORCA output parser — synthetic fixtures in documented format', () =>
     const imaginary = parseOrcaOutput(makeOrcaFixtureOutput({ imaginary: 1 }));
     expect(imaginary.frequencies.imaginaryCount).toBe(1);
     expect(imaginary.frequencies.minImaginary).toBeCloseTo(-83.22, 2);
+  });
+
+  it('reads the Raman table from a real ORCA 6.1.1 log', () => {
+    const parsed = parseOrcaOutput(fixture('water-raman.out'));
+    expect(parsed.raman).toHaveLength(3);
+    expect(parsed.raman[0]).toEqual({
+      mode: 6, frequencyCm: 1596.13, ramanActivity: 6.367325, depolarization: 0.524741,
+    });
+    // The two A1 modes carry most of the activity; the table keeps mode numbers.
+    expect(parsed.raman.map((mode) => mode.mode)).toEqual([6, 7, 8]);
+    expect(parsed.raman[1].ramanActivity).toBeCloseTo(74.743698, 6);
+    expect(parsed.vcd).toBeUndefined();
+  });
+
+  it('reads the VCD table and keeps the sign of each rotational strength', () => {
+    const parsed = parseOrcaOutput(fixture('chfclbr-vcd.out'));
+    expect(parsed.vcd).toHaveLength(9);
+    expect(parsed.vcd[0]).toEqual({ mode: 6, frequencyCm: 218.8, rotationalStrength: -0.21 });
+    // The sign is the enantiomer signal; a reader that normalised it would be wrong.
+    expect(parsed.vcd.map((mode) => Math.sign(mode.rotationalStrength)))
+      .toEqual(expect.arrayContaining([-1, 1]));
+    expect(parsed.raman).toBeUndefined();
+  });
+
+  it('carries no Raman or VCD table when the log has none', () => {
+    const parsed = parseOrcaOutput(fixture('water-opt-freq.out'));
+    expect(parsed.raman).toBeUndefined();
+    expect(parsed.vcd).toBeUndefined();
   });
 
   it('reads the excited states of a real ORCA 6.1.1 TD-DFT log', () => {

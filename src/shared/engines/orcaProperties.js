@@ -1102,3 +1102,99 @@ export function parseOrcaExcitedStates(text) {
     transitionDipoleCount: states.filter((state) => state.transitionDipoleAu !== null).length,
   };
 }
+
+
+/* ── Raman and VCD (issue 288) ───────────────────────────────── */
+
+const RAMAN_HEADER = /^\s*Mode\s+freq \(cm\*\*-1\)\s+Activity\s+Depolarization/i;
+/** `   6:      1596.13      6.367325      0.524741` — note the colon. */
+const RAMAN_ROW = /^\s*(\d+):\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/;
+const RAMAN_TRAILER = /The first frequency considered to be a vibration is\s+(\d+)/i;
+const RAMAN_TOTAL = /The total number of vibrations considered is\s+(\d+)/i;
+
+const VCD_HEADER = /^VCD SPECTRUM CALCULATION\s*$/i;
+/** `    6   218.8         -0.21` — no colon, and the intensity may be negative. */
+const VCD_ROW = /^\s*(\d+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$/;
+const VCD_UNIT = /\(1E-44\*esu\^2\*cm\^2\)/i;
+
+/**
+ * Read ORCA's Raman table (`%elprop Polar 1` on a `NumFreq` job).
+ *
+ * The rows are keyed by ORCA's **mode number**, which is 1-based over the
+ * 3N-6 (or 3N-5) vibrations ORCA reports; the table starts at the first
+ * vibrational mode, which ORCA states below the table. Absent section → null,
+ * so a plain frequency job is distinguishable from a Raman job with no rows.
+ */
+export function parseOrcaRaman(text) {
+  const source = String(text ?? '');
+  const lines = source.split(/\r?\n/);
+  const modes = [];
+  let started = false;
+  let misses = 0;
+  for (const line of lines) {
+    if (!started) {
+      if (RAMAN_HEADER.test(line)) started = true;
+      continue;
+    }
+    const row = RAMAN_ROW.exec(line);
+    if (row) {
+      misses = 0;
+      modes.push({
+        mode: Number(row[1]),
+        frequencyCm: num(row[2]),
+        ramanActivity: num(row[3]),
+        depolarization: num(row[4]),
+      });
+      continue;
+    }
+    if (modes.length > 0 && ++misses > 3) break;
+  }
+  if (modes.length === 0) return null;
+  return {
+    count: modes.length,
+    firstMode: num(RAMAN_TRAILER.exec(source)?.[1]),
+    declaredCount: num(RAMAN_TOTAL.exec(source)?.[1]),
+    modes,
+    source: 'orca-raman',
+    unit: 'A^4/amu',
+  };
+}
+
+/**
+ * Read ORCA's VCD table (`%freq DOVCD true` on a `Freq` job).
+ *
+ * The intensity is ORCA's rotational strength in `1E-44 esu^2 cm^2` and its
+ * **sign is the whole result** — an enantiomer flips it — so it is kept as
+ * printed. Absent section → null.
+ */
+export function parseOrcaVcd(text) {
+  const source = String(text ?? '');
+  const lines = source.split(/\r?\n/);
+  const modes = [];
+  let started = false;
+  let misses = 0;
+  for (const line of lines) {
+    if (!started) {
+      if (VCD_HEADER.test(line)) started = true;
+      continue;
+    }
+    const row = VCD_ROW.exec(line);
+    if (row) {
+      misses = 0;
+      modes.push({
+        mode: Number(row[1]),
+        frequencyCm: num(row[2]),
+        rotationalStrength: num(row[3]),
+      });
+      continue;
+    }
+    if (modes.length > 0 && ++misses > 3) break;
+  }
+  if (modes.length === 0) return null;
+  return {
+    count: modes.length,
+    modes,
+    source: 'orca-vcd',
+    unit: VCD_UNIT.test(source) ? '1E-44 esu^2 cm^2' : null,
+  };
+}

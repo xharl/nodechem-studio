@@ -37,6 +37,8 @@ import {
   orcaEprBlock,
   orcaNmrBlock,
   parseOrcaExcitedStates,
+  parseOrcaRaman,
+  parseOrcaVcd,
   parseOrcaGTensor,
   parseOrcaHyperfine,
   parseOrcaSpinSpin,
@@ -285,7 +287,6 @@ export function orcaSettingsOffenders(settings = {}) {
     ['TD-DFT states', isTddft ? '' : Number(source.tdStates) > 0 ? String(source.tdStates) : ''],
     ['TD-DFT triplets', Number(source.tdTriplets) > 0 ? String(source.tdTriplets) : ''],
     ['Stable=Opt', source.stableOpt === true ? 'true' : ''],
-    ['Raman activities', source.raman === true ? 'true' : ''],
     ['Population analysis', text(source.population)],
   ]
     .filter(([, value]) => value !== '')
@@ -509,7 +510,8 @@ export function buildOrcaInput({
   const methodEntry = ORCA_METHODS.find((entry) => entry.id === method) || null;
   const basis = orcaBasisFor(settings);
   const jobType = oneLine(settings.jobType, 'SP');
-  const jobKeywords = ORCA_JOB_KEYWORDS[jobType];
+  const declaredKeywords = ORCA_JOB_KEYWORDS[jobType];
+  const jobKeywords = declaredKeywords ? [...declaredKeywords] : null;
   if (!jobKeywords) {
     const reason = ORCA_UNSUPPORTED_JOB_REASONS[jobType];
     throw new Error(
@@ -517,6 +519,41 @@ export function buildOrcaInput({
       + `${reason ? `: ${reason}` : ''}. `
       + `Supported: ${Object.keys(ORCA_JOB_KEYWORDS).join(', ')}.`,
     );
+  }
+
+  /**
+   * Issue 288. ORCA 6 has no Raman/VCD/ROA keyword on the route line: Raman is
+   * a numerical Hessian plus `%elprop Polar 1`, VCD is an analytic Hessian plus
+   * `%freq DOVCD true`, and the two are mutually exclusive because VCD cannot be
+   * computed with `NumFreq`. ROA has no ORCA implementation at all.
+   */
+  const wantsRaman = settings.raman === true;
+  const wantsVcd = settings.vcd === true;
+  if (settings.roa === true) {
+    throw new Error(
+      'ORCA 6 has no ROA (resonance Raman optical activity) implementation; this build '
+      + 'computes ROA in Gaussian only. Clear the setting, or run the block in Gaussian.',
+    );
+  }
+  const frequencyJob = jobType === 'Freq' || jobType === 'Opt Freq';
+  if ((wantsRaman || wantsVcd) && !frequencyJob) {
+    throw new Error(
+      `${wantsRaman ? 'Raman activities' : 'VCD'} need a frequency job: set the job type to `
+      + 'Freq or Opt Freq. A single point prints no modes, so the request would run and '
+      + 'return nothing.',
+    );
+  }
+  if (wantsRaman && wantsVcd) {
+    throw new Error(
+      'Raman and VCD cannot share one ORCA job: Raman needs a numerical Hessian (NumFreq) '
+      + 'and ORCA refuses VCD with NumFreq. Run two blocks.',
+    );
+  }
+  if (wantsRaman) {
+    // ORCA: analytic Hessians are not available for Raman intensities.
+    for (let i = 0; i < jobKeywords.length; i += 1) {
+      if (jobKeywords[i] === 'Freq') jobKeywords[i] = 'NumFreq';
+    }
   }
 
   if (jobType === 'TD-DFT' && CORRELATED_NO_TDDFT.has(method)) {
@@ -604,6 +641,8 @@ export function buildOrcaInput({
   }
   const tddft = tddftBlockFor(settings, jobType);
   if (tddft) blocks.push(...tddft.lines);
+  if (wantsRaman) blocks.push('%elprop', '  Polar 1', 'end');
+  if (wantsVcd) blocks.push('%freq', '  DOVCD true', 'end');
 
   const inputText = [
     keywords.join(' '),
@@ -633,6 +672,8 @@ export function buildOrcaInput({
     riApproximation: dlpno?.riApproximation || null,
     jobType,
     tddft: tddft ? { nroots: tddft.nroots, approximation: tddft.approximation } : null,
+    raman: wantsRaman,
+    vcd: wantsVcd,
     charge,
     multiplicity,
     dispersion,
@@ -1023,6 +1064,10 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
   // Issue 285: the excited-state block. Absent when the log carries no TD-DFT
   // banner; the reader never turns "no section" into "zero states".
   const excitedStates = parseOrcaExcitedStates(body);
+  // Issue 288: the Raman table (from `%elprop Polar 1` on a NumFreq job) and the
+  // VCD table (from `%freq DOVCD true` on a Freq job). Absent unless requested.
+  const ramanModes = parseOrcaRaman(body);
+  const vcdModes = parseOrcaVcd(body);
 
   const result = canonicalResult({
     engine: ORCA_ENGINE_ID,
@@ -1060,6 +1105,8 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
       entropyTreatment,
     },
     excitedStates,
+    raman: ramanModes ? ramanModes.modes : null,
+    vcd: vcdModes ? vcdModes.modes : null,
     thermochemistry: {
       freeEnergyHartree: freeEnergy,
       enthalpyHartree: enthalpy,

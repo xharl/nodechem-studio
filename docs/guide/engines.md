@@ -351,6 +351,15 @@ In this app ORCA gives you:
   (`test/fixtures/real/orca-6.1-water-dlpno/`).
 - **Job types** `SP`, `Opt`, `Freq`, `Opt Freq` and `TD-DFT`. `Opt Freq` is ORCA's compound job:
   optimise, then compute the Hessian at the minimum.
+- **Raman**: ORCA gives Raman intensities only from a **numerical** Hessian, so the builder writes
+  `NumFreq` (replacing `Freq`) plus `%elprop Polar 1 end`. The parser reads the `RAMAN SPECTRUM`
+  table: mode, frequency (cm⁻¹), activity (Å⁴/amu) and depolarization. Pinned to a real 6.1.1
+  water log: 1596.13 / 3905.14 / 4010.94 cm⁻¹ with activities 6.367 / 74.744 / 34.699.
+- **VCD**: `%freq DOVCD true end` on an analytic `Freq` job — ORCA refuses VCD with `NumFreq`, so
+  Raman and VCD cannot share one job and the builder refuses the combination by name. The parser
+  reads `VCD SPECTRUM CALCULATION` and keeps the **signed** rotational strength
+  (1E-44 esu² cm²); the sign is the enantiomer signal. Real 6.1.1 fixture on CHFClBr (9 modes).
+- **ROA** is refused by name: ORCA 6 has no ROA implementation. The Gaussian block computes it.
 - **TD-DFT**: ORCA 6 takes no `TDDFT` keyword on the route line — it stops with
   `UNRECOGNIZED OR DUPLICATED KEYWORD(S) IN SIMPLE INPUT LINE` — so the builder writes a
   `%tddft` block (`NRoots N`, `TDA false`) and leaves the route alone. The parser reads the
