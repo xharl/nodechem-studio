@@ -651,9 +651,13 @@ PySCF is an open-source Python electronic-structure package. In this app it give
 - **Methods**: HF, B3LYP, PBE0, M06-2X, MP2, CCSD, CCSD(T) and CASSCF.
 - **Bases**: def2-SVP, def2-TZVP, cc-pVDZ, cc-pVTZ, 6-31G(d) and STO-3G. For a def2 basis, PySCF supplies the
   matching ECP automatically, so iodine and heavier elements build without a separate ECP field.
-- **Job types**: `SP`, `Opt`, `Freq` and `Opt Freq`. Optimisations use geomeTRIC (installed with
-  PySCF's `geometric` extra); frequencies use PySCF's analytic Hessian, and the app reports 3N−6
-  modes and the imaginary count.
+- **Job types**: `SP`, `Opt`, `Freq`, `Opt Freq` and `TD-DFT`. Optimisations use geomeTRIC
+  (installed with PySCF's `geometric` extra); frequencies use PySCF's analytic Hessian, and the app
+  reports 3N−6 modes and the imaginary count.
+- **Excited states**: `TD-DFT` runs `tdscf.TDDFT` (full TDDFT, not TDA) for N singlet roots on a
+  converged HF/DFT reference, and records each root's energy in Hartree and eV, wavelength,
+  oscillator strength and transition dipole. Triplet roots, solvated references and post-HF
+  references are refused by name.
 - **Implicit solvation**: PCM (IEF-PCM) and C-PCM in water, dichloromethane, THF, toluene,
   acetonitrile, methanol, ethanol, chloroform, acetone or DMSO. It is a single-point setting: the
   deck applies the continuum to the SCF, records the model and solvent, and refuses Opt, Freq and
@@ -670,8 +674,8 @@ JSON document. A title containing a quote, a semicolon or `import os` stays a st
 it is never interpolated as a statement. The deck prints a `nodechem.pyscf.v1` JSON record between
 `NCS-PYSCF-RESULT-BEGIN` and `NCS-PYSCF-RESULT-END` and writes the same record beside itself as
 `<task>.json`. The parser reads that record — energy, SCF convergence and cycle count, MO energies,
-geometry, frequencies and Hessian, thermochemistry, PySCF version, method, basis, density fitting,
-active space and solvation — and falls back to PySCF's printed text only for a log the user supplies;
+geometry, frequencies and Hessian, thermochemistry, excited states, PySCF version, method, basis,
+density fitting, active space and solvation — and falls back to PySCF's printed text only for a log the user supplies;
 the fallback says `recordSource: text-fallback` and carries no molecular record.
 
 **Which energy is reported.** The record has one `energy` field, set by the job: the SCF total for HF
@@ -681,8 +685,8 @@ CCSD and the CCSD(T) total for CCSD(T). The CCSD(T) perturbative correction is a
 
 What a PySCF block will **not** do in this build, each refused by name rather than dropped:
 
-- **TD-DFT and excited states** — no excited-state module is written. The `TD-DFT` job type, the
-  excited-state gates and the `tddft` setting are refused by name.
+- **Triplet excited states** — the deck writes singlet roots only; a `tdTriplets` request is
+  refused by name.
 - **Periodic calculations** — `pyscf.pbc` is not used; a `periodic` setting is refused.
 - **Relativistic and spin–orbit calculations** — no X2C, DKH or SOC Hamiltonian is written; the
   setting is refused.
@@ -736,7 +740,7 @@ parser does not recognise is reported as `unknown`, never guessed.
 | Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` | `! method basis` | `set reference` + method/basis | Recorded method/basis; CASSCF takes an active space |
 | Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload | Mapped to ORCA keywords; population refused | Basis used; unsupported fields refused by name | Basis used; dispersion, SCF, grid and population refused |
 | Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile | CPCM / SMD, Water…Acetonitrile | DDX PCM / COSMO, Water…DMSO | PCM / C-PCM, Water…DMSO |
-| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq |
+| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq, TD-DFT |
 | Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` | `TightOpt` / `VeryTightOpt`, `DEFGRID2/3` | Psi4 optimizer defaults | geomeTRIC defaults |
 | Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` | `%maxcore` (MB per core), `%pal nprocs` | `Threads (OMP_NUM_THREADS)` | `Threads (OMP_NUM_THREADS)` |
 | Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; queue transfer not implemented | None; geometry-only hand-off | None; geometry-only hand-off |

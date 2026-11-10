@@ -32,6 +32,27 @@ by `test/pyscf.test.js`.
 | `water-ccsd(t)-def2svp-sp.json` | CCSD(T)/def2-SVP | SP | −76.17693585504087 Eh |
 | `water-hf-def2svp-sp-failed-scf.json` | HF/def2-SVP | SP | **deliberately failed SCF**: the deck's `maxCycle` was set to 1; record is `ok: false`, `nIter: 1` |
 
+## TD-DFT records (2026-11-10)
+
+Written by the same deck after the TD-DFT branch was added to it.
+
+| Field | Value |
+| --- | --- |
+| Engine | PySCF 2.15.0 |
+| Interpreter | CPython 3.14.9 (venv, `pip install pyscf`) |
+| Command | `python <deck>.py` in a fresh directory |
+| Method | `tdscf.TDDFT` (full TDDFT, not TDA), **singlet roots only** |
+| Reference | B3LYP/def2-SVP, density fitting on, as the deck writes it |
+
+| File | Job | Notes |
+| --- | --- | --- |
+| `water-b3lyp-def2svp-tddft.json` | TD-DFT | 4 singlet roots, 7.598–11.894 eV; first root f = 0.0182 |
+| `ethene-b3lyp-def2svp-tddft.json` | TD-DFT | 5 singlet roots; π→π* at 8.140 eV, f = 0.3748, 152.32 nm |
+
+Every state carries `transitionDipoleAu` (atomic units) and a `wavelengthNm` derived from the
+printed energy, matching the shape `psi4.js` produces. The record's `energy` is the ground-state
+reference energy, as in Gaussian's TD records.
+
 ## Psi4 comparison
 
 The acceptance criterion compares water at HF/def2-SVP and B3LYP/def2-SVP with

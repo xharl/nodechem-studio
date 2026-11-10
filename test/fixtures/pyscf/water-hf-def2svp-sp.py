@@ -11,7 +11,7 @@ import os
 import sys
 import traceback
 
-_DATA = json.loads(base64.b64decode("eyJzY2hlbWEiOiJub2RlY2hlbS5weXNjZi52MSIsInRpdGxlIjoiaGYtc3AiLCJtZXRob2RLZXkiOiJoZiIsIm1ldGhvZExhYmVsIjoiSEYiLCJ4YyI6bnVsbCwiYmFzaXNLZXkiOiJkZWYyLXN2cCIsImJhc2lzTGFiZWwiOiJkZWYyLVNWUCIsImJhc2lzIjoiZGVmMi1zdnAiLCJlY3AiOmZhbHNlLCJjaGFyZ2UiOjAsIm11bHRpcGxpY2l0eSI6MSwicmVmZXJlbmNlIjoicmhmIiwiam9iVHlwZSI6IlNQIiwiYWN0aXZlU3BhY2UiOm51bGwsInNvbHZhdGlvbiI6bnVsbCwiZGVuc2l0eUZpdCI6dHJ1ZSwiZ3JpZExldmVsIjpudWxsLCJtYXhDeWNsZSI6MTAwLCJjb252VG9sIjoxZS0xMCwibWF4U3RlcHMiOjEwMCwiaGVzc2lhbk1heEF0b21zIjo2MCwiYXRvbXMiOlt7ImVsZW1lbnQiOiJPIiwieCI6MCwieSI6MCwieiI6MC4xMTczfSx7ImVsZW1lbnQiOiJIIiwieCI6MCwieSI6MC43NTcyLCJ6IjotMC40NjkyfSx7ImVsZW1lbnQiOiJIIiwieCI6MCwieSI6LTAuNzU3MiwieiI6LTAuNDY5Mn1dfQ==").decode("utf-8"))
+_DATA = json.loads(base64.b64decode("eyJzY2hlbWEiOiJub2RlY2hlbS5weXNjZi52MSIsInRpdGxlIjoiaGYtc3AiLCJtZXRob2RLZXkiOiJoZiIsIm1ldGhvZExhYmVsIjoiSEYiLCJ4YyI6bnVsbCwiYmFzaXNLZXkiOiJkZWYyLXN2cCIsImJhc2lzTGFiZWwiOiJkZWYyLVNWUCIsImJhc2lzIjoiZGVmMi1zdnAiLCJlY3AiOmZhbHNlLCJjaGFyZ2UiOjAsIm11bHRpcGxpY2l0eSI6MSwicmVmZXJlbmNlIjoicmhmIiwiam9iVHlwZSI6IlNQIiwiYWN0aXZlU3BhY2UiOm51bGwsInRkU3RhdGVzIjpudWxsLCJzb2x2YXRpb24iOm51bGwsImRlbnNpdHlGaXQiOnRydWUsImdyaWRMZXZlbCI6bnVsbCwibWF4Q3ljbGUiOjEwMCwiY29udlRvbCI6MWUtMTAsIm1heFN0ZXBzIjoxMDAsImhlc3NpYW5NYXhBdG9tcyI6NjAsImF0b21zIjpbeyJlbGVtZW50IjoiTyIsIngiOjAsInkiOjAsInoiOjAuMTE3M30seyJlbGVtZW50IjoiSCIsIngiOjAsInkiOjAuNzU3MiwieiI6LTAuNDY5Mn0seyJlbGVtZW50IjoiSCIsIngiOjAsInkiOi0wLjc1NzIsInoiOi0wLjQ2OTJ9XX0=").decode("utf-8"))
 _SCHEMA = "nodechem.pyscf.v1"
 _BEGIN = "NCS-PYSCF-RESULT-BEGIN"
 _END = "NCS-PYSCF-RESULT-END"
@@ -81,6 +81,7 @@ def _base_record(data):
         "hessianOmitted": False,
         "optimization": None,
         "thermochemistry": None,
+        "excitedStates": None,
         "pyscfVersion": None,
         "warnings": [],
         "error": None,
@@ -263,6 +264,66 @@ def main():
                 }
                 _emit(record)
                 return 1
+
+        if job_type == "TD-DFT":
+            # Singlet roots on a converged HF/DFT reference. Triplets, solvated
+            # references and post-HF references are refused by name in the
+            # builder; this branch never guesses one.
+            if method not in ("hf", "b3lyp", "pbe0", "m06-2x"):
+                raise RuntimeError(
+                    "PySCF TD-DFT in this build is limited to HF and DFT references; "
+                    "%s is refused by name" % data.get("methodLabel")
+                )
+            if data.get("solvation"):
+                raise RuntimeError(
+                    "A solvated PySCF reference is a single point in this build; "
+                    "TD-DFT on it is refused by name"
+                )
+            nstates = int(data.get("tdStates") or 0)
+            if nstates < 1:
+                raise RuntimeError(
+                    "TD-DFT needs at least one excited state; set States to a positive whole number"
+                )
+            stage = "tddft"
+            from pyscf import tdscf
+            td = tdscf.TDDFT(mf)
+            td.nstates = nstates
+            td.kernel()
+            energies = [float(value) for value in td.e]
+            dipoles = td.transition_dipole()
+            strengths = td.oscillator_strength()
+            states = []
+            for index, value in enumerate(energies):
+                if value <= 0.0:
+                    continue
+                vector = None
+                if index < len(dipoles):
+                    vector = [float(component) for component in dipoles[index]]
+                strength = None
+                if index < len(strengths):
+                    strength = float(strengths[index])
+                states.append({
+                    "index": len(states) + 1,
+                    "multiplicity": 1,
+                    "energyHartree": float(value),
+                    "energyEv": float(value) * 27.211386245988,
+                    "wavelengthNm": (1239.841984 / (float(value) * 27.211386245988)),
+                    "oscillatorStrength": strength,
+                    "transitionDipoleAu": vector,
+                })
+            if len(states) == 0:
+                raise RuntimeError("TD-DFT returned no positive excitation energy")
+            record["excitedStates"] = {
+                "requested": nstates,
+                "source": "pyscf-tddft",
+                "states": states,
+            }
+            record["energy"] = float(mf.e_tot)
+            record["converged"] = True
+            record["ok"] = True
+            record["solvation"] = None
+            _emit(record)
+            return 0
 
         if job_type in ("Opt", "Opt Freq"):
             if method not in ("hf", "b3lyp", "pbe0", "m06-2x"):

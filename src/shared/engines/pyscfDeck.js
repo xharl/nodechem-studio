@@ -17,7 +17,9 @@
  * Reviewed against PySCF 2.15.0. APIs used:
  *   gto.M, scf.RHF/UHF/ROHF, dft.RKS/UKS/ROKS, mp.MP2, cc.CCSD.ccsd_t(),
  *   mcscf.CASSCF, solvent.PCM (method IEF-PCM / C-PCM),
- *   geomopt.geometric_solver.kernel, mf.Hessian(), hessian.thermo.
+ *   geomopt.geometric_solver.kernel, mf.Hessian(), hessian.thermo,
+ *   tdscf.TDDFT (singlet roots), td.e, td.oscillator_strength(),
+ *   td.transition_dipole().
  */
 
 export const PYSCF_DATA_TOKEN = '__NCS_DATA_B64__';
@@ -105,6 +107,7 @@ def _base_record(data):
         "hessianOmitted": False,
         "optimization": None,
         "thermochemistry": None,
+        "excitedStates": None,
         "pyscfVersion": None,
         "warnings": [],
         "error": None,
@@ -287,6 +290,66 @@ def main():
                 }
                 _emit(record)
                 return 1
+
+        if job_type == "TD-DFT":
+            # Singlet roots on a converged HF/DFT reference. Triplets, solvated
+            # references and post-HF references are refused by name in the
+            # builder; this branch never guesses one.
+            if method not in ("hf", "b3lyp", "pbe0", "m06-2x"):
+                raise RuntimeError(
+                    "PySCF TD-DFT in this build is limited to HF and DFT references; "
+                    "%s is refused by name" % data.get("methodLabel")
+                )
+            if data.get("solvation"):
+                raise RuntimeError(
+                    "A solvated PySCF reference is a single point in this build; "
+                    "TD-DFT on it is refused by name"
+                )
+            nstates = int(data.get("tdStates") or 0)
+            if nstates < 1:
+                raise RuntimeError(
+                    "TD-DFT needs at least one excited state; set States to a positive whole number"
+                )
+            stage = "tddft"
+            from pyscf import tdscf
+            td = tdscf.TDDFT(mf)
+            td.nstates = nstates
+            td.kernel()
+            energies = [float(value) for value in td.e]
+            dipoles = td.transition_dipole()
+            strengths = td.oscillator_strength()
+            states = []
+            for index, value in enumerate(energies):
+                if value <= 0.0:
+                    continue
+                vector = None
+                if index < len(dipoles):
+                    vector = [float(component) for component in dipoles[index]]
+                strength = None
+                if index < len(strengths):
+                    strength = float(strengths[index])
+                states.append({
+                    "index": len(states) + 1,
+                    "multiplicity": 1,
+                    "energyHartree": float(value),
+                    "energyEv": float(value) * 27.211386245988,
+                    "wavelengthNm": (1239.841984 / (float(value) * 27.211386245988)),
+                    "oscillatorStrength": strength,
+                    "transitionDipoleAu": vector,
+                })
+            if len(states) == 0:
+                raise RuntimeError("TD-DFT returned no positive excitation energy")
+            record["excitedStates"] = {
+                "requested": nstates,
+                "source": "pyscf-tddft",
+                "states": states,
+            }
+            record["energy"] = float(mf.e_tot)
+            record["converged"] = True
+            record["ok"] = True
+            record["solvation"] = None
+            _emit(record)
+            return 0
 
         if job_type in ("Opt", "Opt Freq"):
             if method not in ("hf", "b3lyp", "pbe0", "m06-2x"):
