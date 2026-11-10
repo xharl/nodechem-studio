@@ -72,6 +72,7 @@ const ENERGY_SOURCE_LABELS = Object.freeze({
   'post-hf': 'post-HF correlation',
   scc: 'xTB SCC',
   'force-field': 'GFN-FF energy',
+  'oniom-extrapolated': 'ONIOM extrapolated',
 });
 
 const HARTREE_DIGITS = 10;
@@ -508,6 +509,65 @@ function energyCard(parsed, flags) {
     );
   }
   return card('Energy', kv(rows) + caveatHtml(flags, 'The final energy'));
+}
+
+/**
+ * ONIOM (issue 67). The extrapolated energy is the answer; the three gridpoint
+ * rows are its ingredients and must add up. The card prints the cuts Gaussian
+ * used as link atoms and the layer counts, and refuses to invent a topology.
+ */
+function oniomCard(parsed, flags) {
+  const oniom = isObject(parsed?.oniom) ? parsed.oniom : null;
+  const total = finite(oniom?.extrapolatedEnergyHartree);
+  if (!oniom || total === null) return '';
+  const layers = isObject(oniom.layers) ? oniom.layers : null;
+  const counts = isObject(oniom.layerCounts) ? oniom.layerCounts : null;
+  const cuts = Array.isArray(oniom.cuts) ? oniom.cuts : [];
+  const gridpoints = Array.isArray(oniom.gridpoints) ? oniom.gridpoints : [];
+  const role = (point) => `${point.method === 'high' ? 'High' : point.method === 'low' ? 'Low' : point.method} layer · ${point.system}`;
+  const gridRows = gridpoints.map((point) => '<tr>'
+    + `<td>${esc(point.index)}</td><td>${esc(role(point))}</td>`
+    + `<td>${esc(hartreeText(point.energyHartree) ?? MISSING_TEXT)}</td></tr>`).join('');
+  const cutRows = cuts.map((cut) => '<tr>'
+    + `<td>${esc(cut.linkElement)} ${esc(cut.linkAtom)}</td>`
+    + `<td>${esc(cut.highElement)} / ${esc(cut.lowElement)} ${esc(cut.lowAtom)}</td>`
+    + `<td>${esc(cut.factors.map((value) => value.toFixed(6)).join(' / '))}</td></tr>`).join('');
+  const reconstructed = finite(oniom.reconstructedEnergyHartree);
+  const difference = finite(oniom.reconstructionDifferenceHartree);
+  const arithmetic = oniom.reconstructionOk === true
+    ? '<span class="results-pass">adds up</span>'
+    : reconstructed === null
+      ? '<span class="results-missing">not enough gridpoints to check</span>'
+      : `<span class="results-fail">does not add up (difference ${esc(difference?.toExponential(3) ?? '?')} Eh)</span>`;
+  const layerText = layers
+    ? `High: <code>${esc(layers.high)}</code>${layers.medium ? ` · Medium: <code>${esc(layers.medium)}</code>` : ''} · Low: <code>${esc(layers.low)}</code>`
+    : 'The log does not echo an <code>ONIOM(high:low)</code> route.';
+  const countText = counts
+    ? `${esc(counts.total)} atoms: <strong>${esc(counts.high)}</strong> high-layer, <strong>${esc(counts.low)}</strong> low-layer`
+    : 'The log does not state the layer counts.';
+  const chargeRows = Object.entries(isObject(oniom.charges) ? oniom.charges : {})
+    .map(([key, value]) => `<tr><td>${esc(key)}</td><td>${esc(value.charge)}</td><td>${esc(value.multiplicity)}</td></tr>`)
+    .join('');
+  const dipole = isObject(oniom.dipole) ? oniom.dipole : null;
+  const dipoleText = dipole
+    ? `<p class="results-note">ONIOM dipole: ${esc(dipole.x.toFixed(4))}, ${esc(dipole.y.toFixed(4))}, `
+      + `${esc(dipole.z.toFixed(4))} D; total ${esc(dipole.total.toFixed(4))} D.</p>`
+    : '';
+  return card('ONIOM', '<p class="results-note" data-field="oniom-route">'
+    + `The reported total is the <strong>extrapolated ONIOM energy</strong>: ${esc(hartreeText(total))} `
+    + `(${esc((total * 627.5094740631).toFixed(4))} kcal mol⁻¹). ${layerText}. ${countText}.</p>`
+    + `<p class="results-note" data-field="oniom-arithmetic">Check: high(model) + low(real) − low(model) = `
+      + `${reconstructed === null ? MISSING_TEXT : esc(hartreeText(reconstructed))}; ${arithmetic}.</p>`
+    + `<table class="results-table" data-field="oniom-gridpoints"><thead><tr><th>Gridpoint</th><th>Layer / system</th><th>Energy</th></tr></thead><tbody>${gridRows}</tbody></table>`
+    + (cuts.length
+      ? `<table class="results-table" data-field="oniom-cuts"><thead><tr><th>Link atom</th><th>Cut bond (high / low)</th><th>Scale factors</th></tr></thead><tbody>${cutRows}</tbody></table>`
+      : '<p class="results-missing" data-field="oniom-cuts">No ONIOM cut lines were printed, so no link atoms are claimed.</p>')
+    + (chargeRows
+      ? `<table class="results-table" data-field="oniom-charges"><thead><tr><th>Layer / system</th><th>Charge</th><th>Multiplicity</th></tr></thead><tbody>${chargeRows}</tbody></table>`
+      : '')
+    + dipoleText
+    + `<p class="results-note">${esc(oniom.limitation || '')}</p>`
+    + caveatHtml(flags, 'These ONIOM energies'));
 }
 
 /** The six terms the workbench can switch on and off, in display order. */
@@ -2753,6 +2813,7 @@ export function resultsPanelHtml(record, options = {}) {
       programCard(parsed, flags),
       checkpointCard(record, parsed),
       energyCard(parsed, flags),
+      oniomCard(parsed, flags),
       spinSweepCard(options.spinSweep, options.spinStates),
       saptCard(parsed, flags),
       solvationCard(parsed, flags),

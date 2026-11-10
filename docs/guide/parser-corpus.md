@@ -34,6 +34,10 @@ not a claim that the parser handles the case:
 
 - `Opt=TS` and a `Freq` with exactly one imaginary mode (a true saddle).
 - `--Link1--` multi-step jobs produced by Gaussian itself.
+- **ONIOM result parsing is supported** — a Gaussian ONIOM log yields the extrapolated total,
+  its three gridpoint components, the layer counts, the link-atom cuts Gaussian printed and the
+  per-layer charge/multiplicity lines. The app does **not** build an ONIOM input or invent link
+  atoms (#67).
 - **ROA** (`Freq=ROA`) — the parser has a real Gaussian 09 E.01 formaldehyde log (the three
   geometries, invariants and `RC180`, all zero because the molecule is achiral). No public
   Gaussian 16 B.01+ ROA log was found, so that revision is not claimed. VCD, NMR shieldings and

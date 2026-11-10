@@ -259,9 +259,10 @@ docs/              documentation; the user guide lives in docs/guide/, decisions
   would be wrong to invent.
 - **Multiscale scope.** xTB **GFN-FF** is the supported force-field pre-optimisation path: run a
   GFN-FF xTB block, then pass its geometry to a Gaussian/ORCA/Psi4 block through the normal geometry
-  edge. **ONIOM/QM-MM, molecular dynamics, docking/QSAR and GAFF-style force-field
-  parameterisation are not implemented** (#67); the app does not write a route it cannot run and
-  parse.
+  edge. **ONIOM result parsing is supported** (extrapolated energy, gridpoint components, layer
+  counts and link-atom cuts), but **ONIOM/QM-MM input construction, molecular dynamics,
+  docking/QSAR and GAFF-style force-field parameterisation are not implemented** (#67); the app
+  does not write a route it cannot run and parse.
 - **Join policy `any` still waits for every input.**
 - **Validity thresholds are documented choices, not calibrated against real logs.** The parsers are
   checked against committed real output — Gaussian 09 and 16, ORCA 5.0 and 6.1, Psi4 1.11 — including

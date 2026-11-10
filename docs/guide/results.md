@@ -57,6 +57,11 @@ below the output shows what the parser actually reported:
 - the **gate list** with its verdict and evidence,
 - parsed values — termination, SCF energy and cycles, frequencies and the imaginary count, final
   energy, charges, thermochemistry when present,
+- an **ONIOM** card when the log is an ONIOM job: the extrapolated energy is the reported total,
+  beside the three gridpoint components, the layer counts, the cuts Gaussian used as link atoms
+  and the per-layer charge/multiplicity lines. The card checks
+  `high(model) + low(real) − low(model)` and says whether it adds up. The app does not build ONIOM
+  inputs; see [ONIOM](#oniom) below,
 - `not reported` for a field the parser did not find. It is never guessed, and an absent value is
   never rendered as zero,
 - a **FIXTURE** badge on a dry-run record and a **truncated** badge when the output exceeded the
@@ -215,6 +220,22 @@ more than those two inputs — standard-state declaration, conformer coverage, c
 bookkeeping, IRC endpoint identity — are not implemented. xTB records are judged by the subset that
 applies to them: charge/multiplicity, geometry sanity, imaginary modes and optimisation convergence.
 The Gaussian-route checks are reported as *not applicable* for xTB, never as a pass.
+
+## ONIOM
+
+A Gaussian ONIOM log is read as a multi-layer result, not as a single SCF energy. The reported
+total is `ONIOM: extrapolated energy`, and the parser also keeps the three gridpoint ingredients
+(low/model, high/model, low/real), the `NAtoms`/`NQM`/`NMMI` layer counts, every `ONIOM: Cut between`
+line (the link atom and its low-layer partner, with the scale factors) and the charge/multiplicity
+line for each layer calculation. The card verifies `E(high, model) + E(low, real) − E(low, model)`
+against the extrapolated energy; a mismatch is shown, not smoothed over.
+
+The fixture is a real Gaussian 09 C.01 ONIOM(B3LYP/6-31G(d):PM6) frequency log (74 atoms, 54
+high-layer, 20 low-layer, six cuts).
+
+This is a **reader**, not a builder. The app does not write an `ONIOM(...)` route and does not
+generate or validate link atoms; those remain open in #67. A log without ONIOM evidence yields no
+card rather than zeros.
 
 ## Thermochemistry
 

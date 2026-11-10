@@ -64,6 +64,11 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
   the app refuses to write a `GenECP` route that Gaussian would reject — and a light-element job is
   written byte-for-byte as before. LANL2DZ is offered as a name but carries no bundled data, so a
   heavy-element job with it is blocked with the same message until its blocks are added.
+- **ONIOM results** — a Gaussian ONIOM log is read: the extrapolated energy is the reported total,
+  and the card prints the three gridpoint components, the layer counts, the cuts Gaussian used as
+  link atoms and the per-layer charge/multiplicity lines. The reader checks
+  `high(model) + low(real) − low(model)` against the extrapolated energy. It does **not** build an
+  ONIOM input or invent link atoms; those are still open in #67.
 
 Gaussian is **licensed separately by Gaussian, Inc.**; the Apache 2.0 licence of this repository
 grants no rights to it. The app cannot run Gaussian without a licensed installation on the same

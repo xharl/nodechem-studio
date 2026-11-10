@@ -21,6 +21,7 @@ import { animatableModes, parseNormalModes } from './normalModes.js';
 import { attachRaman, parseRamanActivities } from './raman.js';
 import { attachVcd, parseVcdStrengths } from './vcd.js';
 import { attachRoa, parseRoaIntensities } from './roa.js';
+import { parseOniom } from './oniom.js';
 import { parseOrbitals } from './orbitals.js';
 import { parseRotatoryStrengths } from './ecd.js';
 import { parseExcitedStateOptimization } from './excitedStates.js';
@@ -1326,6 +1327,7 @@ function parseLink(section, index) {
         release: roaTable.release,
       }
       : null,
+    oniom: parseOniom(lines.join('\n')),
     frequencyBlocks,
     thermochemistry: parseThermochemistry(joined, lines),
     solvation: parseGaussianSolvation(routeText, lines, scf),
@@ -1543,6 +1545,12 @@ export const GAUSSIAN_PARSE_BRANCHES = Object.freeze([
     versions: ['09'],
     taken: (parsed) => parsed.roa !== null && Array.isArray(parsed.roa),
   },
+  {
+    id: 'oniom',
+    line: '`ONIOM: extrapolated energy =` with its three gridpoint energies',
+    versions: ['09'],
+    taken: (parsed) => parsed.oniom !== null && parsed.oniom?.extrapolatedEnergyHartree != null,
+  },
 ]);
 
 /**
@@ -1617,6 +1625,9 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   const counterpoise = counterpoiseLink ? counterpoiseLink.counterpoise : null;
   const solvationLink = reversed.find((link) => link.solvation) || null;
   const solvation = solvationLink ? solvationLink.solvation : null;
+  // ONIOM prints several SCF energies (each gridpoint and each layer). The
+  // reported answer is the extrapolated energy, never the last low-level SCF.
+  const oniom = parseOniom(text);
   let finalEnergy;
   if (composite?.expected) {
     const hartree = composite.found && Number.isFinite(composite.zeroPointEnergyHartree)
@@ -1632,6 +1643,8 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     // The route asked for a correction but the summary is missing; the SCF
     // energy of the complex is uncorrected, so it is not this job's answer.
     finalEnergy = { hartree: null, source: null };
+  } else if (oniom?.extrapolatedEnergyHartree != null) {
+    finalEnergy = { hartree: oniom.extrapolatedEnergyHartree, source: 'oniom-extrapolated' };
   } else {
     finalEnergy = finalEnergyLink
       ? { hartree: finalEnergyLink.finalEnergy.hartree, source: finalEnergyLink.finalEnergy.source }
@@ -1791,6 +1804,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
       : null,
     roa,
     roaMeta,
+    oniom,
     rotatoryStrengths,
     orbitals,
     thermochemistry,
