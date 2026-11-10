@@ -53,6 +53,7 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | NBO analysis | Pop=NBO | **Implemented** | parsed from the log |
 | Hirshfeld / MK charges | Pop | **Implemented** | `gaussianOutput.js` |
 | ESP / electrostatic potential | cube | **Implemented** | `esp.js`, `cubeFile.js` |
+| Multiwfn sidecar (QTAIM basins, ESP surface, ELF/LOL cubes, RDG–NCI) | wfn/wfx/fchk/molden/cube | **Implemented** — user-installed Multiwfn 3.8, not bundled | `multiwfn.js`, `multiwfnRunner.js` |
 | QTAIM / AIM analysis | wavefunction | **Implemented** | `qtaim.js` (from fchk/wfn) |
 | NCI analysis | — | **Implemented** | `nci.js` |
 | NMR shieldings | NMR=GIAO | **Implemented** | `nmr.js` |

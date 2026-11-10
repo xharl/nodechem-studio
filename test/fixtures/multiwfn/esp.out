@@ -1,0 +1,24 @@
+ Multiwfn -- A Multifunctional Wavefunction Analyzer
+ Version 3.8(dev), release date: 2024-May-17
+
+ Quantitative analysis of molecular surface
+ The electron density isovalue is  0.001000 a.u.
+ Calculation of surface vertices is finished.
+ ================= Summary of surface analysis =================
+ Volume:   120.00000 Bohr^3  (  17.78200 Angstrom^3)
+ Overall surface area:          90.00000 Bohr^2  (  25.20000 Angstrom^2)
+ Positive surface area:         40.00000 Bohr^2  (  11.20000 Angstrom^2)
+ Negative surface area:         50.00000 Bohr^2  (  14.00000 Angstrom^2)
+ Minimal value:  -45.00000 kcal/mol Maximal value:   32.00000 kcal/mol
+ Overall average value:   -0.00020233 a.u. (  -0.12695332 kcal/mol)
+ Positive average value:   0.01877643 a.u. (  11.78145591 kcal/mol)
+ Negative average value:  -0.01810626 a.u. ( -11.36095315 kcal/mol)
+ Overall variance (sigma^2_tot):  0.00041488 a.u.^2 ( 163.34165024 (kcal/mol)^2)
+ Positive variance:        0.00031106 a.u.^2 ( 122.46642148 (kcal/mol)^2)
+ Negative variance:        0.00010382 a.u.^2 (  40.87522876 (kcal/mol)^2)
+ Balance of charges (nu):   0.18762182
+ Product of sigma^2_tot and nu:   0.00007784 a.u.^2 (  30.6464578 (kcal/mol)^2)
+ Internal charge separation (Pi):   0.01842642 a.u. (  11.56183883 kcal/mol)
+ Molecular polarity index (MPI):   0.50154872 eV (     11.56600 kcal/mol)
+ Nonpolar surface area (|ESP| <= 10 kcal/mol):     12.60 Angstrom^2  ( 50.00 %)
+ Polar surface area (|ESP| > 10 kcal/mol):         12.60 Angstrom^2  ( 50.00 %)

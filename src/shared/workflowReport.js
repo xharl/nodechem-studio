@@ -873,8 +873,28 @@ export function buildWorkflowReport(queue, records = {}, {
       // probability table with no single value, and it is reported in its own
       // section below. Listing it here would print "derived quantity not
       // computed" over a comparison that did compute.
-      .filter((task) => task?.analyse && typeof task.analyse === 'object' && task.analyse.mode !== 'dp4')
+      // Issue #270: Multiwfn is an external sidecar result with its own section,
+      // not arithmetic over fields.
+      .filter((task) => task?.analyse && typeof task.analyse === 'object'
+        && task.analyse.mode !== 'dp4' && task.analyse.mode !== 'multiwfn')
       .map((task) => derivedModel(task)),
+    // Issue #270: one entry per Multiwfn analyse task, with the normalised
+    // result and the exact provenance the run recorded.
+    multiwfn: tasks.map((task) => {
+      if (task?.analyse?.mode !== 'multiwfn') return null;
+      const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+      return {
+        nodeId: text(task.nodeId),
+        title: text(record?.title) || text(task.title) || text(task.nodeId),
+        status: text(task.analyse.status) || (task.status === 'completed' ? 'computed' : 'refused'),
+        summary: text(task.analyse.summary),
+        notComputed: text(task.analyse.notComputed),
+        result: (record && typeof record.multiwfn === 'object' ? record.multiwfn : null)
+          || (typeof task.analyse.multiwfn === 'object' ? task.analyse.multiwfn : null),
+        provenance: (record && typeof record.provenance === 'object' ? record.provenance : null)
+          || (typeof task.analyse.provenance === 'object' ? task.analyse.provenance : null),
+      };
+    }).filter(Boolean),
     // One entry per conformer block whose branches were fanned out, with the
     // target-level ΔE the run energies actually support.
     conformers,
@@ -1527,6 +1547,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + reactionBlocks
     + uncertaintySectionHtml(model.uncertainty, sectionHeading)
     + derivedBlocks
+    + multiwfnSectionHtml(model.multiwfn, sectionHeading)
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
@@ -1535,7 +1556,107 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
 }
 
 /**
- * The NMR section (issue 147). Absolute isotropic shieldings, the reference the
+ * The Multiwfn section (issue #270). One subsection per analyse block: the
+ * normalised numbers, then the program's version, citation, exact menu script
+ * and input SHA-256. A refusal is printed in full, because a missing binary or
+ * density matrix is the outcome the reader needs to see.
+ */
+export function multiwfnSectionHtml(entries, headingTag = 'h2') {
+   if (!Array.isArray(entries) || entries.length === 0) return '';
+   const sections = entries.map((entry) => {
+     const result = entry.result && typeof entry.result === 'object' ? entry.result : null;
+     const provenance = entry.provenance && typeof entry.provenance === 'object' ? entry.provenance : {};
+     const heading = `<${headingTag}>Multiwfn analysis — ${escapeHtml(entry.title || entry.nodeId || MISSING)}</${headingTag}>`;
+     if (!result || result.ok === false || entry.status !== 'computed') {
+       return heading
+         + `<p class="warn" data-field="multiwfn-refusal">${escapeHtml(entry.notComputed || result?.reason || 'not computed')}</p>`
+         + `<p class="meta" data-field="multiwfn-provenance">Multiwfn ${escapeHtml(text(provenance.version) || MISSING)} · `
+         + `${escapeHtml(text(provenance.citation) || 'citation not recorded')} · input `
+         + `<code>${escapeHtml(text(provenance.input?.sha256) || MISSING)}</code></p>`;
+     }
+     let body = '';
+     if (result.analysis === 'qtaim') {
+       body += '<table data-field="multiwfn-basins"><thead><tr><th class="num">Basin</th><th class="num">Electrons</th>'
+         + '<th class="num">Volume / bohr³</th><th class="num">Vol(ρ&gt;0.001) / bohr³</th></tr></thead><tbody>'
+         + (result.basins?.rows || []).map((row) => '<tr data-field="multiwfn-basin">'
+           + `<td class="num">${escapeHtml(String(row.basin))}</td>`
+           + `<td class="num">${escapeHtml(value(row.electrons, 7))}</td>`
+           + `<td class="num">${escapeHtml(value(row.volumeBohr3, 3))}</td>`
+           + `<td class="num">${escapeHtml(value(row.volumeRhoCutoffBohr3, 3))}</td></tr>`).join('')
+         + '</tbody></table>';
+       body += '<table data-field="multiwfn-charges"><thead><tr><th>Atom</th><th class="num">Charge / e</th>'
+         + '<th class="num">Volume / bohr³</th></tr></thead><tbody>'
+         + (result.atomicCharges || []).map((row) => '<tr data-field="multiwfn-charge">'
+           + `<td>${escapeHtml(`${row.element}${row.basin}`)}</td>`
+           + `<td class="num">${escapeHtml(value(row.charge, 6))}</td>`
+           + `<td class="num">${escapeHtml(value(row.volumeBohr3, 3))}</td></tr>`).join('')
+         + '</tbody></table>';
+       body += '<table data-field="multiwfn-critical-points"><thead><tr><th class="num">CP</th><th>Type</th><th>Atoms</th>'
+         + '<th class="num">ρ / e·bohr⁻³</th><th class="num">∇²ρ / e·bohr⁻⁵</th><th class="num">ε</th></tr></thead><tbody>'
+         + (result.criticalPoints || []).map((row) => '<tr data-field="multiwfn-critical-point">'
+           + `<td class="num">${escapeHtml(String(row.index))}</td><td>${escapeHtml(row.type)}</td>`
+           + `<td>${escapeHtml(row.connectedAtoms || '—')}</td>`
+           + `<td class="num">${escapeHtml(value(row.density, 7))}</td>`
+           + `<td class="num">${escapeHtml(value(row.laplacian, 5))}</td>`
+           + `<td class="num">${escapeHtml(value(row.ellipticity, 5))}</td></tr>`).join('')
+         + '</tbody></table>';
+       const comparison = result.comparison;
+       if (comparison && typeof comparison === 'object') {
+         body += `<p class="meta" data-field="multiwfn-comparison-summary">Comparison with in-app qtaim.js: `
+           + `${escapeHtml(comparison.withinTolerance ? 'within the stated tolerances' : 'outside the stated tolerances')}`
+           + ` (${escapeHtml(String(comparison.matched ?? 0))} matching BCPs)`
+           + `${comparison.reason ? ` — ${escapeHtml(comparison.reason)}` : ''}. `
+           + 'Only critical-point properties are compared: the in-app code integrates no basins.</p>';
+         if (Array.isArray(comparison.differences) && comparison.differences.length) {
+           body += '<table data-field="multiwfn-comparison"><thead><tr><th>Bond</th><th>Property</th>'
+             + '<th class="num">Multiwfn</th><th class="num">in-app</th><th class="num">|Δ|</th></tr></thead><tbody>'
+             + comparison.differences.map((entry) => `<tr data-field="multiwfn-comparison-row">`
+               + `<td>${escapeHtml(entry.bond || '—')}</td><td>${escapeHtml(entry.property || '')}</td>`
+               + `<td class="num">${escapeHtml(value(entry.multiwfn, 6))}</td>`
+               + `<td class="num">${escapeHtml(value(entry.inApp, 6))}</td>`
+               + `<td class="num">${escapeHtml(value(entry.absolute, 6))}</td></tr>`).join('')
+             + '</tbody></table>';
+         }
+       }
+     } else if (result.analysis === 'esp') {
+       body += '<table data-field="multiwfn-esp"><tbody>'
+         + `<tr><th>Surface area</th><td class="num">${escapeHtml(value(result.surfaceArea?.overall?.angstrom, 4))} Å²</td></tr>`
+         + `<tr><th>Enclosed volume</th><td class="num">${escapeHtml(value(result.volume?.angstrom, 4))} Å³</td></tr>`
+         + `<tr><th>Overall ESP</th><td class="num">${escapeHtml(value(result.potential?.overall?.kcalMol, 4))} kcal/mol</td></tr>`
+         + `<tr><th>ESP range</th><td class="num">${escapeHtml(value(result.potential?.minimalKcalMol, 4))} to `
+         + `${escapeHtml(value(result.potential?.maximalKcalMol, 4))} kcal/mol</td></tr></tbody></table>`;
+     } else if (result.analysis === 'elf' || result.analysis === 'lol') {
+       body += '<table data-field="multiwfn-cube"><tbody>'
+         + `<tr><th>Cube</th><td>${escapeHtml(result.cube?.name || MISSING)}</td></tr>`
+         + `<tr><th>Grid</th><td>${escapeHtml((result.cube?.dims || []).join(' × '))}</td></tr>`
+         + `<tr><th>Range</th><td>${escapeHtml(value(result.summary?.min, 6))} to ${escapeHtml(value(result.summary?.max, 6))}</td></tr>`
+         + `<tr><th>Mean</th><td>${escapeHtml(value(result.summary?.mean, 6))}</td></tr></tbody></table>`;
+     } else if (result.analysis === 'rdg') {
+       body += '<table data-field="multiwfn-nci"><tbody>'
+         + `<tr><th>Points</th><td>${escapeHtml(String(result.points?.count ?? 0))}</td></tr>`
+         + `<tr><th>Attractive / repulsive</th><td>${escapeHtml(String(result.counts?.attractive ?? 0))} / `
+         + `${escapeHtml(String(result.counts?.repulsive ?? 0))}</td></tr>`
+         + `<tr><th>sign(λ₂)ρ range</th><td>${escapeHtml(value(result.range?.xMin, 5))} to ${escapeHtml(value(result.range?.xMax, 5))}</td></tr>`
+         + `<tr><th>RDG range</th><td>${escapeHtml(value(result.range?.sMin, 5))} to ${escapeHtml(value(result.range?.sMax, 5))}</td></tr></tbody></table>`;
+     }
+     return heading + body
+       + `<p class="meta" data-field="multiwfn-provenance">Multiwfn ${escapeHtml(text(provenance.version) || MISSING)}`
+       + ` · menu ${escapeHtml(text(provenance.menuVersion) || MISSING)} · input `
+       + `<code>${escapeHtml(text(provenance.input?.name) || MISSING)}</code> SHA-256 `
+       + `<code>${escapeHtml(text(provenance.input?.sha256) || MISSING)}</code>. `
+       + `${escapeHtml(text(provenance.citation) || 'citation not recorded')}. `
+       + 'User-installed; not bundled with NodeChem Studio.</p>'
+       + (text(provenance.menuScript)
+         ? `<details data-field="multiwfn-script"><summary>Exact menu script</summary>`
+           + `<pre>${escapeHtml(provenance.menuScript)}</pre></details>` : '');
+   }).join('');
+   return `<${headingTag}>Multiwfn analyses</${headingTag}>`
+     + '<p class="meta">These numbers were produced by a user-installed Multiwfn binary in batch mode '
+     + 'and normalised by NodeChem Studio. They are an external reference, not an in-app calculation.</p>'
+     + sections;
+ }
+
+ /** The NMR section (issue 147). Absolute isotropic shieldings, the reference the
  * run recorded with its provenance, and — for `NMR=(GIAO,SpinSpin)` — every
  * coupling pair the log printed. Units are in the headers, the nuclei are named
  * element + Gaussian's 1-based index, and a value the run did not record is

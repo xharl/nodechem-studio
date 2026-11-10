@@ -1,7 +1,7 @@
 /**
  * Issue 258 — the run console's companion-tool fields (CREST, Open Babel,
- * ML scorer, tautomer sidecar) seed themselves from the same detection answer
- * that already fills the engine field (issue 233).
+ * ML scorer, tautomer sidecar, Multiwfn) seed themselves from the same detection
+ * answer that already fills the engine field (issue 233).
  *
  * Kept pure so the rule is testable without a DOM: a stored path always wins;
  * otherwise a detected path becomes the value and is marked "detected"; a
@@ -9,7 +9,7 @@
  * PATH" instead of showing a foreign placeholder.
  */
 
-export const COMPANION_TOOL_IDS = Object.freeze(['crest', 'obabel', 'scorer', 'tautomer']);
+export const COMPANION_TOOL_IDS = Object.freeze(['crest', 'obabel', 'scorer', 'tautomer', 'multiwfn']);
 
 /** The absolute path main's PATH probe found for a companion, or ''. */
 export function detectedCompanionPath(status, toolId) {
@@ -53,6 +53,8 @@ export function companionPlaceholderFor(toolId, platform = 'linux') {
       return windows ? 'C:\\scorer\\aimnet2-scorer.exe' : '/opt/scorer/aimnet2-scorer';
     case 'tautomer':
       return windows ? 'C:\\Python\\python.exe' : '/usr/bin/python3';
+    case 'multiwfn':
+      return windows ? 'C:\\Multiwfn\\Multiwfn.exe' : '/opt/Multiwfn/Multiwfn';
     default:
       return '';
   }

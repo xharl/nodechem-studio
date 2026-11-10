@@ -31,11 +31,12 @@ const STATUS = {
     obabel: { ok: true, path: `${HOME}/obabel` },
     scorer: { ok: true, path: `${HOME}/aimnet2-scorer` },
     tautomer: { ok: true, path: `${HOME}/python3` },
+    multiwfn: { ok: true, path: `${HOME}/Multiwfn` },
   },
 };
 
 describe('companion tool seeding (#258)', () => {
-  it('seeds all four companion fields from one detection answer', () => {
+  it('seeds all five companion fields from one detection answer', () => {
     const seeds = companionSeeds({ status: STATUS });
     expect(Object.keys(seeds).sort()).toEqual([...COMPANION_TOOL_IDS].sort());
     expect(seeds).toEqual({
@@ -43,6 +44,8 @@ describe('companion tool seeding (#258)', () => {
       obabel: { value: `${HOME}/obabel`, detected: true, path: `${HOME}/obabel` },
       scorer: { value: `${HOME}/aimnet2-scorer`, detected: true, path: `${HOME}/aimnet2-scorer` },
       tautomer: { value: `${HOME}/python3`, detected: true, path: `${HOME}/python3` },
+      // Issue #270: Multiwfn is the fifth companion and is never bundled.
+      multiwfn: { value: `${HOME}/Multiwfn`, detected: true, path: `${HOME}/Multiwfn` },
     });
   });
 

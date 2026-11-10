@@ -2433,6 +2433,128 @@ function trajectoryCard(parsed, flags) {
     + '</section>';
 }
 
+/** A number with a fixed decimal count, or the missing marker. */
+function multiwfnNumber(value, digits = 4) {
+  return finite(value) === null ? missingHtml() : esc(numberText(value, digits));
+}
+
+/**
+ * The Multiwfn result card (issue 270).
+ *
+ * Every table is built from the normalised object the parser wrote, never from
+ * the raw transcript. The provenance block prints the version, the exact menu
+ * script and the input hash, because a number from an external program is only
+ * as traceable as those three.
+ */
+function multiwfnCard(analyse, multiwfn, provenance) {
+  const result = isObject(multiwfn) ? multiwfn : null;
+  const status = text(analyse?.status) || 'refused';
+  const refusal = text(analyse?.notComputed);
+  const rows = [];
+  if (result && result.ok !== false) {
+    if (result.analysis === 'qtaim') {
+      const basinRows = (result.basins?.rows || []).map((row) => `<tr data-role="multiwfn-basin">`
+        + `<td class="num">${esc(String(row.basin))}</td>`
+        + `<td class="num">${multiwfnNumber(row.electrons, 7)}</td>`
+        + `<td class="num">${multiwfnNumber(row.volumeBohr3, 3)}</td>`
+        + `<td class="num">${multiwfnNumber(row.volumeRhoCutoffBohr3, 3)}</td></tr>`).join('');
+      rows.push(card('QTAIM basins', '<table class="results-table" data-role="multiwfn-basins"><thead><tr>'
+        + '<th class="num">Basin</th><th class="num">Electrons</th><th class="num">Volume / bohr³</th>'
+        + '<th class="num">Vol(ρ&gt;0.001) / bohr³</th></tr></thead>'
+        + `<tbody>${basinRows}</tbody></table>`
+        + `<p class="results-note">Sum of basin populations: ${multiwfnNumber(result.basins?.sumElectrons, 7)} e; `
+        + `normalisation ${multiwfnNumber(result.basins?.normalisation, 8)}.</p>`));
+      const chargeRows = (result.atomicCharges || []).map((row) => `<tr data-role="multiwfn-charge">`
+        + `<td>${esc(row.element)}${esc(String(row.basin))}</td>`
+        + `<td class="num">${multiwfnNumber(row.charge, 6)}</td>`
+        + `<td class="num">${multiwfnNumber(row.volumeBohr3, 3)}</td></tr>`).join('');
+      rows.push(card('QTAIM atomic charges', chargeRows
+        ? '<table class="results-table" data-role="multiwfn-charges"><thead><tr><th>Atom</th>'
+          + '<th class="num">Charge / e</th><th class="num">Volume / bohr³</th></tr></thead>'
+          + `<tbody>${chargeRows}</tbody></table>`
+        : `<p class="results-note">${esc(MISSING_TEXT)}</p>`));
+      const cpRows = (result.criticalPoints || []).map((row) => `<tr data-role="multiwfn-critical-point">`
+        + `<td class="num">${esc(String(row.index))}</td><td>${esc(row.type)}</td>`
+        + `<td>${esc(row.connectedAtoms || '—')}</td>`
+        + `<td class="num">${multiwfnNumber(row.density, 7)}</td>`
+        + `<td class="num">${multiwfnNumber(row.laplacian, 5)}</td>`
+        + `<td class="num">${multiwfnNumber(row.ellipticity, 5)}</td></tr>`).join('');
+      rows.push(card('QTAIM critical points', cpRows
+        ? '<table class="results-table" data-role="multiwfn-cps"><thead><tr><th class="num">CP</th>'
+          + '<th>Type</th><th>Atoms</th><th class="num">ρ / e·bohr⁻³</th>'
+          + '<th class="num">∇²ρ / e·bohr⁻⁵</th><th class="num">ε</th></tr></thead>'
+          + `<tbody>${cpRows}</tbody></table>`
+        : `<p class="results-note">${esc(MISSING_TEXT)}</p>`));
+      const comparison = result.comparison;
+      if (isObject(comparison)) {
+        const diffRows = (comparison.differences || []).map((entry) => `<tr data-role="multiwfn-comparison">`
+          + `<td>${esc(entry.bond || '—')}</td><td>${esc(entry.property)}</td>`
+          + `<td class="num">${multiwfnNumber(entry.multiwfn, 6)}</td>`
+          + `<td class="num">${multiwfnNumber(entry.inApp, 6)}</td>`
+          + `<td class="num">${multiwfnNumber(entry.absolute, 6)}</td>`
+          + `<td class="num">${esc(entry.withinTolerance ? 'yes' : 'no')}</td></tr>`).join('');
+        rows.push(card('Comparison with in-app qtaim.js', `<p class="results-note" data-role="multiwfn-comparison-summary">`
+          + `${esc(comparison.withinTolerance ? 'Within the stated tolerances' : 'Outside the stated tolerances')}`
+          + ` · ${esc(String(comparison.matched ?? 0))} matching BCP(s)`
+          + `${comparison.reason ? ` · ${esc(comparison.reason)}` : ''}.</p>`
+          + (diffRows ? `<table class="results-table"><thead><tr><th>Bond</th><th>Property</th>`
+            + '<th class="num">Multiwfn</th><th class="num">in-app</th><th class="num">|Δ|</th>'
+            + `<th class="num">within</th></tr></thead><tbody>${diffRows}</tbody></table>` : '')
+          + '<p class="results-note">The in-app code integrates no basins: only critical-point '
+          + 'properties can be compared, and a mismatch is shown rather than averaged away.</p>'));
+      }
+    } else if (result.analysis === 'esp') {
+      rows.push(card('ESP surface statistics', kv([
+        fieldValue('Surface area', `${multiwfnNumber(result.surfaceArea?.overall?.angstrom, 4)} Å²`, 'multiwfn-area'),
+        fieldValue('Enclosed volume', `${multiwfnNumber(result.volume?.angstrom, 4)} Å³`, 'multiwfn-volume'),
+        fieldValue('Overall ESP', `${multiwfnNumber(result.potential?.overall?.kcalMol, 4)} kcal/mol`, 'multiwfn-mean'),
+        fieldValue('ESP range', `${multiwfnNumber(result.potential?.minimalKcalMol, 4)} to `
+          + `${multiwfnNumber(result.potential?.maximalKcalMol, 4)} kcal/mol`, 'multiwfn-range'),
+        fieldValue('Positive / negative area', `${multiwfnNumber(result.surfaceArea?.positive?.angstrom, 4)} / `
+          + `${multiwfnNumber(result.surfaceArea?.negative?.angstrom, 4)} Å²`, 'multiwfn-polar'),
+      ])));
+    } else if (result.analysis === 'elf' || result.analysis === 'lol') {
+      rows.push(card(`${result.analysis.toUpperCase()} cube`, kv([
+        fieldValue('Cube file', esc(result.cube?.name || MISSING_TEXT), 'multiwfn-cube'),
+        fieldValue('Grid', esc((result.cube?.dims || []).join(' × ')), 'multiwfn-grid'),
+        fieldValue('Range', `${multiwfnNumber(result.summary?.min, 6)} to ${multiwfnNumber(result.summary?.max, 6)}`, 'multiwfn-range'),
+        fieldValue('Mean', multiwfnNumber(result.summary?.mean, 6), 'multiwfn-mean'),
+      ])));
+    } else if (result.analysis === 'rdg') {
+      rows.push(card('RDG–NCI points', kv([
+        fieldValue('Points', `${esc(String(result.points?.count ?? 0))}${result.points?.truncated ? ' (truncated)' : ''}`, 'multiwfn-points'),
+        fieldValue('Attractive / repulsive', `${esc(String(result.counts?.attractive ?? 0))} / ${esc(String(result.counts?.repulsive ?? 0))}`, 'multiwfn-nci-counts'),
+        fieldValue('sign(λ₂)ρ range', `${multiwfnNumber(result.range?.xMin, 5)} to ${multiwfnNumber(result.range?.xMax, 5)}`, 'multiwfn-x-range'),
+        fieldValue('RDG range', `${multiwfnNumber(result.range?.sMin, 5)} to ${multiwfnNumber(result.range?.sMax, 5)}`, 'multiwfn-s-range'),
+      ]) + '<p class="results-note">The points are stored in the run record and in the queue result; '
+        + 'this card prints their range, not a second copy of every point.</p>'));
+    }
+  }
+  const version = text(provenance?.version) || text(analyse?.version) || MISSING_TEXT;
+  const inputName = text(provenance?.input?.name) || text(analyse?.input?.resolved) || MISSING_TEXT;
+  const inputHash = text(provenance?.input?.sha256) || text(analyse?.input?.sha256) || MISSING_TEXT;
+  const script = text(provenance?.menuScript) || text(analyse?.menuScript);
+  const citation = text(provenance?.citation) || text(analyse?.citation) || 'Tian Lu, Feiwu Chen, J. Comput. Chem. 2012, 33, 580-592.';
+  const provenanceRows = kv([
+    fieldValue('Program', `${esc(text(provenance?.program) || 'Multiwfn')} ${esc(version)}`, 'multiwfn-version'),
+    fieldValue('Menu version', esc(text(provenance?.menuVersion) || '3.8'), 'multiwfn-menu-version'),
+    fieldValue('Input', esc(inputName), 'multiwfn-input-name'),
+    fieldValue('Input SHA-256', `<code>${esc(inputHash)}</code>`, 'multiwfn-input-sha'),
+    fieldValue('Executable', esc(text(provenance?.executable) || MISSING_TEXT), 'multiwfn-executable'),
+    fieldValue('Citation', esc(citation), 'multiwfn-citation'),
+  ]);
+  return '<div class="results-stack">'
+    + '<p class="results-banner" data-role="multiwfn-banner">Multiwfn sidecar — a user-installed program, '
+    + 'not bundled with NodeChem Studio. Its numbers are an external reference, not an in-app calculation.</p>'
+    + (status === 'computed'
+      ? rows.join('')
+      : card('Multiwfn', `<p class="warn" data-role="multiwfn-refusal">${esc(refusal || 'not computed')}</p>`))
+    + card('Multiwfn provenance', provenanceRows
+      + (script ? `<details data-role="multiwfn-script"><summary>Exact menu script</summary>`
+        + `<pre class="code-block">${esc(script)}</pre></details>` : ''))
+    + '</div>';
+}
+
 /**
  * A computed record: a derived quantity, never a QM result (issue 175).
  *
@@ -2447,7 +2569,11 @@ function trajectoryCard(parsed, flags) {
  * replaced by the statement that the table is the result. A run that was
  * refused still prints its refusal, because the refusal *is* the outcome.
  */
-function analyseCard(analyse, dp4) {
+function analyseCard(analyse, dp4, multiwfn, provenance = null) {
+  // Issue 270: a Multiwfn block's record is not a derived quantity and has no
+  // expression; it gets its own card with the normalised analysis and the
+  // user-installed program's provenance.
+  if (analyse?.mode === 'multiwfn') return multiwfnCard(analyse, multiwfn, provenance || analyse?.provenance || null);
   const inputs = Array.isArray(analyse?.inputs) ? analyse.inputs : [];
   const value = finite(analyse?.value);
   const unit = text(analyse?.unit);
@@ -2491,7 +2617,7 @@ function analyseCard(analyse, dp4) {
 export function resultsPanelHtml(record, options = {}) {
   if (!isObject(record)) return emptyStateHtml();
   // Issue 175: an analyse block's record carries `analyse` and no `parsed` block.
-  if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4);
+  if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4, record.multiwfn, record.provenance);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
   const flags = flagsFor(record);
@@ -3072,6 +3198,8 @@ export function installResultsView({
       title: text(task.title) || text(task.nodeId),
       kind: 'derived',
       analyse: task.analyse,
+      ...(isObject(task.analyse.multiwfn) ? { multiwfn: task.analyse.multiwfn } : {}),
+      ...(isObject(task.analyse.provenance) ? { provenance: task.analyse.provenance } : {}),
       ...(isObject(task.dp4) ? { dp4: task.dp4 } : {}),
     };
   };

@@ -89,7 +89,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs build-input <project.ncs> --node <id> [--out <file>]
   ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
       [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>]
-      [--tautomer <path>] [--tautomer-script <path>]
+      [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>]
       [--timeout <seconds>] [--json]
   ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
   ncs validation <cases.json> [--out <file>] [--json]
@@ -333,6 +333,8 @@ async function commandRun({ positional, flags }) {
       // run needs the same two paths the run console takes.
       tautomerExecutable: flags.tautomer ? String(flags.tautomer) : '',
       tautomerScript: flags['tautomer-script'] ? String(flags['tautomer-script']) : '',
+      // Issue #270: the user-installed Multiwfn binary for analyse blocks.
+      multiwfnExecutable: flags.multiwfn ? String(flags.multiwfn) : '',
       scratchDir: '',
       maxParallel,
       // Issue 177: the project's per-task wall clock. Absent from the project

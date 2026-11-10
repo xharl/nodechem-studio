@@ -38,6 +38,7 @@ import {
   evaluateCompute,
 } from './compute.js';
 import { dp4RowsFromSources, dp4Summary, evaluateDp4 } from './dp4Workflow.js';
+import { multiwfnAnalysis } from './multiwfn.js';
 
 export const safeBase = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
 
@@ -1095,6 +1096,19 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       const context = computeContext(project, node, { results, edges: projectEdges });
       const { sources, declared, definition } = context;
       const ids = [];
+      if (context.mode === 'multiwfn') {
+        // Issue #270: one Multiwfn task per record of the block's scope, just as
+        // a calculation block runs once per record. The input is a whole run
+        // record or a path, so there is no value to preview at plan time.
+        for (const record of records) {
+          const recordId = record?.id || null;
+          const taskId = taskIdFor(node.id, recordId);
+          pushTask(multiwfnTask(node, { taskId, record, recordId, sources }), recordId);
+          ids.push(taskId);
+        }
+        idsFor.set(node.id, ids);
+        continue;
+      }
       if (context.mode === 'dp4') {
         const taskId = taskIdFor(node.id, null);
         const rows = dp4RowsFromSources(sources, context.rowsFor);
@@ -1559,6 +1573,53 @@ function calculationTask(project, node, {
 }
 
 /**
+ * One Multiwfn analyse task (issue #270).
+ *
+ * The block runs a user-installed Multiwfn binary, but the task is still an
+ * `analyse` task: it is not executable in the queue's engine sense, it spawns
+ * no engine, and it never writes a `parsed` calculation block. It carries the
+ * validated definition so the queue resolves the wavefunction, runs Multiwfn and
+ * writes a `run.json` of its own.
+ */
+function multiwfnTask(node, { taskId, record = null, recordId = null, sources = [] }) {
+  const definition = node.analyse && typeof node.analyse === 'object' && node.analyse.multiwfn
+    && typeof node.analyse.multiwfn === 'object'
+    ? node.analyse.multiwfn : null;
+  if (!definition) {
+    throw new ComputeError(`"${node.title}" is a Multiwfn block but carries no multiwfn definition.`);
+  }
+  const analysis = multiwfnAnalysis(definition.analysis);
+  const input = definition.input || {};
+  const inputLabel = input.path
+    ? input.path
+    : (input.nodeId ? `the run of ${input.nodeId}` : `run ${input.runId}`);
+  return {
+    nodeId: taskId,
+    type: 'analyse',
+    title: record ? `${node.title} — ${record.label || record.id}` : node.title,
+    kind: node.kind || 'Analyse',
+    executable: false,
+    analyse: {
+      mode: 'multiwfn',
+      multiwfn: { ...definition, input: { ...input } },
+      sources: [...sources],
+      summary: `Multiwfn ${analysis?.label || definition.analysis} · ${inputLabel}`,
+    },
+    ...(record ? {
+      record: {
+        id: record.id,
+        label: record.label || record.id,
+        charge: record.charge,
+        multiplicity: record.multiplicity,
+        ...(record.series ? { series: record.series } : {}),
+        ...(record.derivative ? { derivative: record.derivative } : {}),
+        ...(record.complex ? { complex: record.complex } : {}),
+      },
+    } : {}),
+  };
+}
+
+/**
  * Where an analyse block's numbers come from (issue 175).
  *
  * One resolver, used by the plan, the queue's planner path and the inspector's
@@ -1580,23 +1641,40 @@ export function computeContext(project, node, { results = null, edges = null } =
   // Issue 165: a DP4+ block reads whole run records (candidates), not named
   // fields, so it declares no inputs of its own — the upstream blocks are the
   // candidate sources. Every other mode is the arithmetic block unchanged.
-  const mode = definition.mode === 'dp4' ? 'dp4' : 'expression';
-  const declared = mode === 'dp4' ? [] : computeInputsOf(definition);
-  if (mode !== 'dp4' && declared.length === 0) {
+  // Issue #270: a Multiwfn block reads one wavefunction, not fields, so it also
+  // declares none; its `input.nodeId` must name a wired block.
+  const mode = definition.mode === 'dp4'
+    ? 'dp4'
+    : (definition.mode === 'multiwfn' ? 'multiwfn' : 'expression');
+  const declared = mode === 'dp4' || mode === 'multiwfn' ? [] : computeInputsOf(definition);
+  if (mode === 'expression' && declared.length === 0) {
     throw new ComputeError(`"${node.title}" declares no inputs; an analyse block reads at least one field`
       + ' from an upstream block.');
   }
-  if (sources.length === 0) {
+  if (mode !== 'multiwfn' && sources.length === 0) {
     throw new ComputeError(`"${node.title}" has no upstream block; wire the blocks whose results it ${mode === 'dp4' ? 'compares' : 'computes from'}.`);
   }
-  for (const input of declared) {
-    if (input.source && !sources.includes(input.source)) {
-      throw new ComputeError(`"${node.title}" input "${input.name}" reads "${input.source}", which is not wired`
-        + ` into this block (upstream: ${sources.join(', ')}).`);
+  if (mode === 'multiwfn') {
+    const multiwfnInput = definition.multiwfn && typeof definition.multiwfn === 'object'
+      ? definition.multiwfn.input || {} : {};
+    if (multiwfnInput.nodeId && !sources.includes(multiwfnInput.nodeId)) {
+      throw new ComputeError(`"${node.title}" reads the run of "${multiwfnInput.nodeId}", which is not wired`
+        + ` into this block (upstream: ${sources.length ? sources.join(', ') : 'none'}).`);
     }
-    if (!input.source && sources.length > 1) {
-      throw new ComputeError(`"${node.title}" input "${input.name}" names no upstream block, and`
-        + ` ${sources.length} feed this one (${sources.join(', ')}); name one.`);
+    if (!multiwfnInput.path && !multiwfnInput.runId && sources.length === 0) {
+      throw new ComputeError(`"${node.title}" reads an upstream run but no block is wired into it;`
+        + ' wire the block whose wavefunction it analyses, or name a project-relative path.');
+    }
+  } else {
+    for (const input of declared) {
+      if (input.source && !sources.includes(input.source)) {
+        throw new ComputeError(`"${node.title}" input "${input.name}" reads "${input.source}", which is not wired`
+          + ` into this block (upstream: ${sources.join(', ')}).`);
+      }
+      if (!input.source && sources.length > 1) {
+        throw new ComputeError(`"${node.title}" input "${input.name}" names no upstream block, and`
+          + ` ${sources.length} feed this one (${sources.join(', ')}); name one.`);
+      }
     }
   }
   const lookup = (key) => {
