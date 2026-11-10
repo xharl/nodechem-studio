@@ -1,0 +1,65 @@
+{
+  "activeSpace": {
+    "electrons": 2,
+    "orbitals": 2
+  },
+  "basis": "STO-3G",
+  "basisKey": "sto-3g",
+  "charge": 0,
+  "converged": true,
+  "correlationEnergy": null,
+  "densityFit": true,
+  "ecp": false,
+  "energy": -38.373426122243615,
+  "engine": "pyscf",
+  "error": null,
+  "frequencies": null,
+  "geometry": [
+    {
+      "element": "C",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    {
+      "element": "H",
+      "x": 0.5749999999999998,
+      "y": 0.7429999999999999,
+      "z": 0.0
+    },
+    {
+      "element": "H",
+      "x": 0.5749999999999998,
+      "y": -0.7429999999999999,
+      "z": 0.0
+    }
+  ],
+  "hessian": null,
+  "hessianOmitted": false,
+  "jobType": "SP",
+  "method": "CASSCF",
+  "methodKey": "casscf",
+  "moEnergies": [
+    -10.982820964837083,
+    -0.8687095226676353,
+    -0.5508307420216223,
+    -0.10828768561504934,
+    -0.015862721812906613,
+    0.8809943405079814,
+    0.9651198868185618
+  ],
+  "multiplicity": 1,
+  "nBasis": 7,
+  "nIter": 6,
+  "ok": true,
+  "optimization": null,
+  "pyscfVersion": "2.15.0",
+  "reference": "rhf",
+  "scfConverged": true,
+  "scfEnergy": -38.306867441423854,
+  "schema": "nodechem.pyscf.v1",
+  "solvation": null,
+  "thermochemistry": null,
+  "triplesCorrection": null,
+  "warnings": []
+}

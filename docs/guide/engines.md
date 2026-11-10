@@ -638,7 +638,7 @@ the parser does not recognise is reported as `unknown`, never guessed.
 PySCF is an open-source Python electronic-structure package. In this app it gives you:
 
 - **Methods**: HF, B3LYP, PBE0, M06-2X, MP2, CCSD, CCSD(T) and CASSCF.
-- **Bases**: def2-SVP, def2-TZVP, cc-pVDZ, cc-pVTZ and 6-31G(d). For a def2 basis, PySCF supplies the
+- **Bases**: def2-SVP, def2-TZVP, cc-pVDZ, cc-pVTZ, 6-31G(d) and STO-3G. For a def2 basis, PySCF supplies the
   matching ECP automatically, so iodine and heavier elements build without a separate ECP field.
 - **Job types**: `SP`, `Opt`, `Freq` and `Opt Freq`. Optimisations use geomeTRIC (installed with
   PySCF's `geometric` extra); frequencies use PySCF's analytic Hessian, and the app reports 3N−6

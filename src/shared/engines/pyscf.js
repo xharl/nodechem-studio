@@ -104,6 +104,10 @@ export const PYSCF_BASES = Object.freeze([
   { key: 'cc-pvdz', label: 'cc-pVDZ', pyscf: 'cc-pvdz', ecp: false },
   { key: 'cc-pvtz', label: 'cc-pVTZ', pyscf: 'cc-pvtz', ecp: false },
   { key: '6-31g(d)', label: '6-31G(d)', pyscf: '6-31g*', ecp: false },
+  // Minimal basis used by the CASSCF acceptance case. It is not a production
+  // geometry basis, but it is a legitimate PySCF basis and the issue's
+  // CASSCF/STO-3G reference cannot be reproduced without it.
+  { key: 'sto-3g', label: 'STO-3G', pyscf: 'sto-3g', ecp: false },
 ]);
 
 export const PYSCF_JOB_TYPES = Object.freeze(['SP', 'Opt', 'Freq', 'Opt Freq']);

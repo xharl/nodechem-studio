@@ -25,6 +25,8 @@ by `test/pyscf.test.js`.
 | `water-b3lyp-def2svp-optfreq.json` | B3LYP/def2-SVP | Opt Freq | 4 steps, 3 modes, 0 imaginary |
 | `water-hf-631gd-pcm.json` | HF/6-31G(d) | SP | PCM (IEF-PCM), water, −76.02057700618754 Eh |
 | `water-casscf-44-631gd-sp.json` | CASSCF(4,4)/6-31G(d) | SP | −76.0609899309991 Eh, reference RHF |
+| `water-ch2-singlet-casscf-sto3g-sp.json` | CASSCF(2,2)/STO-3G | SP | CH₂ singlet, −38.373426122243615 Eh |
+| `water-ch2-triplet-casscf-sto3g-sp.json` | CASSCF(2,2)/STO-3G | SP | CH₂ triplet, −38.37342612226331 Eh |
 | `water-mp2-def2svp-sp.json` | MP2/def2-SVP | SP | −76.16452758439047 Eh |
 | `water-ccsd-def2svp-sp.json` | CCSD/def2-SVP | SP | −76.17392974901573 Eh |
 | `water-ccsd(t)-def2svp-sp.json` | CCSD(T)/def2-SVP | SP | −76.17693585504087 Eh |
@@ -52,6 +54,10 @@ not against themselves:
 - CASSCF: `mcscf.CASSCF(scf.RHF(mol).density_fit(), 4, 4)` gives
   −76.06098993030339 Eh, 7 × 10⁻¹⁰ Eh from the deck's record (the CASSCF
   convergence tolerance, not a different calculation).
+- CASSCF/STO-3G CH₂: independent `mcscf.CASSCF((RHF or ROHF).density_fit(), 2, 2)`
+  gives −38.37342612224362 Eh (singlet) and −38.373426122263325 Eh (triplet),
+  matching the two records to 1 × 10⁻¹³ Eh. The two spin states are degenerate
+  in this minimal active space, which is the expected CAS(2,2)/STO-3G result.
 
 No PySCF binary or Python environment is committed or bundled. The deck is a
 fixed program; `pip install pyscf` (or `conda install -c conda-forge pyscf`) is

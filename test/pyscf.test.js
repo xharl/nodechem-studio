@@ -68,7 +68,7 @@ describe('PySCF engine registry', () => {
       'HF', 'B3LYP', 'PBE0', 'M06-2X', 'MP2', 'CCSD', 'CCSD(T)', 'CASSCF',
     ]);
     expect(PYSCF_BASES.map((entry) => entry.label)).toEqual([
-      'def2-SVP', 'def2-TZVP', 'cc-pVDZ', 'cc-pVTZ', '6-31G(d)',
+      'def2-SVP', 'def2-TZVP', 'cc-pVDZ', 'cc-pVTZ', '6-31G(d)', 'STO-3G',
     ]);
     expect(PYSCF_BASES.find((entry) => entry.key === '6-31g(d)').pyscf).toBe('6-31g*');
     expect(PYSCF_SOLVATION_MODELS).toEqual(['PCM', 'C-PCM']);
@@ -290,6 +290,23 @@ describe('PySCF record parser — recorded fixtures', () => {
     expect(parsed.finalEnergy.hartree).toBeCloseTo(-76.0609899309991, 12);
     // Independent direct PySCF CASSCF(4,4) run, same geometry and reference.
     expect(Math.abs(parsed.finalEnergy.hartree - (-76.06098993030339))).toBeLessThan(1e-8);
+  });
+
+  it('reports the CH2 CASSCF/STO-3G singlet and triplet records', () => {
+    const singlet = parsePyscfOutput(fixture('water-ch2-singlet-casscf-sto3g-sp.json'));
+    expect(singlet.extras.basis).toBe('STO-3G');
+    expect(singlet.extras.activeSpace).toEqual({ electrons: 2, orbitals: 2 });
+    expect(singlet.extras.multiplicity).toBe(1);
+    expect(singlet.finalEnergy.hartree).toBeCloseTo(-38.373426122243615, 12);
+    // Independent direct PySCF CASSCF(2,2)/STO-3G run, same density-fitted RHF.
+    expect(Math.abs(singlet.finalEnergy.hartree - (-38.37342612224362))).toBeLessThan(1e-10);
+
+    const triplet = parsePyscfOutput(fixture('water-ch2-triplet-casscf-sto3g-sp.json'));
+    expect(triplet.extras.activeSpace).toEqual({ electrons: 2, orbitals: 2 });
+    expect(triplet.extras.multiplicity).toBe(3);
+    expect(triplet.extras.reference).toBe('rohf');
+    expect(triplet.finalEnergy.hartree).toBeCloseTo(-38.37342612226331, 12);
+    expect(Math.abs(triplet.finalEnergy.hartree - (-38.373426122263325))).toBeLessThan(1e-10);
   });
 
   it('reports the PCM model, solvent and solvated energy', () => {
