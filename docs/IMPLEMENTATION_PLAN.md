@@ -1,8 +1,11 @@
 # NodeChem Studio — implementation plan
 
-Status: **0.5.1 release candidate — tag pending.** 0.5.0 remains the published build until `v0.5.1`
-is tagged. Sections 1–3 and 5 describe the architecture and the original phase plan; §4 is
-the v0.1 baseline kept for history, §4b lists what landed since, and §6b is what remains.
+Status: **0.5.1 released 2026-11-10 — tag `v0.5.1` → `b5f50a0`.** The installers, combined
+`SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations are on the
+[GitHub release](https://github.com/xharl/nodechem-studio/releases/tag/v0.5.1); both package
+workflows passed on the tag and the downloaded assets verify against `SHA256SUMS`. Sections 1–3 and 5
+describe the architecture and the original phase plan; §4 is the v0.1 baseline kept for history, §4b
+lists what landed since, and §6b is what remains.
 **GN-001 is partly satisfied**: on 2026-11-08 a peer run executed 25 cases written by this builder on
 a licensed Gaussian 16 Rev A.03 (Windows) and its logs are committed as
 `test/fixtures/real/g16-a03-*`; what is still unproven is the app's own run console driving a job end
@@ -313,7 +316,7 @@ Linux/macOS Gaussian job has been run.
 | Block taxonomy, schemaVersion 3 (ADR 0001) | **Implemented** — rename, `input(ensemble)`, `prepare`, the optional scorer role and the declarative block-contract table; v2 and older refused | `docs/adr/0001-block-taxonomy.md`, `src/shared/projectSchema.js` |
 | Tag and publish 0.4.0 | **Done** 2026-11-08 — tag `v0.4.0` → `36d36e1`, published as the current release (GitHub leaves the Latest badge on the newest non-prerelease, so 0.3.0 and 0.4.0 are not flagged prerelease) with both installers, `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations, both verified with `gh attestation verify` | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
 | Tag and publish 0.5.0 | **Done** 2026-11-09 — tag `v0.5.0` → `21eb3a9`, published as the latest release with both installers, combined `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations; both package workflows passed on the tag and the downloaded assets verify against `SHA256SUMS`. Breaking: `schemaVersion: 3`; 0.4.0 projects are refused, not migrated | `.github/workflows/*-package.yml`, `CHANGELOG.md`, `docs/releases/0.5.0.md` |
-| Tag and publish 0.5.1 | **Pending** — release candidate prepared at 0.5.1; package workflows must pass on `main` before `v0.5.1` is tagged. No format change: `schemaVersion` stays 3, 0.5.0 projects open unchanged | `.github/workflows/*-package.yml`, `CHANGELOG.md`, `docs/releases/0.5.1.md` |
+| Tag and publish 0.5.1 | **Done** 2026-11-10 — tag `v0.5.1` → `b5f50a0`, published as the latest release with both installers, combined `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations; both package workflows passed on the tag and the downloaded assets verify against `SHA256SUMS`. No format change: `schemaVersion` stays 3, 0.5.0 projects open unchanged. The first tag run failed the Windows suite on four POSIX-only test files; they were made portable (#311) and the tag moved to that merge | `.github/workflows/*-package.yml`, `CHANGELOG.md`, `docs/releases/0.5.1.md` |
 | GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
 | Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |
 | Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |
