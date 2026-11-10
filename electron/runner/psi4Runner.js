@@ -32,7 +32,16 @@ export class Psi4Runner {
   }
 
   /** Threads come from the environment: Psi4 reads OMP_NUM_THREADS. */
-  static environmentFor({ threads = null, env = process.env } = {}) {
+  /**
+   * The child environment.
+   *
+   * Issue 283: Psi4 writes its integrals and DIIS files to `PSI_SCRATCH`, which
+   * defaults to `/tmp`. On a laptop that is a tmpfs of a few GiB, so an 84-atom
+   * job at def2-TZVP fills it and dies with `WRITE failed … No space left on
+   * device` — a message that never names the real cause. The queue already
+   * creates a per-run scratch folder; this is what points Psi4 at it.
+   */
+  static environmentFor({ threads = null, scratchDir = null, env = process.env } = {}) {
     const configured = String(threads ?? '').trim();
     let count = null;
     if (configured !== '') {
@@ -44,9 +53,12 @@ export class Psi4Runner {
     }
     const inherited = Number(env.OMP_NUM_THREADS);
     const resolved = count ?? (Number.isInteger(inherited) && inherited > 0 ? inherited : null);
-    return resolved
+    const scratch = String(scratchDir ?? '').trim();
+    const out = resolved
       ? { ...env, OMP_NUM_THREADS: String(resolved), MKL_NUM_THREADS: String(resolved) }
       : { ...env };
+    if (scratch !== '') out.PSI_SCRATCH = scratch;
+    return out;
   }
 
   async run({
@@ -57,6 +69,7 @@ export class Psi4Runner {
     onOutput = () => {},
     timeoutMs = 0,
     threads = null,
+    scratchDir = null,
   }) {
     const args = Array.isArray(argv) && argv.length > 0 ? argv.map(String) : [];
     if (args.length === 0) throw new Error('Psi4 run has no arguments.');
@@ -69,7 +82,7 @@ export class Psi4Runner {
 
     const child = spawn(executable, args, treeSpawnOptions({
       cwd,
-      env: Psi4Runner.environmentFor({ threads }),
+      env: Psi4Runner.environmentFor({ threads, scratchDir }),
       // Psi4 starts helper processes; the group is what a signal has to reach
       // (issue 177).
       stdio: ['ignore', 'pipe', 'pipe'],

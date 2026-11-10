@@ -23,6 +23,44 @@ const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_INPUT_BYTES = 2 * 1024 * 1024;
+/**
+ * Refuse a launch whose scratch filesystem cannot hold an SCF (issue 283).
+ * One GiB is the floor, not an estimate of the job: it is small enough that no
+ * healthy disk trips it and large enough that a tmpfs already full of a crashed
+ * job is caught before an hour of CPU is spent.
+ */
+const MIN_SCRATCH_FREE_BYTES = 1024 ** 3;
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return 'an unknown amount of space';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${scaled >= 100 || unit === 0 ? Math.round(scaled) : scaled.toFixed(1)} ${units[unit]}`;
+}
+
+/**
+ * Free space where the engine will write its scratch.
+ *
+ * `null` when the platform cannot answer: a missing measurement must never be
+ * turned into a pass or a refusal, so the caller records what it got.
+ */
+async function scratchSpaceFor(dir) {
+  try {
+    const stat = await fsp.statfs(dir);
+    const freeBytes = Number(stat.bavail) * Number(stat.bsize);
+    const totalBytes = Number(stat.blocks) * Number(stat.bsize);
+    if (!Number.isFinite(freeBytes) || !Number.isFinite(totalBytes)) return { dir, freeBytes: null, totalBytes: null };
+    return { dir, freeBytes, totalBytes };
+  } catch {
+    return { dir, freeBytes: null, totalBytes: null };
+  }
+}
 
 function runIdFor(date = new Date()) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-');
@@ -135,6 +173,19 @@ export class RunManager {
     const scratchDir = String(payload.scratchDir || '').trim() || path.join(runDir, 'scratch');
     await fsp.mkdir(runDir, { recursive: true });
     await fsp.mkdir(scratchDir, { recursive: true });
+    // Issue 283: a run that dies of ENOSPC wastes an hour of SCF and blames the
+    // engine. Check the space before the launch, and keep what was measured so
+    // the record can say it afterwards.
+    const scratch = await scratchSpaceFor(scratchDir);
+    if (!dryRun && scratch.freeBytes !== null && scratch.freeBytes < MIN_SCRATCH_FREE_BYTES) {
+      throw new Error(
+        `Scratch directory ${scratchDir} has ${formatBytes(scratch.freeBytes)} free, below the `
+        + `${formatBytes(MIN_SCRATCH_FREE_BYTES)} minimum: ${engine.label} writes its integrals and `
+        + 'DIIS files there and would stop with "No space left on device". Point the scratch '
+        + 'directory at a filesystem with more room (Settings → Tools → Scratch directory), or '
+        + 'free space on this one.',
+      );
+    }
     const inputPath = path.join(runDir, payload.inputName);
     await fsp.writeFile(inputPath, inputText, 'utf8');
     // Hash the bytes that are actually on disk, not the string we asked for.
@@ -233,7 +284,7 @@ export class RunManager {
       throw error;
     }
 
-    const context = { runId, runDir, payload, engine, scratchDir, cancelled: false, timedOut: false, finished: false, timer: null, runner: null, outputMeta: null, lastOutputLine: null, timeoutSeconds };
+    const context = { runId, runDir, payload, engine, scratchDir, scratch, outputText: '', cancelled: false, timedOut: false, finished: false, timer: null, runner: null, outputMeta: null, lastOutputLine: null, timeoutSeconds };
     this.active.set(runId, context);
     this.emit({ type: 'started', runId, runDir, record });
     this.execute(context).catch(async (error) => {
@@ -420,6 +471,9 @@ export class RunManager {
           ...runArgs,
           argv,
           threads: payload.settings?.psi4Threads ?? payload.settings?.nproc ?? null,
+          // Issue 283: Psi4 scratch defaults to /tmp; the run's own folder is
+          // what the queue already created for it.
+          scratchDir,
         });
       } else if (engine.id === 'pyscf') {
         invocation = runner.run({
@@ -443,6 +497,12 @@ export class RunManager {
       }
       result = awaited.result;
       outputText = result.outputText;
+      context.outputText = outputText || '';
+      // Issue 283: a full scratch filesystem is the real cause of "WRITE failed"
+      // and of the "no termination marker" that used to stand in for it. Detect
+      // it before any of the classify/throw paths below can lose the text.
+      context.scratchExhausted = /No space left on device|ENOSPC|WRITE failed/i
+        .test(`${outputText || ''}\n${result.stderr || ''}`);
       exitCode = result.exitCode;
       context.engineId = engine.id;
       if (engine.id === 'xtb') context.parametersPath = result.parameterPath ?? null;
@@ -647,6 +707,11 @@ export class RunManager {
     const runPath = path.join(runDir, 'run.json');
     const record = JSON.parse(await fsp.readFile(runPath, 'utf8'));
     const output = outputProvenance || null;
+    // Issue 283: decided here as well as in `execute`, because an engine can
+    // settle through more than one path and the text is the evidence either way.
+    const scratchExhausted = Boolean(context.scratchExhausted)
+      || /No space left on device|ENOSPC|WRITE failed/i
+        .test(`${context.outputText || ''}\n${context.stderr || ''}`);
     const finished = {
       ...record,
       ...(context.outputMeta || {}),
@@ -689,7 +754,30 @@ export class RunManager {
       cache: context.cache ?? null,
       parsed,
       gates,
-      error,
+      // Issue 283: the scratch the engine wrote to, and — when it died for want
+      // of space — that fact, instead of leaving "no termination marker" to
+      // stand for a full filesystem.
+      // Only a run that actually ran out keeps the numbers: `scratchDir` is
+      // already on every record, and a free-space reading on a healthy run is
+      // volatile noise that would make two identical runs differ byte for byte.
+      ...(context.scratch && scratchExhausted
+        ? {
+          scratch: {
+            dir: context.scratch.dir,
+            freeAtExit: await scratchSpaceFor(context.scratch.dir).then((space) => space.freeBytes),
+            freeAtLaunch: context.scratch.freeBytes,
+            totalBytes: context.scratch.totalBytes,
+            exhausted: true,
+            note: `${context.scratch.dir} ran out of space: the engine could not write its scratch `
+              + 'files (No space left on device). Free space on that filesystem, or point the '
+              + 'scratch directory somewhere with room.',
+          },
+        }
+        : {}),
+      error: scratchExhausted && context.scratch
+        ? [error, `${context.scratch.dir} ran out of space (No space left on device).`]
+          .filter(Boolean).join(' — ')
+        : error,
       // Issue 177: present only on a run stopped by its wall-clock limit, so a
       // run that finished inside it is byte-identical to a run from before.
       ...(timeout ? { timeout } : {}),
