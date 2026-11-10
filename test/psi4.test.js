@@ -31,7 +31,7 @@ const molecule = (overrides = {}) => ({ charge: 0, multiplicity: 1, coords: WATE
 
 describe('Psi4 engine registry', () => {
   it('registers Psi4 as a fourth engine', () => {
-    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb', 'orca', 'psi4']);
+    expect(Object.keys(ENGINES)).toEqual(['gaussian', 'xtb', 'orca', 'psi4', 'pyscf']);
     expect(isEngineId('psi4')).toBe(true);
     expect(engineFor('psi4').id).toBe('psi4');
     expect(engineOrDefault('psi4').label).toBe('Psi4');

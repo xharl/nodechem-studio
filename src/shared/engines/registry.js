@@ -1,7 +1,7 @@
 /**
  * Engine plugin seam.
  *
- * `./index.js` is the static registry: four engines compiled into the app. This
+ * `./index.js` is the static registry: five engines compiled into the app. This
  * module is the additive seam beside it. A host — a test, a CLI runner, a
  * future user-directory loader — hands `registerEngine(spec)` a descriptor and
  * receives a frozen engine object shaped like the static ones, without editing
@@ -243,7 +243,7 @@ export function pluginEngineIds() {
   return [...pluginEngines.keys()];
 }
 
-/** Every id a host can resolve: the static four first, then plugins. */
+/** Every id a host can resolve: the static engines first, then plugins. */
 export function engineIds() {
   return [...ENGINE_IDS, ...pluginEngines.keys()];
 }

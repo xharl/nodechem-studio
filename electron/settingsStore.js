@@ -25,6 +25,7 @@ const ENGINE_LABELS = Object.freeze({
   xtb: 'xTB',
   psi4: 'Psi4',
   orca: 'ORCA',
+  pyscf: 'PySCF',
 });
 
 const TOOL_LABELS = Object.freeze({

@@ -1,6 +1,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { replaceInputGeometry } from '../../src/shared/gaussianInput.js';
+import { replacePyscfGeometry } from '../../src/shared/engines/pyscf.js';
 
 /**
  * The parsed final geometry a finished run leaves in its `run.json`.
@@ -31,4 +32,18 @@ export async function readUpstreamGeometry(runDir) {
 /** Rewrite a Gaussian input's geometry with a handed-over structure. */
 export function applyGeometryHandoff(inputText, atoms) {
   return replaceInputGeometry(inputText, atoms);
+}
+
+/**
+ * Rewrite the geometry of the deck an engine actually wrote.
+ *
+ * Gaussian's route file has a molecule specification; a PySCF deck carries its
+ * molecule as base64 JSON, so it needs its own rewrite. An engine with no
+ * rewrite (Psi4 today) is left unchanged — the caller still records the
+ * hand-off, and the deck keeps the geometry it was planned with.
+ */
+export function applyGeometryHandoffFor(engineId, inputText, atoms) {
+  if (engineId === 'pyscf') return replacePyscfGeometry(inputText, atoms);
+  if (engineId === 'gaussian') return applyGeometryHandoff(inputText, atoms);
+  return inputText;
 }

@@ -115,6 +115,13 @@ import {
 } from './settingsView.js';
 import { ORCA_BASES, ORCA_METHODS, ORCA_PNO_THRESHOLDS, buildOrcaInput } from '../shared/engines/orca.js';
 import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../shared/engines/psi4.js';
+import {
+  PYSCF_BASES,
+  PYSCF_JOB_TYPES,
+  PYSCF_METHODS,
+  PYSCF_SOLVATION_MODELS,
+  buildPyscfInput,
+} from '../shared/engines/pyscf.js';
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import { prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
 import * as shared from '../shared/workflowTasks.js';
@@ -610,6 +617,12 @@ function nodeDetail(node) {
       const method = PSI4_METHODS.find((item) => item.key === String(node.settings.method || '').toLowerCase());
       const basis = PSI4_BASES.find((item) => item.key === String(node.settings.basis || '').toLowerCase());
       return `${method ? method.label : 'Psi4'}${basis ? `/${basis.label}` : ''} ${node.settings.jobType}`;
+    }
+    if (engine.id === 'pyscf') {
+      const method = PYSCF_METHODS.find((item) => item.key === String(node.settings.method || '').toLowerCase());
+      const basis = PYSCF_BASES.find((item) => item.key === String(node.settings.basis || '').toLowerCase());
+      const space = String(node.settings.pyscfActiveSpace || '').trim();
+      return `${method ? method.label : 'PySCF'}${basis ? `/${basis.label}` : ''}${space ? ` CAS(${space})` : ''} ${node.settings.jobType}`;
     }
     return routeShort(node.settings);
   }
@@ -2108,6 +2121,7 @@ function calcInspector(node) {
   const isXtb = engine.id === 'xtb';
   const isPsi4 = engine.id === 'psi4';
   const isOrca = engine.id === 'orca';
+  const isPyscf = engine.id === 'pyscf';
   const gaussianResources = showsGaussianResources(engine.id);
   const checkpointHandoff = showsCheckpointHandoff(engine.id);
   const routeLines = [];
@@ -2153,6 +2167,21 @@ function calcInspector(node) {
     } catch (error) {
       routeLines.push(`Psi4 cannot run this block: ${esc(error.message)}`);
     }
+  } else if (engine.id === 'pyscf') {
+    // PySCF's deck is a Python program. The preview shows the route the deck
+    // declares, not the script: the data line is base64 and unreadable.
+    try {
+      const built = buildPyscfInput({
+        title: node.title,
+        settings: s,
+        molecule: moleculeForNode(node),
+        inputName: `${node.id}.gjf`,
+      });
+      routeLines.push(esc(built.route));
+      routeLines.push(`python3 ${esc(built.inputName)}`);
+    } catch (error) {
+      routeLines.push(`PySCF cannot run this block: ${esc(error.message)}`);
+    }
   } else {
     routeLines.push(`%Chk=${esc(s.checkpoint || chkName(node.id))}`);
     if (checkpointSource) routeLines.push(`%OldChk=${esc(chkName(checkpointSource.id))}`);
@@ -2184,7 +2213,7 @@ function calcInspector(node) {
   // Issue #15: the force-constant choice is valid or not independently of the
   // node's run state, so it gets its own callouts. Those rules are Gaussian
   // route rules; xTB refuses transition-state blocks at input build instead.
-  const tsIssues = isXtb ? { errors: [], warnings: [] } : tsForceConstantIssues(node);
+  const tsIssues = isXtb || isPyscf ? { errors: [], warnings: [] } : tsForceConstantIssues(node);
   callout += tsIssues.errors
     .map((message) => `<div class="callout"><strong>Cannot export.</strong> ${esc(message)}</div>`)
     .join('');
@@ -2193,7 +2222,7 @@ function calcInspector(node) {
     .join('');
   // Issue #16: grid and frequency-provenance advice is also independent of the
   // node's run state — and Gaussian-only.
-  callout += isXtb ? '' : optConvergenceIssues(node)
+  callout += isXtb || isPyscf ? '' : optConvergenceIssues(node)
     .map((message) => `<div class="callout"><strong>Warning.</strong> This block ${esc(message)}</div>`)
     .join('');
 
@@ -2225,9 +2254,11 @@ function calcInspector(node) {
       ['', 'Engine (default)'],
       ...Object.values(SCORER_MODELS).map((model) => [`ml:${model.id}`, `${model.label} (ML scorer)`]),
     ], s.provider ?? ''),
-    selectField('Job type', 'jobType', isPsi4 ? PSI4_JOB_TYPES.map((id) => [id, id === 'Freq' ? 'Frequency' : id === 'Opt' ? 'Optimization' : id === 'SP' ? 'Single point' : id]) : JOB_TYPES, s.jobType),
-    !isXtb && !isPsi4 && s.jobType === 'IRC' ? selectField('IRC direction', 'ircDirection', IRC_DIRECTIONS, s.ircDirection) : '',
-    !isXtb && !isPsi4 && isOptJob(s.jobType)
+    selectField('Job type', 'jobType', isPyscf
+      ? PYSCF_JOB_TYPES.map((id) => [id, id === 'Freq' ? 'Frequency' : id === 'Opt' ? 'Optimization' : id === 'SP' ? 'Single point' : id])
+      : isPsi4 ? PSI4_JOB_TYPES.map((id) => [id, id === 'Freq' ? 'Frequency' : id === 'Opt' ? 'Optimization' : id === 'SP' ? 'Single point' : id]) : JOB_TYPES, s.jobType),
+    !isXtb && !isPsi4 && !isPyscf && s.jobType === 'IRC' ? selectField('IRC direction', 'ircDirection', IRC_DIRECTIONS, s.ircDirection) : '',
+    !isXtb && !isPsi4 && !isPyscf && isOptJob(s.jobType)
       ? selectField(
         'Optimization convergence',
         'optConvergence',
@@ -2235,21 +2266,25 @@ function calcInspector(node) {
         optConvergenceFor(s),
       )
       : '',
-    !isXtb && !isPsi4 ? tsForceField : '',
-    isPsi4 ? selectField('SCF reference', 'reference', [['', 'Auto (from multiplicity)'], ['rhf', 'RHF'], ['uhf', 'UHF'], ['rohf', 'ROHF']], s.reference || '') : '',
+    !isXtb && !isPsi4 && !isPyscf ? tsForceField : '',
+    isPsi4 || isPyscf ? selectField('SCF reference', 'reference', [['', 'Auto (from multiplicity)'], ['rhf', 'RHF'], ['uhf', 'UHF'], ['rohf', 'ROHF']], s.reference || '') : '',
     gaussianResources ? `<div class="field"><label>Memory</label><div class="field-row">
       <input class="input" type="number" min="1" max="512" aria-label="Memory" data-node-field="memory" value="${esc(s.memory)}">
       <select class="select" aria-label="Memory unit" data-node-field="memoryUnit">${MEMORY_UNITS.map(([value, label]) => `<option value="${value}"${s.memoryUnit === value ? ' selected' : ''}>${label}</option>`).join('')}</select>
     </div></div>` : '',
     gaussianResources ? inputField('Cores (nproc)', 'nproc', s.nproc, { type: 'number', min: 1, max: 256 }) : '',
+    isPyscf ? inputField('Threads (OMP_NUM_THREADS)', 'nproc', s.nproc, { type: 'number', min: 1, max: 256 }) : '',
     // Issue 177: an optional wall clock for this block. Blank inherits the
     // project's limit; the field exists because a TD-DFT block on a 40-atom
     // dimer and a single-point on water do not deserve the same hour.
     inputField('Time limit (s)', 'timeoutSeconds', s.timeoutSeconds ?? '', { type: 'number', min: 1, max: LIMITS.timeoutSeconds, full: true }),
     `<div class="field full"><span class="inspector-note">Blank uses the project limit${Number(state.project?.runner?.timeoutSeconds) > 0 ? ` (${Number(state.project.runner.timeoutSeconds)} s)` : ' (3600 s default)'}. A task that reaches it is stopped and recorded as timed out.</span></div>`,
     !isPsi4 && gaussianResources ? inputField('Checkpoint file', 'checkpoint', s.checkpoint || chkName(node.id), { full: true }) : '',
-    !gaussianResources
+    !gaussianResources && !isPyscf
       ? '<div class="field full"><span class="inspector-note">xTB writes <code>xtbrestart</code> in the run folder; a checkpoint hand-off copies that file.</span></div>'
+      : '',
+    isPyscf
+      ? '<div class="field full"><span class="inspector-note">PySCF has no checkpoint file. The deck is a fixed Python program and the molecule travels as data; a downstream block reads the parsed geometry instead.</span></div>'
       : '',
   ].join(''));
 
@@ -2259,8 +2294,8 @@ function calcInspector(node) {
   const compositeJob = isCompositeJobType(s.jobType);
   // Issue #93: constraints read ModRedundant; QST structures exist only for an
   // STQN job. Both are Gaussian-only, so an xTB block shows neither.
-  const constraintGroup = isXtb ? '' : constraintsGroup(node, s);
-  const qstEditor = isXtb || !qstKindFor(s.jobType) ? '' : qstGroup(node, s);
+  const constraintGroup = isXtb || isPyscf ? '' : constraintsGroup(node, s);
+  const qstEditor = isXtb || isPyscf || !qstKindFor(s.jobType) ? '' : qstGroup(node, s);
   const compositeNote = '<div class="field full"><span class="inspector-note">'
     + '<strong>' + esc(s.jobType) + '</strong> is a composite method: Gaussian runs its own fixed '
     + 'sequence and reports one 0 K energy. Method, basis, dispersion, solvation and excited-state '
@@ -2331,6 +2366,36 @@ function calcInspector(node) {
           + 'writes nothing, so an existing project is unchanged.</span></div>',
       ].join('')
       : '',
+  ].join(''));
+
+  // PySCF is a code engine: the deck is a fixed Python program with the
+  // molecule and settings serialized as data. The group offers exactly the
+  // methods, bases and active-space field the builder can spell.
+  const pyscfMethodEntry = PYSCF_METHODS.find((entry) => entry.key === String(s.method || '').toLowerCase())
+    || PYSCF_METHODS.find((entry) => entry.key === 'b3lyp');
+  const pyscfBasisEntry = PYSCF_BASES.find((entry) => entry.key === String(s.basis || '').toLowerCase())
+    || PYSCF_BASES[0];
+  const pyscfMethodGroup = group('Method & basis', `${pyscfMethodEntry.label}/${pyscfBasisEntry.label}`, true, [
+    selectField('Method', 'method', PYSCF_METHODS.map((entry) => [entry.key, entry.label]), pyscfMethodEntry.key),
+    selectField('Basis set', 'basis', PYSCF_BASES.map((entry) => [entry.key, entry.label]), pyscfBasisEntry.key),
+    pyscfMethodEntry.key === 'casscf'
+      ? inputField('Active space (electrons,orbitals)', 'pyscfActiveSpace', s.pyscfActiveSpace ?? '', { full: true })
+      : '',
+    pyscfMethodEntry.key === 'casscf'
+      ? '<div class="field full"><span class="inspector-note"><strong>CASSCF.</strong> The deck writes '
+        + '<code>mcscf.CASSCF(mf, ncas, nelecas)</code> from the active space above. It is a single point: '
+        + 'Opt, Freq and Opt Freq are refused by name. The reference SCF is RHF for a closed shell and ROHF '
+        + 'for an open shell.</span></div>'
+      : '',
+    ['mp2', 'ccsd', 'ccsd(t)'].includes(pyscfMethodEntry.key)
+      ? '<div class="field full"><span class="inspector-note">' + esc(pyscfMethodEntry.label)
+        + ' is a single point in this build: Opt, Freq and Opt Freq are refused by name, and so is solvation. '
+        + 'CCSD(T) adds the perturbative triples correction to the CCSD energy.</span></div>'
+      : '',
+    '<div class="field full"><span class="inspector-note">PySCF reads a fixed Python deck. The method, basis, '
+      + 'molecule, charge and multiplicity travel as data, never as code. HF and DFT support SP, Opt, Freq and '
+      + 'Opt Freq; frequencies use the analytic Hessian, and a density-fitted SCF matches the Psi4 '
+      + 'comparison runs. Dispersion is a property of the functional and no D3 keyword is written.</span></div>',
   ].join(''));
 
   // ORCA is a code engine too: its own method/basis list, its own PNO cutoff,
@@ -2449,6 +2514,18 @@ function calcInspector(node) {
     switchRow('Implicit solvation', 'CPCM / SMD', 'solvation', s.solvation),
     selectField('Model', 'solvationModel', [['CPCM', 'CPCM'], ['SMD', 'SMD']], s.solvationModel),
     selectField('Solvent', 'solvent', SOLVENTS, s.solvent),
+  ].join(''));
+
+  // PySCF writes IEF-PCM ("PCM") and C-PCM; the builder refuses SMD, CPCM and
+  // COSMO by name, and solvation is a single-point setting.
+  const pyscfSolventModel = PYSCF_SOLVATION_MODELS.includes(s.solvationModel) ? s.solvationModel : 'PCM';
+  const pyscfSolvationGroup = group('Solvation', s.solvation ? `${pyscfSolventModel} · ${s.solvent}` : 'off', s.solvation, [
+    switchRow('Implicit solvation', 'PCM / C-PCM', 'solvation', s.solvation),
+    selectField('Model', 'solvationModel', PYSCF_SOLVATION_MODELS.map((model) => [model, model === 'PCM' ? 'PCM (IEF-PCM)' : 'C-PCM']), pyscfSolventModel),
+    selectField('Solvent', 'solvent', SOLVENTS, s.solvent),
+    '<div class="field full"><span class="inspector-note">PySCF\'s <code>solvent.PCM</code> writes a dielectric continuum. '
+      + 'PCM is IEF-PCM and C-PCM is the conductor-like model; neither is SMD, COSMO or a solvation free energy. '
+      + 'A solvated block is a single point: Opt, Freq and Opt Freq are refused by name.</span></div>',
   ].join(''));
 
   // Issue #42: xTB has its own solvation models and identifiers. The group is
@@ -2654,20 +2731,20 @@ function calcInspector(node) {
     ${jobGroup}
     ${constraintGroup}
     ${qstEditor}
-    ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : isOrca ? orcaMethodGroup : compositeJob ? compositeNote : methodGroup}
-    ${isXtb || isPsi4 || isOrca || compositeJob ? '' : excitedGroup}
+    ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : isPyscf ? pyscfMethodGroup : isOrca ? orcaMethodGroup : compositeJob ? compositeNote : methodGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : excitedGroup}
     ${psi4TdGroup}
-    ${isXtb || isPsi4 || isOrca || compositeJob || !nmrJob ? '' : nmrGroup}
-    ${isXtb || isPsi4 || isOrca || compositeJob ? '' : ramanGroup}
-    ${isXtb || isPsi4 || isOrca || compositeJob ? '' : vcdGroup}
-    ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : isOrca ? orcaSolvationGroup : gaussianSolvationGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob || !nmrJob ? '' : nmrGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : ramanGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : vcdGroup}
+    ${isXtb ? xtbSolvationGroup : isPsi4 ? '' : isPyscf ? pyscfSolvationGroup : compositeJob ? '' : isOrca ? orcaSolvationGroup : gaussianSolvationGroup}
     ${moleculeGroup}
     ${spinGroup}
     ${gatesGroup}
     ${isXtb ? '' : validityGroup}
     ${dependencyGroup}
     ${outputGroup}
-    ${isXtb || isPsi4 || isOrca ? '' : extraGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca ? '' : extraGroup}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
       <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
@@ -4801,6 +4878,14 @@ function updateNodeField(node, key, value) {
     node.settings.pnoThreshold = value;
     return;
   }
+  // Issue 269: the CASSCF active space. Empty removes the key, so a block that
+  // never asked for one serialises without it.
+  if (key === 'pyscfActiveSpace') {
+    const text = String(value ?? '').trim();
+    if (text) node.settings.pyscfActiveSpace = text;
+    else delete node.settings.pyscfActiveSpace;
+    return;
+  }
   // Issue 247: absent means "do not ask for a matrix element file", so the
   // empty option removes the key instead of storing an empty string.
   if (key === 'matrixElement') {
@@ -4881,6 +4966,38 @@ function updateNodeField(node, key, value) {
         node.settings.nto = false;
         node.settings.customKeywords = '';
         node.settings.stableOpt = false;
+        node.kind = kindForJob(node.settings.jobType);
+      } else if (resolved === 'pyscf') {
+        // PySCF is a code engine with a closed method, basis and job list. A
+        // Gaussian route field left behind would be refused by the builder and
+        // hidden by the inspector, so clear it here.
+        if (!PYSCF_JOB_TYPES.includes(node.settings.jobType)) node.settings.jobType = 'SP';
+        if (!PYSCF_METHODS.some((entry) => entry.key === String(node.settings.method || '').toLowerCase())) {
+          node.settings.method = 'b3lyp';
+        }
+        if (!PYSCF_BASES.some((entry) => entry.key === String(node.settings.basis || '').toLowerCase())) {
+          node.settings.basis = 'def2-svp';
+        }
+        node.settings.dispersion = '';
+        node.settings.solvation = false;
+        node.settings.solvationModel = 'PCM';
+        node.settings.checkpoint = '';
+        node.settings.population = '';
+        node.settings.orbitals = false;
+        node.settings.raman = false;
+        node.settings.vcd = false;
+        node.settings.grid = '';
+        node.settings.scf = '';
+        node.settings.tdStates = 0;
+        node.settings.tdTriplets = '';
+        node.settings.tdRoot = 0;
+        node.settings.ntoTransition = 0;
+        node.settings.emission = false;
+        node.settings.nto = false;
+        node.settings.customKeywords = '';
+        node.settings.stableOpt = false;
+        node.settings.freezeCore = 'auto';
+        delete node.settings.pyscfActiveSpace;
         node.kind = kindForJob(node.settings.jobType);
       } else if (resolved === 'gaussian' && node.settings.method
         && !METHODS.some(([id]) => String(id).toLowerCase() === String(node.settings.method).toLowerCase())) {
@@ -5844,6 +5961,7 @@ function renderDrawer() {
     const engineId = engineOrDefault(draft.engine).id;
     const isXtb = engineId === 'xtb';
     const isOrca = engineId === 'orca';
+    const isPyscf = engineId === 'pyscf';
     const defaultDispersion = defaultDispersionFor(draft.method);
     const gaussianRoute = routeFull({ method: draft.method, basis: draft.basis, jobType: 'Opt', dispersion: defaultDispersion });
     const xtbMethod = draft.xtbMethod || 'gfn2';
@@ -5853,6 +5971,11 @@ function renderDrawer() {
     const orcaRoute = String(draft.method).toLowerCase() === 'dlpno-ccsd(t)'
       ? `! DLPNO-CCSD(T) ${orcaBasisEntry.keyword} def2/J ${orcaBasisEntry.auxiliary || '<basis>/C'} RIJCOSX NormalPNO`
       : `! ${draft.method} ${orcaBasisEntry.keyword}`;
+    const pyscfMethodEntry = PYSCF_METHODS.find((entry) => entry.key === String(draft.method || '').toLowerCase())
+      || PYSCF_METHODS.find((entry) => entry.key === 'b3lyp');
+    const pyscfBasisEntry = PYSCF_BASES.find((entry) => entry.key === String(draft.basis || '').toLowerCase())
+      || PYSCF_BASES[0];
+    const pyscfRoute = `PySCF ${pyscfMethodEntry.label}/${pyscfBasisEntry.label} SP`;
     body = `
       <div class="form-grid">
         ${drawerSelect('Engine', 'engine', Object.values(ENGINES).map((item) => [item.id, item.label]), engineId)}
@@ -5860,26 +5983,32 @@ function renderDrawer() {
     ? drawerSelect('xTB method', 'xtbMethod', XTB_METHODS.map((item) => [item.id, item.label]), draft.xtbMethod || 'gfn2')
     : isOrca
       ? drawerSelect('Default method', 'method', ORCA_METHODS.map((entry) => [entry.id, entry.label]), draft.method)
-      : drawerSelect('Default method', 'method', METHODS, draft.method)}
+      : isPyscf
+        ? drawerSelect('Default method', 'method', PYSCF_METHODS.map((entry) => [entry.key, entry.label]), pyscfMethodEntry.key)
+        : drawerSelect('Default method', 'method', METHODS, draft.method)}
         ${isXtb
     ? drawerSelect('Optimisation level', 'xtbOptLevel', XTB_OPT_LEVELS.map((level) => [level, level]), draft.xtbOptLevel || 'normal')
     : isOrca
       ? drawerSelect('Default basis', 'basis', ORCA_BASES.map((entry) => [entry.id, entry.label]), draft.basis)
-      : drawerSelect('Default basis', 'basis', BASIS_SETS, draft.basis)}
-        ${isXtb ? '' : drawerField('Memory', 'memory', draft.memory, { type: 'number', attrs: 'min="1" step="1"' })}
-        ${isXtb ? '' : drawerSelect('Memory unit', 'memoryUnit', MEMORY_UNITS, draft.memoryUnit)}
+      : isPyscf
+        ? drawerSelect('Default basis', 'basis', PYSCF_BASES.map((entry) => [entry.key, entry.label]), pyscfBasisEntry.key)
+        : drawerSelect('Default basis', 'basis', BASIS_SETS, draft.basis)}
+        ${isXtb || isPyscf ? '' : drawerField('Memory', 'memory', draft.memory, { type: 'number', attrs: 'min="1" step="1"' })}
+        ${isXtb || isPyscf ? '' : drawerSelect('Memory unit', 'memoryUnit', MEMORY_UNITS, draft.memoryUnit)}
         ${drawerField('Cores (nproc)', 'nproc', draft.nproc, { type: 'number', attrs: 'min="1" max="1024" step="1"' })}
       </div>
       <div class="form-section" style="margin-top:14px">
         <div class="section-label">Default route · ${esc(engineOrDefault(engineId).label)}</div>
-        <div class="code-block">${esc(isXtb ? xtbRoute : isOrca ? orcaRoute : gaussianRoute)}</div>
+        <div class="code-block">${esc(isXtb ? xtbRoute : isOrca ? orcaRoute : isPyscf ? pyscfRoute : gaussianRoute)}</div>
         <p class="field-hint">Shown for the current defaults; each block keeps its own snapshot when it is created.</p>
       </div>
       <div class="callout">${isXtb
     ? 'xTB has no basis set, no transition-state search, no IRC and no scan — blocks needing those are refused when their input is built.'
     : isOrca
       ? 'ORCA reads simple input, not a Gaussian route. DLPNO-CCSD(T) blocks are single points here; Freq and Opt are refused when their input is built.'
-      : 'Gaussian blocks keep the route, dispersion and basis configured per block; these are only the defaults for new blocks.'}</div>`;
+      : isPyscf
+        ? 'PySCF reads a fixed Python deck. CASSCF needs an explicit active space; TD-DFT, periodic, relativistic, QM/MM, GPU and NMR are refused by name when the input is built.'
+        : 'Gaussian blocks keep the route, dispersion and basis configured per block; these are only the defaults for new blocks.'}</div>`;
   }
 
   modal.classList.add('is-molecule');
@@ -8520,8 +8649,8 @@ async function refreshEngineChips() {
   }
   if (!status || typeof status !== 'object') return;
   state.engineStatus = status;
-  const order = ['xtb', 'psi4', 'orca', 'gaussian'];
-  const labels = { xtb: 'xTB', psi4: 'Psi4', orca: 'ORCA', gaussian: 'Gaussian' };
+  const order = ['xtb', 'psi4', 'pyscf', 'orca', 'gaussian'];
+  const labels = { xtb: 'xTB', psi4: 'Psi4', pyscf: 'PySCF', orca: 'ORCA', gaussian: 'Gaussian' };
   el.innerHTML = order
     .filter((id) => status[id])
     .map((id) => {

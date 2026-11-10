@@ -24,6 +24,7 @@ export const ENGINE_SHORT_LABELS = Object.freeze({
   xtb: 'xTB',
   orca: 'ORCA',
   psi4: 'Psi4',
+  pyscf: 'PySCF',
   crest: 'CREST',
 });
 

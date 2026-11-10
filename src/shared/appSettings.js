@@ -16,7 +16,7 @@
 export const SETTINGS_SCHEMA_VERSION = 1;
 export const SETTINGS_FILE_NAME = 'settings.json';
 
-export const SETTINGS_ENGINE_IDS = Object.freeze(['gaussian', 'xtb', 'psi4', 'orca']);
+export const SETTINGS_ENGINE_IDS = Object.freeze(['gaussian', 'xtb', 'psi4', 'orca', 'pyscf']);
 export const SETTINGS_TOOL_IDS = Object.freeze([
   'crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'scratch',
 ]);
@@ -35,6 +35,7 @@ export function defaultAppSettings() {
       xtb: '',
       psi4: '',
       orca: '',
+      pyscf: '',
     },
     tools: {
       crest: '',

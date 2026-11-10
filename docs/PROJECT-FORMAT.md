@@ -132,7 +132,7 @@ Type-specific payloads:
 `raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`, `provider`,
-`recordTransitionDipoles`, `nmrSpinSpin`, `pnoThreshold`.
+`recordTransitionDipoles`, `nmrSpinSpin`, `pnoThreshold`, `pyscfActiveSpace`.
 
 `pnoThreshold` is `"NormalPNO"` or `"TightPNO"` and applies only to an ORCA
 `DLPNO-CCSD(T)` block. It is absent when never set; the ORCA builder writes
@@ -145,7 +145,7 @@ truncation.
 from eV) and the scorer's full provenance. No gate is invented; `gates` is null. A task with a
 provider does not require an engine executable, but it does require the scorer sidecar.
 
-`settings.engine` is a per-block override (`gaussian`, `xtb`, `orca` or `psi4`); an empty string means "use
+`settings.engine` is a per-block override (`gaussian`, `xtb`, `orca`, `psi4` or `pyscf`); an empty string means "use
 `defaults.engine`". Blocks in one project may therefore run on different engines, and a dependency
 edge between them is a geometry hand-off the queue either accepts or refuses with a recorded reason.
 `solvationModel` is validated against the engine the block resolves to:
@@ -153,6 +153,8 @@ edge between them is a geometry hand-off the queue either accepts or refuses wit
 | Resolved engine | Accepted `solvationModel` values |
 | --- | --- |
 | `gaussian`, `orca` | `PCM`, `SMD`, `CPCM` |
+| `psi4` | `PCM`, `COSMO` |
+| `pyscf` | `PCM`, `C-PCM` |
 | `xtb` | `ALPB`, `GBSA`; an empty string means "not chosen" and an absent value defaults to `ALPB` |
 
 A Gaussian-only model on an xTB block is a validation error naming the engine and the two xTB
@@ -173,12 +175,14 @@ read from, `raman` and `vcd` put `=Raman` / `=VCD` on the frequency keyword (`Fr
 when both are on), and `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
 analysis and validity behaviour. `vcd` is refused on a job type with no frequency to carry it.
 
-Four keys are opt-in and **absent by default**, each written only after a block states it, so a
+Five keys are opt-in and **absent by default**, each written only after a block states it, so a
 project saved before they existed serialises byte for byte as it did: `freezeCore` (`auto`, `true` or
 `false`; `auto` writes no line at all, `false` asks for all-electron correlation), `timeoutSeconds`
 (the block's own wall-clock limit), `recordTransitionDipoles` (a Psi4 TD block that records the
-transition-dipole vector, which a coupling cannot be recovered without) and `nmrSpinSpin` (an NMR
-block that writes `NMR=SpinSpin` so Gaussian prints the K and J coupling tables). A key being listed
+transition-dipole vector, which a coupling cannot be recovered without), `nmrSpinSpin` (an NMR
+block that writes `NMR=SpinSpin` so Gaussian prints the K and J coupling tables) and
+`pyscfActiveSpace` (a PySCF CASSCF block's active space, written `electrons,orbitals`, for example
+`"6,6"`). A key being listed
 above is not the same as being persisted — the reader must also read it — which is the defect class
 that silently dropped `freezeCore` and `recordTransitionDipoles` until a round-trip test caught it.
 
