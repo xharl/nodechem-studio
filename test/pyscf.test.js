@@ -54,10 +54,10 @@ describe('PySCF engine registry', () => {
     expect(PYSCF_CAPABILITIES.outputExtension).toBe('.out');
     expect(PYSCF_CAPABILITIES.capturesStdout).toBe(true);
     expect(PYSCF_CAPABILITIES.restartArtifact).toBeNull();
-    expect(PYSCF_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Freq', 'Opt Freq']);
+    expect(PYSCF_CAPABILITIES.jobTypes).toEqual(['SP', 'Opt', 'Freq', 'Opt Freq', 'TD-DFT']);
     expect(PYSCF_CAPABILITIES.solvationModels).toEqual(['PCM', 'C-PCM']);
     const refused = PYSCF_CAPABILITIES.unsupportedFeatures.join(' ');
-    for (const named of ['TD-DFT', 'periodic', 'relativistic', 'QM/MM', 'GPU', 'NMR']) {
+    for (const named of ['triplet', 'periodic', 'relativistic', 'QM/MM', 'GPU', 'NMR']) {
       expect(refused).toContain(named);
     }
     expect(refused).toMatch(/CCSD\(T\) Hessian/);
@@ -131,7 +131,28 @@ describe('PySCF input builder', () => {
     expect(decodeDeck(buildPyscfInput({ settings: settings({ jobType: 'Opt' }), molecule: molecule() }).inputText).jobType).toBe('Opt');
     expect(decodeDeck(buildPyscfInput({ settings: settings({ jobType: 'Freq' }), molecule: molecule() }).inputText).jobType).toBe('Freq');
     expect(decodeDeck(buildPyscfInput({ settings: settings({ jobType: 'Opt Freq' }), molecule: molecule() }).inputText).jobType).toBe('Opt Freq');
-    expect(PYSCF_JOB_TYPES).toEqual(['SP', 'Opt', 'Freq', 'Opt Freq']);
+    expect(PYSCF_JOB_TYPES).toEqual(['SP', 'Opt', 'Freq', 'Opt Freq', 'TD-DFT']);
+  });
+
+  it('writes a TD-DFT job with its root count and refuses what it cannot honour', () => {
+    const built = buildPyscfInput({
+      settings: settings({ jobType: 'TD-DFT', tdStates: 4 }), molecule: molecule(),
+    });
+    const data = decodeDeck(built.inputText);
+    expect(data.jobType).toBe('TD-DFT');
+    expect(data.tdStates).toBe(4);
+    expect(built.route).toContain('TD-DFT');
+
+    expect(() => buildPyscfInput({ settings: settings({ jobType: 'TD-DFT' }), molecule: molecule() }))
+      .toThrow(/at least one excited state/);
+    expect(() => buildPyscfInput({
+      settings: settings({ jobType: 'TD-DFT', tdStates: 3, tdTriplets: 2 }), molecule: molecule(),
+    })).toThrow(/Triplet roots/);
+    expect(() => buildPyscfInput({
+      settings: settings({ jobType: 'TD-DFT', tdStates: 3, method: 'MP2' }), molecule: molecule(),
+    })).toThrow(/no TD-DFT path/);
+    expect(() => buildPyscfInput({ settings: settings({ tdStates: 3 }), molecule: molecule() }))
+      .toThrow(/need the TD-DFT job type/);
   });
 
   it('records the PCM model and the solvent in the payload', () => {
@@ -167,7 +188,7 @@ describe('PySCF input builder', () => {
 
   it('refuses every named feature instead of downgrading it', () => {
     const fields = pyscfSettingsOffenders({
-      jobType: 'TD-DFT', tddft: true, periodic: true, relativistic: true, qmmm: true, gpu: true,
+      jobType: 'NMR', tddft: true, periodic: true, relativistic: true, qmmm: true, gpu: true,
       nmr: true, customKeywords: 'nosymm', dispersion: 'GD3BJ', grid: 'UltraFine',
       population: 'NBO', verbosity: 'Normal', stableOpt: true, checkpoint: 'x.chk',
     }).map((entry) => entry.field);
@@ -332,6 +353,33 @@ describe('PySCF record parser — recorded fixtures', () => {
     expect(ccsdt.finalEnergy.source).toBe('ccsd(t)');
     expect(ccsdt.extras.triplesCorrection).toBeCloseTo(-0.0030061060251916237, 12);
     expect(ccsdt.finalEnergy.hartree).toBeCloseTo(-76.17693585504087, 12);
+  });
+
+  it('reads singlet roots from a TD-DFT record', () => {
+    const parsed = parsePyscfOutput(fixture('water-b3lyp-def2svp-tddft.json'));
+    expect(parsed.excitedStates.count).toBe(4);
+    expect(parsed.excitedStates.requested).toBe(4);
+    expect(parsed.excitedStates.source).toBe('pyscf-tddft');
+    expect(parsed.excitedStates.verified).toBe(true);
+    const first = parsed.excitedStates.states[0];
+    expect(first.energyHartree).toBeCloseTo(0.2792268399882513, 12);
+    expect(first.energyEv).toBeCloseTo(7.5981493931669934, 10);
+    expect(first.oscillatorStrength).toBeCloseTo(0.018198124703632537, 10);
+    expect(first.wavelengthNm).toBeCloseTo(163.1768368643802, 8);
+    expect(first.transitionDipoleAu).toHaveLength(3);
+    expect(parsed.excitedStates.transitionDipoleCount).toBe(4);
+    // The record's energy is the ground-state reference, as in a Gaussian TD log.
+    expect(parsed.finalEnergy.hartree).toBeCloseTo(-76.35815183294753, 10);
+  });
+
+  it('reads the ethene pi-pi* root and its oscillator strength', () => {
+    const parsed = parsePyscfOutput(fixture('ethene-b3lyp-def2svp-tddft.json'));
+    expect(parsed.excitedStates.count).toBe(5);
+    const strong = parsed.excitedStates.states[0];
+    expect(strong.energyEv).toBeCloseTo(8.139667830267898, 8);
+    expect(strong.oscillatorStrength).toBeCloseTo(0.3748052632592823, 10);
+    expect(strong.wavelengthNm).toBeCloseTo(152.3209558244582, 8);
+    expect(parsed.excitedStates.states[1].oscillatorStrength).toBeLessThan(1e-10);
   });
 
   it('records a failed SCF as failed, with its iteration count', () => {

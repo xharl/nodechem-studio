@@ -2436,6 +2436,16 @@ function calcInspector(node) {
   // irreducible representations, one state per irrep in order, so a count below
   // the irrep count can come back without the bright state. The field says so
   // where it is set, with the numbers measured on ethylene.
+  const pyscfTdGroup = isPyscf && s.jobType === 'TD-DFT'
+    ? group('Excited states (TD-DFT)', `${Number(s.tdStates) || 0} states`, true, [
+      inputField('States', 'tdStates', s.tdStates ?? 0, { type: 'number', min: 1, max: 50 }),
+      '<div class="field full"><span class="inspector-note">Writes <code>tdscf.TDDFT</code> with N roots after the '
+        + 'converged reference. <strong>Singlet roots only</strong>: triplet roots are refused by name. Each root '
+        + 'records its energy, oscillator strength, wavelength and transition dipole. A solvated reference is '
+        + 'refused, because a solvated PySCF block is a single point.</span></div>',
+    ].join(''))
+    : '';
+
   const psi4TdGroup = isPsi4 && s.jobType === 'TD-DFT'
     ? group('Excited states (TD-DFT)', `${Number(s.tdStates) || 0} states`, true, [
       inputField('States', 'tdStates', s.tdStates ?? 0, { type: 'number', min: 1, max: 50 }),
@@ -2771,7 +2781,7 @@ function calcInspector(node) {
     ${qstEditor}
     ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : isPyscf ? pyscfMethodGroup : isOrca ? orcaMethodGroup : compositeJob ? compositeNote : methodGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : excitedGroup}
-    ${psi4TdGroup}
+    ${psi4TdGroup}${pyscfTdGroup}
     ${orcaTdGroup}
     ${isXtb || isPsi4 || isPyscf || compositeJob || !nmrJob ? '' : nmrGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : ramanGroup}
@@ -6077,7 +6087,7 @@ function renderDrawer() {
     : isOrca
       ? 'ORCA reads simple input, not a Gaussian route. DLPNO-CCSD(T) blocks are single points here; Freq and Opt are refused when their input is built.'
       : isPyscf
-        ? 'PySCF reads a fixed Python deck. CASSCF needs an explicit active space; TD-DFT, periodic, relativistic, QM/MM, GPU and NMR are refused by name when the input is built.'
+        ? 'PySCF reads a fixed Python deck. CASSCF needs an explicit active space; TD-DFT writes singlet roots only. Periodic, relativistic, QM/MM, GPU, NMR and triplet roots are refused by name when the input is built.'
         : 'Gaussian blocks keep the route, dispersion and basis configured per block; these are only the defaults for new blocks.'}</div>`;
   }
 

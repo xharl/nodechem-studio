@@ -110,10 +110,10 @@ export const PYSCF_BASES = Object.freeze([
   { key: 'sto-3g', label: 'STO-3G', pyscf: 'sto-3g', ecp: false },
 ]);
 
-export const PYSCF_JOB_TYPES = Object.freeze(['SP', 'Opt', 'Freq', 'Opt Freq']);
+export const PYSCF_JOB_TYPES = Object.freeze(['SP', 'Opt', 'Freq', 'Opt Freq', 'TD-DFT']);
 
 export const PYSCF_UNSUPPORTED_JOB_TYPES = Object.freeze([
-  'TD-DFT', 'Opt=TS', 'IRC', 'Scan', 'NMR', 'Opt=QST2', 'Opt=QST3',
+  'Opt=TS', 'IRC', 'Scan', 'NMR', 'Opt=QST2', 'Opt=QST3',
 ]);
 
 /** PySCF PCM models this deck writes. `PCM` maps to IEF-PCM, `C-PCM` to C-PCM. */
@@ -186,7 +186,7 @@ export const PYSCF_CAPABILITIES = Object.freeze({
   jobTypes: PYSCF_JOB_TYPES,
   unsupportedJobTypes: PYSCF_UNSUPPORTED_JOB_TYPES,
   unsupportedFeatures: Object.freeze([
-    'TD-DFT and every excited-state job (PySCF has TDSCF, but this deck does not write it)',
+    'triplet excited states (the deck writes singlet roots only)',
     'periodic calculations (pyscf.pbc)',
     'relativistic Hamiltonians and spin-orbit coupling (X2C, DKH, ZORA)',
     'QM/MM embedding',
@@ -355,9 +355,19 @@ export function pyscfSettingsOffenders(settings = {}) {
     push('jobType', `${jobType} is not supported for PySCF blocks in this build. `
       + `PySCF job types here: ${PYSCF_JOB_TYPES.join(', ')}.`);
   }
-  if (settings.tddft === true || settings.excitedStates || set(settings.td)) {
-    push('tddft', 'TD-DFT and excited states are refused by name for PySCF in this build: '
-      + 'the deck writes no TDSCF step.');
+  const tdStates = Number(settings.tdStates);
+  const tdRequested = settings.tddft === true || settings.excitedStates || set(settings.td)
+    || (Number.isFinite(tdStates) && tdStates > 0) || jobType === 'TD-DFT';
+  if (jobType !== 'TD-DFT' && tdRequested) {
+    push('tddft', `Excited states need the TD-DFT job type; the selected job is ${jobType}.`);
+  }
+  if (jobType === 'TD-DFT') {
+    if (!Number.isInteger(tdStates) || tdStates < 1) {
+      push('tdStates', 'TD-DFT needs at least one excited state: set States to a positive whole number.');
+    }
+    if (Number(settings.tdTriplets) > 0) {
+      push('tdTriplets', 'Triplet roots are not written for PySCF in this build; only singlet roots are computed.');
+    }
   }
   if (set(settings.periodic)) {
     push('periodic', 'Periodic calculations (pyscf.pbc) are refused by name; this deck builds a molecule.');
@@ -427,6 +437,9 @@ export function pyscfSettingsOffenders(settings = {}) {
   }
   if (method && method.key === 'casscf' && (jobType === 'Opt' || jobType === 'Opt Freq' || jobType === 'Freq')) {
     push('jobType', 'CASSCF is a single point in this build: Opt, Freq and Opt Freq are refused by name.');
+  }
+  if (method && jobType === 'TD-DFT' && (method.kind === 'correlated' || method.key === 'casscf')) {
+    push('jobType', `${method.label} has no TD-DFT path in this build; PySCF TD-DFT is HF/DFT only.`);
   }
   if (method && method.kind === 'correlated'
     && (jobType === 'Opt' || jobType === 'Opt Freq' || jobType === 'Freq')) {
@@ -560,6 +573,7 @@ export function buildPyscfInput({
     reference,
     jobType,
     activeSpace,
+    tdStates: jobType === 'TD-DFT' ? Number(settings.tdStates) : null,
     solvation: solvation
       ? { provider: 'pyscf-pcm', model: solvation.model, solvent: solvation.solvent, solventLabel: solvation.solventLabel }
       : null,
@@ -756,8 +770,36 @@ function canonicalFromRecord(record, { truncated = false, lineCount = 0 } = {}) 
     }
     : null;
 
+  const excitedRecord = record.excitedStates && typeof record.excitedStates === 'object'
+    ? record.excitedStates : null;
+  const excitedStates = Array.isArray(excitedRecord?.states)
+    ? excitedRecord.states
+      .filter((state) => state && Number.isFinite(Number(state.energyHartree)))
+      .map((state, index) => ({
+        index: Number.isInteger(Number(state.index)) ? Number(state.index) : index + 1,
+        multiplicity: Number.isInteger(Number(state.multiplicity)) ? Number(state.multiplicity) : 1,
+        energyHartree: Number(state.energyHartree),
+        energyEv: finiteOrNull(state.energyEv),
+        wavelengthNm: finiteOrNull(state.wavelengthNm),
+        oscillatorStrength: finiteOrNull(state.oscillatorStrength),
+        ...(Array.isArray(state.transitionDipoleAu) && state.transitionDipoleAu.length === 3
+          ? { transitionDipoleAu: state.transitionDipoleAu.map(Number) } : {}),
+      }))
+    : null;
+
   const result = canonicalResult({
     engine: PYSCF_ENGINE_ID,
+    excitedStates: excitedStates && excitedStates.length > 0
+      ? {
+        count: excitedStates.length,
+        requested: integerOrNull(excitedRecord?.requested),
+        perIrrep: [],
+        states: excitedStates,
+        source: excitedRecord?.source ? String(excitedRecord.source) : 'pyscf-tddft',
+        verified: true,
+        transitionDipoleCount: excitedStates.filter((state) => Array.isArray(state.transitionDipoleAu)).length,
+      }
+      : null,
     program: { name: 'PySCF', version },
     termination: ok
       ? `PySCF ${version || ''} completed`.trim()
