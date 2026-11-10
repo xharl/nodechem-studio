@@ -25,6 +25,8 @@ project did not run Gaussian itself. Provenance per file is in
 | G16 | `IRC` (LQA, both directions) | `g16-h4s2-irc.log` | path summary, 19 points, reference energy |
 | G16 | SCF failure | `g16-meoh-scf-error.log` | `error` status and the sentence naming the failure |
 | — | truncated file | `g16-dvb-ir-truncated.out` | `incomplete`, never a pass |
+| G09 C.01 | `ONIOM(B3LYP/6-31G(d):PM6)` frequency | `g09-oniom-ir.log` | extrapolated total, three gridpoints, 74 atoms (54 high / 20 low), six link-atom cuts, per-layer charges |
+| G09 E.01 | `Freq=ROA` | `g09-formaldehyde-roa.out` | three ROA geometries, invariants, `RC180`, incident light; achiral, so the intensities are zero |
 | G09/G16 | relaxed and rigid scans | `scan-relaxed.log`, `scan-unrelaxed.log` | parameter table, extremum |
 
 ## Not covered
@@ -34,14 +36,10 @@ not a claim that the parser handles the case:
 
 - `Opt=TS` and a `Freq` with exactly one imaginary mode (a true saddle).
 - `--Link1--` multi-step jobs produced by Gaussian itself.
-- **ONIOM result parsing is supported** — a Gaussian ONIOM log yields the extrapolated total,
-  its three gridpoint components, the layer counts, the link-atom cuts Gaussian printed and the
-  per-layer charge/multiplicity lines. The app does **not** build an ONIOM input or invent link
-  atoms (#67).
-- **ROA** (`Freq=ROA`) — the parser has a real Gaussian 09 E.01 formaldehyde log (the three
-  geometries, invariants and `RC180`, all zero because the molecule is achiral). No public
-  Gaussian 16 B.01+ ROA log was found, so that revision is not claimed. VCD, NMR shieldings and
-  couplings, and Raman activities each have a real log and are read.
+- **ONIOM input construction** — the result reader is covered above, but the app does not build an
+  ONIOM route or generate link atoms (#67).
+- **Gaussian 16 ROA** — the reader is pinned to a real G09 E.01 log; no public G16 B.01+ ROA log was
+  found, so that revision is not claimed.
 - A Gaussian solvation job that prints extra `PCM`/`SMD` sections; the parser records the model the
   log states, but no captured log exercises a Gaussian solvated job.
 - Gaussian 03 and 98 revisions, and any Windows-formatted output.
