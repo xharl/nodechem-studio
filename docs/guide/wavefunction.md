@@ -24,6 +24,27 @@ checkpoint is incomplete.
 Version 1 and version 2 files still parse: Psi4's `fchk()` writer and several third-party tools
 emit them, and the version is a property of the producer, not a validity flag.
 
+## Matrix element files (issue #247): Tier 1 only
+
+The block inspector's **Matrix element file** option emits `Output=MatrixElement` (text) or
+`Output=RawMatrixElement` (binary) on the Gaussian route, with no extra work for the run. Gaussian
+writes the file next to the `.out`; it is the full-precision artifact for an external program or an
+HPC post-processing step.
+
+NodeChem does **not** read either matrix element file in this release. That is deliberate:
+
+- Tier 1 (implemented): request the file. It costs one route keyword and gives a user the artifact
+  Gaussian already knows how to write.
+- Tier 2 (not implemented): a pure-JS reader for the documented binary layout. The format is
+  specified, but it needs a real `formchk -matrix` / `-rawmatrix` corpus and is not on this release's
+  critical path.
+- Tier 3 (not implemented): `External=` and `%OldMatrixElement`. Those change how Gaussian is driven
+  as a subordinate program and are a product decision, not a parser gap.
+
+`Output=MatrixElement` shares Gaussian's single `Output` keyword with the **Output verbosity** field,
+so the builder refuses both at once rather than silently dropping one. A dry run writes no matrix
+element file and does not fail because the fixture has none.
+
 This page describes what the app reads from each, what it deliberately refuses, and what it does
 **not** do yet. Everything on this page happens offline on files you already have; the app never
 runs `formchk`, `cubegen` or an external quantum-chemistry program for you.

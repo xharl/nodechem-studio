@@ -567,6 +567,21 @@ describe('project text parsing', () => {
   });
 });
 
+describe('project schema — optional matrix element request (#247)', () => {
+  it('keeps an explicit value and drops it when unset', () => {
+    const project = seededProject();
+    project.nodes[0].settings.matrixElement = 'MatrixElement';
+    const result = validateProject(project);
+    expect(result.ok).toBe(true);
+    expect(result.project.nodes[0].settings.matrixElement).toBe('MatrixElement');
+
+    const plain = seededProject();
+    const without = validateProject(plain);
+    expect(without.ok).toBe(true);
+    expect('matrixElement' in without.project.nodes[0].settings).toBe(false);
+  });
+});
+
 describe('schema helpers', () => {
   it('exposes defaults consistent with the renderer', () => {
     expect(defaultSettings()).toMatchObject({

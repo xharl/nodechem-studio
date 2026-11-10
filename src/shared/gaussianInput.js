@@ -131,6 +131,9 @@ function routeValues(settings = {}) {
     // silently dropping one of the two analyses.
     population: orbitalsPopulation(settings),
     verbosity: settings.verbosity ? oneLine(settings.verbosity) : null,
+    // Issue #247 Tier 1: write Gaussian's matrix element file. It occupies the
+    // same `Output` keyword as verbosity, so the builder refuses both at once.
+    matrixElement: settings.matrixElement ? oneLine(settings.matrixElement) : null,
     solvationModel: solvated ? oneLine(settings.solvationModel, 'PCM') : null,
     solvent: solvated ? oneLine(settings.solvent, 'Water') : null,
     td: tdKeywordFor(settings),
@@ -249,9 +252,23 @@ function compositeRouteFor(settings, method) {
   if (scf) tokens.push(`SCF=${scf}`);
   const grid = gridFor(settings) || '';
   if (grid) tokens.push(`Integral=${grid}`);
-  const verbosity = oneLine(settings.verbosity);
-  if (verbosity) tokens.push(`Output=${verbosity}`);
+  const output = outputKeyword({
+    verbosity: oneLine(settings.verbosity),
+    matrixElement: oneLine(settings.matrixElement),
+  });
+  if (output) tokens.push(output);
   return tokens.join(' ');
+}
+
+/** Gaussian has one Output keyword; refuse two options instead of dropping one. */
+function outputKeyword({ verbosity = '', matrixElement = '' } = {}) {
+  if (verbosity && matrixElement) {
+    throw new Error('Output verbosity and a matrix element file both write the Output keyword;'
+      + ' choose one instead of having the other silently dropped.');
+  }
+  if (matrixElement) return `Output=${matrixElement}`;
+  if (verbosity) return `Output=${verbosity}`;
+  return '';
 }
 
 /**
@@ -337,7 +354,8 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
     if (values.dispersion) nto.push(`EmpiricalDispersion=${values.dispersion}`);
     if (values.scf) nto.push(`SCF=${values.scf}`);
     if (values.grid) nto.push(`Integral=${values.grid}`);
-    if (values.verbosity) nto.push(`Output=${values.verbosity}`);
+    const output = outputKeyword(values);
+    if (output) nto.push(output);
     return nto.join(' ');
   }
   const tokens = [`#p ${functional}/${basis} ${values.job}`];
@@ -353,7 +371,8 @@ export function routeFor(settings = {}, { basisName = null } = {}) {
   // computed, and Gaussian reads the two together.
   if (values.density) tokens.push(values.density);
   if (values.stable) tokens.push(values.stable);
-  if (values.verbosity) tokens.push(`Output=${values.verbosity}`);
+  const output = outputKeyword(values);
+  if (output) tokens.push(output);
   if (values.solvationModel) {
     tokens.push(`SCRF=(${values.solvationModel},Solvent=${values.solvent})`);
   }

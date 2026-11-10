@@ -145,7 +145,7 @@ describe('rendered calculation inspector', () => {
     expect(nodeFields(renderFor('gaussian'))).toEqual([
       'title', 'engine', 'provider', 'jobType',
       'memory', 'memoryUnit', 'nproc', 'timeoutSeconds', 'checkpoint',
-      'routePreset', 'method', 'basis', 'dispersion', 'scf', 'grid', 'population', 'orbitals', 'verbosity',
+      'routePreset', 'method', 'basis', 'dispersion', 'scf', 'grid', 'population', 'orbitals', 'verbosity', 'matrixElement',
       'tdStates', 'tdTriplets', 'tdRoot', 'ntoTransition', 'nto',
       'raman', 'vcd',
       'solvation', 'solvationModel', 'solvent',
