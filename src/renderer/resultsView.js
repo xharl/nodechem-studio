@@ -323,9 +323,61 @@ function saptCard(parsed, flags) {
  * subtracted from the difference. Nothing on this card is a free energy: the
  * note says what a solvation free energy would additionally need.
  */
+function gaussianSolvationCard(block, flags) {
+  const eh = (value) => (Number.isFinite(value) ? `${value.toFixed(8)} Eh` : missingHtml());
+  const kcal = (value) => (Number.isFinite(value) ? `${value.toFixed(2)} kcal/mol` : missingHtml());
+  const model = text(block.model);
+  const headerModel = text(block.headerModel);
+  const solvent = text(block.solvent);
+  const epsilon = Number.isFinite(block.dielectricConstant) ? block.dielectricConstant : null;
+  const cavity = [text(block.cavityType), Number.isFinite(block.cavityAlpha) ? `×${block.cavityAlpha}` : null]
+    .filter(Boolean).join(' ');
+  const radii = text(block.radiiSet);
+  const rows = [
+    fieldValue('Model', model
+      ? esc(`${model}${headerModel && headerModel !== model ? ` (header: ${headerModel})` : ''}`)
+      : missingHtml(), 'solvation-model'),
+    fieldValue('Solvent', solvent
+      ? esc(`${solvent}${epsilon === null ? '' : ` · ε = ${epsilon}`}`) : missingHtml(), 'solvation-solvent'),
+    fieldValue('Cavity', cavity
+      ? esc(`${cavity}${radii ? ` · ${radii}` : ''}${text(block.cavityAlgorithm) ? ` · ${text(block.cavityAlgorithm)}` : ''}`)
+      : missingHtml(), 'solvation-cavity'),
+    fieldValue('Total SCF energy (in solution)', eh(block.totalEnergyHartree), 'solvation-total'),
+  ];
+  if (block.nonElectrostatic && Number.isFinite(block.nonElectrostatic.kcalPerMol)) {
+    rows.push(fieldValue(
+      `${text(block.nonElectrostatic.name) || 'Non-electrostatic'} term`,
+      `${kcal(block.nonElectrostatic.kcalPerMol)} · ${eh(block.nonElectrostatic.hartree)}`,
+      'solvation-non-electrostatic',
+    ));
+  }
+  if (Number.isFinite(block.electrostaticHartree)) {
+    rows.push(fieldValue('Electrostatic term', eh(block.electrostaticHartree), 'solvation-electrostatic'));
+  }
+  if (Number.isFinite(block.gasPhaseHartree) && Number.isFinite(block.deltaHartree)) {
+    rows.push(fieldValue('ΔE(solv)', `${eh(block.deltaHartree)} · ${kcal(block.deltaKcal)}`, 'solvation-delta'));
+  }
+  const notes = [
+    'The total is the SCF energy in solution. It is not a solvation contribution and not a '
+      + 'solvation free energy: no cavity work, thermal correction or standard-state term is applied.',
+  ];
+  if (block.nonElectrostatic) {
+    notes.push('The non-electrostatic term is already included in the total energy above; '
+      + 'it is shown for provenance and must not be added a second time.');
+  }
+  if (!Number.isFinite(block.gasPhaseHartree)) {
+    notes.push('Gaussian printed no separate gas-phase single point, so no ΔE(solv) is reported. '
+      + 'The model and solvent come from the SCRF route and the PCM header in this log.');
+  }
+  return card('Solvation', kv(rows)
+    + notes.map((note) => `<p class="results-note">${esc(note)}</p>`).join('')
+    + caveatHtml(flags, 'The solvation block'));
+}
+
 function solvationCard(parsed, flags) {
   const block = isObject(parsed?.solvation) ? parsed.solvation : null;
   if (!block) return '';
+  if (block.provider === 'gaussian-scrf') return gaussianSolvationCard(block, flags);
   const eh = (value) => (Number.isFinite(value) ? `${value.toFixed(8)} Eh` : missingHtml());
   const kcal = (value) => (Number.isFinite(value) ? `${value.toFixed(2)} kcal/mol` : missingHtml());
   const model = text(block.model);

@@ -1308,6 +1308,7 @@ function parseLink(section, index) {
     })(),
     frequencyBlocks,
     thermochemistry: parseThermochemistry(joined, lines),
+    solvation: parseGaussianSolvation(routeText, lines, scf),
     finalEnergy: parseFinalEnergy(joined, scf),
     composite: (() => {
       const expected = compositeMethodFromRoute(routeText);
@@ -1324,6 +1325,78 @@ function parseLink(section, index) {
     t1Diagnostic: parseT1Diagnostic(lines),
     resources: parseResources(joined),
     error: error ? { ...error, linkIndex: index } : null,
+  };
+}
+
+/**
+ * Issue 223: a Gaussian SCRF run must not parse to the same record as a vacuum
+ * run. The model and solvent are read from the output's PCM header, not inferred
+ * from the route alone; the total SCF energy is the solvated total and is named
+ * as such. A term the log does not print stays absent, never 0.
+ */
+const SCRF_MODEL = /\bSCRF\s*=\s*\(([^)\n]*)/i;
+const SCRF_MODELS = ['IEFPCM', 'SCIPCM', 'CPCM', 'PCM', 'SMD'];
+
+function parseGaussianSolvation(route, lines, scf) {
+  const scrf = SCRF_MODEL.exec(String(route || ''));
+  const body = (lines || []).join('\n');
+  const modelLine = /^\s*Model\s*:\s*([^.\n]+)\.\s*$/im.exec(body);
+  if (!scrf && !modelLine) return null;
+  const routeTokens = scrf ? scrf[1].split(',').map((token) => token.trim()) : [];
+  const routeModel = routeTokens
+    .map((token) => SCRF_MODELS.find((model) => model.toLowerCase() === token.toLowerCase()))
+    .find(Boolean) || null;
+  const headerModel = (modelLine?.[1] || '').trim().toUpperCase() || null;
+  // Gaussian prints "Model : PCM." inside an SMD run; the route is the model
+  // the user asked for, so it wins. The header value is kept as evidence.
+  const model = routeModel || headerModel;
+  const solventLine = new RegExp(
+    String.raw`^\s*Solvent\s*:\s*([^,\n]+?)(?:,\s*Eps=\s*(${NUMBER}))?(?:\s+Eps\(inf\)=\s*(${NUMBER}))?\s*$`,
+    'im',
+  ).exec(body);
+  const radii = /^\s*Atomic radii\s*:\s*([^.\n]+)\./im.exec(body)?.[1]?.trim() || null;
+  const cavityLine = /^\s*Cavity type\s*:\s*(.+?)\s*$/im.exec(body)?.[1] || '';
+  const alpha = new RegExp(String.raw`\(Alpha=\s*(${NUMBER})\)`, 'i').exec(cavityLine)?.[1];
+  const cavityType = cavityLine.replace(/\s*\(Alpha=.*$/i, '').trim() || null;
+  const cavityAlgorithm = /^\s*Cavity algorithm\s*:\s*([^.\n]+)\.?/im.exec(body)?.[1]?.trim() || null;
+  const nonElectrostaticLine = new RegExp(
+    String.raw`^\s*([A-Za-z0-9-]+)\s+\(non-electrostatic\)\s+energy\s+\(kcal/mol\)\s*=\s*(${NUMBER})\s*$`,
+    'im',
+  ).exec(body);
+  const nonElectrostaticHartree = new RegExp(
+    String.raw`^\s*PCM non-electrostatic energy\s*=\s*(${NUMBER})\s+Hartrees?\.?\s*$`,
+    'im',
+  ).exec(body)?.[1];
+  const nonElectrostatic = nonElectrostaticLine
+    ? {
+      name: nonElectrostaticLine[1],
+      kcalPerMol: toNumber(nonElectrostaticLine[2]),
+      hartree: toNumber(nonElectrostaticHartree),
+    }
+    : null;
+  return {
+    provider: 'gaussian-scrf',
+    model,
+    headerModel,
+    solvent: solventLine?.[1]?.trim() || null,
+    dielectricConstant: toNumber(solventLine?.[2]),
+    epsilonInfinity: toNumber(solventLine?.[3]),
+    radiiSet: radii,
+    cavityType,
+    cavityAlpha: toNumber(alpha),
+    cavityAlgorithm,
+    // The SCF Done energy is the total in solution. It is not a solvation
+    // contribution, and on SMD it already includes the non-electrostatic term.
+    totalEnergyHartree: scf?.energyHartree ?? null,
+    totalEnergyIncludesNonElectrostatic: Boolean(nonElectrostatic),
+    ...(nonElectrostatic ? { nonElectrostatic } : {}),
+    // The log may print an electrostatic term; these two fixtures do not. Absent
+    // means "not printed", never zero.
+    electrostaticHartree: null,
+    gasPhaseHartree: null,
+    deltaHartree: null,
+    deltaKcal: null,
+    energyKind: 'SCF total energy in solution (not a solvation free energy)',
   };
 }
 
@@ -1516,6 +1589,8 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   const composite = compositeLink ? compositeLink.composite : null;
   const counterpoiseLink = reversed.find((link) => link.counterpoise !== null) || null;
   const counterpoise = counterpoiseLink ? counterpoiseLink.counterpoise : null;
+  const solvationLink = reversed.find((link) => link.solvation) || null;
+  const solvation = solvationLink ? solvationLink.solvation : null;
   let finalEnergy;
   if (composite?.expected) {
     const hartree = composite.found && Number.isFinite(composite.zeroPointEnergyHartree)
@@ -1675,6 +1750,8 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     finalEnergy,
     composite,
     counterpoise,
+    // Issue 223: absent on a vacuum run, never a null section.
+    ...(solvation ? { solvation } : {}),
     spinContamination,
     spinSquared,
     wavefunctionStability,
