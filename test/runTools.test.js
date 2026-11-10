@@ -99,19 +99,22 @@ describe('PATH detection names (#258)', () => {
   });
 
   it('reports crest and obabel from stub PATH entries', () => {
-    const files = new Set(['/bin/crest', '/bin/obabel']);
+    // path.join is used by the detector, so the stub paths have to be built the
+    // same way: '/bin/crest' is not what the detector looks for on Windows.
+    const bindir = path.join(path.parse(process.cwd()).root, 'bin');
+    const files = new Set([path.join(bindir, 'crest'), path.join(bindir, 'obabel')]);
     const access = (candidate) => {
       if (!files.has(candidate)) throw new Error('ENOENT');
     };
     const stat = () => ({ isFile: () => true });
     const status = companionToolStatus({
       platform: 'linux',
-      pathValue: ['/missing', '/bin'].join(path.delimiter),
+      pathValue: [path.join(bindir, 'missing'), bindir].join(path.delimiter),
       access,
       stat,
     });
-    expect(status.crest).toEqual({ ok: true, path: '/bin/crest' });
-    expect(status.obabel).toEqual({ ok: true, path: '/bin/obabel' });
+    expect(status.crest).toEqual({ ok: true, path: path.join(bindir, 'crest') });
+    expect(status.obabel).toEqual({ ok: true, path: path.join(bindir, 'obabel') });
     expect(status.scorer).toEqual({ ok: false, path: null });
   });
 

@@ -30,6 +30,12 @@ const FIXTURES = path.join(ROOT, 'test/fixtures/multiwfn');
 const read = (name) => fsp.readFile(path.join(FIXTURES, name), 'utf8');
 const roots = [];
 
+// The fake Multiwfn below is a POSIX shell script, like the other sidecar fakes.
+// `Windows package` runs this suite on windows-latest, where it cannot start, so
+// the two tests that spawn it are skipped there; the parsers, menu scripts and
+// validation run on every platform.
+const canSpawnShell = process.platform !== 'win32';
+
 const water = [
   { element: 'O', x: 0, y: 0, z: 0 },
   { element: 'H', x: 0.9572, y: 0, z: 0 },
@@ -329,7 +335,7 @@ describe('issue #270 — the result card and the report', () => {
 });
 
 describe('issue #270 — the sidecar through the queue', () => {
-  it('runs a fake Multiwfn, writes run.json with version, script and input hash', async () => {
+  it.skipIf(!canSpawnShell)('runs a fake Multiwfn, writes run.json with version, script and input hash', async () => {
     const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'multiwfn-'));
     roots.push(base);
     const queuesRoot = path.join(base, 'queues');
@@ -400,7 +406,7 @@ describe('issue #270 — the sidecar through the queue', () => {
     expect(menu).toBe(record.provenance.menuScript);
   });
 
-  it('refuses a checkpoint with no density matrix by name', async () => {
+  it.skipIf(!canSpawnShell)('refuses a checkpoint with no density matrix by name', async () => {
     const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'multiwfn-nodensity-'));
     roots.push(base);
     const queuesRoot = path.join(base, 'queues');

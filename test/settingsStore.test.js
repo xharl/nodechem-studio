@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { defaultAppSettings } from '../src/shared/appSettings.js';
+import { defaultAppSettings, settingsPathFor } from '../src/shared/appSettings.js';
 import {
   createSettingsStore,
   readSettingsFile,
@@ -28,7 +28,10 @@ describe('settings store (issue 252)', () => {
     const store = createSettingsStore({ userDataDir: dir });
     const result = await store.get();
     expect(result.settings).toEqual(defaultAppSettings());
-    expect(result.path).toBe(path.join(dir, 'settings.json'));
+    // settingsPathFor joins with '/', deliberately: the module is bundled for the
+    // renderer and cannot import node:path, and appSettings.test.js pins that
+    // behaviour for a Windows user-data path too.
+    expect(result.path).toBe(settingsPathFor(dir));
   });
 
   it('writes atomically and reads the same document back', async () => {
