@@ -49,6 +49,17 @@ import {
   parsePsi4Output,
   psi4MethodBlock,
 } from './psi4.js';
+import {
+  PYSCF_CAPABILITIES,
+  PYSCF_ENGINE_ID,
+  buildPyscfInput,
+  classifyPyscfTermination,
+  isSafePyscfInputName,
+  isSafePyscfOutputName,
+  makePyscfFixtureOutput,
+  parsePyscfOutput,
+  pyscfMethodBlock,
+} from './pyscf.js';
 
 const GAUSSIAN_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 const GAUSSIAN_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
@@ -202,11 +213,39 @@ export const PSI4_ENGINE = Object.freeze({
   classify: classifyPsi4Termination,
 });
 
+export const PYSCF_ENGINE = Object.freeze({
+  id: PYSCF_ENGINE_ID,
+  label: PYSCF_CAPABILITIES.label,
+  capabilities: PYSCF_CAPABILITIES,
+
+  acceptsInputName: isSafePyscfInputName,
+  acceptsOutputName: isSafePyscfOutputName,
+
+  buildInput: buildPyscfInput,
+  methodBlock: pyscfMethodBlock,
+  parse: parsePyscfOutput,
+
+  /**
+   * PySCF leaves no restart file this app can hand to another block. Empty is
+   * the honest answer: a cross-engine edge carries the parsed geometry.
+   */
+  checkpointArtifact() {
+    return '';
+  },
+
+  makeFixture({ imaginary = 0 } = {}) {
+    return makePyscfFixtureOutput({ imaginary });
+  },
+
+  classify: classifyPyscfTermination,
+});
+
 export const ENGINES = Object.freeze({
   gaussian: GAUSSIAN_ENGINE,
   xtb: XTB_ENGINE,
   orca: ORCA_ENGINE,
   psi4: PSI4_ENGINE,
+  pyscf: PYSCF_ENGINE,
 });
 
 export const ENGINE_IDS = Object.freeze(Object.keys(ENGINES));

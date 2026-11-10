@@ -1,0 +1,83 @@
+{
+  "activeSpace": null,
+  "basis": "def2-SVP",
+  "basisKey": "def2-svp",
+  "charge": 0,
+  "converged": false,
+  "correlationEnergy": null,
+  "densityFit": true,
+  "ecp": false,
+  "energy": null,
+  "engine": "pyscf",
+  "error": {
+    "message": "SCF did not converge after 1 cycles",
+    "stage": "scf",
+    "type": "SCFNotConverged"
+  },
+  "frequencies": null,
+  "geometry": [
+    {
+      "element": "O",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.1173
+    },
+    {
+      "element": "H",
+      "x": 0.0,
+      "y": 0.7572,
+      "z": -0.4692
+    },
+    {
+      "element": "H",
+      "x": 0.0,
+      "y": -0.7572,
+      "z": -0.4692
+    }
+  ],
+  "hessian": null,
+  "hessianOmitted": false,
+  "jobType": "SP",
+  "method": "HF",
+  "methodKey": "hf",
+  "moEnergies": [
+    -20.78564514871003,
+    -1.6038411680098141,
+    -0.7547183477050581,
+    -0.5892049631607259,
+    -0.47872511577284804,
+    0.09903852160941984,
+    0.19804548029177838,
+    0.7114278919220189,
+    0.7862362134099916,
+    1.0562973743674275,
+    1.0813036399763196,
+    1.159922924706252,
+    1.2589479565918538,
+    1.56419262177817,
+    1.608470054973938,
+    1.7649051665272975,
+    2.040289536449424,
+    2.487993308982368,
+    2.521605997838135,
+    3.17599427894253,
+    3.233483898069387,
+    3.4300855790664704,
+    3.762538765844366,
+    4.090836505310764
+  ],
+  "multiplicity": 1,
+  "nBasis": 24,
+  "nIter": 1,
+  "ok": false,
+  "optimization": null,
+  "pyscfVersion": "2.15.0",
+  "reference": "rhf",
+  "scfConverged": false,
+  "scfEnergy": -75.92255608563181,
+  "schema": "nodechem.pyscf.v1",
+  "solvation": null,
+  "thermochemistry": null,
+  "triplesCorrection": null,
+  "warnings": []
+}

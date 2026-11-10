@@ -67,6 +67,8 @@ const ENGINE_BINARIES = Object.freeze({
   psi4: ['psi4'],
   gaussian: ['g16', 'g09'],
   orca: ['orca'],
+  // PySCF is a Python library: the stable launcher first, then an interpreter.
+  pyscf: ['pyscf-runner', 'python3', 'python'],
 });
 
 function engineStatus() {
@@ -432,6 +434,11 @@ const EXECUTABLE_DIALOG = Object.freeze({
     windowsDefault: () => 'C:\\ORCA\\orca.exe',
     windowsFilter: 'ORCA for Windows',
   },
+  pyscf: {
+    title: 'Locate the Python interpreter that has PySCF (or pyscf-runner)',
+    windowsDefault: () => 'C:\\Python313\\python.exe',
+    windowsFilter: 'Python interpreter',
+  },
 });
 
 async function chooseExecutable(config = {}) {
@@ -440,7 +447,8 @@ async function chooseExecutable(config = {}) {
   const posixDefault = engine.id === 'xtb' ? '/usr/local/bin/xtb'
     : engine.id === 'orca' ? '/opt/orca/orca'
       : engine.id === 'psi4' ? '/opt/conda/bin/psi4'
-        : defaultGaussianExecutablePath(process.platform);
+        : engine.id === 'pyscf' ? '/usr/bin/python3'
+          : defaultGaussianExecutablePath(process.platform);
   const result = await dialog.showOpenDialog(mainWindow, {
     title: copy.title,
     defaultPath: process.platform === 'win32' ? copy.windowsDefault() : posixDefault,

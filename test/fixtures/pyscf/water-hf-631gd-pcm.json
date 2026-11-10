@@ -1,0 +1,78 @@
+{
+  "activeSpace": null,
+  "basis": "6-31G(d)",
+  "basisKey": "6-31g(d)",
+  "charge": 0,
+  "converged": true,
+  "correlationEnergy": null,
+  "densityFit": true,
+  "ecp": false,
+  "energy": -76.02057700618754,
+  "engine": "pyscf",
+  "error": null,
+  "frequencies": null,
+  "geometry": [
+    {
+      "element": "O",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.1173
+    },
+    {
+      "element": "H",
+      "x": 0.0,
+      "y": 0.7572,
+      "z": -0.4692
+    },
+    {
+      "element": "H",
+      "x": 0.0,
+      "y": -0.7572,
+      "z": -0.4692
+    }
+  ],
+  "hessian": null,
+  "hessianOmitted": false,
+  "jobType": "SP",
+  "method": "HF",
+  "methodKey": "hf",
+  "moEnergies": [
+    -20.550720922054754,
+    -1.336989851454201,
+    -0.7011687744765296,
+    -0.5734062173329679,
+    -0.4979146316351053,
+    0.2363374107024696,
+    0.3289225274243992,
+    1.0258028492444975,
+    1.1645119012021223,
+    1.1763977926820726,
+    1.1871588775102817,
+    1.3833176909178095,
+    1.6654996144519763,
+    2.0186953910630017,
+    2.0326081186484233,
+    2.065130245272017,
+    2.632787318758239,
+    2.947825407495958
+  ],
+  "multiplicity": 1,
+  "nBasis": 18,
+  "nIter": 9,
+  "ok": true,
+  "optimization": null,
+  "pyscfVersion": "2.15.0",
+  "reference": "rhf",
+  "scfConverged": true,
+  "scfEnergy": -76.02057700618754,
+  "schema": "nodechem.pyscf.v1",
+  "solvation": {
+    "model": "PCM",
+    "provider": "pyscf-pcm",
+    "solvent": "water",
+    "solventLabel": "Water"
+  },
+  "thermochemistry": null,
+  "triplesCorrection": null,
+  "warnings": []
+}

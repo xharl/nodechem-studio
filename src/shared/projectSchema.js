@@ -41,6 +41,7 @@ import { COMPLEX_MAX_MEMBERS, COMPLEX_PLACEMENT_MODES } from './complex.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import { ORCA_PNO_THRESHOLDS } from './engines/orca.js';
+import { PYSCF_SOLVATION_MODELS } from './engines/pyscf.js';
 import { validateBlockContracts } from './blockContracts.js';
 import { SCORER_SPECS } from './scorer.js';
 import {
@@ -323,6 +324,9 @@ const SETTINGS_KEYS = new Set([
   // ADR 0001 §2.10: a scorer provider on a calculate block. The block stays
   // calculate; the provider is not an engine and never enters ENGINE_IDS.
   'provider',
+  // Issue 269: the CASSCF active space, written "electrons,orbitals". Absent
+  // by default, so a project that never used CASSCF serialises unchanged.
+  'pyscfActiveSpace',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
@@ -412,8 +416,8 @@ export function defaultSettings(overrides = {}) {
     // Psi4 takes dispersion through the functional name (ωB97X-D, B97-D) and
     // its builder refuses any EmpiricalDispersion field, so a default block
     // must not plant one — otherwise the factory output its own UI creates
-    // could never be built into input.
-    settings.dispersion = composite || settings.engine === 'psi4'
+    // could never be built into input. PySCF has no D3/D4 keyword either.
+    settings.dispersion = composite || settings.engine === 'psi4' || settings.engine === 'pyscf'
       ? ''
       : defaultDispersionFor(settings.method);
   }
@@ -521,6 +525,18 @@ function readEnum(c, value, allowed, path, { legacy = false, fallback = '', requ
  * for solvation then requires naming a model xTB implements.
  */
 function readSolvationModel(c, value, path, { engine = 'gaussian', solvation = false, legacy = false } = {}) {
+  if (engine === 'pyscf') {
+    if (value === undefined || value === null) return PYSCF_SOLVATION_MODELS[0];
+    if (value === '') return '';
+    if (PYSCF_SOLVATION_MODELS.includes(value)) return value;
+    // A Gaussian model name on a solvation-off block is the inert placeholder
+    // `defaultSettings()` writes, not a request; keep it readable.
+    if (!solvation && SOLVATION_MODELS.includes(value)) return value;
+    c.error(path,
+      `"${oneLine(value)}" is not a PySCF solvation model; PySCF accepts `
+      + `${PYSCF_SOLVATION_MODELS.join(' or ')}.`);
+    return PYSCF_SOLVATION_MODELS[0];
+  }
   if (engine !== 'xtb') {
     return readEnum(c, value, SOLVATION_MODELS, path, { legacy, fallback: 'PCM' });
   }
@@ -1757,6 +1773,16 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   const freezeCore = source.freezeCore === undefined || source.freezeCore === null || source.freezeCore === ''
     ? null
     : readEnum(c, source.freezeCore, FREEZE_CORE_CHOICES, `${path}.freezeCore`, { legacy, fallback: '' }) || null;
+  // Issue 269: the CASSCF active space. Absent means "not set"; a malformed
+  // value is a save-time error with the field named, not a silent guess.
+  const pyscfActiveSpace = source.pyscfActiveSpace === undefined || source.pyscfActiveSpace === null
+    || source.pyscfActiveSpace === ''
+    ? null
+    : readString(c, source.pyscfActiveSpace, `${path}.pyscfActiveSpace`, { legacy, fallback: '', max: 16 });
+  if (pyscfActiveSpace && !/^\d{1,2}\s*,\s*\d{1,2}$/.test(pyscfActiveSpace)) {
+    c.error(`${path}.pyscfActiveSpace`,
+      'must be written as electrons,orbitals (for example 6,6 for CAS(6,6)).');
+  }
   // Issue 227: the PNO cutoff. Absent means "not set"; the ORCA builder then
   // writes NormalPNO explicitly for DLPNO-CCSD(T) and refuses the setting on a
   // method that has no PNO truncation.
@@ -1852,6 +1878,7 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // which is the same defect as issue 181 in a different list. Absent by
     // default, so a project that never set them serialises exactly as before.
     ...(freezeCore !== null ? { freezeCore } : {}),
+    ...(pyscfActiveSpace !== null ? { pyscfActiveSpace } : {}),
     ...(pnoThreshold !== null ? { pnoThreshold } : {}),
     ...(matrixElement ? { matrixElement } : {}),
     ...(recordTransitionDipoles !== null ? { recordTransitionDipoles } : {}),

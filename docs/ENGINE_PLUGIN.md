@@ -2,12 +2,12 @@
 
 The engine layer is a seam, not a switch statement. `src/shared/engines/registry.js`
 exposes `registerEngine(spec)`: a host hands it a descriptor and receives a
-frozen engine object shaped like the static four, without editing
+frozen engine object shaped like the static five, without editing
 `src/shared/engines/index.js` or rebuilding the app.
 
-The four shipped engines — Gaussian 16, xTB, ORCA and Psi4 — remain in the
-static registry and keep working exactly as before. The seam is additive: it is
-how a new engine is described, not a replacement for the built-ins.
+The five shipped engines — Gaussian 16, xTB, ORCA, Psi4 and PySCF — remain in
+the static registry and keep working exactly as before. The seam is additive: it
+is how a new engine is described, not a replacement for the built-ins.
 
 ## The spec
 

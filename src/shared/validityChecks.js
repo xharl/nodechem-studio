@@ -180,7 +180,7 @@ export const VALIDITY_CHECKS = Object.freeze([
     title: 'Solvation evidence',
     phases: Object.freeze(['post']),
     blocking: false,
-    engines: Object.freeze(['gaussian', 'orca', 'psi4', 'xtb']),
+    engines: Object.freeze(['gaussian', 'orca', 'psi4', 'pyscf', 'xtb']),
     description: 'A route that requested solvation and a log that reported none (or the reverse) is named instead of being silently treated as gas phase.',
   },
   {

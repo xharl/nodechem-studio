@@ -5,6 +5,7 @@ import { GaussianRunner } from './gaussianRunner.js';
 import { XtbRunner } from './xtbRunner.js';
 import { OrcaRunner } from './orcaRunner.js';
 import { Psi4Runner } from './psi4Runner.js';
+import { PyscfRunner } from './pyscfRunner.js';
 import { stageCheckpoint } from './checkpoint.js';
 import { isFile, sha256File, sha256Text } from './hashing.js';
 import { evaluateGates, outputEvidence } from '../../src/shared/gaussianOutput.js';
@@ -81,6 +82,7 @@ export class RunManager {
     if (engine.id === 'gaussian') return new GaussianRunner();
     if (engine.id === 'orca') return new OrcaRunner();
     if (engine.id === 'psi4') return new Psi4Runner();
+    if (engine.id === 'pyscf') return new PyscfRunner();
     // Any engine registered without a runner would otherwise fall through to
     // the Gaussian runner, which would launch g16 on another program's input
     // and print a parseable-looking failure. Refuse by name instead.
@@ -419,6 +421,12 @@ export class RunManager {
           argv,
           threads: payload.settings?.psi4Threads ?? payload.settings?.nproc ?? null,
         });
+      } else if (engine.id === 'pyscf') {
+        invocation = runner.run({
+          ...runArgs,
+          argv,
+          threads: payload.settings?.nproc ?? null,
+        });
       } else {
         invocation = runner.run({
           ...runArgs,
@@ -442,6 +450,11 @@ export class RunManager {
       // is the evidence. When it printed nothing, stderr is all anyone has.
       if (engine.id === 'psi4') {
         context.stderr = result.stderr || null;
+      }
+      if (engine.id === 'pyscf') {
+        context.stderr = result.stderr || null;
+        context.recordText = result.recordText || null;
+        context.recordFile = result.recordFile || null;
       }
       if (engine.id === 'orca') {
         context.stderr = result.stderr || null;
@@ -467,13 +480,14 @@ export class RunManager {
       }
       // A run that printed nothing has no record to read. Saying "needs review"
       // of an empty file would suggest there is something to review.
-      if ((engine.id === 'orca' || engine.id === 'psi4') && String(outputText || '').trim() === '') {
+      if ((engine.id === 'orca' || engine.id === 'psi4' || engine.id === 'pyscf')
+        && String(outputText || '').trim() === '') {
         const detail = result.stderr && String(result.stderr).trim()
           ? `; stderr said: ${String(result.stderr).trim().slice(0, 400)}`
           : '; stderr was empty too';
         throw new Error(`${engine.label} produced no output${detail}.`);
       }
-      const classified = engine.classify(outputText, result.exitCode);
+      const classified = engine.classify(outputText, result.exitCode, { stderr: result.stderr });
       if (classified.code === 'none' && Number(result.exitCode) !== 0) {
         const detail = engine.id === 'orca' && result.stderr
           ? ` stderr said: ${String(result.stderr).trim().slice(0, 400)}`
@@ -511,6 +525,7 @@ export class RunManager {
       argv: Array.isArray(payload.argv) ? payload.argv.map(String) : null,
       route: payload.route || null,
       ...(spinCheckpoint ? { fchk: spinCheckpoint } : {}),
+      ...(context.recordText ? { recordText: context.recordText } : {}),
     });
     // xTB writes the optimised geometry to `xtbopt.xyz` instead of printing it,
     // so a downstream block can only receive a parsed geometry if it is read
@@ -650,6 +665,14 @@ export class RunManager {
         // side files the process actually wrote.
         ...(context.engineId === 'psi4'
           ? { psi4: { stderr: context.stderr ?? null } }
+          : {}),
+        ...(context.engineId === 'pyscf'
+          ? {
+            pyscf: {
+              stderr: context.stderr ?? null,
+              recordFile: context.recordFile ?? null,
+            },
+          }
           : {}),
         ...(context.engineId === 'orca'
           ? {

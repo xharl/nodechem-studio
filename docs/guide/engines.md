@@ -1,6 +1,6 @@
 # Engines
 
-NodeChem Studio drives four calculation engines. The engine is resolved per block: a calculation
+NodeChem Studio drives five calculation engines. The engine is resolved per block: a calculation
 block that names its own engine (inspector → **Engine**) runs on that engine, and a block that leaves
 the field at **Project default** follows **Molecule → Defaults**. A saved project keeps whatever it
 saved; the app never switches an engine behind your back, and a block that never set the field keeps
@@ -633,22 +633,107 @@ What is still not proven: a 1.11 failure mode other than the ones in the corpus 
 the error banner and a non-converged optimisation), and any platform other than Linux. A block shape
 the parser does not recognise is reported as `unknown`, never guessed.
 
+## PySCF — open source, Apache-2.0
+
+PySCF is an open-source Python electronic-structure package. In this app it gives you:
+
+- **Methods**: HF, B3LYP, PBE0, M06-2X, MP2, CCSD, CCSD(T) and CASSCF.
+- **Bases**: def2-SVP, def2-TZVP, cc-pVDZ, cc-pVTZ and 6-31G(d). For a def2 basis, PySCF supplies the
+  matching ECP automatically, so iodine and heavier elements build without a separate ECP field.
+- **Job types**: `SP`, `Opt`, `Freq` and `Opt Freq`. Optimisations use geomeTRIC (installed with
+  PySCF's `geometric` extra); frequencies use PySCF's analytic Hessian, and the app reports 3N−6
+  modes and the imaginary count.
+- **Implicit solvation**: PCM (IEF-PCM) and C-PCM in water, dichloromethane, THF, toluene,
+  acetonitrile, methanol, ethanol, chloroform, acetone or DMSO. It is a single-point setting: the
+  deck applies the continuum to the SCF, records the model and solvent, and refuses Opt, Freq and
+  Opt Freq by name.
+- **CASSCF** with an explicit **Active space** field written as `electrons,orbitals` — for example
+  `6,6` for CAS(6,6). The deck builds `mcscf.CASSCF(mf, ncas, nelecas)` on an RHF or ROHF reference
+  and records the active space in the result. CASSCF is a single point in this build; Opt, Freq and
+  Opt Freq are refused by name.
+
+**The deck is a fixed program.** PySCF input is Python, so the builder does not assemble a script
+from project fields. It writes one reviewed deck (`src/shared/engines/pyscfDeck.js`) and passes the
+molecule, method, basis, charge, multiplicity, solvation and active space as a single base64-encoded
+JSON document. A title containing a quote, a semicolon or `import os` stays a string in that document;
+it is never interpolated as a statement. The deck prints a `nodechem.pyscf.v1` JSON record between
+`NCS-PYSCF-RESULT-BEGIN` and `NCS-PYSCF-RESULT-END` and writes the same record beside itself as
+`<task>.json`. The parser reads that record — energy, SCF convergence and cycle count, MO energies,
+geometry, frequencies and Hessian, thermochemistry, PySCF version, method, basis, density fitting,
+active space and solvation — and falls back to PySCF's printed text only for a log the user supplies;
+the fallback says `recordSource: text-fallback` and carries no molecular record.
+
+**Which energy is reported.** The record has one `energy` field, set by the job: the SCF total for HF
+and DFT (Opt Freq reports the energy at the final geometry), the MP2 total for MP2, the CCSD total for
+CCSD and the CCSD(T) total for CCSD(T). The CCSD(T) perturbative correction is also kept as
+`extras.triplesCorrection`, so the total is not confused with the CCSD energy it started from.
+
+What a PySCF block will **not** do in this build, each refused by name rather than dropped:
+
+- **TD-DFT and excited states** — no excited-state module is written. The `TD-DFT` job type, the
+  excited-state gates and the `tddft` setting are refused by name.
+- **Periodic calculations** — `pyscf.pbc` is not used; a `periodic` setting is refused.
+- **Relativistic and spin–orbit calculations** — no X2C, DKH or SOC Hamiltonian is written; the
+  setting is refused.
+- **QM/MM** — no point-charge embedding; the setting is refused.
+- **GPU** — the deck selects the CPU build; a `gpu` setting is refused.
+- **NMR shieldings** — the NMR job type is refused.
+- **A CCSD(T) Hessian** — refused by name. Frequencies are HF/DFT only in v1, and MP2/CCSD/CCSD(T)
+  are single points. A frequency at a correlated level needs a method-specific Hessian this deck does
+  not write.
+- **SMD, CPCM and COSMO** — PySCF's `solvent.PCM` writes PCM and C-PCM; the other models are refused
+  by name, and the result is an electronic energy, not a solvation free energy.
+- **Checkpoint hand-off** — PySCF leaves no restart file this app hands to another block. A downstream
+  block reads the upstream geometry instead; the queue marks the edge geometry-only and rewrites the
+  downstream deck's molecule.
+- **A method or basis not in the lists above** — refused by name with the supported list. No
+  functional or basis is guessed from a Gaussian route.
+
+**Setting up PySCF**
+
+1. Install PySCF 2.x into a Python 3.9+ environment: `pip install pyscf geometric` (or
+   `conda install -c conda-forge pyscf geometric`). The app does not bundle Python or PySCF.
+2. Set **Molecule → Defaults → Engine** to `PySCF`, then choose method and basis. For CASSCF, enter
+   the active space on the block.
+3. In **Run**, select the Python interpreter that has PySCF — `/usr/bin/python3`, a virtualenv's
+   `python`, or a `pyscf-runner` wrapper — with **Browse**. A bare `python3` is accepted and resolved
+   on `PATH`, with a warning that an absolute path is more reproducible.
+4. **Preflight** checks that the executable exists, that its name is a Python interpreter or
+   `pyscf-runner`, that it is runnable on Linux/macOS, and — for a plain interpreter — runs
+   `python -c "import pyscf; print(pyscf.__version__)"` so a Python without PySCF fails as
+   `No module named 'pyscf'`, not as an unknown engine.
+5. **Run it.** The app spawns `python <task>.py` in the run folder. The deck prints the record to
+   stdout; the runner also reads `<task>.json`, so a truncated capture still parses. Threads come
+   from the block's `nproc` through `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and
+   `NUMEXPR_NUM_THREADS`.
+
+**Provenance of the fixtures.** `test/fixtures/pyscf/` holds records from real PySCF 2.15.0 runs, not
+synthetic numbers; `PROVENANCE.md` beside them lists the interpreter, the command and the reference
+values. Water at HF/def2-SVP and B3LYP/def2-SVP was also run through the official `psi4/psi4:1.11`
+container on the same geometry and density-fitted SCF: the totals agree to **5.6 × 10⁻¹¹** and
+**1.7 × 10⁻⁷** Eh respectively. The PCM record matches an independent direct `solvent.PCM` call to all
+printed digits, and the CASSCF record matches an independent `mcscf.CASSCF` call to 7 × 10⁻¹⁰ Eh.
+
+What is not proven: an optimisation or frequency at a correlated level (refused, not implemented), a
+periodic or relativistic calculation (refused), and any platform other than Linux. A record shape the
+parser does not recognise is reported as `unknown`, never guessed.
+
 ## Which settings belong to which engine
 
-| Setting | Gaussian 16 | xTB | ORCA 6 |
-| --- | --- | --- | --- |
-| Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` | `! method basis` |
-| Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload | Mapped to ORCA keywords; population refused |
-| Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile | CPCM / SMD, Water…Acetonitrile |
-| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq |
-| Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` | `TightOpt` / `VeryTightOpt`, `DEFGRID2/3` |
-| Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` | `%maxcore` (MB per core), `%pal nprocs` |
-| Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; queue transfer not implemented |
-| Validity checks | Six checks, pre and post run | Four applicable checks; Gaussian-only ones reported *not applicable* | Canonical gates on the parsed result; Gaussian-route checks do not apply |
-| Dry run | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture |
+| Setting | Gaussian 16 | xTB | ORCA 6 | Psi4 | PySCF |
+| --- | --- | --- | --- | --- | --- |
+| Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` | `! method basis` | `set reference` + method/basis | Recorded method/basis; CASSCF takes an active space |
+| Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload | Mapped to ORCA keywords; population refused | Basis used; unsupported fields refused by name | Basis used; dispersion, SCF, grid and population refused |
+| Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile | CPCM / SMD, Water…Acetonitrile | DDX PCM / COSMO, Water…DMSO | PCM / C-PCM, Water…DMSO |
+| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq |
+| Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` | `TightOpt` / `VeryTightOpt`, `DEFGRID2/3` | Psi4 optimizer defaults | geomeTRIC defaults |
+| Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` | `%maxcore` (MB per core), `%pal nprocs` | `Threads (OMP_NUM_THREADS)` | `Threads (OMP_NUM_THREADS)` |
+| Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; queue transfer not implemented | None; geometry-only hand-off | None; geometry-only hand-off |
+| Validity checks | Six checks, pre and post run | Four applicable checks; Gaussian-only ones reported *not applicable* | Canonical gates on the parsed result; Gaussian-route checks do not apply | Canonical gates on the parsed result | Canonical gates plus named refusals |
+| Dry run | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture |
 
-A dry run is a fixture for both engines: it writes a synthetic file headed `FIXTURE OUTPUT`, starts
-no process, and is never a calculation. ORCA uses the same fixture path.
+A dry run is a fixture for every engine: it writes a synthetic file headed `FIXTURE OUTPUT`, starts
+no process, and is never a calculation.
 
 ## Next
 

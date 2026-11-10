@@ -2,6 +2,7 @@ import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { engineOrDefault } from '../../src/shared/engines/index.js';
 import { XtbRunner } from './xtbRunner.js';
 import {
@@ -51,6 +52,75 @@ async function directoryReadable(dir, platform) {
   }
 }
 
+/**
+ * A Python interpreter or the `pyscf-runner` wrapper. `python3.13`, `python`,
+ * `python.exe` and `pyscf-runner.cmd` are all accepted; anything else is
+ * refused by name, because the deck is passed as argv[0] to exactly one of
+ * these.
+ */
+const PYSCF_EXECUTABLE = /^(?:python(?:\d+(?:\.\d+)*)?|pyscf-runner)(?:\.(?:exe|cmd|bat))?$/i;
+
+/** Resolve a bare program name against PATH, the way `spawn` will. */
+async function resolveExecutable(executable, env) {
+  const text = String(executable || '').trim();
+  if (!text) return '';
+  if (path.isAbsolute(text) || text.includes('/') || text.includes('\\')) return text;
+  const dirs = String(env?.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, text);
+    // eslint-disable-next-line no-await-in-loop
+    const stat = await fsp.stat(candidate).catch(() => null);
+    if (stat?.isFile()) return candidate;
+  }
+  return '';
+}
+
+/**
+ * Ask the interpreter itself whether PySCF is importable. A user can point at
+ * any `python3`, and the one on PATH is often not the one with PySCF
+ * installed; a preflight that only checked the file name would pass and the
+ * deck would then fail with `ModuleNotFoundError`. The probe is bounded and
+ * returns the interpreter's own message.
+ */
+function pyscfImportProbe(executable, { timeoutMs = 15000, env = process.env } = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (verdict) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(verdict);
+    };
+    const child = spawn(executable, ['-c', 'import pyscf; print(pyscf.__version__)'], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      finish({ ok: false, detail: `PySCF import probe did not answer within ${Math.round(timeoutMs / 1000)} s.` });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    child.once('error', (error) => finish({ ok: false, detail: `Could not run ${executable}: ${error.message}` }));
+    child.once('close', (code) => {
+      const version = stdout.trim().split(/\s+/).pop() || '';
+      if (code === 0 && /\d+\.\d+/.test(version)) {
+        finish({ ok: true, detail: `pyscf ${version}` });
+        return;
+      }
+      const message = stderr.trim().split(/\r?\n/).filter(Boolean).pop() || stdout.trim().split(/\r?\n/).filter(Boolean).pop() || '';
+      const named = /No module named ['"]?pyscf['"]?/i.test(message)
+        ? 'Python could not import pyscf: No module named \'pyscf\'. Install it with `pip install pyscf` '
+          + 'into this interpreter, or choose the interpreter that has it.'
+        : `The interpreter exited with code ${code}${message ? `: ${message}` : ''}`;
+      finish({ ok: false, detail: named });
+    });
+  });
+}
+
 export async function preflight(config = {}, options = {}) {
   const platform = options.platform || process.platform;
   const env = options.env || process.env;
@@ -64,6 +134,7 @@ export async function preflight(config = {}, options = {}) {
   const isXtb = engine.id === 'xtb';
   const isOrca = engine.id === 'orca';
   const isPsi4 = engine.id === 'psi4';
+  const isPyscf = engine.id === 'pyscf';
   const dryRun = Boolean(config.dryRun);
   const executable = String(config.executable || '').trim();
   const scratchDir = String(config.scratchDir || '').trim();
@@ -141,6 +212,48 @@ export async function preflight(config = {}, options = {}) {
         }
       } catch (error) {
         add('executable-exists', 'Executable exists', false, error.message);
+      }
+    }
+  } else if (isPyscf) {
+    add('executable', 'Python or pyscf-runner executable configured', Boolean(executable), executable || 'Not configured');
+    if (executable) {
+      // A bare `python3` is what a user naturally types; resolve it on PATH the
+      // way spawn will, rather than failing a stat on a name.
+      const resolved = await resolveExecutable(executable, env);
+      if (!resolved) {
+        add('executable-exists', 'Executable exists', false,
+          `${executable} was not found on PATH or as a file.`);
+      } else {
+        try {
+          const stat = await fsp.stat(resolved);
+          add('executable-exists', 'Executable exists', stat.isFile(), resolved);
+          const base = path.basename(resolved);
+          const nameOk = PYSCF_EXECUTABLE.test(base);
+          add('executable-name', 'Python interpreter or pyscf-runner', nameOk,
+            nameOk
+              ? `Found ${base}`
+              : `${base} is neither a python interpreter (python, python3, python3.13) nor pyscf-runner`);
+          if (isPosix(platform)) {
+            const permission = await executablePermission(resolved);
+            add('executable-permission', 'Console executable is runnable', permission.ok, permission.detail);
+          }
+          if (nameOk && !/^pyscf-runner/i.test(base)) {
+            const probe = await pyscfImportProbe(resolved, { env });
+            add('pyscf-import', 'PySCF importable from this interpreter', probe.ok, probe.detail);
+          } else if (nameOk) {
+            add('pyscf-import', 'PySCF importable from this interpreter', true,
+              'Delegated to the pyscf-runner wrapper; the wrapper must run an interpreter with PySCF installed.');
+          }
+          if (!path.isAbsolute(resolved)) {
+            warnings.push({
+              id: 'pyscf-full-path',
+              label: 'PySCF executable is not an absolute path',
+              detail: 'The runner starts this name through PATH. Record the absolute interpreter path to make the run reproducible.',
+            });
+          }
+        } catch (error) {
+          add('executable-exists', 'Executable exists', false, error.message);
+        }
       }
     }
   } else {

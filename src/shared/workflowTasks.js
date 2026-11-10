@@ -573,8 +573,12 @@ export function checkpointSourceFor(project, node, checkpointTaskId = null) {
   if (!source) return null;
   const taskId = checkpointTaskId || source.id;
   // Across engines there is no artifact the downstream engine can read: the
-  // parsed final geometry is handed over instead, and the edge says so.
-  if (engineForNode(project, source).id !== engineForNode(project, node).id) {
+  // parsed final geometry is handed over instead, and the edge says so. PySCF
+  // has no restart file even in its own engine, because the deck is a script
+  // over a serialized molecule — so a same-engine PySCF edge is geometry-only
+  // too, rather than a checkpoint name that never exists.
+  if (engineForNode(project, source).id !== engineForNode(project, node).id
+    || engineForNode(project, node).id === 'pyscf') {
     return { nodeId: taskId, checkpoint: '', geometryOnly: true };
   }
   return { nodeId: taskId, checkpoint: checkpointNameFor(project, source, taskId) };
