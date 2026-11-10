@@ -408,6 +408,21 @@ export function parseCjson(text, { name = '' } = {}) {
       .filter((bond) => Number.isInteger(bond?.aid1) && Number.isInteger(bond?.aid2))
       .map((bond) => ({ a: bond.aid1 + 1, b: bond.aid2 + 1, order: Number(bond.order) === 2 ? 2 : Number(bond.order) === 3 ? 3 : Number(bond.order) === 1.5 ? 1.5 : 1 }))
     : [];
+  // Issue 273: a cclib sidecar writes the program/version/method and the final
+  // energy alongside the Avogadro molecule. Keep them on the imported record;
+  // the native parsers never populate these keys.
+  const energy = Number(data?.properties?.energy?.total);
+  const origin = data?.origin && typeof data.origin === 'object' && !Array.isArray(data.origin)
+    ? {
+      program: String(data.origin.program || '').trim(),
+      version: String(data.origin.version || '').trim(),
+      method: String(data.origin.method || '').trim(),
+      basis: String(data.origin.basis || '').trim(),
+      cclibVersion: String(data.origin.cclibVersion || '').trim(),
+      source: String(data.origin.source || '').trim(),
+      sourceSha256: String(data.origin.sourceSha256 || '').trim(),
+    }
+    : null;
   return {
     atoms: atoms.map((atom, index) => ({
       element: String(atom?.element ?? ''),
@@ -420,6 +435,8 @@ export function parseCjson(text, { name = '' } = {}) {
     multiplicity: 1,
     name,
     warnings: [],
+    ...(Number.isFinite(energy) ? { energyHartree: energy } : {}),
+    ...(origin ? { origin } : {}),
   };
 }
 

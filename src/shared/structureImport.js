@@ -93,7 +93,7 @@ function formatFor(filename, text) {
   return '';
 }
 
-function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, parity = 'error', geometry = null, fragmentLabel = '' }) {
+function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, parity = 'error', geometry = null, fragmentLabel = '', energyHartree = null, origin = null }) {
   if (atoms.length === 0) throw new StructureError('The structure has no atoms.');
   if (atoms.length > MAX_ATOMS) throw new StructureError(`The structure has ${atoms.length} atoms; the limit is ${MAX_ATOMS}.`);
 
@@ -192,6 +192,11 @@ function finalize({ atoms, bonds, charge, multiplicity, format, name, warnings, 
     // Issue 139: the fragment's own drawn text, when it had any, so a dataset
     // record can be labelled from it instead of from a position index.
     ...(fragmentLabel ? { fragmentLabel: String(fragmentLabel).trim().slice(0, 200) } : {}),
+    // Issue 273: a cclib-converted record carries the final energy and the
+    // producing program. They are provenance, not a native parse, and the
+    // imported-record boundary is the only place allowed to consume them.
+    ...(Number.isFinite(Number(energyHartree)) ? { energyHartree: Number(energyHartree) } : {}),
+    ...(origin && typeof origin === 'object' ? { origin } : {}),
   };
 }
 

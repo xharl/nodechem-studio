@@ -34,6 +34,7 @@ const TOOL_LABELS = Object.freeze({
   scorer: 'ML scorer',
   multiwfn: 'Multiwfn',
   tautomer: 'Tautomer sidecar',
+  cclib: 'cclib (Python)',
 });
 
 function reasonFor(error) {

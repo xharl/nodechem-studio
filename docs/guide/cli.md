@@ -33,7 +33,7 @@ ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicit
 ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
-ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv] [--out <file>] [--json]
+ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden|cjson> [--spectrum ir|raman|uv] [--from <log>] [--to <cjson>] [--cclib <python>] [--out <file>] [--json]
 ncs convert <project.ncs> --node <id> --format <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs smiles <file|string> [--name <label>] [--out <file.json>] [--json]
@@ -65,10 +65,17 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   record refuses the whole export instead of returning the readable subset. `--out` writes the
   envelope to a file and prints its path.
 - `convert` turns a finished log (`.log`/`.out`), a formatted checkpoint, a structure file or a saved
-  `.ncs` into a format other software reads: `extxyz`, `xyz`, `sdf`, `jcamp` or `molden`. `--spectrum`
-  picks the spectrum written from a log (`ir`, `raman` or `uv`, default `ir`); `molden` needs the basis
-  and MO coefficients, so it is only offered for a formatted checkpoint. Without `--out` the result
-  lands beside the input with the format's extension.
+  `.ncs` into a format other software reads: `extxyz`, `xyz`, `sdf`, `jcamp`, `molden` or `cjson`.
+  `--spectrum` picks the spectrum written from a log (`ir`, `raman` or `uv`, default `ir`); `molden`
+  needs the basis and MO coefficients, so it is only offered for a formatted checkpoint. Without
+  `--out` the result lands beside the input with the format's extension.
+  `--format cjson` is the **cclib sidecar**: it converts a foreign NWChem, GAMESS, Q-Chem, Molpro,
+  CFOUR or Dalton log to Avogadro Chemical JSON (geometry, charge, final energy and origin) and then
+  validates that `.cjson` through the normal importer. `--from`/`--to` are synonyms for the input and
+  output paths. It needs a Python interpreter with cclib: set it in **Settings → Tools → cclib**, pass
+  `--cclib <python>`, or use `python scripts/ncs_cclib.py convert run.log run.cjson`. cclib is
+  user-installed and is not a package dependency; a missing interpreter is exit 4, a truncated log is
+  exit 2 with the reason. Gaussian logs are refused here because the native parser is canonical.
   The same command also writes the three **export-only decks**: `--format nwchem`, `gamess` or
   `qchem` on a `.ncs` project plus `--node <id>`. That is the same text `ncs export-input` and the
   window's **Export** menu write, because all three call one function; a structure file is refused

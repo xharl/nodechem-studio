@@ -30,6 +30,31 @@ A log carries no basis, so Molden needs the job's formatted checkpoint: run `for
 `run.json`, and the export reads it. Without one the export refuses with that instruction instead
 of writing a Molden file with no basis in it.
 
+## Foreign logs: cclib to Chemical JSON
+
+A log from NWChem, GAMESS, Q-Chem, Molpro, CFOUR or Dalton is not one of the engines this app
+drives, and it has no native parser here. The `cclib` sidecar converts it instead of adding a second
+parser family:
+
+```bash
+# one-time, in the interpreter Settings → Tools → cclib names
+pip install cclib
+
+ncs convert --from run.log --to run.cjson --cclib /path/to/python --json
+ncs convert run.log --format cjson --cclib /path/to/python
+python scripts/ncs_cclib.py convert run.log run.cjson --json
+```
+
+The output is **Avogadro Chemical JSON**, the same shape the existing `.cjson` importer reads. It
+carries the final geometry, charge, multiplicity, the highest-level final energy cclib parsed
+(CC/MP2/SCF) and an `origin` block with the program, version, method, basis, cclib version and the
+source SHA-256. Import it with **Import structure** or `ncs convert run.cjson --format xyz`.
+
+The sidecar refuses a log that lacks normal-termination evidence, a wavefunction/checkpoint, a
+Gaussian log (the native parser is canonical) and an unreadable format, each by name. It never
+bundles cclib and never writes a deck. The fixtures under `test/fixtures/cclib/` are real conversions
+from the public cclib-data corpus; the process tests skip when `NCS_CCLIB_PYTHON` is unset.
+
 ## What the engine boundary buys you
 
 The converters never look at a route, a program banner or a keyword. They consume the shapes the
