@@ -302,7 +302,7 @@ const SETTINGS_KEYS = new Set([
   // default so existing projects serialise unchanged.
   'matrixElement',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'roa', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
   // Issue #146: the vertical-emission block and the two-job NTO chain.
   'emission', 'nto', 'ntoTransition',
   'counterpoise', 'counterpoiseChargeStates',
@@ -381,6 +381,7 @@ export function defaultSettings(overrides = {}) {
     stableOpt: false,
     raman: false,
     vcd: false,
+    roa: false,
     orbitals: false,
     tdRoot: 0,
     // Issue #146: a vertical-emission block is an SP TD=(NStates=n,Root=1) at
@@ -1894,6 +1895,7 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),
 
     vcd: readBoolean(c, source.vcd, `${path}.vcd`, { legacy, fallback: false, optional: true }),
+    roa: readBoolean(c, source.roa, `${path}.roa`, { legacy, fallback: false, optional: true }),
     // Issue 147: ask Gaussian for the spin-spin coupling tables on an NMR job.
     // Optional, so an NMR block that never set it writes exactly `NMR` and the
     // card's "the route did not ask for couplings" stays true.

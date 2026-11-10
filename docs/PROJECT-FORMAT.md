@@ -129,7 +129,7 @@ Type-specific payloads:
 `matrixElement`, `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
 `optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
 `emission`, `nto`, `ntoTransition`,
-`raman`, `vcd`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
+`raman`, `vcd`, `roa`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`, `provider`,
 `recordTransitionDipoles`, `nmrSpinSpin`, `pnoThreshold`, `pyscfActiveSpace`.
@@ -171,9 +171,10 @@ vertical-emission block (an SP pinned to `TD=(NStates=n,Root=1)`), `nto` marks t
 `Pop=NTO` chain and `ntoTransition` selects the transition density the TD job stores with
 `Density=(Check,Transition=k)`, `orbitals` adds the
 orbital-eigenvalue print (`Pop=Full` on Gaussian) that the frontier-orbital and Koopmans panel is
-read from, `raman` and `vcd` put `=Raman` / `=VCD` on the frequency keyword (`Freq=(Raman,VCD)`
-when both are on), and `spinSweep`, `stableOpt` and `disabledChecks` switch the corresponding
-analysis and validity behaviour. `vcd` is refused on a job type with no frequency to carry it.
+read from, `raman`, `vcd` and `roa` put `=Raman` / `=VCD` / `=ROA` on the frequency keyword
+(`Freq=(Raman,VCD,ROA)` when more than one is on), and `spinSweep`, `stableOpt` and `disabledChecks`
+switch the corresponding analysis and validity behaviour. `vcd` and `roa` are refused on a job type
+with no frequency to carry them.
 
 Five keys are opt-in and **absent by default**, each written only after a block states it, so a
 project saved before they existed serialises byte for byte as it did: `freezeCore` (`auto`, `true` or
@@ -188,7 +189,7 @@ that silently dropped `freezeCore` and `recordTransitionDipoles` until a round-t
 
 `jobType` also accepts the composite methods `CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4`
 and `G4(MP2)`. A composite job **must** leave `method`, `basis`, `dispersion`, `solvation`,
-`tdStates`, `population`, `orbitals`, `customKeywords`, `raman`, `stableOpt`, `optConvergence` and
+`tdStates`, `population`, `orbitals`, `customKeywords`, `raman`, `vcd`, `roa`, `stableOpt`, `optConvergence` and
 `counterpoise` at their defaults; any value there is a conflict and refuses to build the input. The
 route is the bare keyword (`#p G4`, `#p G4MP2` for `G4(MP2)`).
 

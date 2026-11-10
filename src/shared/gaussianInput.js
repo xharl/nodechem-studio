@@ -546,6 +546,14 @@ export function buildGaussianInput({
       + `${settings.jobType || 'Opt'} would silently drop the keyword.`);
   }
 
+  // ROA (#127) is the third flag on the frequency keyword. It needs a frequency
+  // job for the same reason; without one, Gaussian would never enter the
+  // frequency section that prints its tables.
+  if (settings.roa === true && !/Freq/i.test(String(settings.jobType || 'Opt'))) {
+    throw new Error('ROA intensities need a frequency job: choose Freq or Opt Freq, or turn ROA off. '
+      + `${settings.jobType || 'Opt'} would silently drop the keyword.`);
+  }
+
   // Counterpoise (#77): the fragment count is explicit, and every atom must
   // carry a matching fragment label. A mismatch is refused here rather than
   // written into an input Gaussian cannot interpret.

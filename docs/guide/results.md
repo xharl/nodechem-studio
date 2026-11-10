@@ -574,8 +574,10 @@ Three things the card refuses to smooth over:
 - **Nothing is converted into an instrument intensity.** As with Raman, the plotted quantity is the
   printed rotational strength, not an absorbance.
 
-ROA is not read: it needs Gaussian 16 B.01+ and no real ROA log exists in the corpus, so no parser is
-claimed for it.
+ROA is read from the same frequency section: `ROA1`, `ROA2` and `ROA3` are the three scattering
+geometries the log names, `RC180` is the degree of circularity, and the results card plots one
+chosen geometry as a signed curve. The pinned fixture is a Gaussian 09 E.01 log; Gaussian 16
+B.01+ is not claimed because no public log of that revision was found.
 
 ## Emission
 

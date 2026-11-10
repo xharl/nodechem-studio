@@ -20,6 +20,7 @@ import { couplingSummary, parseCouplings, parseShieldings } from './nmr.js';
 import { animatableModes, parseNormalModes } from './normalModes.js';
 import { attachRaman, parseRamanActivities } from './raman.js';
 import { attachVcd, parseVcdStrengths } from './vcd.js';
+import { attachRoa, parseRoaIntensities } from './roa.js';
 import { parseOrbitals } from './orbitals.js';
 import { parseRotatoryStrengths } from './ecd.js';
 import { parseExcitedStateOptimization } from './excitedStates.js';
@@ -1271,6 +1272,14 @@ function parseLink(section, index) {
     (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
     parseVcdStrengths(lines.join('\n')),
   );
+  // ROA (#127) prints its intensities and invariants in the same frequency
+  // section, in three named scattering geometries. Keep the table and attach
+  // it per mode; a job without Freq=ROA has no rows at all.
+  const roaTable = parseRoaIntensities(lines.join('\n'));
+  const roaModes = attachRoa(
+    (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
+    roaTable,
+  );
   const convergenceRecords = parseConvergenceRecords(lines, startLine);
   const error = parseErrorCause(lines);
   const stepNumbers = lines
@@ -1306,6 +1315,17 @@ function parseLink(section, index) {
       const table = parseVcdStrengths(lines.join('\n'));
       return table ? { units: table.units, dipoleUnits: table.dipoleUnits, representation: table.representation } : null;
     })(),
+    roa: roaModes.some((mode) => mode.roa1 !== null || mode.roa2 !== null || mode.roa3 !== null)
+      ? roaModes : null,
+    roaMeta: roaTable
+      ? {
+        units: roaTable.units,
+        invariantUnits: roaTable.invariantUnits,
+        geometries: roaTable.geometries,
+        incidentWavenumber: roaTable.incidentWavenumber,
+        release: roaTable.release,
+      }
+      : null,
     frequencyBlocks,
     thermochemistry: parseThermochemistry(joined, lines),
     solvation: parseGaussianSolvation(routeText, lines, scf),
@@ -1517,6 +1537,12 @@ export const GAUSSIAN_PARSE_BRANCHES = Object.freeze([
     versions: ['16'],
     taken: (parsed) => parsed.vcd !== null && Array.isArray(parsed.vcd),
   },
+  {
+    id: 'roa',
+    line: '`ROA1   Fr= 1--` inside a `Freq=ROA` block, with the three geometry labels',
+    versions: ['09'],
+    taken: (parsed) => parsed.roa !== null && Array.isArray(parsed.roa),
+  },
 ]);
 
 /**
@@ -1707,6 +1733,25 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     vcdTable,
   );
   const vcd = vcdModes.some((mode) => mode.rotationalStrength !== null) ? vcdModes : null;
+  // ROA (#127) rides the same frequency table. `roa` is null when the route
+  // asked for no ROA; an all-zero ROA table is still a table, so null must not
+  // be inferred from zero values.
+  const roaTable = parseRoaIntensities(text);
+  const roaModes = attachRoa(
+    (frequencyLink?.frequencyBlocks?.at(-1)?.values || []).map((wavenumber) => ({ wavenumber })),
+    roaTable,
+  );
+  const roa = roaModes.some((mode) => mode.roa1 !== null || mode.roa2 !== null || mode.roa3 !== null)
+    ? roaModes : null;
+  const roaMeta = roaTable
+    ? {
+      units: roaTable.units,
+      invariantUnits: roaTable.invariantUnits,
+      geometries: roaTable.geometries,
+      incidentWavenumber: roaTable.incidentWavenumber,
+      release: roaTable.release,
+    }
+    : null;
   // Units and representation belong to the table, not to a mode: a reader has to
   // be able to say which convention produced these numbers, and Gaussian 16
   // prints the unit without naming a representation.
@@ -1744,6 +1789,8 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
         modeCount: vcdTable.rotationalStrengths.length,
       }
       : null,
+    roa,
+    roaMeta,
     rotatoryStrengths,
     orbitals,
     thermochemistry,

@@ -34,9 +34,10 @@ not a claim that the parser handles the case:
 
 - `Opt=TS` and a `Freq` with exactly one imaginary mode (a true saddle).
 - `--Link1--` multi-step jobs produced by Gaussian itself.
-- **ROA** (`Freq=ROA`) — a Gaussian 16 B.01+ feature the A.03 licence in use cannot produce, so there
-  is no fixture and no reader. VCD, NMR shieldings and couplings, and Raman activities each have a
-  real log and are read.
+- **ROA** (`Freq=ROA`) — the parser has a real Gaussian 09 E.01 formaldehyde log (the three
+  geometries, invariants and `RC180`, all zero because the molecule is achiral). No public
+  Gaussian 16 B.01+ ROA log was found, so that revision is not claimed. VCD, NMR shieldings and
+  couplings, and Raman activities each have a real log and are read.
 - A Gaussian solvation job that prints extra `PCM`/`SMD` sections; the parser records the model the
   log states, but no captured log exercises a Gaussian solvated job.
 - Gaussian 03 and 98 revisions, and any Windows-formatted output.

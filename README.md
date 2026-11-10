@@ -250,8 +250,10 @@ docs/              documentation; the user guide lives in docs/guide/, decisions
 - **xTB validity checks are narrower than Gaussian's.** xTB has no route, basis or ECP to inspect, so
   the Gaussian-only checks are reported as *not applicable* (never as a pass). Charge/multiplicity,
   geometry sanity, imaginary modes and optimisation convergence are judged for both engines.
-- **ROA rotational strengths are not read.** VCD is; ROA needs a Gaussian 16 B.01+ log this
-  repository does not have.
+- **ROA is read, but only a G09 log is pinned.** The parser handles the three printed
+  scattering geometries, their invariants and `RC180`; the fixture is a real Gaussian 09 E.01
+  `Freq=ROA` log. No public Gaussian 16 B.01+ ROA log was found, so that revision remains
+  unverified and the card does not claim it.
 - **No g-tensor is computed.** A log that prints one is imported; a log that says `NO` is refused by
   name rather than filled with the free-electron value, so an EPR card can be missing a field it
   would be wrong to invent.

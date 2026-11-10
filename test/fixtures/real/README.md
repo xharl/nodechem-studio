@@ -39,6 +39,7 @@ to match the parser.
 | `scan-relaxed.log` | `cclib/cclib-data`, `Gaussian/Gaussian09/relaxed_PES_testCO2.log` | `Opt=ModRedundant` relaxed scan over R1 |
 | `scan-unrelaxed.log` | `cclib/cclib`, `data/Gaussian/basicGaussian16/dvb_scan_unrelaxed.log` | rigid scan over the D7 dihedral |
 | `g09-*.{log,out}` | `cclib/cclib`, `data/Gaussian/basicGaussian09/` | Gaussian 09: `Freq`, `SP`, `TD`, MP2, CCSD, CIS |
+| `g09-formaldehyde-roa.out` | `mishioo/tesliper`, `test/integration/fixtures/fal-freq-roa.out` | `# freq=roa hf/3-21g`, formaldehyde, 6 modes; the three ROA rows, RC180 and incident light |
 | `g09-dvb-nmr.log` | complete Gaussian 09 Rev D.01 log added in #61; its header names `/home/osl/test/Benzene/NMR/G09/dvb_nmr.log` and no public source repository was recorded then | `NMR=(SpinSpin)` at B3LYP/sto-3g on divinylbenzene (C₁₀H₁₀, 20 atoms): shieldings, the four J contributions and both coupling totals |
 | `g16-*.{log,out}` | `cclib/cclib`, `data/Gaussian/basicGaussian16/` | Gaussian 16: `Opt`, `Freq`, `SP`, `TD` |
 | `g16-h4s2-irc.log` | `CQPES/Model-Zoo`, `H4S2-CC-2024/gau/ts-1-irc.log` | full IRC job (Gaussian 16) |
@@ -99,8 +100,11 @@ Two observations this fixture settled, both now asserted in `test/vcd.test.js`:
    `Rotational strengths ---`. A parser written from the section prose header
    would silently read nothing.
 
-ROA (`Freq=ROA`) is a Gaussian 16 **B.01+** feature and cannot be produced on an
-A.03 licence, so no ROA fixture is included and no ROA reader is claimed.
+ROA (`Freq=ROA`) is now read against the Gaussian 09 E.01 formaldehyde log above
+(the three printed scattering geometries and RC180, all zero because the
+molecule is achiral). No public Gaussian 16 B.01+ ROA log was found, so the
+parser branch records the G09 release it was observed in; the card says the
+table itself names no release rather than claiming G16.
 | `g16-h2o-raman.out` | `exa-analytics/exatomic` (`exatomic/static/gaussian/g16-h2o-321g-freq.out`), G16, `Freq=Raman` on water | Raman activities 11.4937 / 95.6630 / 44.0813 Å⁴/amu and both depolarisation ratios; the file contains the short and the long layout of the same table |
 | `g16-dvb-td.out` | `cclib/cclib` (`data/Gaussian/basicGaussian16/dvb_td.out`), G16 TD-DFT on divinylbenzene | Rotatory-strength block in both conventions (velocity and length); **achiral**, so every value is printed as zero — it proves the column layout, not the signs |
 
