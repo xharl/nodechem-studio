@@ -54,7 +54,11 @@ function methodText(method) {
   const grid = method.grid ? ` grid ${method.grid}` : '';
   const scf = method.scf ? ` SCF ${method.scf}` : '';
   const dispersion = method.dispersion ? ` ${method.dispersion}` : '';
-  return `${method.functional}/${method.basis}${dispersion}${solvent}${grid}${scf}`;
+  const pno = method.pnoThreshold ? ` ${method.pnoThreshold}` : '';
+  // ORCA records `method` rather than Gaussian's `functional`; read both so an
+  // ORCA block is not printed as `undefined/def2-SVP`.
+  const level = method.functional || method.method || UNKNOWN;
+  return `${level}/${method.basis}${pno}${dispersion}${solvent}${grid}${scf}`;
 }
 
 function programText(program) {

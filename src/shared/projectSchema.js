@@ -40,6 +40,7 @@ import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, c
 import { COMPLEX_MAX_MEMBERS, COMPLEX_PLACEMENT_MODES } from './complex.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
+import { ORCA_PNO_THRESHOLDS } from './engines/orca.js';
 import { validateBlockContracts } from './blockContracts.js';
 import { SCORER_SPECS } from './scorer.js';
 import {
@@ -183,6 +184,11 @@ export const IRC_DIRECTIONS = Object.freeze(['forward', 'reverse', 'both']);
 export const DISPERSIONS = Object.freeze(['', 'GD3BJ', 'GD3', 'D4']);
 export const SCF_OPTIONS = Object.freeze(['', 'Tight', 'VeryTight']);
 export const GRID_OPTIONS = Object.freeze(['', 'Fine', 'UltraFine']);
+/**
+ * Issue 227: PNO cutoff presets. Imported from the ORCA engine so the schema,
+ * the builder and the route preview cannot offer different sets.
+ */
+export const PNO_THRESHOLDS = Object.freeze(ORCA_PNO_THRESHOLDS.map((entry) => entry.id));
 export const POPULATION_OPTIONS = Object.freeze(['', 'NBO', 'Hirshfeld', 'MK']);
 export const TD_TRIPLETS_MODES = Object.freeze(['', 'triplets', 'both']);
 export const NMR_NUCLEI = Object.freeze(['1H', '13C', '15N', '19F', '31P', '29Si']);
@@ -301,6 +307,9 @@ const SETTINGS_KEYS = new Set([
   // here so an explicit value is not read as a typo.
   'recordTransitionDipoles',
   'nmrSpinSpin',
+  // Issue 227: the PNO cutoff on a DLPNO-CCSD(T) block. Absent by default; a
+  // block that never set it serialises exactly as before.
+  'pnoThreshold',
   // ADR 0001 §2.10: a scorer provider on a calculate block. The block stays
   // calculate; the provider is not an engine and never enters ENGINE_IDS.
   'provider',
@@ -1691,6 +1700,12 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   const freezeCore = source.freezeCore === undefined || source.freezeCore === null || source.freezeCore === ''
     ? null
     : readEnum(c, source.freezeCore, FREEZE_CORE_CHOICES, `${path}.freezeCore`, { legacy, fallback: '' }) || null;
+  // Issue 227: the PNO cutoff. Absent means "not set"; the ORCA builder then
+  // writes NormalPNO explicitly for DLPNO-CCSD(T) and refuses the setting on a
+  // method that has no PNO truncation.
+  const pnoThreshold = source.pnoThreshold === undefined || source.pnoThreshold === null || source.pnoThreshold === ''
+    ? null
+    : readEnum(c, source.pnoThreshold, PNO_THRESHOLDS, `${path}.pnoThreshold`, { legacy, fallback: '' }) || null;
   // Issue 173: record the transition-dipole vector. Without it a coupling cannot
   // be computed — the direction is not recoverable from the oscillator strength.
   // Absent means off, and no key is written.
@@ -1780,6 +1795,7 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     // which is the same defect as issue 181 in a different list. Absent by
     // default, so a project that never set them serialises exactly as before.
     ...(freezeCore !== null ? { freezeCore } : {}),
+    ...(pnoThreshold !== null ? { pnoThreshold } : {}),
     ...(recordTransitionDipoles !== null ? { recordTransitionDipoles } : {}),
     ...(provider ? { provider } : {}),
   };

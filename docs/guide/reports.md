@@ -58,7 +58,15 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    *Tautomer candidates* section: one row per candidate with its label and SMILES, and the energy
    spread across the set at the level the runs were made at. It is never Boltzmann-averaged — the
    candidates are different molecules, and the section says so instead of printing a population.
-5. **Provenance** — run ids and the input/output SHA-256 prefixes.
+5. **Uncertainty** — the measured error bar, one row per method ladder, retained conformer ensemble
+   and reaction path. A ladder contributes the spread across the rungs that actually ran; an
+   ensemble contributes the lowest member and the Boltzmann-weighted value side by side; a reaction
+   path contributes the rate factor its recorded barrier error buys through Eyring. A quantity with
+   nothing measured is printed as `not measured` with the reason — never a literature average. The
+   list under the table, *What would change the conclusion*, is derived from each measured number:
+   the ladder's headroom against its tolerance, the population a conformer would need to dominate,
+   or the rate ratio the barrier error cannot resolve.
+6. **Provenance** — run ids and the input/output SHA-256 prefixes.
 
 A v1 project (no dataset) is unchanged: one table of blocks, no record sections.
 

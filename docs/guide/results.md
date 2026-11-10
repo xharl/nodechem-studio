@@ -130,6 +130,14 @@ A value that came from a ladder or an ensemble is shown with its spread and what
 
 A ladder whose rungs did not all run keeps its existing verdict `unknown`, and no mean is taken over the rungs that happened to finish.
 
+**The uncertainty module.** `src/shared/uncertainty.js` assembles the report's *Uncertainty* section from the numbers a queue already recorded; it is pure and the report is its only caller. Three rules hold:
+
+- **Method spread** is the max − min of the final energies of the rungs that carried a parsed energy, in kcal/mol. It is `measured` only with at least two such rungs; one rung — or two declared with one unparsed — prints `not measured` and the reason. No mean over rungs is returned, and no table of literature error bars is consulted.
+- **Conformer spread** prints the lowest member at 0.00 kcal/mol and the Boltzmann-weighted value above it, side by side, with the retained spread and the largest population. The lowest member is never replaced by the average; the population table is the one the search assigned, and a member without a population is a refusal rather than a re-normalisation.
+- **Barrier to rate** calls `eyringRate()` at the recorded barrier and at barrier ± the error recorded with the path, so the factor is the app's own arithmetic and the temperature is printed with it. At 298.15 K one kcal/mol is a factor **5.41** in k. When no barrier error was recorded the row says `not measured`; the report reads `reaction.barrierErrorKcal` and `reaction.barrierErrorSource` when a producer writes them.
+
+Each measured row yields one *what would change the conclusion* sentence, computed from the number beside it: a ladder's headroom against its tolerance, the 95 % population at which one conformer is representative, or the rate ratio the barrier error cannot resolve.
+
 ## Spin-state comparison
 
 A block with **Spin states** switched on runs one calculation per multiplicity over the same
@@ -398,6 +406,20 @@ ORCA — which does compute one — is not installed. The card prints that refus
 no value, no `≈ 2.0023`, no empty cell. `PSI4_CAPABILITIES.epr.gTensor` is `false`
 with the reason, so a settings dialog cannot offer it either.
 
+An **imported ORCA log** is a different case (issue 222): when it prints
+`Hyperfine couplings ... YES`, the parser reads ORCA's own `A(iso)` in MHz for
+each nucleus, its `A(SD)` dipolar components and the 3×3 total HFC matrix into
+the same `epr.hyperfine[]` rows, with the isotope and nuclear spin the log
+states. ORCA's `SAI` spin-Hamiltonian convention and signs are carried as
+printed. ORCA prints no spin populations, so that table is absent rather than
+empty, and the card says the couplings came from the hyperfine block. A
+`g-Tensor (aka g-matrix) ... YES` run that prints the `ELECTRONIC G-MATRIX`
+block carries that tensor; a `NO` is a refusal by name. The log prints no gauss
+column, so the gauss value is arithmetic on the printed MHz with
+`g_e = 2.0023` (2.00231930436256 in the constants table) and the record says it
+was not cross-checked against the log.
+
+
 **A closed-shell molecule prints `no unpaired electrons`** — not an empty table.
 The words are the answer: a closed-shell wavefunction has no spin density, and a
 zero-filled population table would claim a calculation that never happened.
@@ -497,6 +519,17 @@ an absence, not a zero matrix. The same pairs, matrices and indexing note are wr
 `run.json` (`parsed.nmr.couplings`, plain arrays with `null` for an unprinted pair) and printed in the
 workflow report's **NMR** section, together with the level of theory and the reference the record
 carries, if any. A record without a reference prints *no reference was recorded* and leaves δ empty.
+
+ORCA prints the same physical quantity in a different layout (issue 222): a **full symmetric**
+`SUMMARY OF ISOTROPIC COUPLING CONSTANTS (Hz)` table, in six-column chunks, with every row printing
+every column of its chunk. `parseOrcaSpinSpin` reads it into the same `nmr.couplings` object, so the
+card and the report draw ORCA without a branch. Two differences are carried with the numbers rather
+than left to a reader to assume: ORCA numbers nuclei from **0** (Gaussian from 1), so `indexing` says
+so; and the ORCA logs print J in Hz and the per-pair `gnA`/`gnB` constants but **no reduced K table**,
+so `kMatrix` is `null` and `kUnits` says "not printed" rather than deriving a K the log never showed.
+Every summary pair is checked against the per-pair `Total … iso=` value printed in the same log; on
+the committed DVB fixture all 190 pairs agree at the log's print precision.
+
 
 ## Raman activities
 

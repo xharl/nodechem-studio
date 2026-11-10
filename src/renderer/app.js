@@ -94,7 +94,7 @@ import {
 import { WORKFLOW_TEMPLATES, blankProject, templateProject } from '../shared/templates.js';
 import { engineSummary, formatRecentModified } from '../shared/recentProjects.js';
 import { ENGINES, engineOrDefault } from '../shared/engines/index.js';
-import { buildOrcaInput } from '../shared/engines/orca.js';
+import { ORCA_BASES, ORCA_METHODS, ORCA_PNO_THRESHOLDS, buildOrcaInput } from '../shared/engines/orca.js';
 import { PSI4_BASES, PSI4_JOB_TYPES, PSI4_METHODS, buildPsi4Input } from '../shared/engines/psi4.js';
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import * as shared from '../shared/workflowTasks.js';
@@ -2049,6 +2049,7 @@ function calcInspector(node) {
   const engine = engineForNode(state.project, node);
   const isXtb = engine.id === 'xtb';
   const isPsi4 = engine.id === 'psi4';
+  const isOrca = engine.id === 'orca';
   const gaussianResources = showsGaussianResources(engine.id);
   const checkpointHandoff = showsCheckpointHandoff(engine.id);
   const routeLines = [];
@@ -2269,6 +2270,38 @@ function calcInspector(node) {
       : '',
   ].join(''));
 
+  // ORCA is a code engine too: its own method/basis list, its own PNO cutoff,
+  // and a route that states the RI approximation instead of leaving it to ORCA.
+  const orcaMethodEntry = ORCA_METHODS.find((entry) => entry.id.toLowerCase() === String(s.method || '').toLowerCase())
+    || ORCA_METHODS[0];
+  const orcaBasisEntry = ORCA_BASES.find((entry) => entry.id.toLowerCase() === String(s.basis || '').toLowerCase())
+    || ORCA_BASES[0];
+  const orcaDlpno = orcaMethodEntry.id === 'DLPNO-CCSD(T)';
+  const orcaMethodGroup = group('Method & basis', `${orcaMethodEntry.id}/${orcaBasisEntry.id}`, true, [
+    selectField('Method', 'method', ORCA_METHODS.map((entry) => [entry.id, entry.label]), orcaMethodEntry.id),
+    selectField('Basis set', 'basis', ORCA_BASES.map((entry) => [entry.id, entry.label]), orcaBasisEntry.id),
+    orcaDlpno
+      ? selectField('PNO threshold', 'pnoThreshold', ORCA_PNO_THRESHOLDS.map((entry) => [
+        entry.id,
+        `${entry.label} (TCutPNO ${entry.tCutPNO.toExponential(2)})`,
+      ]), String(s.pnoThreshold || 'NormalPNO'))
+      : '',
+    orcaDlpno
+      ? '<div class="field full"><span class="inspector-note">Writes <code>DLPNO-CCSD(T)</code>, '
+        + `<code>${esc(orcaBasisEntry.auxiliary || 'the /C basis')}</code>, <code>def2/J</code> and <code>RIJCOSX</code> explicitly, `
+        + 'plus the PNO preset. The preset sets <code>TCutPNO</code>, which controls the truncation error, so it is '
+        + 'recorded in the result and the provenance block. DLPNO-CCSD(T) is a single point here: Freq, Opt and '
+        + 'Opt Freq are refused by name rather than run without a gradient.</span></div>'
+      : '',
+    orcaDlpno && !orcaBasisEntry.auxiliary
+      ? '<div class="field full"><span class="inspector-note"><strong>No /C basis for this set.</strong> '
+        + 'DLPNO-CCSD(T) needs a correlation-fitting auxiliary basis; choose def2-SVP, def2-TZVP(PP) or cc-pVTZ.</span></div>'
+      : '',
+    selectField('Dispersion', 'dispersion', DISPERSIONS, s.dispersion),
+    selectField('SCF convergence', 'scf', SCF_OPTIONS, s.scf),
+    selectField('Integration grid', 'grid', GRID_OPTIONS, s.grid),
+  ].join(''));
+
   // Issue 166: Psi4's TD-DFT is a job type of its own, and its state count is
   // not a plain "n lowest" — Psi4 splits the request across the point group's
   // irreducible representations, one state per irrep in order, so a count below
@@ -2344,6 +2377,14 @@ function calcInspector(node) {
   const gaussianSolvationGroup = group('Solvation', s.solvation ? `${s.solvationModel} · ${s.solvent}` : 'off', s.solvation, [
     switchRow('Implicit solvation', 'PCM / SMD / CPCM', 'solvation', s.solvation),
     selectField('Model', 'solvationModel', SOLVATION_MODELS, s.solvationModel),
+    selectField('Solvent', 'solvent', SOLVENTS, s.solvent),
+  ].join(''));
+
+  // ORCA implements CPCM and SMD (not Gaussian's PCM keyword), and the builder
+  // refuses the rest by name; the group shows only the two it can write.
+  const orcaSolvationGroup = group('Solvation', s.solvation ? `${s.solvationModel} · ${s.solvent}` : 'off', s.solvation, [
+    switchRow('Implicit solvation', 'CPCM / SMD', 'solvation', s.solvation),
+    selectField('Model', 'solvationModel', [['CPCM', 'CPCM'], ['SMD', 'SMD']], s.solvationModel),
     selectField('Solvent', 'solvent', SOLVENTS, s.solvent),
   ].join(''));
 
@@ -2550,20 +2591,20 @@ function calcInspector(node) {
     ${jobGroup}
     ${constraintGroup}
     ${qstEditor}
-    ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : compositeJob ? compositeNote : methodGroup}
-    ${isXtb || isPsi4 || compositeJob ? '' : excitedGroup}
+    ${isXtb ? xtbGroup : isPsi4 ? psi4MethodGroup : isOrca ? orcaMethodGroup : compositeJob ? compositeNote : methodGroup}
+    ${isXtb || isPsi4 || isOrca || compositeJob ? '' : excitedGroup}
     ${psi4TdGroup}
-    ${isXtb || isPsi4 || compositeJob || !nmrJob ? '' : nmrGroup}
-    ${isXtb || isPsi4 || compositeJob ? '' : ramanGroup}
-    ${isXtb || isPsi4 || compositeJob ? '' : vcdGroup}
-    ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : gaussianSolvationGroup}
+    ${isXtb || isPsi4 || isOrca || compositeJob || !nmrJob ? '' : nmrGroup}
+    ${isXtb || isPsi4 || isOrca || compositeJob ? '' : ramanGroup}
+    ${isXtb || isPsi4 || isOrca || compositeJob ? '' : vcdGroup}
+    ${isXtb ? xtbSolvationGroup : (isPsi4 || compositeJob) ? '' : isOrca ? orcaSolvationGroup : gaussianSolvationGroup}
     ${moleculeGroup}
     ${spinGroup}
     ${gatesGroup}
     ${isXtb ? '' : validityGroup}
     ${dependencyGroup}
     ${outputGroup}
-    ${isXtb || isPsi4 ? '' : extraGroup}
+    ${isXtb || isPsi4 || isOrca ? '' : extraGroup}
     <div class="inspector-actions-row">
       <button type="button" class="btn small" data-action="duplicate-node">Duplicate</button>
       <button type="button" class="btn small danger" data-action="delete-node">Delete</button>
@@ -4605,6 +4646,10 @@ function updateNodeField(node, key, value) {
     };
     return;
   }
+  if (key === 'pnoThreshold') {
+    node.settings.pnoThreshold = value;
+    return;
+  }
   if (key in node.settings) {
     if (key === 'solvation') {
       node.settings.solvation = Boolean(value);
@@ -4685,10 +4730,40 @@ function updateNodeField(node, key, value) {
         node.settings.method = state.project?.defaults?.method || MODERN_ROUTE_PRESET.method;
         node.settings.basis = state.project?.defaults?.basis || MODERN_ROUTE_PRESET.basis;
         node.settings.dispersion = defaultDispersionFor(node.settings.method);
+      } else if (resolved === 'orca') {
+        // ORCA has its own method/basis vocabulary. Carry no Gaussian-only
+        // setting into it: the builder refuses each by name and the inspector
+        // hides the field, so a stale value would be unfixable.
+        if (!ORCA_METHODS.some((entry) => entry.id.toLowerCase() === String(node.settings.method || '').toLowerCase())) {
+          node.settings.method = 'B3LYP';
+        }
+        if (!ORCA_BASES.some((entry) => entry.id.toLowerCase() === String(node.settings.basis || '').toLowerCase())) {
+          node.settings.basis = 'def2-SVP';
+        }
+        node.settings.population = '';
+        node.settings.customKeywords = '';
+        node.settings.stableOpt = false;
+        node.settings.raman = false;
+        node.settings.vcd = false;
+        node.settings.tdStates = 0;
+        node.settings.tdTriplets = '';
+        node.settings.tdRoot = 0;
+        node.settings.ntoTransition = 0;
+        node.settings.emission = false;
+        node.settings.nto = false;
+        node.settings.orbitals = false;
       }
     } else if (key === 'method') {
       node.settings.method = value;
-      node.settings.dispersion = dispersionForMethodChange(value, node.settings.dispersion);
+      if (String(value).toLowerCase() === 'dlpno-ccsd(t)') {
+        // DLPNO-CCSD(T) has no empirical dispersion keyword, and its PNO
+        // cutoff must be stated before the route can be built.
+        node.settings.dispersion = '';
+        if (!node.settings.pnoThreshold) node.settings.pnoThreshold = 'NormalPNO';
+      } else {
+        delete node.settings.pnoThreshold;
+        node.settings.dispersion = dispersionForMethodChange(value, node.settings.dispersion);
+      }
     } else {
       node.settings[key] = value;
     }
@@ -5398,32 +5473,43 @@ function renderDrawer() {
   } else {
     const engineId = engineOrDefault(draft.engine).id;
     const isXtb = engineId === 'xtb';
+    const isOrca = engineId === 'orca';
     const defaultDispersion = defaultDispersionFor(draft.method);
     const gaussianRoute = routeFull({ method: draft.method, basis: draft.basis, jobType: 'Opt', dispersion: defaultDispersion });
     const xtbMethod = draft.xtbMethod || 'gfn2';
     const gfnFlag = xtbMethod === 'gfnff' ? '--gfnff' : `--gfn ${xtbMethod.replace('gfn', '')}`;
     const xtbRoute = `xtb task.xyz ${gfnFlag} --opt ${draft.xtbOptLevel || 'normal'}`;
+    const orcaBasisEntry = ORCA_BASES.find((entry) => entry.id === draft.basis) || ORCA_BASES[0];
+    const orcaRoute = String(draft.method).toLowerCase() === 'dlpno-ccsd(t)'
+      ? `! DLPNO-CCSD(T) ${orcaBasisEntry.keyword} def2/J ${orcaBasisEntry.auxiliary || '<basis>/C'} RIJCOSX NormalPNO`
+      : `! ${draft.method} ${orcaBasisEntry.keyword}`;
     body = `
       <div class="form-grid">
         ${drawerSelect('Engine', 'engine', Object.values(ENGINES).map((item) => [item.id, item.label]), engineId)}
         ${isXtb
     ? drawerSelect('xTB method', 'xtbMethod', XTB_METHODS.map((item) => [item.id, item.label]), draft.xtbMethod || 'gfn2')
-    : drawerSelect('Default method', 'method', METHODS, draft.method)}
+    : isOrca
+      ? drawerSelect('Default method', 'method', ORCA_METHODS.map((entry) => [entry.id, entry.label]), draft.method)
+      : drawerSelect('Default method', 'method', METHODS, draft.method)}
         ${isXtb
     ? drawerSelect('Optimisation level', 'xtbOptLevel', XTB_OPT_LEVELS.map((level) => [level, level]), draft.xtbOptLevel || 'normal')
-    : drawerSelect('Default basis', 'basis', BASIS_SETS, draft.basis)}
+    : isOrca
+      ? drawerSelect('Default basis', 'basis', ORCA_BASES.map((entry) => [entry.id, entry.label]), draft.basis)
+      : drawerSelect('Default basis', 'basis', BASIS_SETS, draft.basis)}
         ${isXtb ? '' : drawerField('Memory', 'memory', draft.memory, { type: 'number', attrs: 'min="1" step="1"' })}
         ${isXtb ? '' : drawerSelect('Memory unit', 'memoryUnit', MEMORY_UNITS, draft.memoryUnit)}
         ${drawerField('Cores (nproc)', 'nproc', draft.nproc, { type: 'number', attrs: 'min="1" max="1024" step="1"' })}
       </div>
       <div class="form-section" style="margin-top:14px">
         <div class="section-label">Default route · ${esc(engineOrDefault(engineId).label)}</div>
-        <div class="code-block">${esc(isXtb ? xtbRoute : gaussianRoute)}</div>
+        <div class="code-block">${esc(isXtb ? xtbRoute : isOrca ? orcaRoute : gaussianRoute)}</div>
         <p class="field-hint">Shown for the current defaults; each block keeps its own snapshot when it is created.</p>
       </div>
       <div class="callout">${isXtb
     ? 'xTB has no basis set, no transition-state search, no IRC and no scan — blocks needing those are refused when their input is built.'
-    : 'Gaussian blocks keep the route, dispersion and basis configured per block; these are only the defaults for new blocks.'}</div>`;
+    : isOrca
+      ? 'ORCA reads simple input, not a Gaussian route. DLPNO-CCSD(T) blocks are single points here; Freq and Opt are refused when their input is built.'
+      : 'Gaussian blocks keep the route, dispersion and basis configured per block; these are only the defaults for new blocks.'}</div>`;
   }
 
   modal.classList.add('is-molecule');

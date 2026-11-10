@@ -29,6 +29,9 @@
  *     solvation: { provider, model, solvent, radiiSet, gasPhaseHartree,
  *                  solvatedHartree, deltaHartree, deltaKcal,
  *                  interactionHartree } | absent,  // issue 167, DDX only
+ *     dlpno: { method, pnoThreshold, tCutPNO, basis, auxiliaryBasis,
+ *              correlationEnergyHartree, triplesCorrectionHartree,
+ *              eCcsdTHartree, provenance } | absent,  // issue 227
  *     extras: { ... },                            // engine-specific evidence
  *     lineCount
  *   }
@@ -113,6 +116,11 @@ export function canonicalResult({
   // a number with none of those. Absent when the engine computed no transition
   // density, so a run that never opted in carries no key.
   chargeTransfer = null,
+  // Issue 227: the local-correlation record. Kept whole (method, threshold,
+  // both auxiliary bases, the correlation and triples energies and the log line
+  // they came from) because a correlation energy without the PNO cutoff that
+  // produced it is a number whose error bar is unknown.
+  dlpno = null,
   extras = {},
   lineCount = 0,
 } = {}) {
@@ -220,6 +228,10 @@ export function canonicalResult({
     // as an empty section.
     ...(chargeTransfer && typeof chargeTransfer === 'object'
       && typeof chargeTransfer.modelled === 'boolean' ? { chargeTransfer } : {}),
+    // A DLPNO block without a named method is not a correlation record and is
+    // dropped rather than passed on as an empty section.
+    ...(dlpno && typeof dlpno === 'object' && typeof dlpno.method === 'string'
+      ? { dlpno } : {}),
     extras: extras && typeof extras === 'object' ? extras : {},
     lineCount: Number.isFinite(lineCount) ? lineCount : 0,
   };
