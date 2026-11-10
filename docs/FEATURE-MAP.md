@@ -47,7 +47,7 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | Excited-state optimisation | Opt TD | **Implemented** (unverified shape) | parsed from documented layout, `verified: false` |
 | **EOM-CCSD** | EOM-CCSD | **Absent** | no method path |
 | **CASSCF / MCSCF** | CASSCF | **Absent** | `CASSCF`/`MCSCF` absent from `src/` |
-| **ONIOM / QM-MM** | ONIOM | **Absent** | no multi-layer model |
+| **ONIOM / QM-MM** | ONIOM | **Results reader implemented; input builder absent** | `oniom.js`; extrapolated energy, gridpoints, cuts, layer charges; no link-atom construction (#67) |
 | Compound methods | G4, CBS-QB3, CBS-APNO, W1 | **Implemented** | `routePresets.js` (route keywords, not method/basis pairs) |
 | Counterpoise / BSSE | Counterpoise | **Implemented** | `validityChecks.js`, parser |
 | NBO analysis | Pop=NBO | **Implemented** | parsed from the log |
@@ -191,7 +191,7 @@ Effort is engineering time, not calendar, and assumes the parser work is done ag
 | 5 | **Validation harness** (#230) | recorded and live PySCF paths are implemented; Gaussian/ORCA/Psi4 live rungs remain | — |
 | 6 | **Gaussian Polar** (polarizability, hyperpolarizability) | a single keyword job; completes the property set on the licensed engine | ~3 days |
 | 7 | **Psi4 SAPT2 family** | SAPT0 is the cheapest rung; interaction-energy analysis is the app's strength | ~1 week |
-| 8 | **ONIOM / QM-MM** | whole class of papers; needs a layer/region model, not just a keyword | 2–4 weeks |
+| 8 | **ONIOM / QM-MM** | whole class of papers; needs a layer/region model, not just a keyword | 2–4 weeks (result reader shipped; input builder open) |
 | 9 | **CASSCF / NEVPT2** (ORCA) | the one method family with no representation; T1 diagnostic already exists | ~2 weeks |
 | 10 | **BOMD / ADMP** (Gaussian) and **MD** (ORCA/xTB) | would need a trajectory model and viewer; the app has no dynamics at all | 1–3 weeks |
 | 11 | **EOM-CCSD / ADC** | excited-state accuracy beyond TD-DFT | 1–2 weeks |
