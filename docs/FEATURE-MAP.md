@@ -3,7 +3,7 @@
 Status of this document: audit as of **2026-11-09**, against the working tree that contains
 schemaVersion 3 (ADR 0001), the `prepare` block, the scorer role, RDKit conformers and tautomer
 enumeration. Issues #222, #226, #227, #229 and #231 have closed since the map was first drafted;
-#228 (explicit solvation) and #230 (validation harness) remain open. It records capabilities, not keywords:
+#228 (explicit solvation) remains open; #230 (validation harness) now has recorded and live PySCF paths. It records capabilities, not keywords:
 "feature" means something a computational chemist selects — a job type, a property, a method
 family, a correction or a workflow primitive. Every Gaussian keyword, ORCA `%block` and Psi4
 `set` option is not enumerated; that would be a manual, not a map.
@@ -171,7 +171,8 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | Tautomer/protomer enumeration | **Implemented** | `tautomers.js` + `tautomerRunner.js`, RDKit ruleset (issue #226) |
 | `prepare` block (embed 3D, relax) | **Implemented (branch)** | ADR §2.9; `mlRelax.js` |
 | Descriptors / fingerprints | **Absent** | no RDKit descriptor path |
-| Validation harness across reference cases | **Absent** | `benchmark.js` compares bond lengths only; issue #230 |
+| Validation harness across reference cases | **Implemented** | `validationMatrix.js`, `ncs validation`; `--run` executes PySCF rungs (issue #230) |
+| cclib foreign-log conversion | **Implemented** | `scripts/ncs_cclib.py`, `ncs convert --format cjson` (issue #273); cclib is user-installed |
 | Uncertainty reporting | **Implemented** | `uncertainty.js` (issue #229) |
 
 ---
@@ -186,7 +187,7 @@ Effort is engineering time, not calendar, and assumes the parser work is done ag
 | 2 | **ORCA TD-DFT** | ORCA users cannot do UV-Vis/ECD; the excited-state analysis already exists for Gaussian and Psi4 | ~4 days |
 | 3 | **ORCA TS / IRC / Scan** | no reaction paths at all on ORCA, although the Gaussian path logic is written | ~1 week |
 | 4 | **Explicit / micro-solvation** (#228) | implicit models miss specific H-bonds; the record cannot even say "implicit only" today | 1–2 weeks |
-| 5 | **Validation harness** (#230) | the method ladder exists but cannot be run across a reference set and tabulated | ~1 week |
+| 5 | **Validation harness** (#230) | recorded and live PySCF paths are implemented; Gaussian/ORCA/Psi4 live rungs remain | — |
 | 6 | **Gaussian Polar** (polarizability, hyperpolarizability) | a single keyword job; completes the property set on the licensed engine | ~3 days |
 | 7 | **Psi4 SAPT2 family** | SAPT0 is the cheapest rung; interaction-energy analysis is the app's strength | ~1 week |
 | 8 | **ONIOM / QM-MM** | whole class of papers; needs a layer/region model, not just a keyword | 2–4 weeks |
