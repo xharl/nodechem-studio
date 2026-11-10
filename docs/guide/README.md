@@ -28,8 +28,8 @@ If you are new, read these in order:
    per record, with outputs for the whole set.
 6. [Engines](engines.md) — choose Gaussian 16, xTB, ORCA or Psi4, and know which settings belong to
    which.
-7. [Conformers and protomers](conformers.md) — search or import an ensemble, then choose the shape a
-   later block runs.
+7. [Conformers, tautomers and protomers](conformers.md) — search or import an ensemble, enumerate
+   tautomers, then choose the shape a later block runs.
 8. [ML scorers](scorers.md) — the optional ranking layer, its domain guard and units.
 9. [Workflows](workflow.md) — the queue, conditions, loops, checkpoint hand-off, cluster export.
 10. [Results](results.md) — the results panel, gates, validity checks, methods text, run bundles.
@@ -68,10 +68,14 @@ Reference pages:
 Normative references, for people reading code or writing tooling:
 
 - [`docs/PROJECT-FORMAT.md`](../PROJECT-FORMAT.md) — the `.ncs` document and the on-disk layout.
-- [`schemas/run-record.v1.schema.json`](../../schemas/run-record.v1.schema.json) — the run-record
-  contract (JSON Schema draft 2020-12).
+- [`docs/adr/0001-block-taxonomy.md`](../adr/0001-block-taxonomy.md) — the six data stages behind
+  `schemaVersion: 3`.
+- [`schemas/run-record.v2.schema.json`](../../schemas/run-record.v2.schema.json) — the current
+  run-record contract (JSON Schema draft 2020-12); `run-record.v1.schema.json` beside it is the body
+  an imported record nests, and is still what `--schema-version 1` exports.
 - [`docs/CLUSTER_EXPORT.md`](../CLUSTER_EXPORT.md) — the SLURM/PBS export folder and manifest.
 - [`docs/IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) — phased plan and remaining work.
+- [`CHANGELOG.md`](../../CHANGELOG.md) — what each release contains, and what is still unreleased.
 - [`README.md`](../../README.md) — the project landing page.
 
 ## What this documentation is careful about
@@ -81,11 +85,12 @@ Three things, because a wrong claim in a chemistry tool is expensive:
 - **Dry run is a fixture.** Wherever the docs say "dry run", they mean a synthetic file headed
   `FIXTURE OUTPUT`. It exercises the parser and the queue. It is never a calculation, and no number
   from it is a chemical result.
-- **Unverified paths are named as unverified.** The parser is tested against real Gaussian 09 and
-  Gaussian 16 outputs published in public repositories (see
-  [Output corpus](parser-corpus.md)), but the project has never run Gaussian itself and no xTB
-  binary ships with the app. The docs say so where it matters instead of implying a validated
-  pipeline.
+- **Unverified paths are named as unverified.** The parsers are tested against committed real output
+  from Gaussian 09 and 16, ORCA 5.0 and 6.1, and Psi4 1.11 (see [Output corpus](parser-corpus.md)); a
+  peer run in November 2026 also drove 25 cases written by this builder through Gaussian 16 Rev A.03,
+  and those logs are fixtures now. This project's own automated tests have never executed a licensed
+  Gaussian job, and no engine binary ships with the app. The docs say that where it matters instead of
+  implying a validated pipeline.
 - **Nothing is reported that the output did not contain.** The results panel prints
   `not reported` for a missing value, and the docs describe that behaviour rather than smoothing
   over it.

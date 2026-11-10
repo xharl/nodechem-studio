@@ -34,11 +34,17 @@ not a claim that the parser handles the case:
 
 - `Opt=TS` and a `Freq` with exactly one imaginary mode (a true saddle).
 - `--Link1--` multi-step jobs produced by Gaussian itself.
-- NMR shielding and Raman activities (the parser reads neither).
-- Solvation models printing extra sections, and `PCM`/`SMD` output.
+- **ROA** (`Freq=ROA`) — a Gaussian 16 B.01+ feature the A.03 licence in use cannot produce, so there
+  is no fixture and no reader. VCD, NMR shieldings and couplings, and Raman activities each have a
+  real log and are read.
+- A Gaussian solvation job that prints extra `PCM`/`SMD` sections; the parser records the model the
+  log states, but no captured log exercises a Gaussian solvated job.
 - Gaussian 03 and 98 revisions, and any Windows-formatted output.
 - Files larger than the 32 MiB parse limit; completeness is covered by the
   synthetic truncation test instead.
+
+ORCA, Psi4 and xTB captures live in the same directory and are indexed, with the parser branch each
+one reaches, in [`test/fixtures/real/README.md`](../../test/fixtures/real/README.md).
 
 Adding a case is cheap: drop the log in a `test/fixtures/real/<engine>-<version>-<molecule>-<job>/`
 folder with a `PROVENANCE.md` beside it, add its row to this table and its numbers to
