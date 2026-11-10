@@ -6,6 +6,13 @@ import { PyscfRunner } from '../electron/runner/pyscfRunner.js';
 
 const roots = [];
 
+// The fake interpreter below is a POSIX shell script, the same shape the other
+// sidecar tests use. The `Windows package` workflow runs this suite on
+// windows-latest, where a `#!/bin/sh` file is not executable, so the tests that
+// spawn it are skipped there rather than failing the build. `environmentFor`
+// and the argument checks still run on every platform.
+const canSpawnShell = process.platform !== 'win32';
+
 async function tempRoot(prefix = 'gns-pyscf-runner-') {
   const root = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), prefix)));
   roots.push(root);
@@ -46,7 +53,7 @@ async function fakePython(dir, body, name = 'python3') {
 }
 
 describe('PySCF runner', () => {
-  it('passes the deck as argv[0], captures stdout and reads the sidecar record', async () => {
+  it.skipIf(!canSpawnShell)('passes the deck as argv[0], captures stdout and reads the sidecar record', async () => {
     const root = await tempRoot();
     const cwd = path.join(root, 'run');
     await fsp.mkdir(cwd);
@@ -77,7 +84,7 @@ describe('PySCF runner', () => {
     expect(await fsp.readFile(path.join(cwd, 'job.out'), 'utf8')).toBe(result.outputText);
   });
 
-  it('completes the log from the sidecar when stdout lost the markers', async () => {
+  it.skipIf(!canSpawnShell)('completes the log from the sidecar when stdout lost the markers', async () => {
     const root = await tempRoot();
     const cwd = path.join(root, 'run');
     await fsp.mkdir(cwd);
@@ -96,7 +103,7 @@ describe('PySCF runner', () => {
     expect(result.recordText).toContain('"schema":"nodechem.pyscf.v1"');
   });
 
-  it('leaves a non-empty log a wrapper wrote', async () => {
+  it.skipIf(!canSpawnShell)('leaves a non-empty log a wrapper wrote', async () => {
     const root = await tempRoot();
     const cwd = path.join(root, 'run');
     await fsp.mkdir(cwd);
@@ -119,7 +126,7 @@ describe('PySCF runner', () => {
     })).rejects.toThrow(/not-python/);
   });
 
-  it('cancels a long deck and reports it as cancelled', async () => {
+  it.skipIf(!canSpawnShell)('cancels a long deck and reports it as cancelled', async () => {
     const root = await tempRoot();
     const executable = await fakePython(root, 'sleep 30');
     const started = Date.now();
