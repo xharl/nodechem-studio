@@ -331,8 +331,13 @@ no licence file and no ORCA source. Install ORCA yourself and follow its licence
 
 In this app ORCA gives you:
 
-- **Methods** `B3LYP`, `PBE0`, `M06-2X`, `MP2`, `CCSD(T)` and `HF`, with **basis sets** `def2-SVP`,
-  `def2-TZVP`, `cc-pVTZ`, `6-31G(d)` (written as ORCA's `6-31G*`) and `6-311+G(d,p)`.
+- **Methods** `B3LYP`, `PBE0`, `M06-2X`, `MP2`, `CCSD(T)`, `DLPNO-CCSD(T)` and `HF`, with **basis
+  sets** `def2-SVP`, `def2-TZVP`, `cc-pVTZ`, `6-31G(d)` (written as ORCA's `6-31G*`) and
+  `6-311+G(d,p)`. `DLPNO-CCSD(T)` is a **single point** in this builder — a request for `Opt` or
+  `Freq` with it is refused by name — and it carries a **PNO threshold** (`NormalPNO` or `TightPNO`),
+  written explicitly so the route preview states the truncation level instead of leaving it to ORCA's
+  default. The parsed header, PNO settings and triples correction are pinned to a real ORCA 6.1 log
+  (`test/fixtures/real/orca-6.1-water-dlpno/`).
 - **Job types** `SP`, `Opt`, `Freq` and `Opt Freq`. `Opt Freq` is ORCA's compound job: optimise,
   then compute the Hessian at the minimum.
 - **Dispersion** `D3(BJ)` → `D3BJ`, `D3` → `D3ZERO` and `D4` → `D4`.
