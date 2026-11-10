@@ -377,7 +377,13 @@ describe('issue 165 — the queue writes the DP4+ record', () => {
   });
 
   afterAll(async () => {
-    await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+    // A queue started in one of these tests can still be persisting when the
+    // file ends, so the removal races the writer and fails with ENOTEMPTY. The
+    // retries belong on the removal, not on a sleep: a settled directory is
+    // removed on the first attempt and a busy one is retried with backoff.
+    await Promise.all(roots.map((root) => fsp.rm(root, {
+      recursive: true, force: true, maxRetries: 5, retryDelay: 50,
+    })));
     roots = [];
   });
 
