@@ -56,11 +56,25 @@ export function projectFileName(project) {
   return `${projectStem(project)}${PROJECT_EXTENSION}`;
 }
 
-/** Append `.ncs` unless the path already carries it. */
+/**
+ * Normalise a chosen save path to exactly one `.ncs`.
+ *
+ * Issue 315: the save dialog's filter and this helper each tried to own the
+ * suffix, and the result was `foo.ncs.ncs` — a file that opens here but reads
+ * as a different type to every other tool. A path that already ends in exactly
+ * one suffix is returned byte-for-byte (the user's case included); a run of
+ * suffixes collapses to one.
+ */
 export function withProjectExtension(filePath) {
   const value = String(filePath || '').trim();
   if (!value) return value;
-  return isProjectPath(value) ? value : `${value}${PROJECT_EXTENSION}`;
+  // Strip every trailing `.ncs` so a doubly-suffixed name cannot keep growing.
+  const stem = value.replace(/(?:\.ncs)+$/i, '');
+  if (!stem) return PROJECT_EXTENSION;
+  const suffix = value.slice(stem.length);
+  // Exactly one suffix already: leave it alone, case and all.
+  if (suffix.length === PROJECT_EXTENSION.length) return value;
+  return `${stem}${PROJECT_EXTENSION}`;
 }
 
 /**
