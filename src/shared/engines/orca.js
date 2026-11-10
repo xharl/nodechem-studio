@@ -38,6 +38,7 @@ import {
   orcaNmrBlock,
   parseOrcaGTensor,
   parseOrcaHyperfine,
+  parseOrcaShieldings,
   parseOrcaSpinSpin,
 } from './orcaProperties.js';
 
@@ -193,15 +194,15 @@ export const ORCA_JOB_KEYWORDS = Object.freeze({
   Opt: Object.freeze(['Opt']),
   'Opt Freq': Object.freeze(['Opt', 'Freq']),
   Freq: Object.freeze(['Freq']),
+  NMR: Object.freeze(['NMR']),
 });
 
-export const ORCA_UNSUPPORTED_JOB_TYPES = Object.freeze(['Opt=TS', 'IRC', 'Scan', 'NMR']);
+export const ORCA_UNSUPPORTED_JOB_TYPES = Object.freeze(['Opt=TS', 'IRC', 'Scan']);
 
 export const ORCA_UNSUPPORTED_JOB_REASONS = Object.freeze({
   'Opt=TS': 'a transition-state search needs an initial Hessian and mode specification written in a %geom block',
   IRC: 'an IRC needs a %irc block naming the transition mode and direction',
   Scan: 'a relaxed PES scan needs a %geom Scan block naming the scanned coordinate',
-  NMR: 'NMR shieldings need a %elprop block with an explicit nucleus list',
 });
 
 export const ORCA_CAPABILITIES = Object.freeze({
@@ -230,7 +231,6 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'IRC',
     'relaxed PES scan',
     'TD-DFT excited states',
-    'NMR shieldings',
     'population analysis (NBO/ESP)',
     'Gaussian-style checkpoint hand-off (%Chk)',
     'Gaussian PCM keyword (ORCA implements CPCM/SMD)',
@@ -246,6 +246,7 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'hyperfine couplings (A(iso), A(SD), total HFC matrix)',
     'g-tensor when the log prints one',
     'isotropic spin-spin couplings J (no reduced K table)',
+    'chemical shieldings (isotropic and anisotropy) from a ! NMR job',
   ]),
 });
 
@@ -412,6 +413,32 @@ function resourcesFor(settings = {}) {
  * extension is rewritten here and the returned `inputName` is the name the
  * runner writes. Anything else is validated strictly.
  */
+/** Elements ORCA's GIAO module shields, in the order the block is written. */
+export const ORCA_NMR_ELEMENTS = Object.freeze(['H', 'C', 'N', 'O', 'F', 'P', 'Si']);
+
+/**
+ * `%EPRNMR` block for a `! NMR` job.
+ *
+ * ORCA takes one `NUCLEI = ALL <element>` line per element. `SSALL` adds that
+ * element's spin-spin coupling matrix; without it ORCA prints shieldings only.
+ * The block goes after the coordinates, where ORCA's own NMR examples put it.
+ */
+export function nmrBlockFor(coords = [], settings = {}) {
+  const present = new Set(coords.map((atom) => oneLine(atom.element)));
+  const elements = ORCA_NMR_ELEMENTS.filter((element) => present.has(element));
+  if (elements.length === 0) {
+    throw new Error('An ORCA NMR job needs at least one NMR-active element '
+      + `(${ORCA_NMR_ELEMENTS.join(', ')}); this molecule has none.`);
+  }
+  const couplings = settings.nmrSpinSpin === true;
+  const lines = ['%EPRNMR'];
+  for (const element of elements) {
+    lines.push(`  NUCLEI = ALL ${element} { ${couplings ? 'SHIFT, SSALL' : 'SHIFT'} }`);
+  }
+  lines.push('end');
+  return { elements, couplings, lines };
+}
+
 export function buildOrcaInput({
   title = 'ORCA task',
   settings = {},
@@ -547,6 +574,10 @@ export function buildOrcaInput({
     blocks.push('%cpcm', '  smd true', `  smdsolvent "${solvation.solvent}"`, 'end');
   }
 
+  // `! NMR` needs a %EPRNMR nucleus list; without it ORCA shields nothing.
+  // Written after the coordinates, as ORCA's NMR examples do.
+  const nmr = jobType === 'NMR' ? nmrBlockFor(coords, settings) : null;
+
   const inputText = [
     keywords.join(' '),
     `# ${oneLine(title, 'ORCA task')}`,
@@ -555,6 +586,7 @@ export function buildOrcaInput({
     `* xyz ${charge} ${multiplicity}`,
     ...coordinateLines,
     '*',
+    ...(nmr ? ['', ...nmr.lines] : []),
     '',
   ].join('\n');
 
@@ -581,6 +613,7 @@ export function buildOrcaInput({
       ? { model: solvation.model, solvent: solvation.solvent, label: solvation.label }
       : { model: null, solvent: null, label: null },
     resources,
+    nmr: nmr ? { elements: nmr.elements, couplings: nmr.couplings } : null,
     /** Human-readable simple-input line, for the inspector preview. */
     route: keywords.join(' ').replace(/^!\s*/, ''),
   };
@@ -937,7 +970,8 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
 
   const jobType = echo ? (/\bopt\b/i.test(echo) && /\bfreq\b/i.test(echo) ? 'Opt Freq'
     : /\bopt\b/i.test(echo) ? 'Opt'
-      : /\bfreq\b/i.test(echo) ? 'Freq' : 'SP') : null;
+      : /\bfreq\b/i.test(echo) ? 'Freq'
+        : /\bnmr\b/i.test(echo) ? 'NMR' : 'SP') : null;
 
   // Issue 222: ORCA's magnetic properties. The hyperfine section and the
   // spin-spin summary live after the SCF and are not part of the canonical
@@ -949,7 +983,8 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
   const gTensor = parseOrcaGTensor(body);
   const epr = orcaEprBlock({ hyperfine, gTensor, level: echo || hyperfine?.method || null });
   const spinSpin = parseOrcaSpinSpin(body);
-  const nmr = orcaNmrBlock({ couplings: spinSpin, text: body });
+  const shieldings = parseOrcaShieldings(body);
+  const nmr = orcaNmrBlock({ couplings: spinSpin, shieldings, text: body });
 
   const result = canonicalResult({
     engine: ORCA_ENGINE_ID,

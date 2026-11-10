@@ -1,0 +1,141 @@
+
+                                 *****************
+                                 * O   R   C   A *
+                                 *****************
+
+                                            #,                                       
+                                            ###                                      
+                                            ####                                     
+                                            #####                                    
+                                            ######                                   
+                                           ########,                                 
+                                     ,,################,,,,,                         
+                               ,,#################################,,                 
+                          ,,##########################################,,             
+
+                #                        -***-                          #
+                #########################################################
+
+
+                         Program Version 6.1.1  -  RELEASE   -
+                                (GIT: $487d211c$)
+                          ($2025-11-21 10:33:24 +0100$)
+                                                                         
+                                  - NO-DMRG VERSION -                    
+
+================================================================================
+NAME = methanol-nmr.inp
+|  1> ! B3LYP def2-SVP NMR
+|  2> # methanol-nmr
+|  3> %pal nprocs 2 end
+|  4> 
+|  5> * xyz 0 1
+|  6> C      0.000000     0.000000     0.000000
+|  7> O      1.430000     0.000000     0.000000
+|  8> H     -0.360000     1.030000     0.000000
+|  9> H     -0.360000    -0.515000     0.892000
+| 10> H     -0.360000    -0.515000    -0.892000
+| 11> H      1.790000     0.890000     0.000000
+| 12> *
+| 13> 
+| 14> %EPRNMR
+| 15>   NUCLEI = ALL H { SHIFT, SSALL }
+| 16>   NUCLEI = ALL C { SHIFT, SSALL }
+| 17>   NUCLEI = ALL O { SHIFT, SSALL }
+| 18> end
+| 19> 
+| 20>                          ****END OF INPUT****
+================================================================================
+
+ 
+[ThinkEndeavour:1777963] osc_ucx_component.c:375  Error: OSC UCX component priority set inside component query failed 
+ 
+[ThinkEndeavour:1777964] osc_ucx_component.c:375  Error: OSC UCX component priority set inside component query failed 
+ 
+[ThinkEndeavour:1777963] osc_ucx_component.c:375  Error: OSC UCX component priority set inside component query failed 
+ 
+
+               *****************************************************
+               *                     SUCCESS                       *
+               *           SCF CONVERGED AFTER   8 CYCLES          *
+               *****************************************************
+
+
+----------------
+TOTAL SCF ENERGY
+----------------
+
+Total Energy       :       -115.56211637243774 Eh           -3144.60506 eV
+
+Components:
+Nuclear Repulsion  :         40.16480095165057 Eh            1092.93980 eV
+Electronic Energy  :       -155.72688837328090 Eh           -4237.54407 eV
+
+Property integrals calculated in   0.6 sec
+
+Maximum memory used throughout the entire PROPINT-calculation: 8.4 MB
+
+-------------------------   --------------------
+FINAL SINGLE POINT ENERGY      -115.562116372438
+-------------------------   --------------------
+
+
+
+           ************************************************************
+           *        Program running with 2 parallel MPI-processes     *
+           *              working on a common directory               *
+
+CHEMICAL SHIELDINGS (ppm)
+-------------------
+
+Method             : SCF
+Type of density    : Electron Density
+Type of derivative : Magnetic Field (with GIAOs) (Direction=X)
+Multiplicity       :   1
+Irrep              :   0
+Basis              : AO
+
+CHEMICAL SHIELDING SUMMARY (ppm)
+--------------------------------
+
+
+  Nucleus  Element    Isotropic     Anisotropy
+  -------  -------  ------------   ------------
+      2       H           28.336          8.004 
+      3       H           28.175          7.691 
+      4       H           28.175          7.691 
+      5       H           32.237         18.235 
+      0       C          141.174         72.277 
+      1       O          342.467         83.381 
+
+
+NMR shielding tensor and spin rotation calculation done in   0.0 sec 
+
+
+-----------------------------------------------------------------------
+                     NMR SPIN-SPIN COUPLING CONSTANTS
+
+                SUMMARY OF ISOTROPIC COUPLING CONSTANTS J (Hz)                
+-----------------------------------------------------------------------------
+                  0 C        1 O        2 H        3 H        4 H        5 H  
+      0 C        0.000     15.511    179.858    199.640    199.640     -1.378
+      1 O       15.511      0.000     -2.653     -9.870     -9.870    -91.723
+      2 H      179.858     -2.653      0.000     -9.551     -9.551      8.169
+      3 H      199.640     -9.870     -9.551      0.000     -7.951      1.657
+      4 H      199.640     -9.870     -9.551     -7.951      0.000      1.657
+      5 H       -1.378    -91.723      8.169      1.657      1.657      0.000
+
+NMR spin-spin coupling calculation done in   0.1 sec 
+
+Maximum memory used throughout the entire PROP-calculation: 6.0 MB
+
+--------------------------------
+SUGGESTED CITATIONS FOR THIS RUN
+
+Startup calculation              ...        2.657 sec (=   0.044 min)  18.7 %
+SCF iterations                   ...        5.182 sec (=   0.086 min)  36.4 %
+Property integrals               ...        1.803 sec (=   0.030 min)  12.7 %
+SCF Response                     ...        3.225 sec (=   0.054 min)  22.7 %
+Property calculations            ...        1.353 sec (=   0.023 min)   9.5 %
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 0 hours 0 minutes 15 seconds 779 msec
