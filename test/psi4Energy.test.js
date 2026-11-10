@@ -76,3 +76,18 @@ describe('Psi4 correlated energies', () => {
     expect(parsed.finalEnergy.source).toBe('total-energy');
   });
 });
+
+describe('Psi4 method and basis lookup', () => {
+  it('accepts the label the inspector writes, the key, and the ASCII spelling', async () => {
+    const { psi4MethodFor, psi4BasisFor } = await import('../src/shared/engines/psi4.js');
+    for (const spelling of ['ωB97X-D', 'wB97X-D', 'wb97x-d', 'WB97X-D']) {
+      expect(psi4MethodFor({ method: spelling }).fn).toBe('wb97x-d');
+    }
+    // A label whose key differs only in case still resolves, and an unknown
+    // method still fails while naming the request.
+    expect(psi4MethodFor({ method: 'b3lyp' }).fn).toBe('b3lyp');
+    expect(() => psi4MethodFor({ method: 'B3LYP-D3' })).toThrow(/cannot run method "B3LYP-D3"/);
+    expect(psi4BasisFor({ basis: 'def2-TZVP' }).psi4).toBe('def2-tzvp');
+    expect(psi4BasisFor({ basis: 'def2-tzvp' }).psi4).toBe('def2-tzvp');
+  });
+});

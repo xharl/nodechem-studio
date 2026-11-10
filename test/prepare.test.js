@@ -72,6 +72,21 @@ async function waitFor(check, timeout = 5000) {
   throw new Error('timed out waiting for the queue');
 }
 
+describe('prepare outputs the report could not value', () => {
+  it('accepts a null energyKcal, so a non-converged run can still be saved', () => {
+    // #260: Open Babel reports no final energy when a minimisation hits its cap;
+    // refusing null made the whole project unsaveable after a legitimate run.
+    const validated = validateProject(project([prepareNode({}, {
+      kind: 'relax', converter: 'openbabel', forceField: 'MMFF94',
+      energyKcal: null, converged: false,
+      reason: 'converter-did-not-report-convergence', iterations: 500, atomCount: 3,
+    })]));
+    expect(validated.ok).toBe(true);
+    expect(validated.project.nodes[0].output.energyKcal).toBeNull();
+    expect(validated.project.nodes[0].output.reason).toBe('converter-did-not-report-convergence');
+  });
+});
+
 describe('prepare under a dry run', () => {
   it('spawns no converter and records why', async () => {
     // `--dry-run` records no binaries, so a prepare block that spawns anyway made
