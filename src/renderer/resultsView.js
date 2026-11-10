@@ -713,7 +713,10 @@ function eprCard(parsed, flags) {
     + `<td class="num">${finite(row.mulliken) === null ? missingHtml() : esc(row.mulliken.toFixed(4))}</td>`
     + `<td class="num">${finite(row.lowdin) === null ? missingHtml() : esc(row.lowdin.toFixed(4))}</td>`
     + '</tr>').join('');
-  const populationTable = '<div class="results-charge-block">'
+  // ORCA prints the hyperfine tensor but no spin populations. An empty
+  // population table with headers would read as "every population is missing";
+  // the card omits the table and says where the couplings came from instead.
+  const populationTable = populations.length === 0 ? '' : '<div class="results-charge-block">'
     + '<h5 class="results-charge-title">Spin populations<span>electrons (alpha − beta)</span></h5>'
     + '<table class="results-table results-charge-table" data-field="epr-population-table"><thead>'
     + '<tr><th>Atom</th><th>El</th><th class="num">Mulliken</th><th class="num">Löwdin</th></tr></thead>'
@@ -735,8 +738,9 @@ function eprCard(parsed, flags) {
       + `<td>${reported ? '' : esc(row.note || row.status || '')}</td>`
       + '</tr>';
   }).join('');
+  const hyperfineLabel = text(epr.hyperfineLabel) || 'Fermi-contact coupling';
   const hyperfineTable = '<div class="results-charge-block">'
-    + '<h5 class="results-charge-title">Fermi-contact coupling'
+    + `<h5 class="results-charge-title">${esc(hyperfineLabel)}`
     + '<span>MHz · gauss</span></h5>'
     + '<table class="results-table results-charge-table" data-field="epr-hyperfine-table"><thead>'
     + '<tr><th>Atom</th><th>Isotope</th><th class="num">A<sub>iso</sub> / MHz</th>'
@@ -748,13 +752,17 @@ function eprCard(parsed, flags) {
       + `${esc(String(epr.electrons?.beta ?? '?'))} beta — `
       + `<strong>${esc(String(epr.electrons?.unpaired ?? '?'))} unpaired</strong>`, 'epr-electrons'),
     fieldValue('Level', valueOrMissing(epr.level), 'epr-level'),
-    fieldValue('Populations from', valueOrMissing(epr.scheme ?? epr.provenance?.spinDensityBlock), 'epr-scheme'),
-    fieldValue('Population sum',
+  ];
+  if (populations.length > 0) {
+    rows.push(fieldValue('Populations from', valueOrMissing(epr.scheme ?? epr.provenance?.spinDensityBlock), 'epr-scheme'));
+    rows.push(fieldValue('Population sum',
       finite(epr.populationSum) === null ? missingHtml()
         : `${esc(epr.populationSum.toFixed(6))} <span class="results-unit">electrons</span>`
           + ` (n<sub>alpha</sub> − n<sub>beta</sub> = ${esc(String(epr.electrons?.unpaired ?? '?'))})`,
-      'epr-population-sum'),
-  ];
+      'epr-population-sum'));
+  } else if (epr.provenance?.hyperfineBlock) {
+    rows.push(fieldValue('Hyperfine from', valueOrMissing(epr.provenance.hyperfineBlock), 'epr-hyperfine-source'));
+  }
 
   return card('Spin density / EPR',
     kv(rows)
@@ -1614,7 +1622,9 @@ function nmrCard(parsed, flags, record) {
   if (!nmr) return '';
   const atoms = Array.isArray(nmr.atoms) ? nmr.atoms : [];
   const couplings = nmr.couplings && typeof nmr.couplings === 'object' ? nmr.couplings : null;
-  if (atoms.length === 0 && !couplings) return '';
+  // A couplings-only block (ORCA) has no shieldings; a malformed coupling
+  // request still has a reason to print, so it is not dropped either.
+  if (atoms.length === 0 && !couplings && !text(nmr.couplingsError)) return '';
 
   const elements = [...new Set(atoms.map((atom) => atom.element))];
   const nuclei = elements
@@ -1702,8 +1712,10 @@ function nmrOrigin(record) {
 }
 
 /**
- * The coupling table: every pair the log printed, with Gaussian's 1-based atom
- * numbers named as element + index. The units and the sign convention are the
+ * The coupling table: every pair the log printed, with the nucleus named by
+ * element + the table's own index. Gaussian is 1-based and ORCA is 0-based, so
+ * the index is never re-numbered here; the `indexing` sentence says which
+ * convention the numbers use. The units and the sign convention are the
  * table's, and a pair that was not printed is never rendered as 0.
  */
 function couplingSectionHtml(nmr) {
@@ -1713,12 +1725,22 @@ function couplingSectionHtml(nmr) {
       + 'block — it was written before couplings were parsed — so couplings are not reported.</p>';
   }
   if (!couplings) {
+    const reason = text(nmr.couplingsError);
+    if (reason) {
+      return '<p class="results-note" data-field="nmr-couplings-absent">The spin–spin coupling block '
+        + `could not be read: ${esc(reason)}. Couplings are not reported — that is an absence, not a `
+        + 'zero matrix.</p>';
+    }
     return '<p class="results-note" data-field="nmr-couplings-absent">No spin–spin coupling table was printed '
       + 'for this run: the route did not ask for <code>NMR=(GIAO,SpinSpin)</code>, so couplings are '
       + 'not reported — that is an absence, not a zero matrix.</p>';
   }
   const atoms = Array.isArray(nmr.atoms) ? nmr.atoms : [];
-  const elementOf = (index) => atoms.find((atom) => atom.index === index)?.element ?? null;
+  const elements = Array.isArray(couplings.elements) ? couplings.elements : null;
+  // Gaussian's shieldings carry element + 1-based index in `nmr.atoms`; an
+  // ORCA couplings-only block carries the element list beside the matrix.
+  const elementOf = (index) => (elements ? elements[index] ?? null : null)
+    ?? atoms.find((atom) => atom.index === index)?.element ?? null;
   const name = (index) => `${elementOf(index) ?? '#'}${index}`;
   const pairs = Array.isArray(couplings.pairs) ? couplings.pairs : [];
   const possible = (Number(couplings.atoms) * (Number(couplings.atoms) - 1)) / 2;
@@ -1730,6 +1752,10 @@ function couplingSectionHtml(nmr) {
   const verified = couplings.verified === true
     ? 'The printed rows matched their column headers and every printed diagonal was 0.'
     : `The table did not verify: ${problems.join('; ') || 'reason not recorded'}.`;
+  const crossCheck = couplings.verification?.pairBlockCrossCheck?.pairsCompared
+    ? ` Cross-check: ${couplings.verification.pairBlockCrossCheck.pairsCompared} summary pairs agree `
+      + `with the per-pair isotropic values to ${couplings.verification.pairBlockCrossCheck.worstDeviationHz} Hz.`
+    : '';
 
   const rows = pairs.map((pair) => '<tr data-coupling="'
       + `${esc(pair.i)},${esc(pair.j)}">`
@@ -1738,12 +1764,17 @@ function couplingSectionHtml(nmr) {
     + `<td class="num">${Number.isFinite(pair.k) ? esc(pair.k.toFixed(6)) : MISSING_TEXT}</td>`
     + '</tr>').join('');
 
+  const unitsNote = couplings.note
+    || 'J in Hz, sign as Gaussian prints it (the total of its FC, SD, PSO and DSO contributions, '
+      + 'never normalised).';
+  const kNote = couplings.kUnits
+    ? ` K: ${couplings.kUnits}.`
+    : ' K is the reduced constant exactly as printed; this app does not convert one into the other.';
+
   return '<h4>Spin–spin couplings</h4>'
     + '<p class="results-note" data-field="nmr-couplings-note">'
-    + 'J in <strong>Hz</strong>, sign as Gaussian prints it (the total of its FC, SD, PSO and DSO '
-    + 'contributions, never normalised). K is the reduced constant exactly as printed: Gaussian labels its '
-    + 'table “(Hz)” but it is not a frequency, and this app does not convert one into the other.</p>'
-    + `<p class="results-note" data-field="nmr-couplings-coverage">${esc(coverage)} ${esc(verified)}</p>`
+    + `${esc(unitsNote)}${esc(kNote)}</p>`
+    + `<p class="results-note" data-field="nmr-couplings-coverage">${esc(coverage)} ${esc(verified)}${esc(crossCheck)}</p>`
     + `<p class="results-note" data-field="nmr-couplings-indexing">${esc(couplings.indexing
       || 'Gaussian numbers nuclei from 1 in input order; element + that number names them here.')}</p>`
     + '<table class="results-table" data-field="nmr-couplings">'

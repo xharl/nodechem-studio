@@ -33,6 +33,13 @@
 
 import { isElementSymbol, atomicNumber } from '../elements.js';
 import { canonicalResult, TERMINATION } from './canonical.js';
+import {
+  orcaEprBlock,
+  orcaNmrBlock,
+  parseOrcaGTensor,
+  parseOrcaHyperfine,
+  parseOrcaSpinSpin,
+} from './orcaProperties.js';
 
 export const ORCA_ENGINE_ID = 'orca';
 
@@ -228,6 +235,17 @@ export const ORCA_CAPABILITIES = Object.freeze({
     'Gaussian-style checkpoint hand-off (%Chk)',
     'Gaussian PCM keyword (ORCA implements CPCM/SMD)',
     'DLPNO-CCSD(T) gradients, analytical frequencies and optimisations (single points only)',
+  ]),
+  /**
+   * Property blocks an imported ORCA log is read for (issue 222). These are
+   * *readers*, not builder options: the simple-input builder still refuses an
+   * NMR job because it would need a `%elprop` nucleus list. They are listed so a
+   * capability dialog can say what an ORCA log can contribute beside an energy.
+   */
+  parsedProperties: Object.freeze([
+    'hyperfine couplings (A(iso), A(SD), total HFC matrix)',
+    'g-tensor when the log prints one',
+    'isotropic spin-spin couplings J (no reduced K table)',
   ]),
 });
 
@@ -921,6 +939,18 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
     : /\bopt\b/i.test(echo) ? 'Opt'
       : /\bfreq\b/i.test(echo) ? 'Freq' : 'SP') : null;
 
+  // Issue 222: ORCA's magnetic properties. The hyperfine section and the
+  // spin-spin summary live after the SCF and are not part of the canonical
+  // energy/frequency shape, so they are read here and travel in the same
+  // `epr` / `nmr` blocks the other engines use. Both readers return null when
+  // the run did not ask for the property; a yes-with-no-block is refused by
+  // name inside the reader, never turned into zeros.
+  const hyperfine = parseOrcaHyperfine(body);
+  const gTensor = parseOrcaGTensor(body);
+  const epr = orcaEprBlock({ hyperfine, gTensor, level: echo || hyperfine?.method || null });
+  const spinSpin = parseOrcaSpinSpin(body);
+  const nmr = orcaNmrBlock({ couplings: spinSpin, text: body });
+
   const result = canonicalResult({
     engine: ORCA_ENGINE_ID,
     program: {
@@ -966,7 +996,11 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
       hartree: finalEnergy,
       source: finalEnergy !== null ? 'final-single-point' : null,
     },
+    // Issue 227: absent unless the log printed a DLPNO header and triples.
     dlpno,
+    // Issue 222: absent unless the log printed a hyperfine section or a
+    // g-tensor; canonicalResult drops a null block.
+    epr,
     extras: {
       simpleInput: echo || null,
       basis: level.basis,
@@ -982,6 +1016,10 @@ export function parseOrcaOutput(text, { truncated = false, argv = null, route = 
     },
     lineCount: lines.length,
   });
+  // Issue 222: the coupling summary is not part of the canonical energy shape
+  // (Gaussian attaches its `nmr` block the same way), so it rides beside the
+  // canonical result rather than being folded into `extras`.
+  if (nmr) result.nmr = nmr;
   if (route !== null && String(route).trim() !== '') result.route = String(route).trim();
   return result;
 }
