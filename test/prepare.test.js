@@ -166,6 +166,51 @@ describe('prepare block schema (ADR 0001 §2.9)', () => {
     expect(ok.project.nodes[0].kind).toBe('3D embed');
   });
 
+  it('accepts an explicit solvent block and records its placement provenance', () => {
+    const validated = validateProject(project([prepareNode({
+      kind: 'solvate', converter: 'geometric', forceField: 'none',
+      solvent: 'water', solventCount: 4, seed: 7, shellAngstrom: 3.5,
+    })]));
+    expect(validated.ok).toBe(true);
+    const node = validated.project.nodes[0];
+    expect(node.kind).toBe('Solvate');
+    expect(node.settings).toMatchObject({
+      kind: 'solvate', converter: 'geometric', forceField: 'none',
+      solvent: 'water', solventCount: 4, seed: 7, shellAngstrom: 3.5,
+    });
+    const output = {
+      kind: 'solvate', converter: 'geometric', forceField: 'none',
+      solvationModel: 'explicit',
+      energyKcal: null, converged: null, reason: 'placement-completed', iterations: 0, atomCount: 15,
+      solvent: { id: 'water', label: 'Water', formula: 'H2O' }, count: 4, seed: 7,
+      shellAngstrom: 3.5, minDistanceAngstrom: 2, formula: 'H2O · 4 H2O',
+      method: 'deterministic Fibonacci-shell placement, rigid solvent templates, no relaxation',
+      limitation: 'One explicit cluster is not bulk solvent.',
+      composition: {
+        soluteFormula: 'H2O', solventFormula: 'H2O', solventCount: 4,
+        soluteAtoms: 3, solventAtoms: 3, totalAtoms: 15,
+      },
+    };
+    const reloaded = validateProject(project([prepareNode({
+      kind: 'solvate', converter: 'geometric', forceField: 'none',
+      solvent: 'water', solventCount: 4, seed: 7, shellAngstrom: 3.5,
+    }, output)]));
+    expect(reloaded.ok).toBe(true);
+    expect(reloaded.project.nodes[0].output.composition.totalAtoms).toBe(15);
+    expect(reloaded.project.nodes[0].output.solvationModel).toBe('explicit');
+    expect(reloaded.project.nodes[0].output.formula).toBe('H2O · 4 H2O');
+    expect(reloaded.project.nodes[0].output.limitation).toMatch(/not bulk solvent/);
+  });
+
+  it('refuses a solvate block with a force-field converter or an unknown solvent', () => {
+    const wrongConverter = validateProject(project([prepareNode({ kind: 'solvate', converter: 'uff' })]));
+    expect(wrongConverter.ok).toBe(false);
+    expect(wrongConverter.errors.some((error) => /settings\.converter/.test(error.path))).toBe(true);
+    const unknown = validateProject(project([prepareNode({ kind: 'solvate', converter: 'geometric', solvent: 'benzene' })]));
+    expect(unknown.ok).toBe(false);
+    expect(unknown.errors.some((error) => /settings\.solvent/.test(error.path))).toBe(true);
+  });
+
   it('names the prepared structure on a downstream calculate task', () => {
     const validated = validateProject(project([
       prepareNode(),
@@ -185,6 +230,41 @@ describe('prepare block schema (ADR 0001 §2.9)', () => {
 });
 
 describe('prepare runtime', () => {
+  it('builds an explicit solvent cluster and writes prepared.xyz + prepare.json', async () => {
+    const { queueManager } = await stack();
+    const validated = validateProject(project([prepareNode({
+      kind: 'solvate', converter: 'geometric', forceField: 'none',
+      solvent: 'water', solventCount: 4, seed: 7, shellAngstrom: 3.5,
+    })]));
+    expect(validated.ok).toBe(true);
+    const task = buildWorkflowPlan(validated.project).tasks.find((entry) => entry.type === 'prepare');
+    const started = await queueManager.start({
+      projectName: validated.project.name,
+      tasks: [task],
+      edges: [],
+      options: { dryRun: true, executable: null, crestExecutable: '', scratchDir: '' },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+    const preparedTask = done.tasks.find((entry) => entry.nodeId === 'prep');
+    expect(preparedTask.error).toBeNull();
+    expect(preparedTask.status).toBe('completed');
+    const xyz = await fsp.readFile(path.join(preparedTask.runDir, 'prepared.xyz'), 'utf8');
+    expect(xyz.trim().split('\n')[0]).toBe('15');
+    const record = JSON.parse(await fsp.readFile(path.join(preparedTask.runDir, 'prepare.json'), 'utf8'));
+    expect(record.kind).toBe('solvate');
+    expect(record.converter).toBe('geometric');
+    expect(record.forceField).toBe('none');
+    expect(record.solvationModel).toBe('explicit');
+    expect(record.atomCount).toBe(15);
+    expect(record.composition.totalAtoms).toBe(15);
+    expect(record.seed).toBe(7);
+    expect(record.limitation).toMatch(/not bulk solvent/);
+    expect(record.method).toMatch(/no relaxation/);
+  });
+
   it('relaxes one structure with UFF and writes prepared.xyz + prepare.json', async () => {
     const { queueManager } = await stack();
     const validated = validateProject(project([prepareNode()]));

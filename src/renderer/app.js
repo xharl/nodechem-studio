@@ -124,6 +124,7 @@ import {
 } from '../shared/engines/pyscf.js';
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import { prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
+import { EXPLICIT_SOLVENTS } from '../shared/explicitSolvation.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
 import { SPIN_SWEEP_MAX, multiplicitiesFor, spinSweepFor } from '../shared/spinSweep.js';
@@ -3215,44 +3216,64 @@ function loopInspector(node) {
 function prepareInspector(node) {
   const s = node.settings || {};
   const output = node.output && typeof node.output === 'object' ? node.output : null;
-  const kind = s.kind === 'embed3d' ? 'embed3d' : 'relax';
+  const kind = s.kind === 'embed3d' ? 'embed3d' : (s.kind === 'solvate' ? 'solvate' : 'relax');
   const converter = kind === 'embed3d' ? 'openbabel' : (s.converter === 'openbabel' ? 'openbabel' : 'uff');
   const detail = output
     ? prepareSummaryLine(output)
-    : (kind === 'embed3d' ? 'SMILES → one 3D structure' : 'one structure → one relaxed structure');
+    : (kind === 'embed3d' ? 'SMILES → one 3D structure'
+      : (kind === 'solvate' ? 'one structure → one explicit solvent cluster' : 'one structure → one relaxed structure'));
+  const methodLabel = kind === 'solvate'
+    ? 'Deterministic placement, rigid templates, no relaxation'
+    : (kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app')));
   return `${inspectorHead('Structure · prepare', node.title, detail)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">1 structure in, 1 out · no enumeration</span></div>
-    ${group('Method', kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app')), true, [
+    ${group('Method', methodLabel, true, [
       `<div class="field"><label>Kind</label><select class="select" data-prepare-field="kind">
         <option value="relax"${kind === 'relax' ? ' selected' : ''}>Relax one structure</option>
+        <option value="solvate"${kind === 'solvate' ? ' selected' : ''}>Add explicit solvent</option>
         <option value="embed3d"${kind === 'embed3d' ? ' selected' : ''}>Embed SMILES in 3D</option>
       </select></div>`,
-      `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
-        <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
-        <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel (external)</option>
-        <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>
-      </select></div>`,
-      ...(kind === 'embed3d' ? [
-        `<div class="field full"><label>SMILES</label><input class="input" data-prepare-field="smiles" value="${esc(s.smiles || '')}" placeholder="CCO" spellcheck="false" autocomplete="off"></div>`,
+      ...(kind === 'solvate' ? [
+        `<div class="field"><label>Solvent</label><select class="select" data-prepare-field="solvent">${Object.values(EXPLICIT_SOLVENTS)
+          .map((solvent) => `<option value="${esc(solvent.id)}"${String(s.solvent || 'water') === solvent.id ? ' selected' : ''}>${esc(solvent.label)} (${esc(solvent.formula)})</option>`).join('')}</select></div>`,
+        `<div class="field"><label>Molecules</label><input class="input" type="number" min="1" max="64" data-prepare-field="solventCount" value="${esc(s.solventCount ?? 10)}"></div>`,
+        `<div class="field"><label>Seed</label><input class="input" type="number" min="0" max="2147483647" data-prepare-field="seed" value="${esc(s.seed ?? 1)}"></div>`,
+        `<div class="field"><label>Shell / Å</label><input class="input" type="number" min="1" max="20" step="0.1" data-prepare-field="shellAngstrom" value="${esc(s.shellAngstrom ?? 3.5)}"></div>`,
       ] : [
-        `<div class="field"><label>Force field</label><select class="select" data-prepare-field="forceField">
-          <option value="UFF"${s.forceField !== 'MMFF94' && s.forceField !== 'AIMNet2' ? ' selected' : ''}>UFF</option>
-          <option value="MMFF94"${s.forceField === 'MMFF94' ? ' selected' : ''}>MMFF94</option>
-          <option value="AIMNet2"${s.forceField === 'AIMNet2' || converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML)</option>
+        `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
+          <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
+          <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel (external)</option>
+          <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>
         </select></div>`,
+        ...(kind === 'embed3d' ? [
+          `<div class="field full"><label>SMILES</label><input class="input" data-prepare-field="smiles" value="${esc(s.smiles || '')}" placeholder="CCO" spellcheck="false" autocomplete="off"></div>`,
+        ] : [
+          `<div class="field"><label>Force field</label><select class="select" data-prepare-field="forceField">
+            <option value="UFF"${s.forceField !== 'MMFF94' && s.forceField !== 'AIMNet2' ? ' selected' : ''}>UFF</option>
+            <option value="MMFF94"${s.forceField === 'MMFF94' ? ' selected' : ''}>MMFF94</option>
+            <option value="AIMNet2"${s.forceField === 'AIMNet2' || converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML)</option>
+          </select></div>`,
+        ]),
       ]),
       `<div class="field"><label>Charge</label><input class="input" type="number" min="-10" max="10" data-prepare-field="charge" value="${esc(s.charge ?? 0)}"></div>`,
       `<div class="field"><label>Multiplicity</label><input class="input" type="number" min="1" max="10" data-prepare-field="multiplicity" value="${esc(s.multiplicity ?? 1)}"></div>`,
-      `<div class="field full"><span class="inspector-note">Deterministic, 1→1: protonation-state and tautomer enumeration belong to Generate. A calculate block wired from this one runs on <code>prepared.xyz</code>.</span></div>`,
+      `<div class="field full"><span class="inspector-note">${kind === 'solvate'
+        ? 'Explicit cluster: deterministic Fibonacci-shell placement around the solute. It is not equilibrated and does not represent bulk solvent; the record keeps that limitation.'
+        : 'Deterministic, 1→1: protonation-state and tautomer enumeration belong to Generate. A calculate block wired from this one runs on <code>prepared.xyz</code>.'}</span></div>`,
     ].join(''))}
     ${group('Result', output ? `${output.atomCount} atoms` : 'not prepared yet', Boolean(output), [
       output
         ? `<div class="field full"><div class="card">
             <div class="kv"><span>Outcome</span><code>${esc(output.kind)} · ${esc(output.converter)} · ${esc(output.forceField)}</code></div>
-            <div class="kv"><span>Energy</span><code>${Number.isFinite(output.energyKcal) ? `${output.energyKcal.toFixed(3)} kcal/mol` : 'not reported'}</code></div>
+            ${output.solvationModel ? `<div class="kv"><span>Solvation</span><code>${esc(output.solvationModel)}</code></div>` : ''}
+            ${output.kind === 'solvate'
+              ? `<div class="kv"><span>Composition</span><code>${esc(output.formula || 'not recorded')}</code></div>
+                 <div class="kv"><span>Placement</span><code>seed ${esc(output.seed)} · shell ${esc(output.shellAngstrom)} Å · min ${esc(output.minDistanceAngstrom)} Å</code></div>`
+              : `<div class="kv"><span>Energy</span><code>${Number.isFinite(output.energyKcal) ? `${output.energyKcal.toFixed(3)} kcal/mol` : 'not reported'}</code></div>`}
             <div class="kv"><span>Converged</span><code>${esc(prepareConvergenceText(output))}</code></div>
             <div class="kv"><span>Iterations</span><code>${esc(output.iterations)}</code></div>
+            ${output.limitation ? `<div class="kv"><span>Limit</span><code>${esc(output.limitation)}</code></div>` : ''}
           </div></div>`
         : '<div class="field full"><span class="inspector-note">Run the block to write <code>prepared.xyz</code>. A downstream calculate reads that file, not the geometry this block was planned with.</span></div>',
     ].join(''))}
@@ -4546,6 +4567,10 @@ function addBlock(type) {
         smiles: '',
         charge: state.project.molecule.charge,
         multiplicity: state.project.molecule.multiplicity,
+        solvent: 'water',
+        solventCount: 10,
+        seed: 1,
+        shellAngstrom: 3.5,
       },
       output: null,
     };
@@ -10784,13 +10809,21 @@ function applyPrepareField(target) {
     const value = Number(target.value);
     if (!Number.isFinite(value)) return;
     node.settings[key] = clamp(value, bounds[0], bounds[1]);
+  } else if (['solventCount', 'seed', 'shellAngstrom'].includes(key)) {
+    const bounds = key === 'solventCount' ? [1, 64] : (key === 'seed' ? [0, 0x7fffffff] : [1, 20]);
+    const value = Number(target.value);
+    if (!Number.isFinite(value)) return;
+    node.settings[key] = key === 'shellAngstrom' ? clamp(value, bounds[0], bounds[1]) : Math.round(clamp(value, bounds[0], bounds[1]));
   } else if (key === 'kind') {
-    node.settings.kind = target.value === 'embed3d' ? 'embed3d' : 'relax';
-    node.settings.converter = node.settings.kind === 'embed3d' ? 'openbabel' : 'uff';
-    node.kind = node.settings.kind === 'embed3d' ? '3D embed' : 'Relax';
+    node.settings.kind = target.value === 'embed3d' ? 'embed3d' : (target.value === 'solvate' ? 'solvate' : 'relax');
+    node.settings.converter = node.settings.kind === 'embed3d'
+      ? 'openbabel'
+      : (node.settings.kind === 'solvate' ? 'geometric' : 'uff');
+    if (node.settings.kind === 'solvate') node.settings.forceField = 'none';
+    node.kind = node.settings.kind === 'embed3d' ? '3D embed' : (node.settings.kind === 'solvate' ? 'Solvate' : 'Relax');
     node.output = null;
     node.state = 'ready';
-  } else if (key === 'converter' || key === 'forceField' || key === 'smiles') {
+  } else if (key === 'converter' || key === 'forceField' || key === 'smiles' || key === 'solvent') {
     node.settings[key] = String(target.value || '');
     node.output = null;
     node.state = 'ready';

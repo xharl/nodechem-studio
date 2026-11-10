@@ -67,6 +67,7 @@ import {
 import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 import { optimizeUff } from '../../src/shared/uff.js';
 import { prepareSummaryLine } from '../../src/shared/prepare.js';
+import { buildSolventCluster } from '../../src/shared/explicitSolvation.js';
 import { relaxWithForces } from '../../src/shared/mlRelax.js';
 import {
   SCORER_SPECS,
@@ -606,10 +607,12 @@ function taskAtomList(raw) {
  */
 function prepareTaskRecord(raw, nodeId) {
   const prep = raw?.prepare && typeof raw.prepare === 'object' ? raw.prepare : {};
-  const kind = prep.kind === 'embed3d' ? 'embed3d' : 'relax';
+  const kind = prep.kind === 'embed3d' ? 'embed3d' : (prep.kind === 'solvate' ? 'solvate' : 'relax');
   const converter = kind === 'embed3d'
     ? 'openbabel'
-    : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff');
+    : (kind === 'solvate'
+      ? 'geometric'
+      : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff'));
   const inputName = String(raw?.inputName || '');
   const inputText = String(raw?.inputText || '');
   if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
@@ -672,11 +675,18 @@ function prepareTaskRecord(raw, nodeId) {
     prepare: {
       kind,
       converter,
-      forceField: prep.forceField === 'MMFF94' || prep.forceField === 'AIMNet2'
-        ? prep.forceField : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF'),
+      forceField: prep.forceField === 'MMFF94' || prep.forceField === 'AIMNet2' || prep.forceField === 'none'
+        ? prep.forceField
+        : (kind === 'solvate' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
       smiles,
       charge: Math.round(number(prep.charge, 0, -10, 10)),
       multiplicity: Math.round(number(prep.multiplicity, 1, 1, 10)),
+      // Issue 228: explicit cluster placement. Kept on every prepare task so
+      // the queue can build the cluster without reading the project again.
+      solvent: oneLine(prep.solvent, 40) || 'water',
+      solventCount: Math.round(number(prep.solventCount, 10, 1, 64)),
+      seed: Math.round(number(prep.seed, 1, 0, 0x7fffffff)),
+      shellAngstrom: number(prep.shellAngstrom, 3.5, 1, 20),
       ...(Array.isArray(prep.bonds)
         ? {
           bonds: prep.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
@@ -3372,7 +3382,46 @@ export class QueueManager {
       }
       let atoms = parsed.frames[0].atoms;
       let summary;
-      if (queue.options.dryRun && conf.converter !== 'uff') {
+      if (conf.kind === 'solvate') {
+        // Issue 228: deterministic explicit solvent placement. This spawns
+        // nothing, so a dry run may build it too; the record says placement,
+        // never relaxation.
+        const cluster = buildSolventCluster({
+          solute: atoms,
+          solvent: conf.solvent,
+          count: conf.solventCount,
+          seed: conf.seed,
+          shellAngstrom: conf.shellAngstrom,
+        });
+        atoms = cluster.atoms;
+        summary = {
+          kind: 'solvate',
+          converter: 'geometric',
+          forceField: 'none',
+          solvationModel: 'explicit',
+          energyKcal: null,
+          converged: null,
+          reason: 'placement-completed',
+          iterations: 0,
+          atomCount: atoms.length,
+          solvent: cluster.solvent,
+          count: cluster.count,
+          seed: cluster.seed,
+          shellAngstrom: cluster.shellAngstrom,
+          minDistanceAngstrom: cluster.minDistanceAngstrom,
+          composition: cluster.composition,
+          formula: cluster.formula,
+          method: cluster.method,
+          limitation: cluster.limitation,
+          origin: { program: 'NodeChem Studio', version: '', method: 'deterministic solvent placement' },
+        };
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: `Explicit cluster: ${cluster.formula}, ${cluster.count} solvent molecule(s), seed ${cluster.seed}.`,
+        });
+      } else if (queue.options.dryRun && conf.converter !== 'uff') {
         // A dry run spawns nothing — the queue records no binaries for it — so a
         // prepare block must not spawn either. It used to call Open Babel anyway
         // and fail with "No Open Babel executable is configured", which made
