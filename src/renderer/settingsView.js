@@ -34,6 +34,7 @@ const TOOL_COPY = Object.freeze({
   scorer: { title: 'ML scorer', hint: 'Optional AIMNet2 sidecar' },
   multiwfn: { title: 'Multiwfn', hint: 'User-installed 3.8 binary for analyse blocks' },
   tautomer: { title: 'Tautomer sidecar', hint: 'Python interpreter for RDKit enumeration' },
+  cclib: { title: 'cclib (Python)', hint: 'Convert NWChem, GAMESS and Q-Chem logs' },
 });
 
 function esc(value) {

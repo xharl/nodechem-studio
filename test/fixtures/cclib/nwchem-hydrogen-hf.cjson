@@ -1,0 +1,51 @@
+{
+  "chemical json": 0,
+  "name": "nwchem",
+  "molecule": {
+    "atoms": [
+      {
+        "element": "H",
+        "atomicNumber": 1
+      }
+    ],
+    "conformer": {
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    "bonds": [],
+    "formalCharge": 0,
+    "multiplicity": 1
+  },
+  "properties": {
+    "charge": 0,
+    "multiplicity": 1,
+    "energy": {
+      "total": -13.586056882610858,
+      "kind": "SCF"
+    }
+  },
+  "origin": {
+    "program": "NWChem",
+    "version": "6.0",
+    "method": "HF",
+    "basis": "cc-pvdz",
+    "cclibVersion": "1.8.1",
+    "source": "nwchem.log",
+    "sourceSha256": "410dc1f0c2484d017c3262551e984855cdd24949cc4f5047f876230cdd68a00a",
+    "jobs": 1,
+    "completeJobs": 1
+  },
+  "ncs": {
+    "schema": "nodechem.cclib.v1",
+    "sourceSha256": "410dc1f0c2484d017c3262551e984855cdd24949cc4f5047f876230cdd68a00a",
+    "energyKind": "SCF",
+    "jobs": 1,
+    "completeJobs": 1,
+    "warnings": [
+      "cclib did not report a multiplicity; 1 was used."
+    ]
+  }
+}

@@ -142,7 +142,7 @@ async function detectSettings() {
   for (const entry of Object.values(status)) if (entry?.path) paths.add(entry.path);
   for (const entry of Object.values(tools)) if (entry?.path) paths.add(entry.path);
   for (const value of Object.values(settings?.engines || {})) if (String(value || '').trim()) paths.add(String(value).trim());
-  for (const id of ['crest', 'obabel', 'scorer', 'tautomer']) {
+  for (const id of ['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'cclib']) {
     const value = String(settings?.tools?.[id] || '').trim();
     if (value) paths.add(value);
   }
@@ -565,6 +565,11 @@ const COMPANION_DIALOG = Object.freeze({
     title: 'Locate the Multiwfn executable (version 3.8)',
     windows: 'C:\\Multiwfn\\Multiwfn.exe',
     posix: '/opt/Multiwfn/Multiwfn',
+  },
+  cclib: {
+    title: 'Locate the Python interpreter with cclib',
+    windows: 'C:\\Python\\python.exe',
+    posix: '/usr/bin/python3',
   },
 });
 

@@ -1,0 +1,63 @@
+{
+  "chemical json": 0,
+  "name": "qchem",
+  "molecule": {
+    "atoms": [
+      {
+        "element": "O",
+        "atomicNumber": 8
+      },
+      {
+        "element": "H",
+        "atomicNumber": 1
+      },
+      {
+        "element": "H",
+        "atomicNumber": 1
+      }
+    ],
+    "conformer": {
+      "position": [
+        0.0,
+        0.0,
+        0.1191593746,
+        -0.7906491549,
+        0.0,
+        -0.4766374983,
+        0.7906491549,
+        0.0,
+        -0.4766374983
+      ]
+    },
+    "bonds": [],
+    "formalCharge": 0,
+    "multiplicity": 1
+  },
+  "properties": {
+    "charge": 0,
+    "multiplicity": 1,
+    "energy": {
+      "total": -2041.3391880879758,
+      "kind": "CC"
+    }
+  },
+  "origin": {
+    "program": "QChem",
+    "version": "4.2.0",
+    "method": "CCSD(T)",
+    "basis": "STO-3G",
+    "cclibVersion": "1.8.1",
+    "source": "qchem.log",
+    "sourceSha256": "d935a574d88d3f37e0ae98119dd4767eb3fa76e1709b0638ae88018fe1206b12",
+    "jobs": 1,
+    "completeJobs": 1
+  },
+  "ncs": {
+    "schema": "nodechem.cclib.v1",
+    "sourceSha256": "d935a574d88d3f37e0ae98119dd4767eb3fa76e1709b0638ae88018fe1206b12",
+    "energyKind": "CC",
+    "jobs": 1,
+    "completeJobs": 1,
+    "warnings": []
+  }
+}

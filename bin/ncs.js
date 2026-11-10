@@ -22,6 +22,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
@@ -64,6 +66,7 @@ import { detectWavefunctionFormat } from '../src/shared/wavefunction.js';
 import { parseMolden } from '../src/shared/molden.js';
 import { parseWfn } from '../src/shared/wfn.js';
 import { parseWfx } from '../src/shared/wfx.js';
+import { CCLIB_SCRIPT_RELATIVE, cclibOutputName, parseCclibSummary } from '../src/shared/cclib.js';
 import { FIGURE_LEVELS, cubeVolumesFor, surfacesFor } from '../src/shared/report.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
@@ -103,7 +106,8 @@ const USAGE = `ncs — headless NodeChem Studio
       [--json]
   ncs diff <a.ncs> <b.ncs> [--json]
   ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
-  ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden> [--spectrum ir|raman|uv]
+  ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden|cjson> [--spectrum ir|raman|uv]
+      [--from <log>] [--to <cjson>] [--cclib <python>] [--cclib-script <file>]
       [--out <file>] [--json]
   ncs convert <project.ncs> --node <id> --format <nwchem|gamess|qchem>
       [--out <file>] [--json]
@@ -1051,17 +1055,131 @@ async function commandMerge({ positional, flags }) {
 }
 
 /**
+ * Run the user-installed cclib converter. It is a separate process because
+ * cclib is Python and this app never adds it to package.json; a missing
+ * interpreter is a named failure, not a fallback parser.
+ */
+function runCclibConverter(executable, argv, { cwd, timeoutMs = 120_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    let child;
+    try {
+      child = spawn(executable, argv, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      reject(new Error(`cclib converter could not start ${executable}: ${error.message}`));
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+      finish({ code: null, stdout, stderr: `${stderr}\ncclib conversion timed out after ${timeoutMs / 1000} s`, timedOut: true });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => { if (stdout.length < 4 * 1024 * 1024) stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk) => { if (stderr.length < 4 * 1024 * 1024) stderr += chunk.toString('utf8'); });
+    child.once('error', (error) => {
+      const hint = error.code === 'ENOENT'
+        ? `cclib converter could not start ${executable}: the interpreter was not found.`
+        : `cclib converter could not start ${executable}: ${error.message}`;
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error(hint));
+      }
+    });
+    child.once('close', (code, signal) => finish({ code, signal, stdout, stderr, timedOut: false }));
+  });
+}
+
+/**
+ * `ncs convert --from run.log --to run.cjson` (issue 273). The sidecar writes
+ * Avogadro Chemical JSON; this command validates that the existing importer can
+ * read it, then reports the origin and final energy. It never parses the
+ * foreign log itself.
+ */
+async function convertWithCclib({ file, out, flags }) {
+  const settings = await readRunSettings(flags);
+  const interpreter = flags.cclib
+    ? String(flags.cclib)
+    : String(settings?.tools?.cclib || '').trim();
+  if (!interpreter) {
+    fail('convert --format cjson needs a Python interpreter with cclib. Set Settings → Tools → cclib, '
+      + 'pass --cclib <python>, or run `pip install cclib` in that interpreter. cclib is user-installed and not bundled.',
+    EXIT.engine);
+  }
+  const script = flags['cclib-script']
+    ? path.resolve(String(flags['cclib-script']))
+    : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', CCLIB_SCRIPT_RELATIVE);
+  const output = path.resolve(out || path.join(path.dirname(file), cclibOutputName(file)));
+  if (output === path.resolve(file)) fail('the cjson output must not overwrite the source log.', EXIT.usage);
+  const result = await runCclibConverter(interpreter, [script, 'convert', path.resolve(file), output, '--json'], {
+    cwd: path.dirname(path.resolve(file)),
+  });
+  const summary = parseCclibSummary(result.stdout);
+  if (!summary?.ok || result.code !== 0) {
+    const reason = summary?.message
+      || parseCclibSummary(result.stderr)?.message
+      || String(result.stderr || '').trim().split(/\r?\n/).filter(Boolean).pop()
+      || `cclib converter exited with code ${result.code}`;
+    fail(reason, EXIT.invalid);
+  }
+  const text = await fs.readFile(output, 'utf8');
+  const { records } = parseStructureRecords(text, { filename: path.basename(output) });
+  const record = records.find((entry) => !entry.error);
+  if (!record) fail(`the cjson cclib wrote has no importable structure: ${records[0]?.error || 'no record'}.`, EXIT.invalid);
+  const payload = {
+    ok: true,
+    format: 'cjson',
+    out: output,
+    bytes: Buffer.byteLength(text),
+    atoms: record.atoms.length,
+    charge: record.charge,
+    multiplicity: record.multiplicity,
+    energyHartree: Number.isFinite(record.energyHartree) ? record.energyHartree : null,
+    origin: record.origin || null,
+    cclib: summary,
+    notes: [
+      'Imported from a foreign log by cclib; not a native NodeChem parse.',
+      ...(summary.warnings || []),
+    ],
+  };
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  } else {
+    process.stdout.write(`cjson written to ${output} (${payload.bytes} bytes)\n`);
+    process.stdout.write(`${payload.origin?.program || 'unknown program'} ${payload.origin?.version || ''} · `
+      + `${payload.atoms} atoms · charge ${payload.charge} · E ${payload.energyHartree ?? 'not recorded'} Eh\n`);
+  }
+  process.exit(EXIT.ok);
+}
+
+/**
  * `ncs convert` — turn a finished log, a structure file or a saved project into
  * a format other software reads. The engine-specific parsing stops at the door:
  * every branch produces atoms, frames or spectra, and the converters never ask
  * which program produced them.
  */
 async function commandConvert({ positional, flags }) {
-  const [input] = positional;
+  const input = positional[0] || (typeof flags.from === 'string' ? String(flags.from) : '');
   if (!input) fail('convert needs an input file.');
-  const formatId = String(flags.format || '').trim();
-  if (!formatId) fail(`convert needs --format <extxyz|xyz|sdf|jcamp|molden|${EXPORT_ENGINE_IDS.join('|')}>.`);
+  const to = typeof flags.to === 'string' ? String(flags.to) : '';
+  const formatId = String(flags.format || (/\.cjson$/i.test(to) ? 'cjson' : '')).trim();
+  if (!formatId) fail(`convert needs --format <extxyz|xyz|sdf|jcamp|molden|cjson|${EXPORT_ENGINE_IDS.join('|')}>.`);
   const file = path.resolve(input);
+  if (formatId === 'cjson') {
+    try {
+      await convertWithCclib({ file, out: to || (flags.out ? String(flags.out) : ''), flags });
+    } catch (error) {
+      fail(error.message, EXIT.engine);
+    }
+    return;
+  }
 
   try {
     const text = await fs.readFile(file, 'utf8');

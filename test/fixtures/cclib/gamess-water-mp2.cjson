@@ -1,0 +1,63 @@
+{
+  "chemical json": 0,
+  "name": "gamess",
+  "molecule": {
+    "atoms": [
+      {
+        "element": "O",
+        "atomicNumber": 8
+      },
+      {
+        "element": "H",
+        "atomicNumber": 1
+      },
+      {
+        "element": "H",
+        "atomicNumber": 1
+      }
+    ],
+    "conformer": {
+      "position": [
+        0.0,
+        -0.0666785419100023,
+        0.0,
+        0.7906490976767411,
+        0.5291182878113321,
+        0.0,
+        -0.7906490976767411,
+        0.5291182878113321,
+        0.0
+      ]
+    },
+    "bonds": [],
+    "formalCharge": 0,
+    "multiplicity": 1
+  },
+  "properties": {
+    "charge": 0,
+    "multiplicity": 1,
+    "energy": {
+      "total": -2040.9159783225796,
+      "kind": "MP2"
+    }
+  },
+  "origin": {
+    "program": "GAMESS",
+    "version": "2014.r1",
+    "method": "MP2",
+    "basis": "STO-3G",
+    "cclibVersion": "1.8.1",
+    "source": "gamess.log",
+    "sourceSha256": "bf20b74969f346630f433660a73ac7640110c2919b1fb57616b6aa65da46e2e7",
+    "jobs": 1,
+    "completeJobs": 1
+  },
+  "ncs": {
+    "schema": "nodechem.cclib.v1",
+    "sourceSha256": "bf20b74969f346630f433660a73ac7640110c2919b1fb57616b6aa65da46e2e7",
+    "energyKind": "MP2",
+    "jobs": 1,
+    "completeJobs": 1,
+    "warnings": []
+  }
+}
