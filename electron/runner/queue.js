@@ -17,7 +17,7 @@ import { ComputeError, describeCompute, evaluateCompute } from '../../src/shared
 import { dp4Summary, evaluateDp4 } from '../../src/shared/dp4Workflow.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
 import { LIMITS } from '../../src/shared/projectSchema.js';
-import { applyGeometryHandoff, readUpstreamGeometry } from './geometryHandoff.js';
+import { applyGeometryHandoffFor, readUpstreamGeometry } from './geometryHandoff.js';
 import { sha256File } from './hashing.js';
 import { CrestRunner } from './crestRunner.js';
 import { ObabelRunner } from './obabelRunner.js';
@@ -315,6 +315,10 @@ const ENGINE_BINARIES = Object.freeze({
   xtb: ['xtb'],
   psi4: ['psi4'],
   orca: ['orca'],
+  // PySCF is a Python library; `pyscf-runner` is the stable launcher, and a
+  // plain interpreter is the fallback. Preflight then proves the interpreter
+  // can import pyscf, so a system python without it fails by name.
+  pyscf: ['pyscf-runner', 'python3', 'python'],
 });
 
 function canonicalRestartArtifact(engine) {
@@ -2691,7 +2695,7 @@ export class QueueManager {
           this.publish(queue);
           return;
         }
-        inputText = applyGeometryHandoff(inputText, prepared.frames[0].atoms);
+        inputText = applyGeometryHandoffFor(task.engine, inputText, prepared.frames[0].atoms);
         task.geometryHandoff = {
           from: prepareTask.nodeId,
           fromEngine: 'prepare',
@@ -2716,8 +2720,8 @@ export class QueueManager {
           this.publish(queue);
           return;
         }
-        if (task.engine === 'gaussian') {
-          inputText = applyGeometryHandoff(inputText, atoms);
+        if (task.engine === 'gaussian' || task.engine === 'pyscf') {
+          inputText = applyGeometryHandoffFor(task.engine, inputText, atoms);
         }
         task.geometryHandoff = {
           from: upstreamTask.nodeId,

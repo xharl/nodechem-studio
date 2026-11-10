@@ -20,6 +20,7 @@ const EXECUTABLE_LABEL = Object.freeze({
   xtb: 'xTB executable',
   orca: 'ORCA executable',
   psi4: 'Psi4 executable',
+  pyscf: 'Python interpreter with PySCF (or pyscf-runner)',
 });
 
 const EXECUTABLE_PLACEHOLDER = Object.freeze({
@@ -29,6 +30,7 @@ const EXECUTABLE_PLACEHOLDER = Object.freeze({
   // path and not a bare name.
   orca: '/opt/orca/orca or C:\\ORCA\\orca.exe',
   psi4: '/opt/conda/bin/psi4 or C:\\Psi4\\bin\\psi4.exe',
+  pyscf: '/usr/bin/python3 or /usr/local/bin/pyscf-runner',
 });
 
 const DRY_RUN_HINT = Object.freeze({
@@ -36,6 +38,7 @@ const DRY_RUN_HINT = Object.freeze({
   xtb: `${FIXTURE_HINT} Uncheck to run the xTB executable.`,
   orca: `${FIXTURE_HINT} Uncheck to run the ORCA driver.`,
   psi4: `${FIXTURE_HINT} Uncheck to run the Psi4 interpreter.`,
+  pyscf: `${FIXTURE_HINT} Uncheck to run the deck with the Python interpreter that has PySCF.`,
 });
 
 /** Label above the executable field — the engine named is the one that runs. */
@@ -78,6 +81,9 @@ export function checkpointHandoffNote(engineId) {
   }
   if (id === 'psi4') {
     return 'Psi4 blocks have no checkpoint file; a Psi4 step reads the upstream geometry instead.';
+  }
+  if (id === 'pyscf') {
+    return 'PySCF blocks have no checkpoint file; a PySCF step reads the upstream geometry and rewrites its deck.';
   }
   return 'Adds <code>%OldChk</code>, <code>Geom=Checkpoint</code> and <code>Guess=Read</code> to this task.';
 }

@@ -4,7 +4,7 @@ NodeChem Studio is a desktop app for building and running computational-chemistr
 graph. You place calculation blocks on a canvas, connect them, and run either the whole workflow or
 a single block. Each run writes a folder you can inspect, hash and hand to someone else.
 
-It drives four engines:
+It drives five engines:
 
 | Engine | Licence | What it is |
 | --- | --- | --- |
@@ -12,6 +12,7 @@ It drives four engines:
 | **xTB** (GFN0/GFN1/GFN2/GFN-FF) | Open source, LGPL | Fast semi-empirical and force-field calculations |
 | **ORCA** 5/6 | Free for academic use, licensed separately by FACCTs | DFT and wavefunction calculations from a simple `.inp` |
 | **Psi4** 1.4+ | Open source, LGPL-3.0 | DFT, wavefunction and SAPT calculations from a Psithon `.dat` script |
+| **PySCF** 2.x | Open source, Apache-2.0 | DFT and wavefunction calculations, CASSCF and PCM from a fixed Python deck |
 
 The app never bundles any engine. It drives an installation you already have.
 
@@ -26,7 +27,7 @@ If you are new, read these in order:
    through the same blocks, and the barrier that waits for a whole stage.
 5. [Datasets and input blocks](datasets.md) — import a family of geometries and run the graph once
    per record, with outputs for the whole set.
-6. [Engines](engines.md) — choose Gaussian 16, xTB, ORCA or Psi4, and know which settings belong to
+6. [Engines](engines.md) — choose Gaussian 16, xTB, ORCA, Psi4 or PySCF, and know which settings belong to
    which.
 7. [Conformers, tautomers and protomers](conformers.md) — search or import an ensemble, enumerate
    tautomers, then choose the shape a later block runs.
@@ -63,7 +64,7 @@ Reference pages:
 - [Scripting and the record schema](../SCRIPTING.md) — `run.json` as a versioned contract,
   `ncs export`, and the stdlib-only Python client.
 - [Engine plugins](../ENGINE_PLUGIN.md) — the `registerEngine` spec, its refusals, and why
-  the built-in four do not move.
+  the built-in five do not move.
 
 Normative references, for people reading code or writing tooling:
 

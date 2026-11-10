@@ -15,6 +15,7 @@ import { parseGaussianOutput } from './gaussianOutput.js';
 import { parseXtbOutput } from './engines/xtb.js';
 import { parseOrcaOutput } from './engines/orca.js';
 import { parsePsi4Output } from './engines/psi4.js';
+import { parsePyscfOutput } from './engines/pyscf.js';
 
 export const BATCH_IMPORT_LIMIT = 500;
 export const BATCH_MAX_LOG_BYTES = 32 * 1024 * 1024;
@@ -83,6 +84,15 @@ function isPsi4(textValue) {
 }
 
 /**
+ * PySCF's result record. The deck writes a schema-tagged JSON document, so a
+ * log is PySCF when the record is present; PySCF's own printed text alone is
+ * not enough to claim it (it has no stable banner contract here).
+ */
+function isPyscf(textValue) {
+  return /NCS-PYSCF-RESULT-BEGIN|"schema"\s*:\s*"nodechem\.pyscf\.v1"/i.test(textValue);
+}
+
+/**
  * One log text → one index row.
  *
  * @param {string} source the file text
@@ -134,6 +144,35 @@ export function summarizeLog(source, { name = '', bytes = null } = {}) {
       imaginaryCount: Number.isInteger(parsed.frequencies?.imaginaryCount) ? parsed.frequencies.imaginaryCount : null,
       scfCycles: Number.isInteger(parsed.scf?.cycles) ? parsed.scf.cycles : null,
       errorCause: parsed.terminationCode === 'error' ? (parsed.termination || null) : null,
+      lineCount: Number.isInteger(parsed.lineCount) ? parsed.lineCount : content.split(/\r\n|\n|\r/).length,
+    };
+  }
+
+  if (isPyscf(content)) {
+    let parsed;
+    try {
+      parsed = parsePyscfOutput(content);
+    } catch (error) {
+      row.errorCause = `PySCF output could not be parsed: ${error.message}`;
+      return row;
+    }
+    return {
+      ...row,
+      engine: 'pyscf',
+      status: parsed.status,
+      termination: parsed.termination,
+      program: parsed.program?.name
+        ? `${parsed.program.name} ${parsed.program.version || ''}`.trim()
+        : null,
+      method: parsed.extras?.method ?? null,
+      basis: parsed.extras?.basis ?? null,
+      jobType: parsed.extras?.jobType ?? null,
+      finalEnergyHartree: num(parsed.finalEnergy?.hartree),
+      gibbsHartree: num(parsed.thermochemistry?.freeEnergyHartree),
+      imaginaryCount: Number.isInteger(parsed.frequencies?.imaginaryCount)
+        ? parsed.frequencies.imaginaryCount : null,
+      scfCycles: Number.isInteger(parsed.scf?.cycles) ? parsed.scf.cycles : null,
+      errorCause: parsed.status === 'error' ? (parsed.extras?.errorDetail || parsed.termination) : null,
       lineCount: Number.isInteger(parsed.lineCount) ? parsed.lineCount : content.split(/\r\n|\n|\r/).length,
     };
   }

@@ -335,6 +335,101 @@ describe('preflight edge cases', () => {
   });
 });
 
+describe.skipIf(onWindows)('PySCF preflight', () => {
+  async function fakePython(name, { stdout = '', stderr = '', code = 0 } = {}) {
+    const root = await tempRoot('gns-preflight-pyscf-');
+    const executable = path.join(root, name);
+    await fsp.writeFile(executable, `#!/bin/sh\nprintf '%s' '${stdout}' >&1\nprintf '%s' '${stderr}' >&2\nexit ${code}\n`);
+    await fsp.chmod(executable, 0o755);
+    return { root, executable, dir: root };
+  }
+
+  it('accepts python3 when the interpreter can import PySCF', async () => {
+    const python = await fakePython('python3', { stdout: '2.15.0\n' });
+    const { result } = await runPreflight(
+      { engine: 'pyscf', executable: python.executable },
+      { platform: 'linux', env: { PATH: python.dir } },
+    );
+    expect(result.ok).toBe(true);
+    expect(check(result, 'executable')).toMatchObject({
+      label: 'Python or pyscf-runner executable configured', ok: true, detail: python.executable,
+    });
+    expect(check(result, 'executable-name')).toMatchObject({
+      label: 'Python interpreter or pyscf-runner', ok: true, detail: 'Found python3',
+    });
+    expect(check(result, 'pyscf-import')).toEqual({
+      id: 'pyscf-import',
+      label: 'PySCF importable from this interpreter',
+      ok: true,
+      detail: 'pyscf 2.15.0',
+    });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('accepts python3.13 and refuses a non-Python name by name', async () => {
+    const py = await fakePython('python3.13', { stdout: '2.15.0\n' });
+    const { result } = await runPreflight(
+      { engine: 'pyscf', executable: py.executable },
+      { platform: 'linux', env: { PATH: py.dir } },
+    );
+    expect(result.ok).toBe(true);
+
+    const ruby = await fakePython('ruby');
+    const { result: refused } = await runPreflight(
+      { engine: 'pyscf', executable: ruby.executable },
+      { platform: 'linux', env: { PATH: ruby.dir } },
+    );
+    expect(refused.ok).toBe(false);
+    expect(check(refused, 'executable-name')).toEqual({
+      id: 'executable-name',
+      label: 'Python interpreter or pyscf-runner',
+      ok: false,
+      detail: 'ruby is neither a python interpreter (python, python3, python3.13) nor pyscf-runner',
+    });
+  });
+
+  it('fails a Python that cannot import PySCF, naming the module', async () => {
+    const python = await fakePython('python3', {
+      stderr: "ModuleNotFoundError: No module named 'pyscf'\n", code: 1,
+    });
+    const { result } = await runPreflight(
+      { engine: 'pyscf', executable: python.executable },
+      { platform: 'linux', env: { PATH: python.dir } },
+    );
+    expect(result.ok).toBe(false);
+    expect(check(result, 'pyscf-import').ok).toBe(false);
+    expect(check(result, 'pyscf-import').detail).toContain("No module named 'pyscf'");
+    expect(check(result, 'pyscf-import').detail).toContain('pip install pyscf');
+  });
+
+  it('delegates the import probe to pyscf-runner', async () => {
+    const runner = await fakePython('pyscf-runner');
+    const { result } = await runPreflight(
+      { engine: 'pyscf', executable: runner.executable },
+      { platform: 'linux', env: { PATH: runner.dir } },
+    );
+    expect(result.ok).toBe(true);
+    expect(check(result, 'pyscf-import')).toMatchObject({
+      ok: true,
+      detail: expect.stringContaining('Delegated to the pyscf-runner wrapper'),
+    });
+  });
+
+  it('fails a bare name that is not on PATH, not as an unknown engine', async () => {
+    const { result } = await runPreflight(
+      { engine: 'pyscf', executable: 'python3' },
+      { platform: 'linux', env: { PATH: '/nonexistent' } },
+    );
+    expect(result.ok).toBe(false);
+    expect(check(result, 'executable-exists')).toEqual({
+      id: 'executable-exists',
+      label: 'Executable exists',
+      ok: false,
+      detail: 'python3 was not found on PATH or as a file.',
+    });
+  });
+});
+
 describe.skipIf(onWindows)('runner GAUSS_EXEDIR', () => {
   it('spawns with the resolved installation directory and its PATH entry', async () => {
     const install = await fakeInstall('linux');

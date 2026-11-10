@@ -19,7 +19,7 @@ import { qstKindFor } from '../shared/constraints.js';
 export { GAUSSIAN_RESOURCE_KEYS, runSettingsFor } from '../shared/engineSettings.js';
 
 export function showsGaussianResources(engineId) {
-  return engineId !== 'xtb';
+  return engineId !== 'xtb' && engineId !== 'pyscf';
 }
 
 /** Only the engines that write a restart file usable by the next block. */
@@ -57,6 +57,19 @@ export function calcInspectorFieldIds(engineId, settings = {}) {
     // no Gaussian route keywords. What the builder writes is what is offered.
     fields.push('job.reference', 'job.memory', 'job.memoryUnit', 'job.nproc');
     fields.push('method.method', 'method.basis');
+    fields.push('molecule.charge', 'molecule.multiplicity');
+    fields.push(...GATE_FIELDS);
+    fields.push('validity.checks', 'dependencies.inputs', 'output.view');
+    return fields;
+  }
+
+  if (engineId === 'pyscf') {
+    // PySCF has its own method, basis and job list. Its optional per-block
+    // settings are the active space and PCM; it has no Gaussian route fields,
+    // no memory keyword (threads come from the process environment) and no
+    // checkpoint file.
+    fields.push('job.reference', 'job.nproc');
+    fields.push('method.method', 'method.basis', 'pyscf.activeSpace');
     fields.push('molecule.charge', 'molecule.multiplicity');
     fields.push(...GATE_FIELDS);
     fields.push('validity.checks', 'dependencies.inputs', 'output.view');

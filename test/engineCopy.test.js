@@ -69,7 +69,7 @@ describe('issue #43 — stale Gaussian-only copy cannot drift back', () => {
   it('describes the dry run as a fixture, never as a Gaussian log', () => {
     expect(HTML).toContain('Dry run (fixture output)');
     expect(HTML).toContain('synthetic fixture log');
-    expect(CORPUS).toContain('A dry run is a fixture for both engines');
+    expect(CORPUS).toContain('A dry run is a fixture for every engine');
     expect(CORPUS).toContain('FIXTURE OUTPUT');
   });
 
