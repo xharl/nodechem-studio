@@ -85,8 +85,8 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | Frequency + thermochemistry | Freq | **Implemented** | QRRHO recorded |
 | Optimise then frequency | Opt Freq | **Implemented** | |
 | DLPNO-CCSD(T) single point | DLPNO-CCSD(T) | **Implemented** | PNO threshold recorded; real log fixture |
-| **NMR shieldings (GIAO)** | `! NMR` + `%EPRNMR` | **Absent** | `ORCA_UNSUPPORTED_JOB_TYPES` lists `NMR`; the TE agent hit this |
-| NMR spin-spin couplings | `%EPRNMR … SSALL` | **Keyword-only** | couplings are parsed from *imported* logs (issue 222), but the builder never requests them |
+| **NMR shieldings (GIAO)** | `! NMR` + `%EPRNMR` | **Implemented** | `nmrBlockFor()` writes the block; `parseOrcaShieldings()` reads the summary; real 6.1.1 fixture (#284) |
+| NMR spin-spin couplings | `%EPRNMR … SSALL` | **Implemented** | `nmrSpinSpin` writes `SHIFT, SSALL`; the J summary is parsed into `nmr.couplings` (#284) |
 | **TD-DFT / excited states** | TD-DFT, SOC | **Absent** | refused by name |
 | **Transition-state search** | OptTS | **Absent** | refused by name |
 | **IRC** | `%irc` | **Absent** | refused by name |
@@ -184,20 +184,19 @@ Effort is engineering time, not calendar, and assumes the parser work is done ag
 
 | Rank | Gap | Why it matters | Effort |
 |---|---|---|---|
-| 1 | **ORCA NMR job** (shieldings + couplings) | the free engine cannot do NMR at all; TE hit this on Will's project; the analysis side (DP4, TMS references, spectra) already exists | ~3 days |
-| 2 | **ORCA TD-DFT** | ORCA users cannot do UV-Vis/ECD; the excited-state analysis already exists for Gaussian and Psi4 | ~4 days |
-| 3 | **ORCA TS / IRC / Scan** | no reaction paths at all on ORCA, although the Gaussian path logic is written | ~1 week |
-| 4 | **Explicit / micro-solvation** (#228) | implicit models miss specific H-bonds; the record cannot even say "implicit only" today | 1–2 weeks |
-| 5 | **Validation harness** (#230) | recorded and live PySCF paths are implemented; Gaussian/ORCA/Psi4 live rungs remain | — |
-| 6 | **Gaussian Polar** (polarizability, hyperpolarizability) | a single keyword job; completes the property set on the licensed engine | ~3 days |
-| 7 | **Psi4 SAPT2 family** | SAPT0 is the cheapest rung; interaction-energy analysis is the app's strength | ~1 week |
-| 8 | **ONIOM / QM-MM** | whole class of papers; needs a layer/region model, not just a keyword | 2–4 weeks (result reader shipped; input builder open) |
-| 9 | **CASSCF / NEVPT2** (ORCA) | the one method family with no representation; T1 diagnostic already exists | ~2 weeks |
-| 10 | **BOMD / ADMP** (Gaussian) and **MD** (ORCA/xTB) | would need a trajectory model and viewer; the app has no dynamics at all | 1–3 weeks |
-| 11 | **EOM-CCSD / ADC** | excited-state accuracy beyond TD-DFT | 1–2 weeks |
-| 12 | **xTB scan / NEB / sTDA** | cheap reaction paths and UV-Vis without a licence | 3–5 days each |
-| 13 | **Relativistic (DKH/ZORA/X2C)** | heavy elements are currently ECP-only | ~1 week |
-| 14 | **Anharmonic frequencies** | improves thermochemistry and spectra | 1–2 weeks |
+| 1 | **ORCA TD-DFT** | ORCA users cannot do UV-Vis/ECD; the excited-state analysis already exists for Gaussian and Psi4 | ~4 days |
+| 2 | **ORCA TS / IRC / Scan** | no reaction paths at all on ORCA, although the Gaussian path logic is written | ~1 week |
+| 3 | **Explicit / micro-solvation** (#228) | implicit models miss specific H-bonds; the record cannot even say "implicit only" today | 1–2 weeks |
+| 4 | **Validation harness** (#230) | recorded and live PySCF paths are implemented; Gaussian/ORCA/Psi4 live rungs remain | — |
+| 5 | **Gaussian Polar** (polarizability, hyperpolarizability) | a single keyword job; completes the property set on the licensed engine | ~3 days |
+| 6 | **Psi4 SAPT2 family** | SAPT0 is the cheapest rung; interaction-energy analysis is the app's strength | ~1 week |
+| 7 | **ONIOM / QM-MM** | whole class of papers; needs a layer/region model, not just a keyword | 2–4 weeks (result reader shipped; input builder open) |
+| 8 | **CASSCF / NEVPT2** (ORCA) | the one method family with no representation; T1 diagnostic already exists | ~2 weeks |
+| 9 | **BOMD / ADMP** (Gaussian) and **MD** (ORCA/xTB) | would need a trajectory model and viewer; the app has no dynamics at all | 1–3 weeks |
+| 10 | **EOM-CCSD / ADC** | excited-state accuracy beyond TD-DFT | 1–2 weeks |
+| 11 | **xTB scan / NEB / sTDA** | cheap reaction paths and UV-Vis without a licence | 3–5 days each |
+| 12 | **Relativistic (DKH/ZORA/X2C)** | heavy elements are currently ECP-only | ~1 week |
+| 13 | **Anharmonic frequencies** | improves thermochemistry and spectra | 1–2 weeks |
 
 Deliberately not a gap: **Psi4 NMR** (does not exist), **Psi4 SMD/CPCM** (not DDX models),
 **Psi4 CC frequencies** (no analytic Hessian). ROA has a G09 fixture and a reader; G16 B.01+ is

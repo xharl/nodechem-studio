@@ -349,8 +349,14 @@ In this app ORCA gives you:
   written explicitly so the route preview states the truncation level instead of leaving it to ORCA's
   default. The parsed header, PNO settings and triples correction are pinned to a real ORCA 6.1 log
   (`test/fixtures/real/orca-6.1-water-dlpno/`).
-- **Job types** `SP`, `Opt`, `Freq` and `Opt Freq`. `Opt Freq` is ORCA's compound job: optimise,
-  then compute the Hessian at the minimum.
+- **Job types** `SP`, `Opt`, `Freq`, `Opt Freq` and `NMR`. `Opt Freq` is ORCA's compound job:
+  optimise, then compute the Hessian at the minimum.
+- **NMR**: `! NMR` plus a `%EPRNMR` block listing every NMR-active element in the geometry
+  (H, C, N, O, F, P, Si) with `SHIFT`, and `SHIFT, SSALL` when **Spin-spin couplings** is on.
+  The parser reads `CHEMICAL SHIELDING SUMMARY (ppm)` — isotropic and anisotropy per nucleus, with
+  ORCA's 0-based nucleus numbers shifted to the app's 1-based atom order — and the
+  `SUMMARY OF ISOTROPIC COUPLING CONSTANTS J (Hz)` matrix. Pinned to a real ORCA 6.1.1 methanol
+  log (`test/fixtures/orca/methanol-nmr.out`): C 141.174, O 342.467 ppm, J(C,H) 179.858 Hz.
 - **Dispersion** `D3(BJ)` → `D3BJ`, `D3` → `D3ZERO` and `D4` → `D4`.
 - **SCF** `Tight` → `TightSCF` / `VeryTight` → `VeryTightSCF`; **grid** `Fine` → `DEFGRID2` /
   `UltraFine` → `DEFGRID3`; optimisation convergence `Tight` → `TightOpt` /
@@ -389,9 +395,8 @@ H     0.000000   -0.757200   -0.469200
 
 What ORCA does **not** give you through this builder:
 
-- No transition-state search, IRC, relaxed PES scan or NMR job. Those need `%geom`, `%irc` or
-  `%elprop` blocks, so the input builder refuses them instead of writing a keyword that runs a
-  different job.
+- No transition-state search, IRC or relaxed PES scan. Those need `%geom` or `%irc` blocks, so the
+  input builder refuses them instead of writing a keyword that runs a different job.
 - No TD-DFT excited states, population analysis (NBO/ESP), Raman activities, `Stable=Opt` or custom
   route keywords. Those are Gaussian-only form fields in this app; a block that carries one is
   refused with a message naming the field.
@@ -736,7 +741,7 @@ parser does not recognise is reported as `unknown`, never guessed.
 | Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` | `! method basis` | `set reference` + method/basis | Recorded method/basis; CASSCF takes an active space |
 | Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload | Mapped to ORCA keywords; population refused | Basis used; unsupported fields refused by name | Basis used; dispersion, SCF, grid and population refused |
 | Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile | CPCM / SMD, Water…Acetonitrile | DDX PCM / COSMO, Water…DMSO | PCM / C-PCM, Water…DMSO |
-| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq |
+| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, NMR | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq, TD-DFT |
 | Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` | `TightOpt` / `VeryTightOpt`, `DEFGRID2/3` | Psi4 optimizer defaults | geomeTRIC defaults |
 | Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` | `%maxcore` (MB per core), `%pal nprocs` | `Threads (OMP_NUM_THREADS)` | `Threads (OMP_NUM_THREADS)` |
 | Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; queue transfer not implemented | None; geometry-only hand-off | None; geometry-only hand-off |

@@ -63,12 +63,13 @@
  *
  * ## What this module does not do
  *
- * It does not compute a hyperfine tensor, a g-tensor or a coupling constant —
- * it reads what ORCA printed. It does not convert K into J or J into K. It does
- * not parse ORCA's chemical-shift block (the NMR card's shielding table needs a
- * reference and a level, and that is a separate piece of work). It does not read
- * the STEOM-CCSD/NTO output named in the issue; that is a different property
- * and is refused by omission here.
+ * It does not compute a hyperfine tensor, a g-tensor, a shielding or a coupling
+ * constant — it reads what ORCA printed. It does not convert K into J or J into
+ * K. `parseOrcaShieldings` reads the isotropic/anisotropy summary ORCA prints
+ * (`CHEMICAL SHIELDING SUMMARY`); the chemical shift itself is not computed
+ * here, because that needs a reference at the same level of theory. It does not
+ * read the STEOM-CCSD/NTO output named in the issue; that is a different
+ * property and is refused by omission here.
  */
 
 import { atomicNumber } from '../elements.js';
@@ -650,6 +651,62 @@ function readPairBlocks(lines) {
   return { pairs, gN };
 }
 
+/* ── chemical shieldings ─────────────────────────────────────── */
+
+const SHIELDING_SUMMARY = /^\s*CHEMICAL SHIELDING SUMMARY\s*\(ppm\)/i;
+const SHIELDING_ROW = /^\s*(\d+)\s+([A-Z][a-z]?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*$/;
+
+/**
+ * ORCA's `CHEMICAL SHIELDING SUMMARY (ppm)` table.
+ *
+ * ORCA numbers nuclei from **0** in input order; this app numbers atoms from 1,
+ * so the shift happens here and nowhere else. The row carries the isotropic
+ * shielding and the anisotropy ORCA prints beside it; the per-nucleus tensors
+ * earlier in the log are not duplicated into this table.
+ *
+ * Returns null when the run asked for no shieldings — absence, never zeros.
+ */
+export function parseOrcaShieldings(text) {
+  const lines = splitLines(text);
+  const start = lines.findIndex((line) => SHIELDING_SUMMARY.test(line));
+  if (start === -1) return null;
+  const atoms = [];
+  let inTable = false;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*Nucleus\s+Element/i.test(line)) {
+      inTable = true;
+      continue;
+    }
+    if (!inTable) continue;
+    if (/^\s*-{3,}/.test(line)) continue;
+    if (line.trim() === '') {
+      if (atoms.length > 0) break;
+      continue;
+    }
+    const match = SHIELDING_ROW.exec(line);
+    if (!match) {
+      if (atoms.length > 0) break;
+      continue;
+    }
+    atoms.push({
+      index: Number(match[1]) + 1,
+      nucleus: Number(match[1]),
+      element: match[2],
+      isotropic: Number(match[3]),
+      anisotropy: Number(match[4]),
+      eigenvalues: null,
+    });
+  }
+  if (atoms.length === 0) return null;
+  return {
+    gauge: /GIAO/i.test(text) ? 'GIAO' : null,
+    method: null,
+    count: atoms.length,
+    atoms,
+  };
+}
+
 /**
  * ORCA's `SUMMARY OF ISOTROPIC COUPLING CONSTANTS (Hz)` table, in the shape
  * `nmr.js` returns.
@@ -935,27 +992,23 @@ export function parseOrcaSpinSpin(text) {
  * block is present with `couplings: null` and `couplingsError` naming what was
  * missing — an absence with a reason, never a zero matrix.
  */
-export function orcaNmrBlock({ couplings = null, text = '' } = {}) {
-  if (!couplings) return null;
-  let gauge = null;
+export function orcaNmrBlock({ couplings = null, shieldings = null, text = '' } = {}) {
+  if (!couplings && !shieldings) return null;
+  let gauge = shieldings?.gauge ?? null;
   const gaugeMatch = /Treatment of gauge\s+\.{3}\s+([A-Za-z0-9]+)/.exec(String(text));
-  if (gaugeMatch) gauge = gaugeMatch[1];
-  if (!couplings.ok) {
-    return {
-      gauge,
-      method: null,
-      count: 0,
-      atoms: [],
-      couplings: null,
-      couplingsError: couplings.reason,
-    };
+  if (!gauge && gaugeMatch) gauge = gaugeMatch[1];
+  const base = {
+    gauge,
+    method: shieldings?.method ?? null,
+    count: shieldings?.count ?? 0,
+    atoms: shieldings?.atoms ?? [],
+  };
+  if (couplings && !couplings.ok) {
+    return { ...base, couplings: null, couplingsError: couplings.reason };
   }
   return {
-    gauge,
-    method: null,
-    count: 0,
-    atoms: [],
-    couplings: couplingSummary(couplings),
-    couplingsSource: couplings.summaryLine,
+    ...base,
+    couplings: couplings ? couplingSummary(couplings) : null,
+    ...(couplings ? { couplingsSource: couplings.summaryLine } : {}),
   };
 }
