@@ -20,15 +20,12 @@ the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
-**Status: 0.5.0 in preparation — [0.4.0](https://github.com/xharl/nodechem-studio/releases/tag/v0.4.0)
-is the current published build, an early preview.** 0.4.0 shipped on 2026-11-08 and everything in its
-notes is inside the installers below. `main` carries the unreleased 0.5.0 work, and the released
-installers do not contain it: tautomer enumeration through an RDKit sidecar, ML scorers as a role
-rather than an engine, DP4/DP4+ candidate ranking, EPR, QTAIM and NCI figures, electrostatic-potential
-surfaces, an in-app UFF force field for conformers, a pre-run cost estimate, and `schemaVersion: 3` —
-the ADR 0001 block taxonomy, the one breaking format change, which opens and migrates a 0.4.0 project.
-[`CHANGELOG.md`](CHANGELOG.md) records what landed in each release and what is still unreleased;
-building from source on `main` is the only way to use the latter.
+**Status: v0.5.0 — early preview.** Released 2026-11-09. 0.4.0 shipped on 2026-11-08; 0.5.0 adds
+tautomer enumeration through an RDKit sidecar, ML scorers as a role rather than an engine, DP4/DP4+
+candidate ranking, EPR, QTAIM and NCI figures, electrostatic-potential surfaces, an in-app UFF force
+field for conformers, a pre-run cost estimate, and `schemaVersion: 3` — the ADR 0001 block taxonomy.
+**Schema v3 is the one breaking format change: a 0.4.0 project is refused by version, not migrated.**
+[`CHANGELOG.md`](CHANGELOG.md) records what changed; finish or export a 0.4.0 project before upgrading.
 What has *not* been proven is a run driven by this app: no licensed Gaussian job and no real xTB job
 has been executed by the project's automated tests. On 2026-11-08 a peer run did execute 25
 app-written cases on Gaussian 16 Rev A.03 (Windows), and those logs now pin the parsers as fixtures;
@@ -37,8 +34,7 @@ driving the same job from the app's own run console remains unverified. Read
 
 ## What it does
 
-Bullets marked **0.5.0** are on `main` and recorded in the changelog but are **not** in the 0.4.0
-installers; everything unmarked shipped in 0.4.0.
+The bullets marked **0.5.0** are the changes in this release; everything unmarked shipped in 0.4.0.
 
 - **Graph workflows** — blocks for each data stage (input, prepare, generate, calculate, analyse,
   output), for control (condition, loop, merge) and for notes, connected by dependency, checkpoint
@@ -118,12 +114,11 @@ installers; everything unmarked shipped in 0.4.0.
 
 | Platform | How |
 | --- | --- |
-| Windows 10/11 x64 | Run `nodechem-studio-0.4.0-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
-| Linux x64 | `chmod +x nodechem-studio-0.4.0-x86_64.AppImage` and run it. Unsigned. |
+| Windows 10/11 x64 | Run `nodechem-studio-0.5.0-x64.exe` from the release. Per-user install, unsigned — SmartScreen warns once. |
+| Linux x64 | `chmod +x nodechem-studio-0.5.0-x86_64.AppImage` and run it. Unsigned. |
 | From source | Node 22+, then `npm ci && npm run dev`. |
 
-Neither artifact installs an engine, and these are 0.4.0 artifacts: the 0.5.0 features described above
-are not in them. Build from `main` if you want to try those. Both are unsigned; `SHA256SUMS`, a
+Neither artifact installs an engine. Both are unsigned; `SHA256SUMS`, a
 CycloneDX SBOM and a build-provenance attestation accompany every release. See
 [Install](docs/guide/install.md) for the data directory and requirements, and
 [how to verify your download](docs/guide/install.md#verify-your-download).

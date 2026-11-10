@@ -8,10 +8,10 @@ The history starts at **0.2.1**, the first release after this repository was pre
 0.1.0 was published and then withdrawn; it is not listed. Sections for released versions summarise
 what the build contains — the GitHub release for each tag carries the long form.
 
-## [Unreleased] — 0.5.0
+## [0.5.0] - 2026-11-09
 
-Sixty-nine non-merge commits since 0.4.0, thirty-eight of them features. The one breaking change is
-the schema bump to 3; a saved 0.4.0 project opens and migrates.
+Seventy-three non-merge commits since 0.4.0. The one breaking change is
+the schema bump to 3; a saved 0.4.0 project is refused by version, not migrated.
 
 ### Added
 
@@ -65,8 +65,8 @@ the schema bump to 3; a saved 0.4.0 project opens and migrates.
 
 - **`schemaVersion: 3` — the block taxonomy (ADR 0001), a breaking format change.** Six data stages
   (`input`, `prepare`, `generate`, `calculate`, `analyse`, `output`) plus two axes that are not
-  stages (`condition`/`loop`/`merge` for control, `note` for annotation). A 0.4.0 project opens and
-  migrates; the plan it produces is unchanged.
+  stages (`condition`/`loop`/`merge` for control, `note` for annotation). A 0.4.0 project is refused by
+  version; finish or export it in 0.4.0 before upgrading. There is no migration.
 - **Run-record v2**: an imported number is a `kind: "imported"` record, and `$defs.runRecord` is the
   v1 body verbatim, so an old document still validates and still exports at `--schema-version 1`.
 - **The Generate block** names what it produces (`conformers` or `tautomers`) instead of implying a
@@ -154,7 +154,7 @@ withdrawn 0.2.0 tester build.
 - `.ncs` files open from the desktop, "Open with", `file://` arguments and macOS `open-file`.
 - Packaged provenance records the commit the build came from.
 
-[Unreleased]: https://github.com/xharl/nodechem-studio/compare/v0.4.0...main
+[0.5.0]: https://github.com/xharl/nodechem-studio/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xharl/nodechem-studio/releases/tag/v0.4.0
 [0.3.0]: https://github.com/xharl/nodechem-studio/releases/tag/v0.3.0
 [0.2.1]: https://github.com/xharl/nodechem-studio/releases/tag/v0.2.1
