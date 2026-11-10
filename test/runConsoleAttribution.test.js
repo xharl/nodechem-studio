@@ -204,6 +204,7 @@ describe('the run header belongs to the open project (issue 255)', () => {
     expect(html).toContain('09 Nov 21:04');
     expect(html).toContain('data-queue-id="queue-a"');
     expect(html).toContain('data-run-id="queue-a-run-0"');
+    expect(html).toContain('data-action="open-history-queue"');
     expect(html).toContain('tabindex="0"');
   });
 });

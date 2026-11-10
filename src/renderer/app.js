@@ -6628,6 +6628,23 @@ function emptyQueueState() {
   };
 }
 
+/**
+ * Issue 255: every path that swaps the project in memory must clear the run
+ * console first. Returns the queue that was on screen so the caller can name it
+ * as the last foreign run after the new project is in place.
+ */
+function resetRunConsoleForProjectSwap() {
+  const previousQueue = state.queue?.id ? { ...state.queue } : null;
+  resetRunHeader({ ignoreEvents: true });
+  state.queue = emptyQueueState();
+  state.lastForeignQueue = null;
+  clearRunHint();
+  renderQueue();
+  updateRunTabBadges();
+  renderRunLast();
+  return previousQueue;
+}
+
 /** Reset the console header to the empty project state (issue 255). */
 function resetRunHeader({ ignoreEvents = false } = {}) {
   state.run.id = null;
@@ -7686,7 +7703,7 @@ function failureHint(failure, verdict = 'failed') {
  * (clamped to two lines, with a keyboard-reachable expander); `title` keeps the
  * complete message as a secondary tooltip.
  */
-function queueRowHtml(task, queue = {}) {
+function queueRowHtml(task, queue = {}, index = 0) {
   const branch = task.conditionResult === true ? '→ true' : task.conditionResult === false ? '→ false' : '';
   const retry = task.loopAttempts
     ? `retry ${Math.min(task.loopAttempts, task.loop?.maxAttempts ?? task.loopAttempts)}/${task.loop?.maxAttempts ?? '?'}`
@@ -7725,7 +7742,7 @@ function queueRowHtml(task, queue = {}) {
   // Issue 256: the reason is ordinary text in the row, not a tooltip-only
   // field. The toggle is a button so a keyboard user can expand the clamp.
   const failure = taskFailure(task);
-  const reasonId = `queue-reason-${String(task.nodeId || 'task').replace(/[^A-Za-z0-9_-]/g, '-')}`;
+  const reasonId = `queue-reason-${String(task.nodeId || 'task').replace(/[^A-Za-z0-9_-]/g, '-')}${index ? `-${index}` : ''}`;
   const action = failure?.action;
   const actionAttrs = action
     ? [
@@ -7758,7 +7775,7 @@ function renderQueue() {
   const listEl = $('#queue-list');
   if (listEl) {
     listEl.innerHTML = queue.tasks.length
-      ? queue.tasks.map((task) => queueRowHtml(task, queue)).join('')
+      ? queue.tasks.map((task, index) => queueRowHtml(task, queue, index)).join('')
       : '<li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li>';
   }
   syncQueueTicker();
@@ -8198,7 +8215,35 @@ function historyRowHtml(row) {
     ? ` tabindex="0" role="button" aria-label="Open results for ${esc(run.title || row.runId)}${row.projectName ? ` from ${esc(row.projectName)}` : ''}"`
     : '';
   const queueAttr = row.queueId ? ` data-queue-id="${esc(row.queueId)}"` : '';
-  return `<li class="queue-item is-${esc(run.status)}" data-run-id="${esc(row.runId)}"${queueAttr}${interactive} title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}</span></li>`;
+  const queueButton = row.queueId
+    ? `<button type="button" class="btn small queue-history-open" data-action="open-history-queue" data-queue-id="${esc(row.queueId)}" aria-label="Open queue ${esc(row.queueId)}">Queue</button>`
+    : '';
+  return `<li class="queue-item is-${esc(run.status)}" data-run-id="${esc(row.runId)}"${queueAttr}${interactive} title="${esc(run.runDir || '')}"><span class="queue-dot"></span><span class="queue-title">${esc(run.title || run.id)}</span><span class="queue-meta">${esc(meta)}${queueButton}</span></li>`;
+}
+
+/**
+ * Issue 255: the history row's Queue button opens the queue that produced the
+ * run. A queue from another project is named rather than painted over this one.
+ */
+async function openHistoryQueue(queueId) {
+  if (!queueId || !desktop?.listQueues) return;
+  try {
+    const queues = await desktop.listQueues();
+    const queue = (Array.isArray(queues) ? queues : []).find((item) => String(item.id) === String(queueId));
+    if (!queue) {
+      toast('That queue is no longer on disk.');
+      return;
+    }
+    if (!queueBelongsToProject(queue)) {
+      toast(`That queue belongs to ${queue.projectName || 'another project'}, not the open project.`);
+      return;
+    }
+    applyQueue(queue, { paintHeader: ['running', 'queued', 'paused'].includes(String(queue.status)) });
+    openRunConsole();
+    setRunPane('queue', { user: true });
+  } catch (error) {
+    toast(`Could not open queue: ${error.message}`);
+  }
 }
 
 async function refreshHistory() {
@@ -8251,11 +8296,7 @@ function applyOpenedProject(result) {
   // Issue 255: capture where the previous queue went before replacing the
   // project, then clear the console. A fresh project must not inherit counters,
   // a title or an outcome hint from the one that was on screen.
-  const previousQueue = state.queue?.id ? { ...state.queue } : null;
-  resetRunHeader({ ignoreEvents: true });
-  state.queue = emptyQueueState();
-  state.lastForeignQueue = null;
-  clearRunHint();
+  const previousQueue = resetRunConsoleForProjectSwap();
   state.project = result.project;
   hydrateProject(state.project);
   // Issue 160: the queue may already be restored — it is read at start up, before
@@ -8730,12 +8771,17 @@ function applyTemplateProject(templateId) {
     return;
   }
   closeDrawer();
+  const previousQueue = resetRunConsoleForProjectSwap();
   state.project = project;
   state.selected = { type: 'project', id: null };
   state.connecting = null;
   state.keyboardConnect = null;
   state.paletteOpen = false;
   state.history = null;
+  // Issue 255: the previous project's queue is now history, not this project's
+  // header. Name it instead of leaving its counters on screen.
+  if (previousQueue && !queueBelongsToProject(previousQueue)) noteForeignQueue(previousQueue);
+  renderRunLast();
   // markProjectSaved(null) clears the path (Save becomes Save As) and snapshots
   // the freshly built project, so it opens clean and the dirty flag clears.
   markProjectSaved(null);
@@ -9301,12 +9347,16 @@ function saveProjectName() {
 function closeProject() {
   closeProjectMenu();
   requestProjectReplacement(() => {
+    const previousQueue = resetRunConsoleForProjectSwap();
     state.project = blankProject();
     state.selected = { type: 'project', id: null };
     state.connecting = null;
     state.keyboardConnect = null;
     state.paletteOpen = false;
     state.history = null;
+    // Issue 255: a closed project's queue is history, not a fresh project's run.
+    if (previousQueue && !queueBelongsToProject(previousQueue)) noteForeignQueue(previousQueue);
+    renderRunLast();
     markProjectSaved(null);
     clearDraft();
     setProjectNameLabel();
@@ -9571,6 +9621,7 @@ function handleAction(action, element) {
     case 'resume-workflow': resumeWorkflow(); break;
     case 'cancel-workflow': cancelWorkflow(); break;
     case 'refresh-history': refreshHistory(); break;
+    case 'open-history-queue': openHistoryQueue(element.dataset.queueId || ''); break;
     case 'toggle-queue-reason': {
       const item = element.closest('.queue-item');
       if (item) {

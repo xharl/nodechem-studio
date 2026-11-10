@@ -1507,6 +1507,7 @@ body.is-dragging-run-console .run-head { cursor: grabbing; }
 .queue-item .queue-failure-actions .queue-fix { flex: none; }
 .queue-item .queue-reason-toggle:hover { color: var(--text-primary); }
 .queue-item .queue-reason-toggle:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+.queue-item .queue-history-open { margin-left: 6px; padding: 1px 6px; font-size: var(--text-size-xs); }
 .queue-item.is-running .queue-dot { background: var(--kind-merge); animation: pulse 1.4s ease-in-out infinite; }
 .queue-item.is-completed .queue-dot { background: var(--state-passed); }
 .queue-item.is-failed .queue-dot { background: var(--state-review); }
