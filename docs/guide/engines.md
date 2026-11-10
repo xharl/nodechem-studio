@@ -781,10 +781,10 @@ parser does not recognise is reported as `unknown`, never guessed.
 | Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` | `! method basis` | `set reference` + method/basis | Recorded method/basis; CASSCF takes an active space |
 | Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload | Mapped to ORCA keywords; population refused | Basis used; unsupported fields refused by name | Basis used; dispersion, SCF, grid and population refused |
 | Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile | CPCM / SMD, Water…Acetonitrile | DDX PCM / COSMO, Water…DMSO | PCM / C-PCM, Water…DMSO |
-| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, NMR | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq, TD-DFT |
+| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, NMR, TD-DFT, Opt=TS, IRC, Scan | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq, TD-DFT |
 | Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` | `TightOpt` / `VeryTightOpt`, `DEFGRID2/3` | Psi4 optimizer defaults | geomeTRIC defaults |
 | Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` | `%maxcore` (MB per core), `%pal nprocs` | `Threads (OMP_NUM_THREADS)` | `Threads (OMP_NUM_THREADS)` |
-| Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; queue transfer not implemented | None; geometry-only hand-off | None; geometry-only hand-off |
+| Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; the upstream `.gbw` is copied into this run folder | None; geometry-only hand-off | None; geometry-only hand-off |
 | Validity checks | Six checks, pre and post run | Four applicable checks; Gaussian-only ones reported *not applicable* | Canonical gates on the parsed result; Gaussian-route checks do not apply | Canonical gates on the parsed result | Canonical gates plus named refusals |
 | Dry run | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture |
 

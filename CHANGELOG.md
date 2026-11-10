@@ -8,6 +8,49 @@ The history starts at **0.2.1**, the first release after this repository was pre
 0.1.0 was published and then withdrawn; it is not listed. Sections for released versions summarise
 what the build contains — the GitHub release for each tag carries the long form.
 
+## [Unreleased]
+
+### Added
+
+- **The PySCF engine** (#269) — a fixed Python deck and a JSON record on stdout, running in the same
+  queue as the other engines: HF/DFT single points, optimisations and frequencies, MP2, CCSD,
+  CCSD(T) and CASSCF single points, and PCM solvation on a single point. **PySCF TD-DFT** singlet
+  roots with oscillator strengths (#296).
+- **ORCA beyond a single point** — NMR shieldings and spin-spin couplings (#284), TD-DFT excited
+  states with oscillator strengths (#285), Raman and VCD spectra (#288), and a transition-state
+  search, IRC and relaxed scan (#286).
+- **A cclib converter sidecar** (#273): a foreign log is converted to Chemical JSON by a
+  user-installed interpreter, so NWChem, GAMESS and Q-Chem output can be imported as
+  `kind: "imported"` records.
+- **ONIOM result parsing** (#67): extrapolated energies, gridpoint components, layer counts and
+  link-atom cuts, with a layer SCF never shown as the ONIOM total.
+- **ROA intensities and invariants** read from a Gaussian log (#127).
+- **ChemDraw binary `.cdx` drawings** imported as one record per fragment (#221).
+- **Explicit solvent clusters** in a `prepare` block (#228).
+- **A validation matrix** over the reference cases, tabulated by the CLI, with PySCF ladder rungs
+  executed when a case carries a molecule (#230).
+- **App-wide machine settings**, stored outside the project (#252).
+- **A floating run console** that remembers its position (#253).
+- **Matrix element requests** (`rwf`) from a Gaussian block (#247 Tier 1), and more of what an fchk
+  carries — Job Status, character fields and MO dimensions (#244, #245, #246).
+
+### Changed
+
+- **ADR 0002 defines the explorer**, the sixth program role: a program that navigates a potential
+  energy surface exposed by a calculator and returns a saddle, path or profile. It amends ADR 0001
+  §2.5 and adds a gradient/Hessian capability declaration to the engine contract.
+
+### Fixed
+
+- The engine settings table in `docs/guide/engines.md` listed ORCA without `TD-DFT`, `Opt=TS`, `IRC`
+  or `Scan` after #286 implemented them, and still called the `.gbw` hand-off unimplemented; both now
+  match `src/shared/engines/orca.js` and `electron/runner/checkpoint.js`.
+- The packaged app ships `src/data`, so its JSON reference tables resolve (#299).
+- The run console is scoped to the open project, and a project swap clears queue history.
+- Companion binaries are taken from `PATH`, and a signalled child is reported instead of passing.
+- Psi4 and the schema resolve label/key method names, and a null prepare energy can be saved.
+- A dry run no longer spawns a prepare converter.
+
 ## [0.5.0] - 2026-11-09
 
 Seventy-three non-merge commits since 0.4.0. The one breaking change is

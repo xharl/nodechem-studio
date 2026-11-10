@@ -1,22 +1,33 @@
 # NodeChem Studio
 
-A desktop application for building and running computational-chemistry workflows as a graph. Place
-calculation blocks on a canvas, connect them, and run one block or the whole workflow. Every run
+NodeChem Studio is a desktop workbench for designing a complete computational-chemistry workflow as a
+graph — not a front end for one program. Blocks are the stages of the workflow (input, prepare,
+generate, calculate, analyse, output); the program behind a block is a separate choice. Every run
 writes a folder with the exact input, the raw output and a provenance record you can hash and share.
 
-Four engines, and each block picks the one it runs on:
+Five engines run in-app, and each block picks its own:
 
 | Engine | Licence | Level of theory |
 | --- | --- | --- |
-| **Gaussian 16** | Commercial — licensed separately by Gaussian, Inc. | DFT and wavefunction methods with explicit basis sets |
+| **Gaussian 16** | Commercial — licensed separately by Gaussian, Inc. | DFT and wavefunction methods with explicit basis sets, down to `Opt=TS`, IRC and scans |
+| **ORCA** 5/6 | Free for academic use — licensed separately by FACCTs | DFT and wavefunction methods including DLPNO-CCSD(T), plus TD-DFT, NMR and Raman/VCD, from a simple `.inp` |
+| **Psi4** 1.4+ | Open source (LGPL-3.0) | DFT, wavefunction methods, SAPT and TD-DFT from a Psithon `.dat` |
+| **PySCF** 2.x | Open source (Apache-2.0) | HF/DFT, MP2, CCSD(T) and CASSCF from a fixed Python deck, with PCM solvation on a single point |
 | **xTB** (GFN0/GFN1/GFN2/GFN-FF) | Open source (LGPL) | Fast semi-empirical and force-field methods |
-| **ORCA** 5/6 | Free for academic use — licensed separately by FACCTs | DFT and wavefunction methods from a simple `.inp` |
-| **Psi4** 1.4+ | Open source (LGPL-3.0) | DFT, wavefunction methods and SAPT from a Psithon `.dat` |
 
-A project can mix them: an xTB pre-optimisation feeding a Gaussian frequency job is a normal graph,
-with the hand-off refused when the receiving block cannot accept the geometry. The app bundles no
-engine. It drives an installation you already have, on the machine it is installed on. Without any,
-the dry run exercises the whole pipeline on a labelled fixture.
+Any other program still joins the graph, at the edge its role allows:
+
+| How a program joins | What it gets you |
+| --- | --- |
+| Run in-app | the five engines above: the input is built, the output is parsed, the same validity gates apply |
+| Deck export | NWChem, GAMESS and Q-Chem through `ncs export-input` / `ncs convert`; a setting that cannot be spelled is refused by name, not dropped |
+| Output import | any program's finished result as a `kind: "imported"` record, labelled `imported, not run here — <program> <version>`; foreign logs through cclib, plus QCSchema, cube, fchk, Molden and WFN/WFX |
+| Sidecar role | CREST, Open Babel or RDKit as a generator, AIMNet2 as a scorer, Multiwfn as an analysis helper, cclib as a converter |
+
+A project can mix all of them: an xTB pre-optimisation feeding a Gaussian frequency job is a normal
+graph, with the hand-off refused when the receiving block cannot accept the geometry. The app bundles
+no engine. It drives installations you already have, on the machine they are installed on. Without
+any, the dry run exercises the whole pipeline on a labelled fixture.
 
 ![NodeChem Studio: node graph with the Reactant frequency inspector open](docs/images/studio-overview.png)
 
@@ -46,9 +57,10 @@ The bullets marked **0.5.0** are the changes in this release; everything unmarke
   interrupted task instead of calling it complete, and records branch decisions and attempts.
   **0.5.0:** a wall-clock limit per task recorded as *timed out*, and an estimate of wall time and
   core-seconds before a queue starts, with the uncertainty stated.
-- **Four engines, chosen per block** — Gaussian 16 job types down to `Opt=TS`, IRC and scans; xTB
+- **Five engines, chosen per block** — Gaussian 16 job types down to `Opt=TS`, IRC and scans; xTB
   with GFN0/1/2 and GFN-FF, solvation, threads and restart hand-off; ORCA 5/6 with `Opt`, `Freq`,
-  CPCM/SMD and `.gbw` hand-off; Psi4 with HF, DFT, MP2, CCSD(T) and SAPT0 — each judged by the same
+  TD-DFT, NMR, Raman/VCD, CPCM/SMD and `.gbw` hand-off; Psi4 with HF, DFT, MP2, CCSD(T), SAPT0 and
+  TD-DFT; PySCF with HF/DFT, MP2, CCSD(T), CASSCF, TD-DFT and PCM — each judged by the same
   validity protocol where the checks apply. **0.5.0:** ORCA `DLPNO-CCSD(T)` single points and its
   hyperfine and spin-spin coupling tables imported from the log, and Psi4 TD-DFT and DDX solvation.
 - **Families of molecules** — a project holds several flows; a Dataset input block drives a whole
