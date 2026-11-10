@@ -3090,6 +3090,9 @@ export function installResultsView({
   };
 
   const onClick = (event) => {
+    // Issue 256: a row's own controls (the failure-reason expander) are not a
+    // request to open the run.
+    if (event.target?.closest?.('button, a, input, select, textarea, summary, [data-action]')) return;
     const item = event.target?.closest?.('[data-run-id]');
     if (!item) return;
     const runId = item.getAttribute('data-run-id');
@@ -3101,6 +3104,8 @@ export function installResultsView({
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const item = event.target?.closest?.('[data-run-id]');
     if (!item) return;
+    // Let the focused button handle its own Enter/Space press.
+    if (event.target !== item) return;
     event.preventDefault();
     const runId = item.getAttribute('data-run-id');
     if (runId) openRun(runId, item);
