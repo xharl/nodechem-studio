@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PyscfRunner } from '../electron/runner/pyscfRunner.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 const roots = [];
 
@@ -20,7 +21,7 @@ async function tempRoot(prefix = 'gns-pyscf-runner-') {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

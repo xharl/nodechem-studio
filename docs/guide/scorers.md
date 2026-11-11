@@ -27,9 +27,17 @@ large:
 
 ```sh
 python3 -m venv ~/.venvs/aimnet2
-~/.venvs/aimnet2/bin/pip install torch aimnet2
+~/.venvs/aimnet2/bin/pip install torch aimnet
 export AIMNET2_WEIGHTS=/path/to/aimnet2_weights.pt
 ```
+
+The distribution is **`aimnet`** (0.2.6, module `aimnet.calculators`); `aimnet2` is not on PyPI and
+`pip install aimnet2` cannot resolve. The sidecar tries `aimnet.calculators` first and falls back to
+a fork that ships the module as `aimnet2`.
+
+stdout is the JSON channel, so the sidecar points `sys.stdout` at stderr before it imports torch —
+`warp`, `torch` and `aimnet` print banners ("Warp 1.19.0 initialized: …") that would otherwise
+corrupt the result object. Its stderr is free-form and may show those banners.
 
 Point the run console at `scripts/aimnet2-scorer.py` (or a wrapper that runs it with that venv's
 Python), or pass the same path headlessly as `ncs run … --scorer scripts/aimnet2-scorer.py`. The

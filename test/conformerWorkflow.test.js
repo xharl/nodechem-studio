@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   buildRunInput,
   buildWorkflowPlan,
@@ -335,7 +336,7 @@ describe('conformer fan-out (#80)', () => {
 
 describe('conformer queue path', () => {
   afterEach(async () => {
-    await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+    await Promise.all(roots.map((root) => rmrf(root)));
     roots.length = 0;
   });
 
@@ -617,7 +618,7 @@ describe('conformer queue path', () => {
 
 describe('imported conformer energies (#103)', () => {
   afterEach(async () => {
-    await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+    await Promise.all(roots.map((root) => rmrf(root)));
     roots.length = 0;
   });
 

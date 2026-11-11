@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ObabelRunner } from '../electron/runner/obabelRunner.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * A search that dies from a signal leaves `exitCode` null, and `Number(null)` is
@@ -31,7 +32,7 @@ afterEach(async () => {
   while (roots.length) {
     const dir = roots.pop();
     // eslint-disable-next-line no-await-in-loop
-    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    await rmrf(dir).catch(() => {});
   }
 });
 

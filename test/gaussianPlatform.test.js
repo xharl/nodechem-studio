@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   NETWORK_FILESYSTEM_MAGIC,
   SUPPORTED_PLATFORMS,
@@ -38,7 +39,7 @@ async function tempRoot(prefix = 'gns-platform-') {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

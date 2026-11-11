@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   buildWorkflowPlan,
   conformerSearchTask,
@@ -177,7 +178,7 @@ describe('conformer search task for Run selected block (#101)', () => {
 
 describe('queue path for a pending conformer calculation (#101)', () => {
   afterEach(async () => {
-    await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+    await Promise.all(roots.map((root) => rmrf(root)));
     roots.length = 0;
   });
 

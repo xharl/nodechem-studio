@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { preflight, preflightForEngines } from '../electron/runner/preflight.js';
 import { GaussianRunner } from '../electron/runner/gaussianRunner.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * Preflight against fake installations.
@@ -29,7 +30,7 @@ async function tempRoot(prefix = 'gns-preflight-') {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

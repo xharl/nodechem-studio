@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   UFF_SEARCH_METHOD,
   findRotatableBonds,
@@ -497,7 +498,7 @@ describe('UFF route wiring (issue 144)', () => {
 describe('UFF route in the queue (issue 144)', () => {
   const roots = [];
   afterEach(async () => {
-    await Promise.all(roots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
+    await Promise.all(roots.splice(0).map((root) => rmrf(root)));
   });
 
   async function stack() {
