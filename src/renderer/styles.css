@@ -591,6 +591,11 @@ kbd {
   background: var(--surface-panel);
   border-left: 1px solid var(--tone-blue-71a);
   z-index: 35;
+  /* Issue 358: the pane is a column of head / scroller / footer. Clipping here
+     is what makes the scroller the only way content can leave the pane — a
+     control painted past the viewport used to sit in the tab order while the
+     canvas received its clicks. */
+  overflow: hidden;
   transition: width .16s ease, flex-basis .16s ease;
 }
 .inspector.is-wide { width: 520px; flex-basis: 520px; }

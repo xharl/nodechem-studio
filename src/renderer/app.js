@@ -1930,11 +1930,6 @@ function renderProjectInspector() {
       </div>
       <p class="inspector-note" style="margin-top:8px">Select any block to edit its full Current Job parameter set here; use the expand control for a two-column layout.</p>
     </section>
-
-    <div class="inspector-actions-row">
-      <button type="button" class="btn" data-action="toggle-palette">+ Add block</button>
-      <button type="button" class="btn" data-action="validate">Validate</button>
-    </div>
   </div>
   <div class="inspector-footer">
     <button type="button" class="btn primary" data-open-modal="molecule">Edit molecule</button>
