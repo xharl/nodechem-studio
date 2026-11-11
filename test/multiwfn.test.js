@@ -12,6 +12,7 @@ import {
   compareQtaimToApp,
   multiwfnMenuScript,
   multiwfnArgv,
+  multiwfnBandFor,
   multiwfnSummary,
   multiwfnVersionRefusal,
   parseMultiwfnOutput,
@@ -150,7 +151,9 @@ describe('issue #270 — Multiwfn schema', () => {
   });
 
   it('plans one task per record and carries the definition', () => {
-    const definition = definitionFor('esp', { grid: 60, isovalue: 0.002 });
+    // `esp` no longer declares a grid (issue 339: no menu answer carries one), so
+    // the grid belongs to the analysis that uses it — QTAIM's basin grid.
+    const definition = definitionFor('qtaim', { grid: 3 });
     const project = validated(projectWith(
       [calc(), multiwfnNode(definition)],
       [{ from: 'calc', to: 'mw', type: 'dependency' }],
@@ -158,8 +161,7 @@ describe('issue #270 — Multiwfn schema', () => {
     const plan = buildWorkflowPlan(project);
     const task = plan.tasks.find((entry) => entry.type === 'analyse');
     expect(task.analyse.mode).toBe('multiwfn');
-    expect(task.analyse.multiwfn.grid).toBe(60);
-    expect(task.analyse.multiwfn.isovalue).toBe(0.002);
+    expect(task.analyse.multiwfn.grid).toBe(3);
     expect(task.executable).toBe(false);
     const context = computeContext(project, project.nodes[1]);
     expect(context.mode).toBe('multiwfn');
@@ -167,14 +169,25 @@ describe('issue #270 — Multiwfn schema', () => {
 });
 
 describe('issue #270 — deterministic menu scripts', () => {
-  it('pins the QTAIM 3.8 recipe exactly', () => {
+  it('pins the current-band QTAIM recipe exactly (issue 339)', () => {
     const script = multiwfnMenuScript('qtaim', { grid: 2 });
-    expect(script.version).toBe('3.8');
+    expect(script.version).toBe('2024+');
+    // The CP properties come from topology option 7 + `-1`; the old `-4 / -1 / 7 / 0`
+    // export submenu wrote no CPprop.txt at all.
     expect(script.text).toBe([
-      '2', '2', '3', '-4', '-1', '7', '0', '-10',
+      '2', '2', '3', '7', '-1', '-10',
       '17', '1', '1', '2', '7', '2', '1', '-10', 'q', '',
     ].join('\n'));
     expect(multiwfnMenuScript('qtaim', { grid: 2 }).text).toBe(script.text);
+  });
+
+  it('keeps the 3.8 recipes in their own band', () => {
+    expect(multiwfnMenuScript('qtaim', { grid: 2 }, { band: '3.8' }).text).toBe([
+      '2', '2', '3', '-4', '-1', '7', '0', '-10',
+      '17', '1', '1', '2', '7', '2', '1', '-10', 'q', '',
+    ].join('\n'));
+    expect(() => multiwfnMenuScript('qtaim', {}, { band: '2.5' }))
+      .toThrow(/not a Multiwfn menu band/);
   });
 
   it('writes the ELF cube recipe with the requested grid', () => {
@@ -183,19 +196,26 @@ describe('issue #270 — deterministic menu scripts', () => {
     ].join('\n'));
   });
 
-  it('writes ESP and RDG recipes with their parameters', () => {
-    expect(multiwfnMenuScript('esp', { grid: 80, isovalue: 0.001 }).text).toBe([
-      '12', '1', '1', '0.001', '6', '0', 'q', '',
+  it('writes ESP and RDG recipes with their parameters (issue 339)', () => {
+    // 0 = analyse *with* the mapped ESP; -1 -1 take the default post-processing
+    // answers. `6` and the trailing `0 q` used to exit 59 after the surface run.
+    expect(multiwfnMenuScript('esp', { isovalue: 0.001 }).text).toBe([
+      '12', '1', '1', '0.001', '0', '-1', '-1', 'q', '',
     ].join('\n'));
     expect(multiwfnMenuScript('rdg', { grid: 3 }).text).toBe([
-      '20', '1', '3', '2', '0', 'q', '',
+      '20', '1', '3', '2', '0', '0', 'q', '',
     ].join('\n'));
   });
 
-  it('refuses a Multiwfn version outside the pinned band by name', () => {
+  it('accepts the release a user can install and refuses only unknown bands (issue 341)', () => {
     expect(multiwfnVersionRefusal('3.8(dev)')).toBeNull();
     expect(multiwfnVersionRefusal('3.8')).toBeNull();
-    expect(multiwfnVersionRefusal('3.7')).toContain('pinned to Multiwfn 3.8');
+    // The vendor's download page installs a 2026 build; that is not a refusal.
+    expect(multiwfnVersionRefusal('2026.11.3')).toBeNull();
+    expect(multiwfnBandFor('2026.11.3').id).toBe('2024+');
+    expect(multiwfnBandFor('3.8').id).toBe('3.8');
+    expect(multiwfnVersionRefusal('3.7')).toContain('not in a menu band');
+    expect(multiwfnVersionRefusal('3.7')).toContain('archive-only');
     expect(multiwfnVersionRefusal('')).toContain('version could not be read');
   });
 });
@@ -246,16 +266,25 @@ describe('issue #270 — transcript parsers', () => {
     expect(result.summary.mean).toBeCloseTo(0.315, 8);
   });
 
-  it('parses RDG–NCI points and counts attractive ones', async () => {
-    const text = await read('nci.txt');
+  it('parses RDG–NCI points from the five-column scatter file (issue 340)', async () => {
+    const text = await read('nci-output-2026.txt');
     const result = parseMultiwfnOutput({ analysis: 'rdg', text, parameters: { isovalue: 0.5 } });
     expect(result.ok).toBe(true);
-    expect(result.points.count).toBe(9);
-    expect(result.counts.attractive).toBe(4);
-    expect(result.counts.repulsive).toBe(5);
-    expect(result.range.xMin).toBe(-0.025);
-    expect(result.range.xMax).toBe(0.031);
-    expect(result.points.values[0]).toEqual([-0.025, 0.42]);
+    expect(result.points.count).toBe(3);
+    // Columns 4 and 5 — not the X/Y coordinates, which is what the old parser read.
+    expect(result.points.values[0]).toEqual([-0.33717929e-3, 7.4118347]);
+    expect(result.points.values[1]).toEqual([-0.38441398e-3, 7.046955]);
+    expect(result.range.xMax).toBeCloseTo(-0.33717929e-3, 12);
+    expect(result.range.sMax).toBeCloseTo(7.4118347, 7);
+    expect(result.counts.attractive).toBe(3);
+    expect(result.counts.belowIsovalue).toBe(0);
+  });
+
+  it('counts a two-column file as skipped lines instead of reading coordinates', async () => {
+    const text = await read('nci.txt');
+    const result = parseMultiwfnOutput({ analysis: 'rdg', text, parameters: { isovalue: 0.5 } });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('no sign(lambda2)rho / RDG points');
   });
 
   it('refuses a transcript with no basin table instead of returning zero', () => {
@@ -345,13 +374,15 @@ describe('issue #270 — the sidecar through the queue', () => {
     await fsp.mkdir(sourceDir, { recursive: true });
     const fchk = await fsp.readFile(path.join(ROOT, 'test/fixtures/esp/water-esp.fchk'));
     await fsp.writeFile(path.join(sourceDir, 'water.fchk'), fchk);
-    const qtaimOut = await read('qtaim.out');
+    // The transcript the fake prints must name the same release the banner probe saw.
+    const qtaimOut = (await read('qtaim.out'))
+      .replace(/Version 3\.8\(dev\)[^\n]*/, 'Version 2026.11.3 (release date is the same as version name)');
     const fake = path.join(base, 'Multiwfn');
     const fakeScript = [
       '#!/bin/sh',
       'if [ "$#" -eq 0 ]; then',
       '  echo " Multiwfn -- A Multifunctional Wavefunction Analyzer"',
-      '  echo " Version 3.8(dev), release date: 2024-May-17"',
+      '  echo " Version 2026.11.3 (release date is the same as version name)"',
       '  exit 0',
       'fi',
       'cat > menu.txt',
@@ -395,9 +426,9 @@ describe('issue #270 — the sidecar through the queue', () => {
     const record = JSON.parse(await fsp.readFile(path.join(queueManager.queueDir(queue.id), 'analyse', 'mw', 'run.json'), 'utf8'));
     expect(record.kind).toBe('multiwfn');
     expect(record.status).toBe('completed');
-    expect(record.provenance.version).toBe('3.8(dev)');
-    expect(record.provenance.menuVersion).toBe('3.8');
-    expect(record.provenance.menuScript).toBe(multiwfnMenuScript('qtaim', { grid: 2 }).text);
+    expect(record.provenance.version).toBe('2026.11.3');
+    expect(record.provenance.menuVersion).toBe('2024+');
+    expect(record.provenance.menuScript).toBe(multiwfnMenuScript('qtaim', { grid: 2 }, { band: '2024+' }).text);
     expect(record.provenance.citation).toBe(MULTIWFN_CITATION);
     expect(record.inputSha256).toBe(createHash('sha256').update(fchk).digest('hex'));
     expect(record.multiwfn.basins.count).toBe(3);
@@ -420,7 +451,7 @@ describe('issue #270 — the sidecar through the queue', () => {
     const fake = path.join(base, 'Multiwfn');
     await fsp.writeFile(fake, [
       '#!/bin/sh',
-      'echo " Version 3.8(dev), release date: 2024-May-17"',
+      'echo " Version 2026.11.3 (release date is the same as version name)"',
       'exit 0',
     ].join('\n'), { mode: 0o755 });
     const runManager = new RunManager({ runsRoot, emit: () => {} });
@@ -480,5 +511,56 @@ describe('issue #270 — the sidecar through the queue', () => {
     const record = JSON.parse(await fsp.readFile(path.join(queueManager.queueDir(queue.id), 'analyse', 'mw', 'run.json'), 'utf8'));
     expect(record.error.code).toBe('multiwfn-binary');
     expect(record.analyse.notComputed).toContain('No Multiwfn executable is configured');
+  });
+
+  it.skipIf(!canSpawnShell)('reports a child killed by a signal as a failure, not a parse error (issue 344)', async () => {
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'multiwfn-signal-'));
+    roots.push(base);
+    const queuesRoot = path.join(base, 'queues');
+    const runsRoot = path.join(base, 'runs');
+    const sourceDir = path.join(runsRoot, 'gaussian-run');
+    await fsp.mkdir(sourceDir, { recursive: true });
+    await fsp.copyFile(path.join(ROOT, 'test/fixtures/esp/water-esp.fchk'), path.join(sourceDir, 'water.fchk'));
+    const fake = path.join(base, 'Multiwfn');
+    await fsp.writeFile(fake, [
+      '#!/bin/sh',
+      'if [ "$#" -eq 0 ]; then',
+      '  echo " Version 2026.11.3 (release date is the same as version name)"',
+      '  exit 0',
+      'fi',
+      'cat > menu.txt',
+      'echo "NCI analysis started"',
+      // A process that dies from a signal reports exitCode null; the queue used to
+      // read Number(null) as 0 and blame the parser for the missing output.
+      'kill -KILL $$',
+    ].join('\n'), { mode: 0o755 });
+
+    const runManager = new RunManager({ runsRoot, emit: () => {} });
+    const queueManager = new QueueManager({ queuesRoot, runManager, emit: () => {} });
+    await queueManager.init();
+    const definition = definitionFor('rdg', { grid: 2, input: { nodeId: 'calc' } });
+    const queue = {
+      id: 'mw-signal',
+      projectName: 'Multiwfn',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      options: { multiwfnExecutable: fake, projectDir: base, maxParallel: 1, dryRun: false },
+      timeoutSeconds: 60,
+      edges: [{ from: 'calc', to: 'mw', type: 'dependency' }],
+      tasks: [
+        { nodeId: 'calc', title: 'Gaussian', status: 'completed', runDir: sourceDir, runId: 'run-1' },
+        { nodeId: 'mw', type: 'analyse', title: 'Multiwfn NCI', status: 'pending', attempts: 0, analyse: { mode: 'multiwfn', multiwfn: definition } },
+      ],
+    };
+    queueManager.queues.set(queue.id, queue);
+    await fsp.mkdir(queueManager.queueDir(queue.id), { recursive: true });
+    await queueManager.persist(queue);
+    await queueManager.runMultiwfn(queue, queue.tasks[1]);
+
+    expect(queue.tasks[1].status).toBe('failed');
+    expect(queue.tasks[1].error).toContain('killed by signal');
+    // The failure belongs to the engine, not to the parser: the transcript never
+    // reached a scatter file, and the reason says so.
+    expect(queue.tasks[1].error).not.toContain('no sign(lambda2)rho');
   });
 });
