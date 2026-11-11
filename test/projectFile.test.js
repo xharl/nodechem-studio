@@ -96,4 +96,15 @@ describe('save paths', () => {
     expect(withProjectExtension('/tmp/a.NCS')).toBe('/tmp/a.NCS');
     expect(withProjectExtension('')).toBe('');
   });
+
+  it('collapses a doubled suffix instead of stacking another (issue 315)', () => {
+    // What the dialog produced when the filter and this helper both added the
+    // extension: "24dhiiq-spartan-051.ncs.ncs".
+    expect(withProjectExtension('/w/24dhiiq-spartan-051.ncs.ncs')).toBe('/w/24dhiiq-spartan-051.ncs');
+    expect(withProjectExtension('/w/a.ncs.ncs.ncs')).toBe('/w/a.ncs');
+    expect(withProjectExtension('a.NCS.ncs')).toBe('a.ncs');
+    // A bare name and a name that happens to contain the extension are untouched.
+    expect(withProjectExtension('a.ncs.bak')).toBe('a.ncs.bak.ncs');
+    expect(withProjectExtension('ncs')).toBe('ncs.ncs');
+  });
 });

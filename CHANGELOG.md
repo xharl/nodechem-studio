@@ -12,6 +12,10 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- Saving a project no longer appends a second `.ncs`: a chosen name that already ends in the
+  extension stays as typed, and a doubled `foo.ncs.ncs` collapses to `foo.ncs`. Saving over a file
+  this session did not open asks first, and the next save dialog opens where the last save went
+  (#315).
 - The Settings window's version column reads the version a program states, not the first line of
   its banner: xTB no longer shows its 59-character rule and ORCA no longer shows ASCII art. An engine
   whose output carries no version token reads `version unknown` instead of a fragment, and a row that
