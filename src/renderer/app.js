@@ -195,6 +195,7 @@ import {
   dryRunHintFor,
   executableLabelFor,
   executablePlaceholderFor,
+  planRunHint,
   runEngineLabel,
 } from './engineCopy.js';
 import { executableSeed } from './runExecutable.js';
@@ -6454,6 +6455,20 @@ function buildInputForNode(node) {
   return buildRunInput(node).inputText;
 }
 
+/** The engine ids and companion tools the active flow will launch (issue 361). */
+function planNeedsForConsole() {
+  try {
+    const tasks = shared.buildWorkflowPlan(state.project).tasks;
+    return {
+      engines: shared.calcEnginesIn(tasks),
+      tools: shared.planToolNeeds(tasks),
+    };
+  } catch {
+    // An unbuildable plan is reported by the queue's own error.
+    return { engines: [], tools: [] };
+  }
+}
+
 /** Show "detected" or "from Settings" when the visible value came from there. */
 function syncRunExecutableDetected(engineId) {
   const field = $('#run-exe');
@@ -6505,11 +6520,16 @@ function rendererPlatform() {
 function syncCompanionExecutables() {
   const platform = rendererPlatform();
   const status = state.engineStatus;
+  // Issue 361: a field is seeded only for a tool the plan spawns. Seeding from
+  // PATH alone made a project with no tautomer block show a Python interpreter
+  // as if it were a configured requirement.
+  const needed = new Set(planNeedsForConsole().tools);
   for (const [toolId, ui] of Object.entries(COMPANION_FIELDS)) {
     const input = $(ui.field);
     if (!input) continue;
     input.placeholder = companionPlaceholderFor(toolId, platform);
-    if (!input.value.trim() && document.activeElement !== input) {
+    const required = needed.has(toolId);
+    if (required && !input.value.trim() && document.activeElement !== input) {
       const seed = companionSeed({ toolId, stored: '', status });
       if (seed.detected) input.value = seed.value;
     }
@@ -6520,7 +6540,7 @@ function syncCompanionExecutables() {
     const isDetected = Boolean(detected) && visible === detected;
     const settingsPath = String(state.appSettings?.tools?.[toolId] || '').trim();
     const fromSettings = Boolean(settingsPath) && visible === settingsPath && !isDetected;
-    const missing = Boolean(status) && !visible && !detected;
+    const missing = required && Boolean(status) && !visible && !detected;
     marker.hidden = !isDetected && !fromSettings && !missing;
     marker.textContent = isDetected ? 'detected' : (fromSettings ? 'from Settings' : (missing ? 'not found on PATH' : ''));
     marker.classList.toggle('is-missing', missing && !fromSettings);
@@ -6538,7 +6558,15 @@ function renderRunHint() {
   if (!hint) return;
   hint.classList.remove('is-warn');
   if (!state.run.hintPinned) {
-    hint.textContent = desktop ? dryRunHintFor(activeRunEngineId()) : BROWSER_PREVIEW_CONSOLE_HINT;
+    // Issue 361: the default hint named the project default's engine, so a
+    // console running an xTB flow told the user to launch Psi4.
+    const needs = planNeedsForConsole();
+    const dryRun = $('#run-dry') ? $('#run-dry').checked === true : true;
+    hint.textContent = desktop
+      ? (needs.engines.length > 0
+        ? planRunHint({ engines: needs.engines, tools: needs.tools, dryRun })
+        : dryRunHintFor(activeRunEngineId()))
+      : BROWSER_PREVIEW_CONSOLE_HINT;
     if (!desktop) hint.classList.add('is-warn');
     return;
   }
@@ -6578,11 +6606,16 @@ function clearRunHint() {
 /** Point the run-console copy at the engine the selected block will run. */
 function updateRunConsoleCopy() {
   const engineId = activeRunEngineId();
+  const selected = state.selected?.type === 'node' ? nodeById(state.selected.id) : null;
+  // Issue 361: with nothing selected the field holds the project default's
+  // path, so the label says `project default: …` rather than naming an engine
+  // the flow may never launch.
+  const projectDefault = !(selected && selected.type === 'calculate');
   const label = $('#run-exe-label');
-  if (label) label.textContent = executableLabelFor(engineId);
+  if (label) label.textContent = executableLabelFor(engineId, { projectDefault });
   const executable = $('#run-exe');
   if (executable) {
-    executable.placeholder = executablePlaceholderFor(engineId);
+    executable.placeholder = executablePlaceholderFor(engineId, rendererPlatform());
     // Follow the selected block's engine, but never overwrite a path the user
     // is typing into the field right now. Issue issue 233: a stored path wins; on a
     // fresh profile, use the path the app already detected and say so.

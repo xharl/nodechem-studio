@@ -57,6 +57,34 @@ export function calcEnginesIn(tasks = []) {
     .map((task) => String(task.engine || 'gaussian')))];
 }
 
+/**
+ * The companion executables a plan will actually spawn (issue 361).
+ *
+ * The run console used to seed every tool field from whatever sat on PATH, so a
+ * project with no tautomer block still showed a Python interpreter as a
+ * configured requirement, and the CREST/Open Babel fields implied a stage the
+ * flow never runs. A tool is listed here only when a task names it: a generate
+ * block's generator (an in-app UFF search spawns nothing), the scorer that
+ * replaces an engine, or a Multiwfn analysis.
+ */
+export const PLAN_TOOL_IDS = Object.freeze(['crest', 'obabel', 'scorer', 'tautomer', 'multiwfn']);
+
+export function planToolNeeds(tasks = []) {
+  const needs = new Set();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!task || typeof task !== 'object') continue;
+    if (task.scorer) needs.add('scorer');
+    if (task.type === 'generate') {
+      const generate = task.generate && typeof task.generate === 'object' ? task.generate : {};
+      if (generate.produces === 'tautomers') needs.add('tautomer');
+      else if (generate.generator === 'crest') needs.add('crest');
+      else if (generate.generator === 'obabel') needs.add('obabel');
+    }
+    if (task.type === 'analyse' && task.analyse?.mode === 'multiwfn') needs.add('multiwfn');
+  }
+  return PLAN_TOOL_IDS.filter((toolId) => needs.has(toolId));
+}
+
 /** defaultSettings() plants these; a block only overrides a record when it differs. */
 const DEFAULT_CHARGE = 0;
 const DEFAULT_MULTIPLICITY = 1;

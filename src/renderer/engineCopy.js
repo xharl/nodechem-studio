@@ -24,13 +24,28 @@ const EXECUTABLE_LABEL = Object.freeze({
 });
 
 const EXECUTABLE_PLACEHOLDER = Object.freeze({
-  gaussian: 'C:\\G16W\\g16.exe',
-  xtb: '/usr/local/bin/xtb or C:\\xtb\\bin\\xtb.exe',
+  gaussian: {
+    win32: 'C:\\G16W\\g16.exe',
+    posix: '/usr/local/g16/g16',
+  },
+  xtb: {
+    win32: 'C:\\xtb\\bin\\xtb.exe',
+    posix: '/usr/local/bin/xtb',
+  },
   // ORCA's parallel driver must be called by its full path, so the example is a
   // path and not a bare name.
-  orca: '/opt/orca/orca or C:\\ORCA\\orca.exe',
-  psi4: '/opt/conda/bin/psi4 or C:\\Psi4\\bin\\psi4.exe',
-  pyscf: '/usr/bin/python3 or /usr/local/bin/pyscf-runner',
+  orca: {
+    win32: 'C:\\ORCA\\orca.exe',
+    posix: '/opt/orca/orca',
+  },
+  psi4: {
+    win32: 'C:\\Psi4\\bin\\psi4.exe',
+    posix: '/usr/bin/psi4',
+  },
+  pyscf: {
+    win32: 'C:\\Python\\python.exe',
+    posix: '/usr/bin/python3',
+  },
 });
 
 const DRY_RUN_HINT = Object.freeze({
@@ -42,15 +57,65 @@ const DRY_RUN_HINT = Object.freeze({
 });
 
 /** Label above the executable field — the engine named is the one that runs. */
-export function executableLabelFor(engineId) {
+export function executableLabelFor(engineId, { projectDefault = false } = {}) {
   const id = engineOrDefault(engineId).id;
+  // Issue 361: with no block selected the field holds the project's default
+  // engine, and the label has to say so instead of implying the flow runs it.
+  if (projectDefault) return `project default: ${engineOrDefault(id).label}`;
   return EXECUTABLE_LABEL[id] || EXECUTABLE_LABEL.gaussian;
 }
 
-/** Example path shown in the empty executable field. */
-export function executablePlaceholderFor(engineId) {
+/**
+ * Example path shown in the empty executable field, on this platform's
+ * convention (issue 361: a Linux console offered `C:\G16W\g16.exe`).
+ */
+export function executablePlaceholderFor(engineId, platform = 'linux') {
   const id = engineOrDefault(engineId).id;
-  return EXECUTABLE_PLACEHOLDER[id] || EXECUTABLE_PLACEHOLDER.gaussian;
+  const entry = EXECUTABLE_PLACEHOLDER[id] || EXECUTABLE_PLACEHOLDER.gaussian;
+  return platform === 'win32' ? entry.win32 : entry.posix;
+}
+
+/**
+ * `xTB`, `xTB and Psi4`, `xTB, Psi4 and ORCA` — the sentence form of a plan's
+ * engines, so the hint can name them without a list of ids.
+ */
+export function engineListText(engineIds = []) {
+  const labels = [...new Set((Array.isArray(engineIds) ? engineIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean)
+    .map((id) => engineOrDefault(id).label))];
+  if (labels.length === 0) return '';
+  if (labels.length === 1) return labels[0];
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+}
+
+const TOOL_LABEL = Object.freeze({
+  crest: 'CREST',
+  obabel: 'Open Babel',
+  scorer: 'the ML scorer',
+  tautomer: 'the tautomer sidecar',
+  multiwfn: 'Multiwfn',
+});
+
+/**
+ * The hint under the dry-run checkbox (issue 361). It said "Uncheck to run the
+ * Psi4 interpreter" on a flow whose blocks were xTB — the project default, not
+ * the plan. It now names the engines the plan launches and the tools it spawns.
+ */
+export function planRunHint({ engines = [], tools = [], dryRun = true } = {}) {
+  const engineText = engineListText(engines);
+  const toolText = (Array.isArray(tools) ? tools : [])
+    .map((toolId) => TOOL_LABEL[toolId])
+    .filter(Boolean)
+    .join(', ');
+  if (!engineText) {
+    return dryRun ? FIXTURE_HINT : `${FIXTURE_HINT} No block in this flow launches an engine.`;
+  }
+  const needs = toolText ? `${engineText}, plus ${toolText}` : engineText;
+  const many = (Array.isArray(engines) ? engines.length : 0) > 1 || Boolean(toolText);
+  return dryRun
+    ? `${FIXTURE_HINT} This flow runs ${needs}; uncheck to launch ${many ? 'them' : 'it'}.`
+    : `${FIXTURE_HINT} This flow runs ${needs}.`;
 }
 
 /** Run-console hint under the dry-run checkbox. Dry run stays a fixture. */
