@@ -8,6 +8,12 @@ calculation block and letting the scheduler decide what may start.
 Open **Run** and click **Run workflow**. The queue panel shows each task, its status and — for a
 condition — the branch it released.
 
+Before the queue starts, preflight checks the machine facts the flow depends on. It checks **the
+engines this flow's blocks run**, one row each, and lists the engines it does not run as `SKIP` with
+the reason: a Psi4/ORCA workflow starts on a machine with no Gaussian licence, and Gaussian's absence
+stays visible without blocking it. A failing row keeps its text in the status bar, not only in the
+toast that disappears.
+
 - Tasks run **one at a time**, in stable topological order, in a single local process.
 - The queue is **persisted** under `<userData>/queues/<queueId>/queue.json`. Close the app mid-run,
   reopen it, and an interrupted task is reconciled on startup instead of being reported as complete.

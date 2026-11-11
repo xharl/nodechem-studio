@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { engineOrDefault } from '../../src/shared/engines/index.js';
+import { ENGINE_IDS, engineOrDefault } from '../../src/shared/engines/index.js';
 import { XtbRunner } from './xtbRunner.js';
 import {
   SUPPORTED_PLATFORMS,
@@ -342,4 +342,87 @@ export async function preflight(config = {}, options = {}) {
       scratch: scratchConventions(platform),
     },
   };
+}
+
+/** Check ids that describe an engine, not the host. */
+const ENGINE_CHECK_IDS = new Set([
+  'executable',
+  'executable-exists',
+  'executable-name',
+  'executable-permission',
+  'gauss-exedir',
+  'link1-present',
+  'xtb-parameters',
+  'pyscf-import',
+]);
+
+/**
+ * Preflight a flow that may run several engines (issue 316).
+ *
+ * `config.engines` is the set the plan actually launches — the same list the
+ * queue derives from its tasks — and `config.executables` is the same
+ * engine→path map the queue takes. Each engine in use is checked; each engine
+ * the flow does not run is listed as SKIP, so a missing Gaussian stays visible
+ * on a Psi4/ORCA machine without blocking a workflow that never needed it.
+ *
+ * With no `engines` this is exactly `preflight()`, which is what a single-engine
+ * caller (and the Windows regression test) still gets.
+ */
+export async function preflightForEngines(config = {}, options = {}) {
+  const requested = Array.isArray(config.engines) && config.engines.length
+    ? [...new Set(config.engines.map((id) => engineOrDefault(id).id))]
+    : [];
+  if (requested.length === 0 || config.dryRun) return preflight({ ...config, engines: undefined }, options);
+
+  const order = ENGINE_IDS.filter((id) => requested.includes(id));
+  const [primary, ...rest] = order;
+  const executables = config.executables && typeof config.executables === 'object' ? config.executables : {};
+  const executableFor = (id) => String(
+    executables[id] || (id === primary ? config.executable : '') || '',
+  ).trim();
+
+  const base = await preflight({ ...config, engine: primary, executable: executableFor(primary) }, options);
+  const checks = [...base.checks];
+
+  for (const engineId of rest) {
+    // eslint-disable-next-line no-await-in-loop
+    const probe = await preflight({ ...config, engine: engineId, executable: executableFor(engineId) }, options);
+    const label = engineOrDefault(engineId).label;
+    const engineRows = probe.checks.filter((row) => ENGINE_CHECK_IDS.has(row.id));
+    const rows = engineRows.length > 0
+      ? engineRows
+      : [{
+        id: 'executable',
+        label: `${label} executable configured`,
+        ok: probe.ok,
+        detail: executableFor(engineId) || 'Not configured',
+      }];
+    for (const row of rows) checks.push({ ...row, id: `engine-${engineId}-${row.id}` });
+  }
+
+  for (const engineId of ENGINE_IDS.filter((id) => !requested.includes(id))) {
+    const label = engineOrDefault(engineId).label;
+    checks.push({
+      id: `engine-${engineId}-skipped`,
+      label: `${label} executable`,
+      ok: true,
+      skipped: true,
+      detail: `Skipped — no block in this flow runs ${label}.`,
+    });
+  }
+
+  // Issue 316: a failing engine row names the block that needs it, so the user
+  // knows which one to change rather than which engine is missing.
+  const blocks = config.engineBlocks && typeof config.engineBlocks === 'object' ? config.engineBlocks : {};
+  const named = checks.map((row) => {
+    if (row.ok || row.skipped) return row;
+    const engineId = row.id === 'executable'
+      ? primary
+      : (/^engine-([a-z0-9]+)-executable$/.exec(row.id) || [])[1];
+    const block = engineId ? String(blocks[engineId] || '').trim() : '';
+    if (!block) return row;
+    return { ...row, detail: `${row.detail} · needed by ${block}` };
+  });
+
+  return { ...base, checks: named, ok: named.every((check) => check.ok || check.skipped) };
 }
