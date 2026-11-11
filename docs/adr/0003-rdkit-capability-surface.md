@@ -1,6 +1,6 @@
 # ADR 0003 — RDKit beyond tautomers: one chemistry sidecar, six capability families
 
-Status: proposed · design record, not in force · implements issue #331
+Status: accepted — design only, no phase implemented yet · implements issue #331
 
 Date: 2026-11-10
 
@@ -112,13 +112,29 @@ op may return an empty table, a fallback geometry or a silently dropped fragment
 ### 2.4 Provenance
 
 Every op records `program`, `version`, `op`, the parameters that change the answer and
-`sourceSha256` where the input is a file the app wrote. Two additional rules:
+`sourceSha256` where the input is a file the app wrote. Four additional rules:
 
 - **Descriptors are versioned as a set** (`descriptorSet: "nodechem-1"`). Adding a
   descriptor later bumps the id, so an old report still says which table produced it.
 - **Force-field numbers never enter an energy column.** `conformers` records MMFF94 or
   UFF in `origin.method`, exactly as the UFF generator already does; `descriptors`
   records `kind: "cheminformatics"`.
+- **Identity is a triple, not one key.** A structure is compared by standard InChIKey
+  (composition and stereo), `rdMolHash` `HetAtomTautomer` (constitution, ignoring the
+  mobile proton) and the formula with atom counts. Standard InChI alone is not a tautomer
+  test in either direction: measured with RDKit 2026.09.1, 2-pyridone and
+  2-hydroxypyridine share `UBQKCCHYAOITMY-UHFFFAOYSA-N`, while acetylacetone's keto and
+  enol forms share no key at all. A FixedH InChIKey separates both pairs. The 2026.09.1
+  API is `rdMolHash.MolHash(mol, rdMolHash.HashFunction.HetAtomTautomer)`; `HashMol` no
+  longer exists.
+- **Every computed value is cached, and the key is written down.** 2D and topological
+  values key on the canonical isomeric SMILES, the charge, `descriptorSet` and the RDKit
+  version. 3D values (PMI, radius of gyration, SASA, shape) also key on a geometry hash,
+  because one conformer's numbers must never be returned for another. The cache lives in
+  the run folder (`chem-cache.json`) so it dies with the run and can be audited; a hit is
+  recorded (`cache: { hit: true, key: "…" }`), and a refusal is cached too, so a molecule
+  that cannot be sanitised is not retried once per fan-out member. A project-level cache
+  may come later; a global one may not, unless version and set id are in its key.
 
 ### 2.5 Installation and packaging
 
@@ -150,6 +166,8 @@ aromatic-ring counts, Fsp3, QED, formal charge, InChIKey and Murcko scaffold.
 - **Limits** descriptors are 2D/topological unless stated; a 3D descriptor needs the
   geometry and is labelled as such. A molecule RDKit cannot sanitise is a refused row,
   not a zero.
+- **Cached per §2.4** on the structure identity, so a fan-out over sixteen conformers of
+  one molecule computes the 2D set once and the report says it was reused.
 - **Why here** it is the cheapest visible capability and it closes the FEATURE-MAP gap
   without touching the runner.
 
@@ -186,25 +204,58 @@ it does not decide what is kept.
 
 ### 3.5 `stereoisomers` — `generate` candidate kind
 
-`EnumerateStereoisomers` as `produces: "stereoisomers"`, reusing the tautomer candidate
-contract: labels, SMILES, per-candidate geometry, fan-out, no energies, a warning that
-these are distinct molecules. Schema rejects any generator other than `rdkit`, exactly as
-it does for tautomers.
+`EnumerateStereoisomers` enumerates stereoisomers as its **own** `produces: "stereoisomers"`
+value — separate from `tautomers` in the schema, the op and the report. The schema rejects
+any generator other than `rdkit`, exactly as it does for tautomers.
+
+The candidate contract is shared (labels, SMILES, per-candidate geometry, fan-out, no
+energies, a warning that these are distinct molecules); the **geometry policy is not**.
+Measured with RDKit 2026.09.1, `EnumerateStereoisomers` copies the input conformer onto
+every candidate: all four stereoisomers of a test molecule carried the same coordinates
+(RMSD 0.0000 between them). Carrying those coordinates forward would label an inverted
+centre with the geometry of the original. So every candidate except the one identical to
+the input is embedded with ETKDGv4, and `geometry.source` records which. The tautomer
+carry-over rule must not be reused here.
 
 ### 3.6 `integrity` — post-run gate
 
-Perceive the final geometry (`rdDetermineBonds`) and compare it with the input molecule by
-InChIKey and `rdMolHash`, with atom counts and formula as corroboration. Report:
+Perceive the final geometry (`rdDetermineBonds`) and compare it with the molecule the block
+was given. The comparison is a **perception from coordinates, not a measurement**, so it
+answers three separate questions instead of returning a boolean:
 
-- pass — same molecule, stereo preserved;
-- changed — same formula, different connectivity or proton placement;
-- lost atoms / added atoms;
-- stereo lost.
+- **composition** — formula and atom counts before and after;
+- **constitution** — `HetAtomTautomer` hash and FixedH InChIKey, which ignore the mobile
+  proton and the charge form;
+- **configuration** — standard InChIKey and isomeric SMILES.
 
-The gate is recorded on the record and surfaced in validity checks. It does not fail a run
-by default — a deliberate proton transfer is legitimate — but a block can opt into
-refusing on `changed`. This is the one capability that changes what the app is willing to
-claim about a finished calculation, and it is why the ADR exists at all.
+Statuses: `match`, `tautomer-changed`, `stereo-changed`, `connectivity-changed`,
+`composition-changed`, `inconclusive`, `not-applicable`.
+
+`inconclusive` is a first-class answer and is never reported as a pass. It covers
+perception failure, open-shell records, multi-fragment inputs, and models where the parsed
+geometry is not the whole molecule (an ONIOM QM region, QM/MM link atoms).
+
+**Policy — default on, blocking nothing.** The gate is computed for every record, stored
+on the record as `structureIntegrity`, shown as a validity warning and as a report column.
+It never fails a run by default. A block may opt into `integrity: "fail"`, and only
+`composition-changed` and `connectivity-changed` are eligible: a lost atom is almost never
+legitimate, while a proton transfer, a tautomerisation or an inverted centre can be the
+chemistry the user asked for. Stereo and tautomer changes stay warnings even when refusal
+is on.
+
+The default is not "fail" for four reasons. A distance-based heuristic that can be wrong
+must not destroy a finished calculation. A false positive teaches users to switch the check
+off, and then the real positive is missed. Existing projects would turn red on upgrade.
+And termination, SCF convergence and exit code say nothing about identity: the honest claim
+is "the run converged, and here is what it converged to", not "the run is invalid".
+
+Scope: jobs with one final geometry (SP, Opt, Freq, Opt Freq, TS) and the endpoint of an
+IRC or scan, labelled as a path comparison. Imported records are `not-applicable`; a
+counterpoise monomer compares against its own input; ONIOM compares the model region and
+says so.
+
+This is the one capability that changes what the app is willing to claim about a finished
+calculation, and it is why the ADR exists at all.
 
 ### 3.7 `depict` — report and inspector
 
@@ -229,10 +280,10 @@ analysis the app already has slots for.
 | 0 | Sidecar consolidation: `SidecarRunner`, op registry, `probe`, packaging | tautomer tests unchanged; existing project yields an identical `conformers.json`; installed build resolves the script | 2–3 d |
 | 1 | `descriptors` + `analyse` mode `chem` | curated set on real and fixture records; refusal without RDKit; report and CSV columns | 3–4 d |
 | 2 | `standardize` + stereo audit | before/after record; salt removal refused when it empties the molecule; warnings surfaced | 3–5 d |
-| 3 | `integrity` gate | fixture with a moved proton and a lost atom is classified; opt-in refusal | 4–6 d |
+| 3 | `integrity` gate | every status classified, `inconclusive` included; default warn; opt-in refusal limited to composition and connectivity | 4–6 d |
 | 4 | `depict` | SVG in the HTML report and inspector; grid for a candidate set | 2–3 d |
 | 5 | `conformers` | size cap, seed and force field recorded; energy-window and RMSD curation reused; CREST comparison on one fixture | 4–6 d |
-| 6 | `stereoisomers` | candidate set fans out; schema refuses a non-RDKit generator | 2–3 d |
+| 6 | `stereoisomers` | every candidate except the input-identical one is embedded; `geometry.source` recorded; schema refuses a non-RDKit generator | 2–3 d |
 | 7 | `similarity` | Tanimoto matrix, clustering and MCS on a dataset fixture | 5–7 d |
 
 Total ~5–6 weeks; phases 0–3 ~3 weeks.
@@ -279,12 +330,20 @@ pH-dependent protonation or pKa models (Epik, Dimorphite-DL are separate tools);
 molecular dynamics; transition-state search; periodic systems; any energy presented as a
 QM result; and a molecule builder.
 
-## 8. Open questions
+## 8. Decisions taken after review
 
-- Does `stereoisomers` deserve its own `produces` value, or should `generate` expose
-  "candidate kind" as one field with `tautomers` and `stereoisomers` as values? The
-  tautomer precedent argues for `produces`; the schema will tell us at phase 6.
-- Should `descriptors` run once per record or once per unique structure (by InChIKey) in a
-  fan-out? Caching by InChIKey is cheaper but adds a cache with its own provenance.
-- Does `integrity` belong on every record, or only where the block asks? Default-on as a
-  report, opt-in as a refusal, is the proposal — it needs a decision before phase 3.
+The first draft left three questions open. Xavier settled them on 2026-11-10:
+
+- **Stereoisomers get their own `produces` value**, not a shared "candidate kind" field.
+  The geometry policy differs (§3.5): tautomer coordinates can be carried over, enumerated
+  stereoisomers cannot, so the two ops share the ensemble contract but not the
+  implementation.
+- **Caching is the default, not an option.** Keys and scope are in §2.4: identity plus
+  `descriptorSet` and version for 2D values, a geometry hash as well for 3D values, a
+  run-local `chem-cache.json`, hits recorded, refusals cached.
+- **`integrity` is recorded on every record and refuses nothing by default.** Refusal is
+  opt-in per block and limited to composition and connectivity changes; `inconclusive` is
+  never a pass and never a failure (§3.6).
+
+Those were the only open questions in the draft; everything in §2–§4 is the decision this
+ADR records, and no phase is implemented yet.
