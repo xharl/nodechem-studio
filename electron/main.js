@@ -34,6 +34,7 @@ import {
   withProjectExtension,
 } from '../src/shared/projectFile.js';
 import { ENGINES, engineOrDefault } from '../src/shared/engines/index.js';
+import { parseToolVersion } from '../src/shared/toolVersion.js';
 import { createSettingsStore } from './settingsStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -104,16 +105,12 @@ function engineStatus() {
  * clicking Detect again); startup stays presence-only for the reason above.
  * A binary that does not answer within the timeout keeps an empty version
  * rather than blocking the window.
+ *
+ * Issue #314: the version is the token the output states, not its first line.
+ * xTB opens with a 59-character rule and ORCA with ASCII art, so taking the
+ * first line printed a banner fragment as if it were a version.
  */
 const execFileAsync = promisify(execFile);
-
-function firstVersionLine(text) {
-  for (const line of String(text || '').split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed) return trimmed.slice(0, 160);
-  }
-  return '';
-}
 
 async function probeVersion(executable) {
   try {
@@ -122,10 +119,10 @@ async function probeVersion(executable) {
       windowsHide: true,
       maxBuffer: 64 * 1024,
     });
-    return firstVersionLine(stdout) || firstVersionLine(stderr);
+    return parseToolVersion(`${stdout}\n${stderr}`);
   } catch (error) {
     // Some drivers print their banner and then exit non-zero; keep the banner.
-    return firstVersionLine(error?.stdout) || firstVersionLine(error?.stderr);
+    return parseToolVersion(`${error?.stdout || ''}\n${error?.stderr || ''}`);
   }
 }
 
@@ -639,6 +636,12 @@ function suggestedProjectName(project) {
 /** Path → sha256 of the exact bytes the app last read or wrote. */
 const knownProjectHashes = new Map();
 
+/**
+ * Issue 315: the folder the last save used. Without it every "Save as" default
+ * came from `documents`, so a second project landed in the wrong place.
+ */
+let lastProjectSaveDir = null;
+
 async function saveProject(project, filePath) {
   const serialized = stringifyProject(project);
   if (!serialized.ok) {
@@ -652,11 +655,31 @@ async function saveProject(project, filePath) {
   if (!target) {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Save NodeChem Studio project',
-      defaultPath: path.join(app.getPath('documents'), suggestedProjectName(project)),
+      defaultPath: path.join(lastProjectSaveDir || app.getPath('documents'), suggestedProjectName(project)),
       filters: [{ name: 'NodeChem Studio project', extensions: [PROJECT_EXTENSIONS[0]] }],
     });
     if (result.canceled || !result.filePath) return { canceled: true };
     target = withProjectExtension(result.filePath);
+  } else {
+    // A path from the renderer is already the open file; normalising is a
+    // no-op there and collapses a doubled suffix if one ever reached it.
+    target = withProjectExtension(target);
+  }
+  // Replacing a different project is a separate question from "where", and the
+  // dialog cannot ask it: a normalised name may point at a file the user never
+  // saw in its listing. Only a file this process has read or written passes
+  // without asking.
+  const exists = await fsp.stat(target).then((stat) => stat.isFile()).catch(() => false);
+  if (exists && !knownProjectHashes.has(target)) {
+    const answer = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Replace', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      message: `${path.basename(target)} already exists`,
+      detail: 'Saving replaces that file. Choose Cancel to keep it and save under another name.',
+    });
+    if (answer.response !== 0) return { canceled: true };
   }
   // Concurrency guard for a project on a shared drive: if the bytes on disk
   // are not the bytes this process last read or wrote, another editor changed
@@ -675,6 +698,7 @@ async function saveProject(project, filePath) {
   }
   await fsp.writeFile(target, serialized.text, 'utf8');
   knownProjectHashes.set(target, fingerprint(serialized.text));
+  lastProjectSaveDir = path.dirname(target);
   rememberRecentProject(target, serialized.project);
   return {
     canceled: false,
