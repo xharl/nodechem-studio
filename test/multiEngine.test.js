@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultSettings, parseProjectText, validateProject } from '../src/shared/projectSchema.js';
 import { buildRunInput, buildWorkflowPlan, engineForNode } from '../src/shared/workflowTasks.js';
 import { replaceInputGeometry } from '../src/shared/gaussianInput.js';
+import { applyGeometryHandoffFor } from '../electron/runner/geometryHandoff.js';
 import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
 
 const WATER = [
@@ -120,6 +121,35 @@ describe('geometry across an engine boundary', () => {
 
   it('refuses an empty hand-off', () => {
     expect(() => replaceInputGeometry(input, [])).toThrow(/No atoms were supplied/);
+  });
+
+  /**
+   * Issue 326: the chain the issue measured — xTB optimises, Psi4 computes the
+   * single point — used to ship the *planned* coordinates. The deck the planner
+   * writes must take the optimised numbers.
+   */
+  it('hands the optimised geometry to a Psi4 block, not only to a Gaussian one', () => {
+    const project = validateProject({
+      ...twoEngineProject(),
+      nodes: [
+        calcNode('opt', { engine: 'xtb', xtbMethod: 'gfn2' }),
+        calcNode('sp', { engine: 'psi4', jobType: 'SP', basis: 'def2-SVP' }),
+      ],
+      edges: [{ from: 'opt', to: 'sp', type: 'checkpoint' }],
+    }).project;
+    const sp = buildWorkflowPlan(project).tasks.find((task) => task.nodeId === 'sp');
+    expect(sp.engine).toBe('psi4');
+    // Planned geometry: O at the origin, H at 0.96 Å.
+    expect(sp.inputText).toContain('0.960000');
+
+    const optimised = [
+      { element: 'O', x: 0.0173, y: 0.0129, z: 0 },
+      { element: 'H', x: 0.9834, y: 0.0021, z: 0.0011 },
+      { element: 'H', x: -0.2412, y: 0.9344, z: -0.0009 },
+    ];
+    const next = applyGeometryHandoffFor('psi4', sp.inputText, optimised);
+    expect(next).toMatch(/O\s+0\.017300/);
+    expect(next).not.toContain('0.960000');
   });
 });
 
