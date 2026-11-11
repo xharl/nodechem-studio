@@ -3117,7 +3117,8 @@ export function validateProject(raw) {
   const molecule = normalizeMolecule(c, raw.molecule, legacy);
 
   const flows = [];
-  const rawFlows = Array.isArray(raw.flows) && raw.flows.length > 0 ? raw.flows : null;
+  const rawFlowList = Array.isArray(raw.flows) ? raw.flows : null;
+  const rawFlows = rawFlowList && rawFlowList.length > 0 ? rawFlowList : null;
   if (rawFlows) {
     if (rawFlows.length > LIMITS.flows) {
       c.error('flows', `must contain at most ${LIMITS.flows} flows.`);
@@ -3140,6 +3141,11 @@ export function validateProject(raw) {
       flows.push(flow);
     });
     if (flows.length === 0) c.error('flows', 'must contain at least one flow.');
+  } else if (rawFlowList) {
+    // Issue 323: `flows: []` is an empty flow list, not a file that predates
+    // flows. Reporting it as a missing legacy `nodes` array sent the reader to
+    // an alias they never wrote, so say what is actually wrong.
+    c.error('flows', 'must contain at least one flow.');
   } else {
     const nodes = normalizeGraphNodes(c, raw.nodes, legacy, projectEngine, 'nodes');
     const nodeIds = new Set(nodes.map((node) => node.id));

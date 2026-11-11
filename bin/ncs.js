@@ -26,9 +26,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { stringifyProject, validateProject } from '../src/shared/projectSchema.js';
+import { fileReadReason } from '../src/shared/fsError.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { flowById } from '../src/shared/flows.js';
-import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
+import { buildWorkflowPlan, moleculeForNode } from '../src/shared/workflowTasks.js';
 import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { parseGaussianOutput, geometryToXyz } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
@@ -168,8 +169,54 @@ function parseArgs(argv) {
   return { command, positional, flags };
 }
 
+/**
+ * Issue 325: the one-line reason a path could not be read.
+ *
+ * The mapping lives in `src/shared/fsError.js` because the window's project open
+ * needs the same sentence (issue 323); the CLI and the app must not disagree
+ * about what EISDIR means.
+ */
+async function readTextOrFail(file, code = EXIT.invalid) {
+  try {
+    return await fs.readFile(file, 'utf8');
+  } catch (error) {
+    fail(`cannot read ${file}: ${fileReadReason(error)}`, code);
+  }
+}
+
+async function readBytesOrFail(file, code = EXIT.invalid) {
+  try {
+    return await fs.readFile(file);
+  } catch (error) {
+    fail(`cannot read ${file}: ${fileReadReason(error)}`, code);
+  }
+}
+
+/**
+ * Issue 324: `--node` names one block, and an unknown id must be refused by
+ * name rather than falling back to the project's molecule — three verbs take it
+ * (`build-input`, `convert`, `export-input`) and a bad id reads the same in all
+ * three.
+ */
+function resolveNode(project, file, requested) {
+  const nodes = Array.isArray(project?.nodes) ? project.nodes : [];
+  const node = nodes.find((entry) => String(entry.id) === String(requested));
+  if (node) return node;
+  const ids = nodes.map((entry) => String(entry.id));
+  const shown = ids.slice(0, 12);
+  const rest = ids.length - shown.length;
+  const listed = ids.length > 0
+    ? ` (blocks: ${shown.join(', ')}${rest > 0 ? `, … ${rest} more` : ''})`
+    : ' (the project has no blocks)';
+  fail(`no block "${requested}" in ${file}${listed}`, EXIT.invalid);
+}
+
+/** Blocks that produce or carry a structure, and those that never do. */
+const GEOMETRY_NODE_TYPES = Object.freeze(['input', 'prepare', 'generate', 'calculate']);
+const GEOMETRY_FREE_NODE_TYPES = Object.freeze(['condition', 'loop', 'merge', 'output', 'analyse', 'note']);
+
 async function readProject(file) {
-  const raw = await fs.readFile(file, 'utf8');
+  const raw = await readTextOrFail(file);
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -215,8 +262,7 @@ async function commandBuildInput({ positional, flags }) {
     process.stderr.write(`${JSON.stringify(validityJson(file, result), null, 2)}\n`);
     process.exit(EXIT.invalid);
   }
-  const node = result.project.nodes.find((entry) => entry.id === flags.node);
-  if (!node) fail(`no node "${flags.node}" in ${file}.`, EXIT.invalid);
+  const node = resolveNode(result.project, file, flags.node);
   let built;
   try {
     const { buildRunInput } = await import('../src/shared/workflowTasks.js');
@@ -836,12 +882,7 @@ async function runValidationRung({ entry, rung, executable, workRoot, timeoutSec
 async function commandValidation({ positional, flags }) {
   const [file] = positional;
   if (!file) fail('validation needs a case file.');
-  let text;
-  try {
-    text = await fs.readFile(path.resolve(file), 'utf8');
-  } catch (error) {
-    fail(`could not read ${file}: ${error.message}`, EXIT.invalid);
-  }
+  const text = await readTextOrFail(path.resolve(file));
   let parsedCases;
   try {
     parsedCases = parseValidationCases(text);
@@ -1080,7 +1121,7 @@ async function commandRecordImport({ positional, flags }) {
       bytes = await fs.readFile(sourceFile);
     } catch (error) {
       importedRefusal(new ImportedRecordError(
-        `cannot read ${sourceFile}: ${error.code === 'ENOENT' ? 'there is no such file' : error.message}`,
+        `cannot read ${sourceFile}: ${fileReadReason(error)}`,
         { field: 'sourceSha256' },
       ));
     }
@@ -1360,7 +1401,7 @@ async function commandConvert({ positional, flags }) {
   }
 
   try {
-    const raw = await fs.readFile(file);
+    const raw = await readBytesOrFail(file);
     const text = raw.toString('utf8');
     const extension = path.extname(file).toLowerCase();
     let converted;
@@ -1383,8 +1424,7 @@ async function commandConvert({ positional, flags }) {
         process.stderr.write(`${JSON.stringify(validityJson(file, result), null, 2)}\n`);
         process.exit(EXIT.invalid);
       }
-      const node = result.project.nodes.find((entry) => entry.id === flags.node);
-      if (!node) fail(`no node "${flags.node}" in ${file}.`, EXIT.invalid);
+      const node = resolveNode(result.project, file, flags.node);
       // Same function the window's Export menu calls: one project → deck path.
       const rendered = renderBlockDeck({ project: result.project, node, engine: deckExporter.id });
       if (!rendered.ok) {
@@ -1401,11 +1441,32 @@ async function commandConvert({ positional, flags }) {
         notes: rendered.notes,
       };
     } else if (extension === '.ncs') {
-      const parsed = JSON.parse(text);
-      const coords = parsed?.molecule?.coords;
-      if (!Array.isArray(coords) || coords.length === 0) fail('this project has no molecule to export.');
-      converted = convertStructure({ atoms: coords, bonds: parsed?.molecule?.bonds }, formatId, {
-        title: parsed?.name || path.basename(file, extension),
+      const { result } = await readProject(file);
+      if (!result.ok) {
+        process.stderr.write(`${JSON.stringify(validityJson(file, result), null, 2)}\n`);
+        process.exit(EXIT.invalid);
+      }
+      const project = result.project;
+      // Issue 324: `--node` asks for one block's structure. An unknown id is
+      // refused by name, and a block that has no structure refuses too, instead
+      // of both quietly exporting the project's molecule.
+      const node = flags.node ? resolveNode(project, file, flags.node) : null;
+      if (node && GEOMETRY_FREE_NODE_TYPES.includes(node.type)) {
+        fail(`block "${node.id}" is a ${node.type} block: it has no structure to convert. `
+          + `Blocks that carry one: ${GEOMETRY_NODE_TYPES.join(', ')}.`, EXIT.invalid);
+      }
+      const projectCoords = project?.molecule?.coords;
+      if (!Array.isArray(projectCoords) || projectCoords.length === 0) {
+        fail(node
+          ? `block "${node.id}" has no structure: ${file} carries no molecule, and a block only overrides one.`
+          : 'this project has no molecule to export.', EXIT.invalid);
+      }
+      const geometry = moleculeForNode(project, node);
+      converted = convertStructure({
+        atoms: geometry.coords,
+        bonds: project?.molecule?.bonds,
+      }, formatId, {
+        title: node ? (node.title || node.id) : (project.name || path.basename(file, extension)),
       });
     } else if (extension === '.fchk' || extension === '.fch') {
       // Molden is the one format that needs the basis and the MO coefficients,
@@ -1428,15 +1489,19 @@ async function commandConvert({ positional, flags }) {
       converted = convertStructure({ atoms: first.atoms, bonds: first.bonds }, formatId, { title: first.name });
     }
 
-    const out = flags.out ? path.resolve(String(flags.out)) : `${file.slice(0, file.length - extension.length)}.${converted.extension}`;
-    await fs.writeFile(out, converted.text, 'utf8');
+    // Issue 324: no path is invented. Without --out the converted text *is* the
+    // output — the same rule `export-input` already follows — so a file appears
+    // only where the caller named one.
+    const out = flags.out ? path.resolve(String(flags.out)) : null;
+    if (out) await fs.writeFile(out, converted.text, 'utf8');
     if (flags.json) {
       process.stdout.write(`${JSON.stringify({
         ok: true, format: converted.format, out, mediaType: converted.mediaType, bytes: Buffer.byteLength(converted.text), notes: converted.notes,
       }, null, 2)}\n`);
     } else {
-      for (const note of converted.notes || []) process.stdout.write(`note: ${note}\n`);
-      process.stdout.write(`${converted.format} written to ${out} (${Buffer.byteLength(converted.text)} bytes)\n`);
+      if (!out) process.stdout.write(converted.text);
+      for (const note of converted.notes || []) process.stderr.write(`note: ${note}\n`);
+      if (out) process.stdout.write(`${converted.format} written to ${out} (${Buffer.byteLength(converted.text)} bytes)\n`);
     }
     process.exit(EXIT.ok);
   } catch (error) {
@@ -1472,8 +1537,7 @@ async function commandExportInput({ positional, flags }) {
     process.exit(EXIT.invalid);
   }
   const project = result.project;
-  const node = project.nodes.find((entry) => entry.id === flags.node);
-  if (!node) fail(`no node "${flags.node}" in ${file}.`, EXIT.invalid);
+  const node = resolveNode(project, file, flags.node);
 
   // `renderBlockDeck` is the one project → deck path; the window's Export menu
   // calls the same function, so the two write identical bytes. It refuses a
@@ -1797,7 +1861,7 @@ async function commandQcschemaImport({ positional, flags }) {
   try {
     doc = JSON.parse(await fs.readFile(file, 'utf8'));
   } catch (error) {
-    qcschemaRefuse(new QCSchemaError(`cannot read ${file}: ${error.message}`, {
+    qcschemaRefuse(new QCSchemaError(`cannot read ${file}: ${fileReadReason(error)}`, {
       code: 'qcschema-invalid', field: 'document',
     }));
   }
@@ -1872,7 +1936,7 @@ async function commandCache({ positional, flags }) {
   try {
     buffer = await fs.readFile(file);
   } catch (error) {
-    fail(`cannot read ${input}: ${error.message}`, EXIT.invalid);
+    fail(`cannot read ${file}: ${fileReadReason(error)}`, EXIT.invalid);
   }
 
   if (path.extname(file).toLowerCase() === '.ncsr') {
@@ -1959,7 +2023,7 @@ async function resolveWavefunctionFile(target) {
   try {
     stats = await fs.stat(absolute);
   } catch (error) {
-    throw new CubeCliError(`cannot read ${target}: ${error.message}`);
+    throw new CubeCliError(`cannot read ${absolute}: ${fileReadReason(error)}`);
   }
   if (stats.isFile()) return absolute;
   if (!stats.isDirectory()) {
@@ -1984,7 +2048,12 @@ async function resolveWavefunctionFile(target) {
 }
 
 async function readWavefunctionFile(file) {
-  const text = await fs.readFile(file, 'utf8');
+  let text;
+  try {
+    text = await fs.readFile(file, 'utf8');
+  } catch (error) {
+    throw new CubeCliError(`cannot read ${file}: ${fileReadReason(error)}`);
+  }
   const kind = detectWavefunctionFormat(text);
   if (kind === 'cube') {
     throw new CubeCliError(`${file} is a cube, not a wavefunction: there are no coefficients in it to evaluate.`);

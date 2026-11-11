@@ -16,6 +16,7 @@ import { writeRunBundle } from './runner/runBundle.js';
 import { isSafeRunId } from '../src/shared/runBundle.js';
 import { fingerprint, writeGuardDecision } from '../src/shared/projectMerge.js';
 import { MAX_PROJECT_BYTES, parseProjectText, stringifyProject, summarizeErrors } from '../src/shared/projectSchema.js';
+import { openFailureMessage, readFailure } from '../src/shared/fsError.js';
 import { createRecentStore, enginesForProject, pathKey } from '../src/shared/recentProjects.js';
 import { buildDiagnostics } from '../src/shared/diagnostics.js';
 import { checkForUpdate } from '../src/shared/updateCheck.js';
@@ -460,10 +461,11 @@ function createWindow() {
   });
 }
 
-function projectFailure(error) {
+function projectFailure(error, file = '') {
   return {
     code: 'invalid-project',
-    message: summarizeErrors(error.errors),
+    // Issue 323: the validator's first error, and the file it came from.
+    message: file ? openFailureMessage(file, { errors: error.errors }) : summarizeErrors(error.errors),
     errors: error.errors,
     warnings: error.warnings,
   };
@@ -602,7 +604,7 @@ async function readProjectFile(filePath) {
     knownProjectHashes.set(target, fingerprint(text));
     const parsed = parseProjectText(text);
     if (!parsed.ok) {
-      return { canceled: false, path: target, error: projectFailure(parsed) };
+      return { canceled: false, path: target, error: projectFailure(parsed, target) };
     }
     // issue 149: a successful read is what "recent" means — the list is not touched
     // by a failed parse, so it never points at something this app could not open.
@@ -615,7 +617,8 @@ async function readProjectFile(filePath) {
       warnings: parsed.warnings,
     };
   } catch (error) {
-    return { canceled: false, error: { message: `Could not read ${target}: ${error.message}` } };
+    // Issue 323: a directory or a vanished file is a sentence, not a Node code.
+    return { canceled: false, path: target, error: { message: readFailure(target, error), code: 'unreadable-project' } };
   }
 }
 
