@@ -13,16 +13,29 @@ Writes one JSON object to stdout with provenance and one energy per frame:
      "charge": 0, "multiplicity": 1,
      "results": [{"id": "c1", "energyEv": -123.4, "forces": [[...], ...]}]}
 
-This file is optional: torch and aimnet2 live in a separate venv, and the app
-never installs them. Point AIMNET2_WEIGHTS at the weights file and run this
-script with that venv's python. Without them it exits 2 with a clear message;
-it does not fabricate an energy.
+stdout is the JSON channel and nothing else may write to it: `torch`, `warp` and
+`aimnet` print banners on import and on calculator construction ("Warp 1.19.0
+initialized: …"), so this process sends `sys.stdout` to stderr before importing
+anything and keeps the real handle in `CONTRACT_STDOUT` for the single result
+object (issue 317).
+
+This file is optional: `aimnet` and `torch` live in a separate venv, and the app
+never installs them. The published distribution is `aimnet` (module
+`aimnet.calculators`); a fork that ships the module as `aimnet2` is still
+accepted. Point AIMNET2_WEIGHTS at the weights file and run this script with that
+venv's python. Without them it exits 2 with a clear message; it does not
+fabricate an energy.
 """
 
 import hashlib
 import json
 import os
 import sys
+
+# Before the first import that can print: a library banner on the JSON channel
+# breaks the parent's JSON.parse even when the calculation itself succeeded.
+CONTRACT_STDOUT = sys.stdout
+sys.stdout = sys.stderr
 
 ELEMENTS = [
     "H", "B", "C", "N", "O", "F", "Si", "P", "S", "Cl",
@@ -49,6 +62,36 @@ def digest(path):
     return h.hexdigest()
 
 
+def load_calculator():
+    """The calculator class and the distribution that provided it.
+
+    `aimnet` is the published name (PyPI 0.2.6, module `aimnet.calculators`);
+    `aimnet2` is only tried if that import fails, for a fork or a future rename.
+    """
+    try:
+        from aimnet.calculators import AIMNet2Calculator
+        return AIMNet2Calculator, "aimnet"
+    except ImportError:
+        pass
+    try:
+        from aimnet2 import AIMNet2Calculator
+        return AIMNet2Calculator, "aimnet2"
+    except ImportError as error:
+        fail(
+            "Neither `aimnet` nor `aimnet2` is importable in this interpreter "
+            f"({error}). Use the optional scorer venv (pip install aimnet torch) "
+            "and point the run console at this script with that venv's python."
+        )
+
+
+def package_version(name):
+    try:
+        from importlib.metadata import version
+        return version(name)
+    except Exception:
+        return "unreported"
+
+
 def main():
     if "--model" not in sys.argv or sys.argv[sys.argv.index("--model") + 1] != "aimnet2":
         fail("This sidecar only implements --model aimnet2.")
@@ -67,30 +110,41 @@ def main():
 
     weights = os.environ.get("AIMNET2_WEIGHTS", "").strip()
     if not weights or not os.path.isfile(weights):
-        fail("AIMNET2_WEIGHTS must name the weights file; install aimnet2 and torch in a separate venv.")
+        fail("AIMNET2_WEIGHTS must name the weights file; install aimnet and torch in a separate venv.")
 
     try:
         import torch
-        from aimnet2 import AIMNet2Calculator
     except ImportError as error:
-        fail(f"aimnet2/torch are not installed in this interpreter: {error}. Use the optional scorer venv.")
+        fail(f"torch is not installed in this interpreter: {error}. Use the optional scorer venv.")
+
+    AIMNet2Calculator, package = load_calculator()
 
     device = os.environ.get("AIMNET2_DEVICE", "cpu")
     dtype = "float64" if torch.get_default_dtype() == torch.float64 else "float32"
     cutoff = float(os.environ.get("AIMNET2_CUTOFF", "5.0"))
     calculator = AIMNet2Calculator(weights)
 
+    charge = float(request.get("charge", 0))
+    multiplicity = int(request.get("multiplicity", 1))
+
     results = []
     for frame in frames:
-        numbers = torch.tensor([ATOMIC_NUMBERS[atom["element"]] for atom in frame["atoms"]], dtype=torch.long)
+        atoms = frame["atoms"]
+        numbers = torch.tensor(
+            [ATOMIC_NUMBERS[atom["element"]] for atom in atoms],
+            dtype=torch.long,
+        ).unsqueeze(0)
         coords = torch.tensor(
-            [[float(atom["x"]), float(atom["y"]), float(atom["z"])] for atom in frame["atoms"]],
+            [[float(atom["x"]), float(atom["y"]), float(atom["z"])] for atom in atoms],
             dtype=torch.get_default_dtype(),
-        )
+        ).unsqueeze(0)
+        # aimnet 0.2.x reads one *batched* structure per call: every tensor
+        # carries the batch dimension, and `mult` is part of the batch.
         data = {
             "coord": coords,
             "numbers": numbers,
-            "charge": torch.tensor([float(request.get("charge", 0))], dtype=torch.get_default_dtype()),
+            "charge": torch.tensor([charge], dtype=torch.get_default_dtype()),
+            "mult": torch.tensor([multiplicity], dtype=torch.long),
         }
         output = calculator(data, forces=True)
         energy_ev = float(output["energy"].reshape(-1)[0])
@@ -100,26 +154,25 @@ def main():
             "energyEv": energy_ev,
             "energyKcal": energy_ev * EV_TO_KCAL,
             "energyHartree": energy_ev * EV_TO_HARTREE,
-            **({"forces": forces.detach().cpu().tolist()} if forces is not None else {}),
+            **({
+                # The answer is batched too: (1, N, 3) -> (N, 3) for the caller.
+                "forces": forces.detach().cpu().reshape(len(atoms), 3).tolist(),
+            } if forces is not None else {}),
         })
 
-    try:
-        from importlib.metadata import version
-        package_version = version("aimnet2")
-    except Exception:
-        package_version = "unreported"
-
-    print(json.dumps({
+    payload = json.dumps({
         "model": "aimnet2",
-        "version": package_version,
+        "version": package_version(package),
         "weightsSha256": digest(weights),
         "dtype": dtype,
         "device": device,
         "cutoffAngstrom": cutoff,
-        "charge": int(request.get("charge", 0)),
-        "multiplicity": int(request.get("multiplicity", 1)),
+        "charge": int(charge),
+        "multiplicity": multiplicity,
         "results": results,
-    }))
+    })
+    print(payload, file=CONTRACT_STDOUT)
+    CONTRACT_STDOUT.flush()
 
 
 if __name__ == "__main__":

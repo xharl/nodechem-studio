@@ -23,6 +23,11 @@ what the build contains — the GitHub release for each tag carries the long for
   extension stays as typed, and a doubled `foo.ncs.ncs` collapses to `foo.ncs`. Saving over a file
   this session did not open asks first, and the next save dialog opens where the last save went
   (#315).
+- The AIMNet2 scorer sidecar runs as published again: it imports `aimnet.calculators` (the
+  distribution on PyPI) instead of the non-existent `aimnet2`, sends `coord`, `numbers`, `charge` and
+  `mult` as one batched structure, returns forces unbatched as `(N, 3)`, and points `sys.stdout` at
+  stderr so a `torch`/`warp` banner can no longer corrupt the JSON channel. `rankBy: "ml:aimnet2"`,
+  the calculate-provider path and `prepare` with the AIMNet2 converter all route through it (#317).
 - Preflight checks the engines the flow actually runs, instead of demanding a Gaussian executable for
   every workflow. A Psi4/ORCA/PySCF workflow now starts on a machine with no Gaussian licence; the
   engines a flow does not run are listed as `SKIP` with the reason, a block that does need an engine
