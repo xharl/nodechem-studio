@@ -36,6 +36,7 @@ import {
   multiwfnMenuScript,
   multiwfnSummary,
   multiwfnVersionRefusal,
+  multiwfnBandFor,
   normalizeMultiwfnTask,
   parseMultiwfnOutput,
 } from '../../src/shared/multiwfn.js';
@@ -3987,7 +3988,11 @@ export class QueueManager {
       if (path.resolve(staged) !== path.resolve(input.path)) {
         await fsp.copyFile(input.path, staged);
       }
-      script = multiwfnMenuScript(definition.analysis, definition);
+      // Issue 341: the menu script is chosen by the release band the banner
+      // names, so a 2026 build runs the 2026 submenu sequence instead of being
+      // refused. The refusal above already rejected any version no band claims.
+      const band = multiwfnBandFor(version);
+      script = multiwfnMenuScript(definition.analysis, definition, { band: band.id });
       const runner = new MultiwfnRunner();
       this.multiwfnRunner = runner;
       const raw = await runner.run({
@@ -4012,10 +4017,16 @@ export class QueueManager {
         error.code = 'multiwfn-timeout';
         throw error;
       }
-      if (Number(raw.exitCode) !== 0) {
+      // Issue 344: a child killed by a signal reports `exitCode === null`, and
+      // `Number(null) === 0`, so a crashed Multiwfn was read as a successful run
+      // and its failure blamed on the parser. The signal is the verdict.
+      const exitCode = raw.exitCode === null || raw.exitCode === undefined ? null : Number(raw.exitCode);
+      if (raw.signal || exitCode !== 0) {
         const tail = String(raw.outputText || '').trim().split(/\r?\n/).slice(-3).join(' ');
-        const error = new Error(`Multiwfn exited with code ${raw.exitCode}${raw.signal ? ` (signal ${raw.signal})` : ''}`
-          + `${tail ? `: ${oneLine(tail, 240)}` : '.'}`);
+        const what = raw.signal
+          ? `Multiwfn was killed by signal ${raw.signal}`
+          : `Multiwfn exited with code ${exitCode}`;
+        const error = new Error(`${what}${tail ? `: ${oneLine(tail, 240)}` : '.'}`);
         error.code = 'multiwfn-exit';
         throw error;
       }

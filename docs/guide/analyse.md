@@ -51,25 +51,30 @@ permission. Every result card and every `run.json` carries:
 The app does not redistribute the binary. Check Multiwfn's own terms before packaging this app for
 other users.
 
-### Version pin
+### Release bands
 
-The menu numbers are pinned to **Multiwfn 3.8**. They are transcribed from the 3.8 manual examples
-(topology analysis, basin analysis, quantitative molecular surface, grid export and NCI), and a
-different release renumbers them. A binary whose banner is not a 3.8 banner is refused by name — the
-block does not guess that a newer menu still means the same thing. A point release inside the band
-(`3.8.1`, `3.8(dev)`) is accepted, because the banner says the menus are the same generation; a
-banner the block cannot read at all is its own refusal, since "unknown version" is not permission to
-use 3.8 menu numbers.
+The menu numbers depend on the release, so the scripts are kept per band:
+
+| Band | Releases | Recipes |
+| --- | --- | --- |
+| `2024+` | any `YYYY.n` banner from 2024 on — including `2026.11.3`, the build the vendor's download page installs | verified against a real 2026.11.3 binary: QTAIM `2 2 3 7 -1 -10 17 …`, ESP `12 1 1 <iso> 0 -1 -1 q`, NCI `20 1 <grid> 2 0 0 q` |
+| `3.8` | `3.8`, `3.8(dev)`, `3.8.1` | the sequences transcribed from the 3.8 manual |
+
+A point release inside a band (`3.8.1`, `3.8(dev)`) is accepted, because the banner says the menus are
+the same generation. A banner that no band claims is refused by name — and the refusal no longer tells
+you to install 3.8: that release is archive-only (MEGA), so the instruction would be unactionable.
+What changed between the bands is inside the submenus (the CP-property submenu, the ESP post-processing
+menu and the NCI scatter menu); the top-level menus are the same.
 
 ### Analyses in v1
 
 | `analysis` | Reads | Parameters | Normalised result |
 | --- | --- | --- | --- |
 | `qtaim` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` = basin grid quality 1–4 (default 2) | `basins` (population, volume, volume at ρ > 0.001), `atomicCharges`, `criticalPoints`, and a comparison with the in-app `qtaim.js` when the input is a formatted checkpoint |
-| `esp` | `.wfn`, `.wfx`, `.fchk`, `.molden`, `.cube` | `grid` (points per axis, default 80), `isovalue` (density surface, default 0.001 a.u.) | `volume`, `surfaceArea` (overall/positive/negative), `potential` (min/max and averages, a.u. and kcal/mol), `polarity` |
+| `esp` | `.wfn`, `.wfx`, `.fchk`, `.molden`, `.cube` | `isovalue` (density surface, default 0.001 a.u.) | `volume`, `surfaceArea` (overall/positive/negative), `potential` (min/max and averages, a.u. and kcal/mol), `polarity` |
 | `elf` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` (points per axis, default 80) | an ELF cube and its value range, mean and grid |
 | `lol` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` (points per axis, default 80) | a LOL cube and its value range, mean and grid |
-| `rdg` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` = NCI grid quality 1–4 (default 2), `isovalue` (RDG s, default 0.5), `rhoCutoff` (default 0.05 a.u.) | `points` in the sign(λ₂)ρ / RDG plane, ranges and attractive/repulsive counts |
+| `rdg` | `.wfn`, `.wfx`, `.fchk`, `.molden` | `grid` = NCI grid quality 1–4 (default 2), `isovalue` (the RDG threshold the record counts and a plot draws at, default 0.5) | `points` in the sign(λ₂)ρ / RDG plane, read from columns 4 and 5 of `output.txt`, ranges and attractive/repulsive counts |
 
 An analysis that is not in this table is refused by name. A format the analysis does not read (a
 cube for QTAIM, for example) is refused with both the file and the formats it does read.
@@ -86,16 +91,17 @@ Exactly one of:
 
 A block with no input source, two sources, or an unsupported extension is refused at save time. A
 run folder with no readable wavefunction, a file that is empty, a formatted checkpoint without a
-density matrix, and a missing or non-3.8 Multiwfn binary are each **named failures**; none is
-reported as `unknown`.
+density matrix, a Multiwfn banner outside every known menu band, and a Multiwfn child killed by a
+signal are each **named failures**; none is reported as `unknown`, and a killed child is not read as
+a successful run whose output the parser could not use.
 
 ### What the record holds
 
 The block writes its own `run.json` under the queue's `analyse/` folder, with:
 
 - `provenance.version` — the Multiwfn version read from its banner;
-- `provenance.menuVersion` and `provenance.menuScript` — the pinned 3.8 recipe and the exact bytes
-  fed to stdin;
+- `provenance.menuVersion` and `provenance.menuScript` — the band that was chosen (`2024+` or `3.8`)
+  and the exact bytes fed to stdin;
 - `provenance.input.sha256` — the SHA-256 of the wavefunction the run read;
 - `provenance.citation`, `provenance.licence`, `provenance.executable` and `provenance.argv`;
 - `multiwfn` — the normalised result, and `analyse` — the block's declaration and one-line summary.
@@ -114,13 +120,13 @@ are not compared — the card says so.
 
 ### What is not validated yet
 
-This build's Multiwfn tests use **synthetic transcripts** written in Multiwfn 3.8's printed layout.
-They prove the parser, the menu script, the provenance and the refusal paths; they do **not** prove
-that a real Multiwfn 3.8 binary agrees with the in-app QTAIM on a real wavefunction, nor that the
-menu numbers are right for a binary other than the one they were transcribed from. A first run
-against your installed 3.8 binary is the validation step; if it prints a different table, the parser
-refuses rather than inventing a number, and the raw `multiwfn.out` is kept beside `run.json` for the
-fix.
+The parser tests use **synthetic transcripts** written in Multiwfn's printed layout, plus the real
+2026.11.3 scatter rows quoted in the RDG column issue. They prove the parser, the menu script, the
+provenance and the refusal paths. The `2024+` menu sequences were run against a real 2026.11.3 binary
+by the reporter of the recipe issue (exit 0, `CPprop.txt`, `output.txt`, the ESP block); this build
+has not repeated that run, and the `3.8` sequences are still transcribed from the manual, not measured.
+A first run against your own binary is the validation step; if it prints a different table, the parser
+refuses rather than inventing a number, and the raw `multiwfn.out` is kept beside `run.json` for the fix.
 
 ### Wiring it
 

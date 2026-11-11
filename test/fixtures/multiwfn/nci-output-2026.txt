@@ -1,0 +1,6 @@
+# Multiwfn 2026.11.3, NCI scatter output (output.txt).
+# Layout written by `20 / 1 / <grid> / 2`: X Y Z sign(lambda2)rho RDG, positions in
+# Angstrom. Multiwfn's own examples/scripts/RDGscatter.gnu plots `u 4:5`.
+   -1.550766   -0.793766   -0.859348 -0.33717929E-03  0.74118347E+01
+   -1.523219   -0.793766   -0.859348 -0.38441398E-03  0.70469550E+01
+   -1.495673   -0.793766   -0.859348 -0.43777248E-03  0.66983807E+01
