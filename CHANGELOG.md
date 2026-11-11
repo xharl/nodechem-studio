@@ -16,6 +16,10 @@ what the build contains — the GitHub release for each tag carries the long for
   extension stays as typed, and a doubled `foo.ncs.ncs` collapses to `foo.ncs`. Saving over a file
   this session did not open asks first, and the next save dialog opens where the last save went
   (#315).
+- The Settings window's version column reads the version a program states, not the first line of
+  its banner: xTB no longer shows its 59-character rule and ORCA no longer shows ASCII art. An engine
+  whose output carries no version token reads `version unknown` instead of a fragment, and a row that
+  was never probed says nothing about a version at all (#314).
 
 ## [0.5.1] - 2026-11-10
 

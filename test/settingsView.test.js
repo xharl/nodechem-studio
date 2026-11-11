@@ -73,6 +73,33 @@ describe('Settings window pages (issue 252)', () => {
     // No invented log-level or update-check control that nothing reads.
     expect(advanced).not.toContain('logLevel');
   });
+
+  it('says version unknown when a probe ran and found no version token (issue 314)', () => {
+    // The probe now returns '' for xTB's banner rather than its 59-dash rule;
+    // the row must say so instead of printing a fragment that looks like data.
+    const draft = settingsWith({ engines: { xtb: '' } });
+    const html = settingsPageHtml({
+      page: 'engines',
+      draft,
+      detection: {
+        xtb: { ok: true, path: '/home/x/.local/bin/xtb' },
+        tools: {},
+        versions: { '/home/x/.local/bin/xtb': '' },
+      },
+    });
+    expect(html).toContain('version unknown');
+    expect(html).not.toMatch(/version\s+-{5,}/);
+  });
+
+  it('says nothing about a version when nothing was probed', () => {
+    const html = settingsPageHtml({
+      page: 'engines',
+      draft: settingsWith({}),
+      detection: { tools: {}, versions: {} },
+    });
+    expect(html).not.toContain('version unknown');
+    expect(html).not.toContain('· version');
+  });
 });
 
 describe('Settings seed precedence (issue 252)', () => {

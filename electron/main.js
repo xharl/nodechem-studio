@@ -34,6 +34,7 @@ import {
   withProjectExtension,
 } from '../src/shared/projectFile.js';
 import { ENGINES, engineOrDefault } from '../src/shared/engines/index.js';
+import { parseToolVersion } from '../src/shared/toolVersion.js';
 import { createSettingsStore } from './settingsStore.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -104,16 +105,12 @@ function engineStatus() {
  * clicking Detect again); startup stays presence-only for the reason above.
  * A binary that does not answer within the timeout keeps an empty version
  * rather than blocking the window.
+ *
+ * Issue #314: the version is the token the output states, not its first line.
+ * xTB opens with a 59-character rule and ORCA with ASCII art, so taking the
+ * first line printed a banner fragment as if it were a version.
  */
 const execFileAsync = promisify(execFile);
-
-function firstVersionLine(text) {
-  for (const line of String(text || '').split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed) return trimmed.slice(0, 160);
-  }
-  return '';
-}
 
 async function probeVersion(executable) {
   try {
@@ -122,10 +119,10 @@ async function probeVersion(executable) {
       windowsHide: true,
       maxBuffer: 64 * 1024,
     });
-    return firstVersionLine(stdout) || firstVersionLine(stderr);
+    return parseToolVersion(`${stdout}\n${stderr}`);
   } catch (error) {
     // Some drivers print their banner and then exit non-zero; keep the banner.
-    return firstVersionLine(error?.stdout) || firstVersionLine(error?.stderr);
+    return parseToolVersion(`${error?.stdout || ''}\n${error?.stderr || ''}`);
   }
 }
 
