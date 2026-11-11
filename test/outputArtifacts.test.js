@@ -93,14 +93,18 @@ async function makeStack({ behaviour, artifactsRoot = null } = {}) {
   const exe = path.join(base, 'g16.exe');
   await fsp.writeFile(exe, '');
   const runManager = new RunManager({ runsRoot, emit: () => {}, createRunner: fakeRunner(behaviour) });
+  // Issue 327: the queue restamps an output block's HTML report after the verdict
+  // exists and publishes `queue-done` once it has, so a test that reads artifact
+  // bytes must wait for that event rather than for the status alone.
+  const events = [];
   const queueManager = new QueueManager({
     queuesRoot,
     runManager,
-    emit: () => {},
+    emit: (event) => events.push(event),
     artifactsRoot: artifactsRoot || null,
   });
   await queueManager.init();
-  return { base, runsRoot, queuesRoot, exe, queueManager };
+  return { base, runsRoot, queuesRoot, exe, queueManager, events };
 }
 
 async function waitFor(check, { timeout = 20000, label = 'condition' } = {}) {
@@ -115,7 +119,7 @@ async function waitFor(check, { timeout = 20000, label = 'condition' } = {}) {
 
 const settled = (queue) => ['completed', 'failed', 'needs-review', 'partial', 'cancelled'].includes(queue.status);
 
-async function runProject({ project, exe, queueManager, options = {} }) {
+async function runProject({ project, exe, queueManager, events = [], options = {} }) {
   const plan = buildWorkflowPlan(project);
   const started = await queueManager.start({
     projectName: project.name,
@@ -123,6 +127,10 @@ async function runProject({ project, exe, queueManager, options = {} }) {
     edges: plan.edges,
     options: { executable: exe, scratchDir: '', ...options },
   });
+  // Issue 327: the settle-time work (the report restamp) is published with
+  // `queue-done`, so wait for that and then for the persisted status.
+  await waitFor(() => events.find((event) => event?.type === 'queue-done' && event.queueId === started.id),
+    { label: 'queue-done' });
   return waitFor(async () => {
     const queue = await queueManager.get(started.id);
     return settled(queue) ? queue : null;
@@ -136,8 +144,8 @@ afterEach(async () => {
 
 describe('output blocks write artifacts and a hashed manifest', () => {
   it('writes one HTML report per record, names the disabled record nowhere, and hashes each file', async () => {
-    const { base, queuesRoot, exe, queueManager } = await makeStack();
-    const queue = await runProject({ project: projectWithOutput({ include: 'record' }), exe, queueManager });
+    const { base, queuesRoot, exe, queueManager, events } = await makeStack();
+    const queue = await runProject({ project: projectWithOutput({ include: 'record' }), exe, queueManager, events });
     expect(queue.status).toBe('completed');
 
     const out = queue.tasks.find((task) => task.nodeId === 'out1');
@@ -164,14 +172,50 @@ describe('output blocks write artifacts and a hashed manifest', () => {
     }
   });
 
+  it('never publishes the verdict before every artifact and its manifest entry agree', async () => {
+    const { queuesRoot, exe, queueManager } = await makeStack();
+    // Slow the settling rewrite down, so a queue that flips to its final status
+    // first is caught holding a rewritten file beside its old manifest entry.
+    const write = queueManager.writeOutputArtifact.bind(queueManager);
+    queueManager.writeOutputArtifact = async (...args) => {
+      if (args[3]?.replace) await new Promise((resolve) => setTimeout(resolve, 40));
+      return write(...args);
+    };
+    const plan = buildWorkflowPlan(projectWithOutput({ include: 'record' }));
+    const started = await queueManager.start({
+      projectName: 'family artifacts',
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { executable: exe, scratchDir: '' },
+    });
+    const seen = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return settled(queue) ? queue : null;
+    }, { label: 'artifact queue settlement' });
+
+    const root = path.join(queuesRoot, seen.id, 'artifacts');
+    const manifest = JSON.parse(await fsp.readFile(path.join(root, 'manifest.json'), 'utf8'));
+    expect(manifest.length).toBe(2);
+    for (const entry of manifest) {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = await fsp.readFile(path.join(root, entry.path));
+      expect(entry.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+    }
+    // The report the block wrote said `running`; the one on disk must say the verdict.
+    const first = await fsp.readFile(path.join(root, 'reports', 'barrier-m1.html'), 'utf8');
+    expect(first).toContain(`status ${seen.status}`);
+    expect(first).not.toContain('finished not reported');
+  });
+
   it('writes a CSV that equals the app dataset export for the same run records', async () => {
     const outRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'gns-artifacts-root-'));
     roots.push(outRoot);
-    const { exe, queueManager } = await makeStack({ artifactsRoot: outRoot });
+    const { exe, queueManager, events } = await makeStack({ artifactsRoot: outRoot });
     const queue = await runProject({
       project: projectWithOutput({ kind: 'csv', artifactPath: 'reports/dataset.csv', records: 2 }),
       exe,
       queueManager,
+      events,
     });
     expect(queue.status).toBe('completed');
     const artifactFile = path.join(outRoot, 'reports', 'dataset.csv');
@@ -188,11 +232,12 @@ describe('output blocks write artifacts and a hashed manifest', () => {
   it('writes a zip containing the queue snapshot, record files and each run', async () => {
     const outRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'gns-artifacts-zip-'));
     roots.push(outRoot);
-    const { exe, queueManager } = await makeStack({ artifactsRoot: outRoot });
+    const { exe, queueManager, events } = await makeStack({ artifactsRoot: outRoot });
     const queue = await runProject({
       project: projectWithOutput({ kind: 'zip', artifactPath: 'reports/project.zip', records: 2 }),
       exe,
       queueManager,
+      events,
     });
     const archive = await fsp.readFile(path.join(outRoot, 'reports', 'project.zip'));
     const names = [];
@@ -217,10 +262,10 @@ describe('output blocks write artifacts and a hashed manifest', () => {
   });
 
   it('still writes the report when one record fails, and names the failure', async () => {
-    const { queuesRoot, exe, queueManager } = await makeStack({
+    const { queuesRoot, exe, queueManager, events } = await makeStack({
       behaviour: (outputName) => (outputName.includes('m2') ? { throw: 'engine lost the record' } : {}),
     });
-    const queue = await runProject({ project: projectWithOutput({ records: 2 }), exe, queueManager });
+    const queue = await runProject({ project: projectWithOutput({ records: 2 }), exe, queueManager, events });
     expect(queue.status).toBe('partial');
     expect(queue.tasks.find((task) => task.nodeId === 'opt~m2').status).toBe('failed');
 
@@ -244,7 +289,7 @@ describe('artifact paths', () => {
   });
 
   it('refuses an output block whose declared path escapes, before anything runs', async () => {
-    const { exe, queueManager } = await makeStack();
+    const { exe, queueManager, events } = await makeStack();
     const plan = buildWorkflowPlan(projectWithOutput({ records: 2 }));
     const output = plan.tasks.find((task) => task.type === 'output');
     output.output.path = '../escape.html';

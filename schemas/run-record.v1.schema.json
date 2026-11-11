@@ -55,7 +55,7 @@
     "engine": {
       "type": "string",
       "minLength": 1,
-      "description": "Engine id: gaussian, xtb, orca, psi4, or a plugin id. Absent on cluster-import records, which do not run anything locally."
+      "description": "Engine id: gaussian, xtb, orca, psi4, pyscf, or a plugin id. Absent on cluster-import records, which do not run anything locally."
     },
     "argv": {
       "type": ["array", "null"],
@@ -133,6 +133,10 @@
     "cache": {
       "anyOf": [{ "$ref": "#/$defs/cache" }, { "type": "null" }],
       "description": "Typed-array cache written for a non-dry run. Absent on records that never reached finish()."
+    },
+    "wavefunction": {
+      "anyOf": [{ "$ref": "#/$defs/wavefunction" }, { "type": "null" }],
+      "description": "Issue 334: the wavefunction files the run folder carries (a converted checkpoint, Molden/WFN/WFX, a cube) with their kind, file name, SHA-256 and byte count, plus the counts the dataset export reads. Absent when the run carried none."
     },
     "error": { "type": ["string", "null"] },
     "timeout": {
@@ -708,6 +712,31 @@
         "frames": { "type": "integer", "minimum": 0 },
         "atoms": { "type": "integer", "minimum": 0 },
         "skipped": { "type": "string" }
+      }
+    },
+    "wavefunction": {
+      "type": "object",
+      "description": "Issue 334: the wavefunction summary `wavefunction.js` writes when a run folder carries a converted checkpoint, a Molden/WFN/WFX file or a cube. Dims, extrema and derived values only, never the grid; the file itself stays in the run folder and its hash is in `artifacts`.",
+      "required": ["version", "artifacts"],
+      "additionalProperties": true,
+      "properties": {
+        "version": { "type": "integer", "minimum": 1 },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "file", "sha256", "bytes"],
+            "additionalProperties": true,
+            "properties": {
+              "kind": { "type": "string", "enum": ["fchk", "molden", "wfn", "wfx", "cube"] },
+              "file": { "type": "string" },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "bytes": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "fchk": { "type": "object", "additionalProperties": true },
+        "cube": { "type": "object", "additionalProperties": true }
       }
     }
   }

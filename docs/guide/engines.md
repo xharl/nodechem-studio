@@ -387,12 +387,14 @@ In this app ORCA gives you:
   log (`test/fixtures/orca/methanol-nmr.out`): C 141.174, O 342.467 ppm, J(C,H) 179.858 Hz.
 - **Raman**: ORCA gives Raman intensities only from a **numerical** Hessian, so the builder writes
   `NumFreq` (replacing `Freq`) plus `%elprop Polar 1 end`. The parser reads the `RAMAN SPECTRUM`
-  table: mode, frequency (cm⁻¹), activity (Å⁴/amu) and depolarization. Pinned to a real 6.1.1
-  water log: 1596.13 / 3905.14 / 4010.94 cm⁻¹ with activities 6.367 / 74.744 / 34.699.
+  table: mode, frequency (cm⁻¹), activity (Å⁴/amu) and depolarization, under the same field names
+  the Gaussian reader uses, so the card draws the broadened curve for both engines. Pinned to a real
+  6.1.1 water log: 1596.13 / 3905.14 / 4010.94 cm⁻¹ with activities 6.367 / 74.744 / 34.699.
 - **VCD**: `%freq DOVCD true end` on an analytic `Freq` job — ORCA refuses VCD with `NumFreq`, so
   Raman and VCD cannot share one job and the builder refuses the combination by name. The parser
   reads `VCD SPECTRUM CALCULATION` and keeps the **signed** rotational strength
-  (1E-44 esu² cm²); the sign is the enantiomer signal. Real 6.1.1 fixture on CHFClBr (9 modes).
+  (1E-44 esu² cm²); the sign is the enantiomer signal, and the mode frequency is written under the
+  same `wavenumber` key the spectrum builder reads. Real 6.1.1 fixture on CHFClBr (9 modes).
 - **ROA** is refused by name: ORCA 6 has no ROA implementation. The Gaussian block computes it.
 - **TD-DFT**: ORCA 6 takes no `TDDFT` keyword on the route line — it stops with
   `UNRECOGNIZED OR DUPLICATED KEYWORD(S) IN SIMPLE INPUT LINE` — so the builder writes a
@@ -588,8 +590,9 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
   `ddx true` and then stops with `Python module ddx not found. Solve by installing it: conda install
   -c conda-forge pyddx`; measured in `test/fixtures/psi4-ddx/water-pcm-no-pyddx.out`.
   The inspector's **Model** menu is still the one shared with the other engines (`PCM`, `SMD`,
-  `CPCM`), so a Psi4 block chosen from it can be `PCM`; `SMD` and `CPCM` are refused by name and
-  `COSMO` is reachable from the block settings but not yet from that menu.
+  `CPCM`), so a Psi4 block can be `PCM`; `SMD` and `CPCM` are refused **at save time** by the schema —
+  next to the field, naming the models DDX writes — and `COSMO` is reachable from the block settings
+  but not yet from that menu.
 - **Spin populations and Fermi-contact hyperfine couplings** for an open-shell single point (issue
   168). The builder writes `E, wfn = energy('…', return_wfn=True)` and `fchk(wfn, '<task>.fchk')`, so
   the run leaves a checkpoint beside its log; the parser reads that file's `Spin SCF Density` block and

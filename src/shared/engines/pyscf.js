@@ -206,7 +206,7 @@ export const PYSCF_CAPABILITIES = Object.freeze({
     spinPopulations: false,
     hyperfine: false,
     gTensor: false,
-    gTensorReason: 'PySCF g-tensors need a relativistic treatment this deck does not write; ORCA is not installed',
+    gTensorReason: 'PySCF g-tensors need a relativistic treatment this deck does not write',
   }),
 });
 

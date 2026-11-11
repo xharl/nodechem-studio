@@ -212,6 +212,10 @@ Unit propagation is deliberately conservative:
 - a sum, difference, mean, min or max keeps the unit only when every operand agrees;
 - an expression that multiplies or divides two **inputs** with units gets no unit at all — the block
   will not claim Hartree² or a dimensionless ratio it cannot justify;
+- a literal that is one of the conversion factors this program uses — 627.5094740631 (kcal/mol),
+  2625.4996394799 (kJ/mol), 27.211386245988 (eV), 219474.6313705 (cm⁻¹), and their usual roundings —
+  converts the unit instead of keeping it, so `(EB − EH) * 627.5094740631` is recorded and reported as
+  `kcal/mol`, not `hartree`. Any other number is a coefficient and keeps the unit (`x * 2` stays);
 - the CBS and conversion helpers state their unit outright, and refuse an argument whose declared
   unit makes the call impossible (eV into a Hartree fit, or a count into either).
 

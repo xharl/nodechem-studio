@@ -311,7 +311,7 @@ export const PSI4_CAPABILITIES = Object.freeze({
     'frequency gradients for CCSD/CCSD(T)',
     // Issue 168: named here as well as in the card, so a settings dialog or a
     // capability listing can refuse it without inventing a g-value.
-    'EPR g-tensor (needs a spin-orbit treatment Psi4 job blocks here have no step for; ORCA is not installed)',
+    'EPR g-tensor (needs a spin-orbit treatment that Psi4 job blocks in this builder have no step for)',
   ]),
   /**
    * Issue 168: what this engine can say about an open-shell species.
@@ -325,7 +325,7 @@ export const PSI4_CAPABILITIES = Object.freeze({
     spinPopulations: true,
     hyperfine: 'density-only (Fermi contact, no core polarisation from correlation beyond the method, no spin-orbit)',
     gTensor: false,
-    gTensorReason: 'Psi4 has no g-tensor property in the module set this builder writes, and ORCA is not installed',
+    gTensorReason: 'Psi4 has no g-tensor property in the module set this builder writes',
   }),
 });
 

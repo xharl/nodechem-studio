@@ -18,8 +18,52 @@ import { withRunProvenance } from './runProvenance.js';
 import { xtbSolvationFromArgv, parseXtbGeometry } from '../../src/shared/engines/xtb.js';
 import { normalizeValidityContext, runValidityChecks } from '../../src/shared/validityChecks.js';
 import { cacheFromParsed, writeCache } from '../../src/shared/cache.js';
+import { wavefunctionRecord } from '../../src/shared/wavefunction.js';
 
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
+
+/** The wavefunction files a run folder may carry (#334). */
+const WAVEFUNCTION_FILES = /\.(fchk|fch|molden|wfn|wfx|cube)$/i;
+
+/** A cube can be tens of megabytes; past this the record keeps the name and no parse. */
+const WAVEFUNCTION_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * The wavefunction block for a run folder, or null when it carries none.
+ *
+ * Issue 334: `wavefunctionRecord()` was only ever called from tests, so every
+ * run.json in a shipped build had no `wavefunction` key and the dataset export's
+ * checkpoint columns could never be filled. The runner calls it here, once, after
+ * the engine has finished and its files are in the folder.
+ */
+export async function wavefunctionForRun(runDir) {
+  let names;
+  try {
+    names = await fsp.readdir(runDir);
+  } catch {
+    return null;
+  }
+  const files = [];
+  for (const name of names.filter((entry) => WAVEFUNCTION_FILES.test(entry)).sort()) {
+    const target = path.join(runDir, name);
+    try {
+      const stats = await fsp.stat(target);
+      if (!stats.isFile() || stats.size > WAVEFUNCTION_MAX_BYTES) continue;
+      const text = await fsp.readFile(target, 'utf8');
+      files.push({ text, filename: name });
+    } catch {
+      // A file that cannot be read is simply not attached.
+    }
+  }
+  if (files.length === 0) return null;
+  try {
+    return wavefunctionRecord(files);
+  } catch {
+    // Two checkpoints, or a file that is not really a wavefunction: no block.
+    return null;
+  }
+}
+
 const SAFE_OUTPUT = /^[A-Za-z0-9._-]+\.(out|log)$/i;
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MAX_INPUT_BYTES = 2 * 1024 * 1024;
@@ -712,9 +756,17 @@ export class RunManager {
     const scratchExhausted = Boolean(context.scratchExhausted)
       || /No space left on device|ENOSPC|WRITE failed/i
         .test(`${context.outputText || ''}\n${context.stderr || ''}`);
+    // Issue 334: a run folder can carry a wavefunction file — a converted
+    // checkpoint, a Molden/WFN/WFX the engine wrote, a cube. The record says what
+    // it is and hashes it, so the dataset export's wavefunction columns and the
+    // wavefunction view read a field that is actually written. A file that cannot
+    // be parsed leaves the field null; it never turns a finished run into a failed
+    // one.
+    const wavefunction = await wavefunctionForRun(runDir);
     const finished = {
       ...record,
       ...(context.outputMeta || {}),
+      ...(wavefunction ? { wavefunction } : {}),
       outputSha256: output?.sha256 || null,
       provenance: {
         ...(record.provenance || {}),

@@ -150,6 +150,37 @@ function withWriteTimeout(promise, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * Write a file a reader may be looking at right now.
+ *
+ * Issue 327 rewrites an artifact the moment the queue settles, and a poller can
+ * read it while that happens. Writing to a temp name and renaming leaves either
+ * the old bytes or the new ones, never half a document and never a hash that
+ * disagrees with the file.
+ */
+async function writeBytesAtomic(filePath, bytes) {
+  const temp = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  await fsp.writeFile(temp, bytes);
+  for (let attempt = 0; attempt <= RENAME_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await withWriteTimeout(fsp.rename(temp, filePath), 'rename');
+      return;
+    } catch (error) {
+      const retryable = error?.writeTimeout === true || RENAME_RETRY_CODES.has(error?.code);
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      if (retryable && delay !== undefined) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      break;
+    }
+  }
+  await fsp.rm(temp, { force: true }).catch(() => {});
+  await fsp.writeFile(filePath, bytes);
+}
+
 async function writeJsonAtomic(filePath, value) {
   const data = `${JSON.stringify(value, null, 2)}\n`;
   const temp = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
@@ -198,6 +229,18 @@ function lastLineOf(text, max = 300) {
 /** The hash a manifest entry records; computed here, never in a pure module. */
 function sha256Hex(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
+}
+
+/**
+ * One line naming the artifacts an output block wrote (#327 also restamps this
+ * text when the bytes change, so the detail and the manifest stay in step).
+ */
+function artifactDetail(written = []) {
+  if (written.length === 1) {
+    return `${written[0].path} · ${written[0].bytes} bytes · sha256 ${written[0].sha256.slice(0, 16)}…`;
+  }
+  return `${written.length} artifacts: ${written.slice(0, 3).map((entry) => entry.path).join(', ')}`
+    + `${written.length > 3 ? ` and ${written.length - 3} more` : ''}`;
 }
 
 /**
@@ -1905,8 +1948,16 @@ export class QueueManager {
       if (queue.status !== 'running') return;
       const status = finalStatus(queue.tasks);
       if (status) {
+        const finishedAt = new Date().toISOString();
+        // Issue 337: the artifact rewrite has to happen while the queue still
+        // reads `running`. Setting the verdict first makes it observable — a
+        // poller or the window sees a finished queue and reads reports that are
+        // half rewritten: the file replaced, its manifest entry not yet. The
+        // rewrite therefore gets the verdict as a pending value, and the queue
+        // only carries it once the files and the manifest agree.
+        await this.restampReports({ ...queue, status, finishedAt });
         queue.status = status;
-        queue.finishedAt = new Date().toISOString();
+        queue.finishedAt = finishedAt;
         queue.currentTaskId = null;
         // Emit before persisting: a poller that sees the finished status must
         // already have been told the queue is done, otherwise the two views
@@ -3102,7 +3153,7 @@ export class QueueManager {
    * array so a reader can verify each artifact without trusting the app; the
    * write is atomic, like every queue snapshot.
    */
-  async appendArtifactEntry(root, entry) {
+  async appendArtifactEntry(root, entry, { replace = false } = {}) {
     const file = path.join(root, 'manifest.json');
     let manifest = [];
     try {
@@ -3112,7 +3163,14 @@ export class QueueManager {
     } catch (error) {
       if (error?.code !== 'ENOENT') throw error;
     }
-    manifest.push(entry);
+    // Issue 327: a restamp rewrites the same path, and the manifest must gain no
+    // second entry for it.
+    const index = replace
+      ? manifest.findIndex((item) => item?.path === entry.path
+        && (item?.flowId ?? null) === (entry.flowId ?? null))
+      : -1;
+    if (index >= 0) manifest[index] = entry;
+    else manifest.push(entry);
     await fsp.mkdir(root, { recursive: true });
     await writeJsonAtomic(file, manifest);
     return manifest;
@@ -3120,7 +3178,7 @@ export class QueueManager {
 
   /** Build, write and manifest one artifact. Returns the manifest entry. */
   async writeOutputArtifact(queue, task, output, {
-    entries, records, recordInfo, recordId = null, include = 'records',
+    entries, records, recordInfo, recordId = null, include = 'records', replace = false,
   }) {
     const root = this.artifactsRootFor(queue);
     const generatedAt = new Date().toISOString();
@@ -3140,7 +3198,7 @@ export class QueueManager {
     });
     const target = resolveArtifactPath(root, artifact.path);
     await fsp.mkdir(path.dirname(target), { recursive: true });
-    await fsp.writeFile(target, artifact.bytes);
+    await writeBytesAtomic(target, artifact.bytes);
     const entry = {
       path: artifact.path,
       sha256: sha256Hex(artifact.bytes),
@@ -3150,7 +3208,7 @@ export class QueueManager {
       generatedAt,
       queueId: queue.id,
     };
-    await this.appendArtifactEntry(root, entry);
+    await this.appendArtifactEntry(root, entry, { replace });
     return entry;
   }
 
@@ -3161,47 +3219,9 @@ export class QueueManager {
    * which is the opposite of the continue-and-report policy.
    */
   async runOutput(queue, task) {
-    const output = task.output && typeof task.output === 'object' ? task.output : {};
-    const include = output.include === 'record' ? 'record' : 'records';
-    const entries = this.artifactEntries(queue, task);
-    const records = await this.readRunRecords(entries);
-    const recordInfo = this.recordInfoFor(queue);
-    const written = [];
     try {
-      if (include === 'record') {
-        const groups = new Map();
-        for (const entry of entries) {
-          if (!entry.recordId) continue;
-          if (!groups.has(entry.recordId)) groups.set(entry.recordId, []);
-          groups.get(entry.recordId).push(entry);
-        }
-        // A record whose blocks were all blocked still gets a named, empty
-        // artifact rather than disappearing from the set.
-        for (const info of recordInfo) {
-          if (!groups.has(info.id)) groups.set(info.id, []);
-        }
-        if (groups.size === 0) {
-          written.push(await this.writeOutputArtifact(queue, task, output, {
-            entries, records, recordInfo, recordId: null, include,
-          }));
-        } else {
-          for (const [recordId, group] of groups) {
-            // eslint-disable-next-line no-await-in-loop
-            written.push(await this.writeOutputArtifact(queue, task, output, {
-              entries: group, records, recordInfo, recordId, include,
-            }));
-          }
-        }
-      } else {
-        written.push(await this.writeOutputArtifact(queue, task, output, {
-          entries, records, recordInfo, include,
-        }));
-      }
-      const detail = written.length === 1
-        ? `${written[0].path} · ${written[0].bytes} bytes · sha256 ${written[0].sha256.slice(0, 16)}…`
-        : `${written.length} artifacts: ${written.slice(0, 3).map((entry) => entry.path).join(', ')}`
-          + `${written.length > 3 ? ` and ${written.length - 3} more` : ''}`;
-      this.setTaskOutcome(task, 'completed', oneLine(`wrote ${detail}`, 400));
+      const written = await this.writeOutputArtifacts(queue, task);
+      this.setTaskOutcome(task, 'completed', oneLine(`wrote ${artifactDetail(written)}`, 400));
     } catch (error) {
       // The OS message is the useful one (ENOSPC, EACCES); keep it verbatim.
       this.setTaskOutcome(task, 'failed', oneLine(error?.message || String(error), 400));
@@ -3209,6 +3229,82 @@ export class QueueManager {
     await this.persist(queue);
     this.publish(queue);
     this.announce(queue, task);
+  }
+
+  /**
+   * Build and write every artifact one output block produces.
+   *
+   * Issue 327: the queue calls this a second time once it settles, so the HTML
+   * a block wrote while the run was still `running` is rewritten with the final
+   * verdict. `replace` updates that artifact's manifest entry instead of adding
+   * a duplicate one.
+   */
+  async writeOutputArtifacts(queue, task, { replace = false } = {}) {
+    const output = task.output && typeof task.output === 'object' ? task.output : {};
+    const include = output.include === 'record' ? 'record' : 'records';
+    const entries = this.artifactEntries(queue, task);
+    const records = await this.readRunRecords(entries);
+    const recordInfo = this.recordInfoFor(queue);
+    const written = [];
+    if (include === 'record') {
+      const groups = new Map();
+      for (const entry of entries) {
+        if (!entry.recordId) continue;
+        if (!groups.has(entry.recordId)) groups.set(entry.recordId, []);
+        groups.get(entry.recordId).push(entry);
+      }
+      // A record whose blocks were all blocked still gets a named, empty
+      // artifact rather than disappearing from the set.
+      for (const info of recordInfo) {
+        if (!groups.has(info.id)) groups.set(info.id, []);
+      }
+      if (groups.size === 0) {
+        written.push(await this.writeOutputArtifact(queue, task, output, {
+          entries, records, recordInfo, recordId: null, include, replace,
+        }));
+      } else {
+        for (const [recordId, group] of groups) {
+          // eslint-disable-next-line no-await-in-loop
+          written.push(await this.writeOutputArtifact(queue, task, output, {
+            entries: group, records, recordInfo, recordId, include, replace,
+          }));
+        }
+      }
+    } else {
+      written.push(await this.writeOutputArtifact(queue, task, output, {
+        entries, records, recordInfo, include, replace,
+      }));
+    }
+    return written;
+  }
+
+  /**
+   * Issue 327: a report written by a workflow block said "status running ·
+   * finished not reported" — the block runs before the queue settles, and the
+   * header was stamped with the live status. Once the verdict exists, rewrite
+   * those artifacts from the settled queue, so the document and the directory it
+   * documents cannot disagree.
+   *
+   * A restamp that fails leaves the artifact exactly as the block wrote it: an
+   * unwritable report must not turn a finished run into a failure.
+   */
+  async restampReports(queue) {
+    if (queue.status === 'running' || queue.status === 'paused') return;
+    for (const task of queue.tasks) {
+      if (task.type !== 'output' || task.status !== 'completed') continue;
+      if (String(task.output?.kind || '') !== 'html') continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const written = await this.writeOutputArtifacts(queue, task, { replace: true });
+        // The bytes changed, so the hash the block reported has to change with
+        // them; a stale detail would be the same contradiction one level down.
+        if (Array.isArray(written) && written.length > 0) {
+          task.reason = oneLine(`wrote ${artifactDetail(written)}`, 400);
+        }
+      } catch {
+        // Nothing to do: the block's own copy is still a valid document.
+      }
+    }
   }
 
   async runControl(queue, task) {

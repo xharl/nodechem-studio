@@ -389,7 +389,9 @@ and whether it is inside the tolerance; it does not "fix" the charges.
 
 ## Where the values go
 
-A finished run can carry a `wavefunction` block in its `run.json`. It is produced by
+A finished run can carry a `wavefunction` block in its `run.json`. The runner attaches it when the
+run folder holds one of the files above after the engine exits — a converted checkpoint, a
+Molden/WFN/WFX file, or a cube — and leaves the key off a run that carries none. It is produced by
 `src/shared/wavefunction.js` and holds:
 
 - `artifacts`: one entry per file with its kind (`cube`, `fchk`, `molden`, `wfn` or `wfx`), its name,

@@ -439,10 +439,11 @@ the protons against a measured 23.04 G. Read the table as *where the spin sits a
 what its order of magnitude is*, not as a spectrum to be assigned line by line.
 
 **The g-tensor is refused, by name.** Psi4 has no g-tensor property in the module
-set this app writes (it needs a spin-orbit treatment of the wavefunction), and
-ORCA — which does compute one — is not installed. The card prints that refusal:
-no value, no `≈ 2.0023`, no empty cell. `PSI4_CAPABILITIES.epr.gTensor` is `false`
-with the reason, so a settings dialog cannot offer it either.
+set this app writes (it needs a spin-orbit treatment of the wavefunction), so the card prints that
+refusal: no value, no `≈ 2.0023`, no empty cell. ORCA is a shipped engine, and a Psi4 block that needs
+a g-tensor is best run on ORCA — its imported log carries the `ELECTRONIC G-MATRIX` block (below) —
+but nothing here pretends the two are interchangeable: `PSI4_CAPABILITIES.epr.gTensor` is `false` with
+the reason, so a settings dialog cannot offer it either.
 
 An **imported ORCA log** is a different case (issue 222): when it prints
 `Hyperfine couplings ... YES`, the parser reads ORCA's own `A(iso)` in MHz for

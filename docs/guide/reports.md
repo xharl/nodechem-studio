@@ -12,6 +12,13 @@ There are two reports:
 Both are built from the queue record and the per-run `run.json` files. A value a run did not report
 is printed as `not reported`; nothing is inferred.
 
+A per-flow report written **by a workflow block** runs before the queue settles, so the queue restamps
+it the moment the verdict exists: the header names the final `status` and the queue's own `finished`
+time, and the manifest entry (bytes and SHA-256) is rewritten in place rather than duplicated. A
+report written mid-run therefore never says `status running · finished not reported` about a run that
+has finished, and `ncs report` on the same folder produces the same header because both read
+`queue.json`.
+
 ## Figures
 
 A report can carry figures, and every figure is derived from the record it describes — never a

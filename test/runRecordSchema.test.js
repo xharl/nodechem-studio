@@ -42,7 +42,7 @@ const v1Schema = loadRecordSchema(1);
  * produce. Each one is exercised below; anything else missing from a fixture
  * would mean the schema describes a record the app does not write.
  */
-const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay', 'timeout', 'dp4']);
+const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay', 'timeout', 'dp4', 'wavefunction']);
 
 describe('run-record schema — publication', () => {
   it('is a draft 2020-12 schema with a version and an id', () => {
@@ -251,5 +251,30 @@ describe('run-record schema — refusals', () => {
     expect(validateRecord(record).errors.some((error) => error.path === '/inputSha256')).toBe(true);
     expect(validateRecord([]).ok).toBe(false);
     expect(validateRecord(null).ok).toBe(false);
+  });
+
+  it('accepts a PySCF record at version 1, because v1 describes every engine this build writes', () => {
+    // Issue 335: the v1 description listed gaussian/xtb/orca/psi4 only, so a
+    // PySCF record exported with `--schema-version 1` named an engine the contract
+    // did not mention.
+    const record = base();
+    record.engine = 'pyscf';
+    expect(validateRecord(record, { version: 1 }).errors).toEqual([]);
+    expect(validateRecord(record, { version: 2 }).errors).toEqual([]);
+  });
+
+  it('carries the wavefunction block on both versions (issue 334)', () => {
+    const record = base();
+    record.wavefunction = {
+      version: 1,
+      artifacts: [{ kind: 'fchk', file: 'he.fchk', sha256: 'a'.repeat(64), bytes: 42 }],
+      fchk: { format: 'fchk' },
+    };
+    expect(validateRecord(record, { version: 1 }).errors).toEqual([]);
+    expect(validateRecord(record, { version: 2 }).errors).toEqual([]);
+
+    const broken = base();
+    broken.wavefunction = { version: 1, artifacts: [{ kind: 'chk', file: 'x', sha256: 'nope', bytes: 1 }] };
+    expect(validateRecord(broken, { version: 1 }).errors.length).toBeGreaterThan(0);
   });
 });
