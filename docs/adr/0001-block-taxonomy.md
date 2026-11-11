@@ -83,7 +83,7 @@ If this rule drifts, CREST and RDKit become ambiguous again.
 ### 2.5 Program roles are orthogonal to blocks
 
 - **Engine** — fills the calculation contract: `buildInput`, `parse`,
-  `classify`, `checkpointArtifact`, `makeFixture`. Gaussian, ORCA, Psi4, xTB.
+  `classify`, `checkpointArtifact`, `makeFixture`. Gaussian, ORCA, Psi4, xTB, PySCF.
 - **Generator** — produces structures: argv or in-process call, parser,
   provenance, coverage refusal, version. CREST, UFF, Open Babel, RDKit.
 - **Scorer** — returns energy (and optionally forces, charges) for a given
@@ -91,10 +91,10 @@ If this rule drifts, CREST and RDKit become ambiguous again.
 - **Converter** — translates files; never a block, invoked by import/export.
 - **Analysis helper** — pure functions over an existing geometry.
 
-**Amended by [ADR 0002](0002-explorer-role.md):** a sixth role, **explorer**,
-covers programs that navigate a potential energy surface (Sella, pysisyphus)
-and produce no energies of their own. They consume an engine or scorer as a
-calculator and return a saddle, path or profile.
+**Amended by [ADR 0002](0002-explorer-role.md) — proposed, not in force:** a sixth
+role, **explorer**, would cover programs that navigate a potential energy surface
+(Sella, pysisyphus) and produce no energies of their own. No explorer setting, run-record field or
+gradient/Hessian capability declaration exists in the code yet; ADR 0002 is a design record.
 
 ### 2.6 Import becomes `input`; ranking stays in `generate`
 
@@ -118,7 +118,7 @@ input(molecule) ─▶ generate(search) ─▶ calculate ─▶ analyse ─▶ o
 | `sourceSha256` | `input` | digest of the bytes read |
 | `source` (`search` \| `imported`) | `generate` | how candidates arrive |
 | `generator` (`crest`/`uff`/`obabel`/`rdkit`) | `generate` | search implementation |
-| `method`, `nconf`, `seed`, `torsionStepDegrees`, `maxTrials` | `generate` | search knobs (`method` is generator-dependent; `ff` is read only as its pre-#240 alias) |
+| `method`, `nconf`, `torsionStepDegrees`, `maxTrials` | `generate` | search knobs (`method` is generator-dependent; `ff` is read only as its pre-#240 alias) |
 | `energyWindowKcal`, `rmsdThreshold`, `maxConformers`, `temperature` | `generate` | curation policy |
 | `selectedConformerId`, fan-out | `generate` | decision on the curated set |
 
@@ -144,8 +144,10 @@ forcing a no-op block into every graph.
 
 `prepare` changes one structure deterministically, without enumeration:
 
-- `embed3d` — SMILES/2D → 3D (Open Babel or RDKit, converter role)
-- `relax` — MM relaxation of one structure (Open Babel or RDKit, UFF/MMFF94)
+- `embed3d` — SMILES/2D → 3D, through the Open Babel converter
+- `relax` — MM or ML relaxation of one structure: in-app UFF, Open Babel (UFF/MMFF94) or the AIMNet2 scorer
+- `solvate` — one structure → one explicit solvent cluster by deterministic placement (added after
+  this ADR, issue 228; `geometric` converter, solvent/`solventCount`/`seed`/`shellAngstrom` settings)
 
 Out of scope for v1, and refused rather than approximated: protonation-state
 enumeration and tautomer enumeration — those produce sets and therefore belong
@@ -206,25 +208,25 @@ vocabularies would recreate the ambiguity this ADR removes.
 
 | Today | Becomes | Note |
 |---|---|---|
-| `calc` | `calculate` | `kind` keeps the job type (`Opt`, `Freq`, `SP`, `Pop`, `NTO`, `TS`, `IRC`, `Scan`, composite) |
+| `calc` | `calculate` | `kind` keeps the job type (`Opt`, `Opt Freq`, `Opt=TS`, `Opt=QST2/QST3`, `Freq`, `IRC`, `SP`, `Scan`, `NMR`, `TD-DFT`, composite) |
 | `conformers` | `generate` | `source` + `generator` distinguish search from import |
-| `compute` | `analyse` | modes: `aggregate` (CBS, ΔE, ratios), `inspect` (descriptors, RMSD, spectra, DP4) |
+| `compute` | `analyse` | modes: `expression` (arithmetic over upstream fields), `dp4` (DP4+ comparison), `multiwfn` (Multiwfn sidecar) |
 | `input` | `input` | `kind` gains `ensemble`; existing kinds (`dataset`, `series`, `derivative`, `complex`) unchanged |
 | `output` | `output` | unchanged (`html`, `csv`, `json`, `zip`) |
 | `condition`, `loop`, `merge` | unchanged | control axis |
 | `note` | unchanged | annotation axis |
-| — | `prepare` | new; `kind`: `embed3d`, `relax` |
+| — | `prepare` | new; `kind`: `embed3d`, `relax` (and `solvate`, added later — §2.9) |
 
 Settings namespaces follow the type: `node.compute` → `node.analyse`; the
 task field `task.conformers` → `task.generate`.
 
-Physical queue layout (`queue/<id>/conformers/<node>/`) is **not** renamed in
-the behaviour-neutral phase, so the rename PR produces no output changes. It can
-be renamed with the import split.
+Physical queue layout is **not** renamed in the behaviour-neutral phase, so the rename PR produces
+no output changes. The folders the queue writes today are `queue/<id>/generate/<node>/`,
+`ensemble/<node>/`, `prepare/<node>/`, `scorer/<node>/`, plus `inputs/`, `records/` and `artifacts/`.
 
-Implementation references: `src/shared/projectSchema.js:121` (`NODE_TYPES`),
-`:248` (`NODE_TYPE_KEYS`), `:21` (`SCHEMA_VERSION`), `electron/runner/queue.js:83`
-(`TASK_TYPES`), `electron/runner/queue.js:295` (import branch).
+Implementation references: `src/shared/projectSchema.js:149` (`NODE_TYPES`),
+`:286` (`NODE_TYPE_KEYS`), `:22` (`SCHEMA_VERSION`), `electron/runner/queue.js:120`
+(`TASK_TYPES`), `:1964` (generate branch).
 
 ---
 
@@ -237,7 +239,7 @@ One table replaces the scattered checks:
 | `input` | no structure edges in; may read files/datasets; never spawns an engine |
 | `prepare` | exactly one structure in; one structure out; no method settings |
 | `generate` | one structure in (search) or one ensemble in (imported); ensemble out; owns selection and fan-out |
-| `calculate` | one structure in; requires an engine, an executable and a method; record out |
+| `calculate` | one structure in; requires a calculator — an engine (executable + method), or a scorer provider, which needs the sidecar instead of an engine executable; record out |
 | `analyse` | ≥1 record in; table out; may not spawn a program |
 | `output` | ≥1 record/table in; writes an artifact; nothing downstream |
 | control | payload unchanged; branch/loop semantics only |

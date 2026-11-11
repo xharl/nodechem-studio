@@ -159,8 +159,9 @@ rather than inferred from a wall clock.
 
 ## 8. Schema
 
-`schemaVersion: 3` has not shipped, so this folds into it rather than bumping
-again:
+The original plan was to fold this into `schemaVersion: 3` before it shipped. Version 3 has since
+shipped (0.5.x), so that is no longer possible: these fields would need an additive change that an
+older reader drops, or a version 4. Nothing here is in the code yet.
 
 - `node.calculate.explorer` (optional; absent means `engine-native`)
 - `run.json` gains `exploration: { id, version, method, parameters, steps,
