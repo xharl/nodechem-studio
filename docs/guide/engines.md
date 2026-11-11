@@ -599,7 +599,8 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
   computes Mulliken and Löwdin populations and the Fermi contact at each nucleus, in MHz and gauss.
   Both are **density-only** — the card and `docs/guide/results.md` state what that omits. A closed-shell
   job prints `no unpaired electrons`. The **g-tensor is refused by name**: Psi4 has no such property in
-  the modules this builder writes, and ORCA is not installed.
+  the modules this builder writes, so a run that needs one belongs on ORCA, which computes it and whose
+  imported log carries the `ELECTRONIC G-MATRIX` block.
 
 **Which energy is reported.** A correlated Psi4 job prints several totals in the same log, and the
 result is the one the job asked for: the `CCSD(T)` total when that is the method, else the `CCSD`
