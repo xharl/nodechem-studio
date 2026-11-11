@@ -719,6 +719,33 @@ describe('project schema v1 — engine-specific solvation models (#102)', () => 
     expect(error.message).toContain('xTB accepts ALPB or GBSA');
   });
 
+  it('rejects SMD on a Psi4 block at save time, naming the models Psi4 writes', () => {
+    const project = projectWithNode(calcNode({
+      settings: defaultSettings({
+        jobType: 'SP', method: 'B3LYP', basis: 'def2-SVP', engine: 'psi4',
+        solvation: true, solvationModel: 'SMD',
+      }),
+    }));
+    project.defaults.engine = 'psi4';
+    const result = validateProject(project);
+    expect(result.ok).toBe(false);
+    const error = result.errors.find((item) => item.path.endsWith('settings.solvationModel'));
+    expect(error).toBeDefined();
+    expect(error.message).toContain('"SMD"');
+    expect(error.message).toContain('not a Psi4 solvation model');
+    expect(error.message).toContain('PCM or COSMO');
+  });
+
+  it('keeps the inert PCM placeholder readable on a solvation-off Psi4 block', () => {
+    const settings = defaultSettings({
+      jobType: 'SP', method: 'B3LYP', basis: 'def2-SVP', engine: 'psi4',
+      solvation: false, solvationModel: 'PCM',
+    });
+    const project = projectWithNode(calcNode({ settings }));
+    project.defaults.engine = 'psi4';
+    expect(validateProject(project).ok).toBe(true);
+  });
+
   it('defaults an xTB block with no model to ALPB', () => {
     const settings = defaultSettings({ jobType: 'SP', method: '', basis: '', engine: 'xtb', solvation: true });
     delete settings.solvationModel;
