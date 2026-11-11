@@ -67,13 +67,18 @@ Optional:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `schemaVersion` | integer (`1`) | Contract version. Absent on records written before the contract and on cluster imports from older builds; a reader must not require it. |
-| `engine` | string | `gaussian`, `xtb`, `orca`, `psi4` or a plugin id. Absent on cluster imports. |
+| `engine` | string | `gaussian`, `xtb`, `orca`, `psi4`, `pyscf` or a plugin id. Absent on cluster imports. |
 | `argv` | string[] \| null | Arguments passed to the executable. |
 | `outputBytes` | object \| null | `size`, `bytesRead`, `truncated` and the `windows` the parser received. |
 | `inputSha256` | string \| null | SHA-256 of the input file on disk. |
 | `outputSha256` | string \| null | SHA-256 of the parsed output. |
 | `app` | object | `version` and `commit` of the build. Absent on cluster imports. |
 | `conformer` | object | The ensemble member this run was built on. |
+| `record` | object | `{ id, label, datasetId? }` — the dataset record the run ran. Absent (not null) for a single-structure block. |
+| `series` | object | `{ parentId, n, count, linkage? }` — the repeat unit a generated member was expanded from. Absent unless the record came from a series block. |
+| `spectrumOverlay` | object | An imported measured trace beside the computed sticks: `{ source, sha256, columns, units, points }`. Absent when no trace was imported. |
+| `dp4` | object | The DP4+ probabilities a derived `analyse` block recorded. Absent on every run that computed no comparison. |
+| `timeout` | object \| null | `{ limitSeconds, elapsedSeconds, lastOutput, tree? }`, present only when the run was stopped at its wall-clock limit. |
 | `cache` | object \| null | The typed-array cache written for a real run. |
 
 The `gates` object carries `overall` (`pass`, `fail`, `unknown`), the
@@ -176,7 +181,10 @@ ncs record import --program "Spartan '26" --version 26.0.1 \
 ```
 
 `--source <file>` hashes the file here; `--source-sha256 <hex>` takes a digest
-computed on the machine that did the work (name exactly one). `--out` may be an
+computed on the machine that did the work (name exactly one). `--id` names the
+record (default `imported-<program>-<method>`); `--title` and `--notes` are optional free text
+carried in the record (`title`, `notes`), and `--source` also stores the file's basename as
+`sourceName`. `--out` may be an
 `ncs run --out` folder — the record lands in `runs/<id>/run.json` beside the
 runs, so `ncs export` and the Python client find it — or a `.json` path for a
 standalone results file. `--json` prints the record and the label instead of the

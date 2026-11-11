@@ -103,7 +103,7 @@ case when every record is the same molecule.
 
 | Refusal | When it is caught |
 | --- | --- |
-| a level the bank does not carry (`GFN2-xTB`, `B3LYP/cc-pVTZ`, …) | **saving the project**, naming the level and listing the 24 that exist |
+| a level the bank does not carry (`GFN2-xTB`, `B3LYP/cc-pVTZ`, …) | **saving the project**, naming the level and listing the 12 functional/basis pairs it carries |
 | classic DP4 as the variant | saving the project: a DP4+ number is never relabelled DP4 |
 | a measured shift with no atom, or in a unit other than ppm | saving the project, by row |
 | a candidate whose run carries no GIAO shielding block | running the block, naming the run |
@@ -116,9 +116,10 @@ never repairs a definition into something computable.
 
 ### Where the result is recorded
 
-The queue writes `run.json` for the block — `kind: "derived"`, no `parsed` block, the definition and
-the one-line verdict under `analyse`, and the whole result under `dp4` (probabilities, per-nucleus
-deviations, the fit each nucleus used, the excluded candidates, the level, the bank and its citation).
+The queue writes `run.json` for the block — `kind: "derived"`, no `parsed` block, a one-line
+definition (`expression`) plus the verdict or refusal under `analyse`, and the whole result under
+`dp4` (probabilities, per-nucleus deviations, the fit each nucleus used, the excluded candidates, the
+level, the bank and its citation).
 A refused comparison is written down too, with the reason, so the record says *why* rather than
 nothing. The block appears in the Results card and in the workflow report's DP4+ section; a run that
 computed nothing shows its refusal in both.
@@ -141,7 +142,8 @@ The DP4+ card and the workflow report print, for one analysis:
 - a note that the number is DP4+, not classic DP4, with the citation and the workbook hash.
 
 A candidate whose probability is printed as `0.00` is not absent: it is below the printed
-precision, and the unnormalised `p uns` / `p sca` columns show where it actually stands.
+precision, and the `p uns` / `p sca` columns — each normalised across the candidates under its own
+variant — show where it actually stands.
 
 ## Verification, stated plainly
 

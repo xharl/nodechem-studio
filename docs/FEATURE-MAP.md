@@ -2,7 +2,7 @@
 
 Status of this document: audit as of **2026-11-10**, renewed after the PySCF engine, the Multiwfn
 sidecar and the cclib converter landed. It describes the working tree that contains schemaVersion 3
-(ADR 0001), the `prepare` block, the scorer role, RDKit conformers, tautomer enumeration, PySCF and
+(ADR 0001), the `prepare` block, the scorer role, RDKit tautomer enumeration, PySCF and
 the explorer role (ADR 0002). Issues #222, #226–#231, #269 and #273 have closed since the first
 draft; **every gap that remains is filed as an issue (#287–#295)**, and #67/#64 carry the
 multiscale and HPC work. The document records capabilities, not keywords:
@@ -192,7 +192,7 @@ rather than scraped from a log; the text parser exists only for user-supplied lo
 | Open Babel MMFF94 conformers | **Implemented** | issue 144 |
 | In-app UFF | **Implemented** | `uff.js` |
 | Imported ensembles | **Implemented** | with provenance |
-| RDKit ETKDGv3 generator | **Implemented** | `rdkit` is a `CONFORMER_GENERATORS` entry |
+| RDKit tautomer enumeration (not a conformer search) | **Implemented** | `rdkit` is a `CONFORMER_GENERATORS` entry only so a `produces: "tautomers"` block can name it; `conformers.js` states outright that it is not a conformer search, and no ETKDG path exists |
 | ML scorer (AIMNet2 et al.) | **Implemented (branch)** | `scorer.js`, `mlRelax.js`, `scorerRunner.js`; ADR §2.10 |
 | Tautomer/protomer enumeration | **Implemented** | `tautomers.js` + `tautomerRunner.js`, RDKit ruleset (issue #226) |
 | `prepare` block (embed 3D, relax) | **Implemented (branch)** | ADR §2.9; `mlRelax.js` |

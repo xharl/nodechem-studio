@@ -20,6 +20,9 @@ All three consumers share the same sidecar contract, domain guard and conversion
 - Prepare: `converter: "aimnet2"` minimises one structure with the scorer's forces (L-BFGS with a
   line search, displacement cap, and an explicit convergence record).
 
+A dry run spawns no scorer: a prepare block skips its converter and carries the geometry forward
+unchanged, and the prepare record states that no converter ran.
+
 ## Requirements
 
 The scorer is optional and never bundled. It runs in its own Python environment because torch is
@@ -49,13 +52,15 @@ a clear message and **no energy**.
 ## Rules the app enforces
 
 - **Domain guard by name, before spawn.** AIMNet2 covers H, B, C, N, O, F, Si, P, S, Cl, As, Se, Br
-  and I; an element outside that list is refused with its symbol. Net charge and spin are bounded the
-  same way. The app does not extrapolate.
+  and I; an element outside that list is refused with its symbol. Net charge is bounded to −2…+2 and
+  the multiplicity must be 1 — the model card is closed-shell, so an open-shell request is refused
+  rather than approximated. The app does not extrapolate.
 - **Units are explicit.** The model emits eV. The result records `energyEv`, `energyKcal` and
   `energyHartree`; the ranking uses the converted Hartree value, and the original eV number is kept.
   It is never mixed silently with MMFF94 kcal/mol.
-- **Provenance is mandatory.** Model, version, weights SHA-256, dtype, device, cutoff, charge and
-  multiplicity must all be present, or the result is refused.
+- **Provenance is mandatory.** Model, version, weights SHA-256, dtype, device and cutoff must all be
+  present, or the result is refused. Charge and multiplicity are recorded when the sidecar reports
+  them and stay `null` when it does not.
 - **Never presented as QM.** The summary and every member carry
   `comparableWithQuantumChemistry: false`; the inspector says ML, and the table's method is the model
   label.

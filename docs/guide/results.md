@@ -27,8 +27,9 @@ Two questions get answered separately, and that separation is the most important
 - **What is in this folder of old logs?** → **Batch import logs…** in the overflow menu. Pick a
   folder and every `.log`/`.out` file is parsed with the same parser a live run uses, then listed
   with its status, engine, level of theory, final energy, free energy, imaginary count and failure
-  cause. The scan is read-only — nothing is imported into the project — and a file over 32 MB or
-  one that cannot be read is listed as skipped with the reason.
+  cause. The scan is read-only — nothing is imported into the project — it stops after the first 500
+  files in the folder, and a file over 32 MB or one that cannot be read is listed as skipped with the
+  reason.
 
 - **How long will it take?** → the block card and **Run → Setup** show a range in wall time and
   core-seconds before anything is queued, with the confidence and the number of measured points
@@ -53,7 +54,13 @@ below the output shows what the parser actually reported:
   TD-DFT** run fills the same cards from Psi4's excitation table; that table also carries the
   rotatory strength in both length and velocity form, and the card prints the state's irrep and the
   allocation Psi4 used (see *Engines → Psi4*: a state request is split across irreducible
-  representations, so a small request can contain no bright state at all),
+  representations, so a small request can contain no bright state at all). **ORCA and PySCF TD-DFT**
+  runs fill the same table: ORCA from its `TD-DFT EXCITED STATES` list joined to the absorption table
+  the same log prints (each state's oscillator strength, wavelength and transition dipole, with the
+  Tamm–Dancoff approximation or the full response named from the banner), and the run's final energy
+  kept at the ground-state SCF value rather than ORCA's `FINAL SINGLE POINT ENERGY`, which is the
+  excited-state total; PySCF from the singlet roots its deck asked for and nothing else — no triplets
+  and no per-irrep split, which the Psi4 branch above does carry,
 - the **gate list** with its verdict and evidence,
 - parsed values — termination, SCF energy and cycles, frequencies and the imaginary count, final
   energy, charges, thermochemistry when present,
@@ -188,7 +195,7 @@ those numbers are ingredients, not the composite answer.
 
 ## Validity checks
 
-Eleven checks, implemented as pure functions in `src/shared/validityChecks.js`. They run before a job
+Twelve checks, implemented as pure functions in `src/shared/validityChecks.js`. They run before a job
 (project **Validate** and run start) and after it (`run.json` → `gates.validity`).
 
 | Check | What it verifies | Phase | A failure is |
@@ -197,9 +204,13 @@ Eleven checks, implemented as pure functions in `src/shared/validityChecks.js`. 
 | `spin-contamination` | `S**2` before and after annihilation against `S(S+1)`; the deviation is recorded | post | error above 0.50, warning above 0.10 |
 | `geometry-sanity` | Atom clashes, implausibly short contacts, stretched bonds, angle anomalies against covalent-radius sums | pre | error for a clash, warnings otherwise |
 | `imaginary-frequencies` | Exactly one imaginary mode for `Opt=TS`, none for `Freq`/`Opt Freq`, and the magnitude floor | post | error |
+| `orbital-descriptors` | Frontier-orbital descriptors need `Pop=Full`, and `Pop=Full` may not share a block with `Pop=NBO`, `Pop=Hirshfeld` or `Pop=MK` | pre | error — blocks the run |
+| `engine-settings` | A setting that belongs to the other engine (a Gaussian-only keyword on an xTB block, or the reverse) is refused rather than silently ignored | pre, post | error |
 | `method-basis-compatibility` | Heavy elements in a basis with no ECP; semi-empirical methods given a basis; composite methods given a separate method/basis; empirical dispersion added twice | pre, post | error for the ECP gap and composite conflicts, warnings otherwise |
 | `counterpoise-bsse` | `Counterpoise=N` has fragment labels 1..N on every atom, and the output carries a counterpoise summary; BSSE is reported separately from the interaction energy | pre, post | error for a fragment mismatch or a missing summary on a completed job |
 | `opt-convergence` | A frequency job only claims a minimum when its optimisation reported completion | pre, post | reported as a failure; does not block the run |
+| `solvation-evidence` | A block that requested solvation against a log that reported none, or a log that reports a model the block did not request | post | warning — the record names what the log printed |
+| `conformer-spread` | A block fed by a conformer ensemble cites the member it ran, and a retained spread above the threshold is declared | pre, post | error when no member is selected, warning above the threshold |
 | `excited-state-root` | An `Opt` with TD states names `tdRoot` inside the states it computed; a `Pop=NTO` block reads a checkpoint from a block that has a TD record | pre | error — blocks the run (the project still opens, so the field can be fixed) |
 
 Findings carry `{ id, status, message, evidence, severity }`. A check never passes on a missing
@@ -218,7 +229,8 @@ omitted from the result, never reported as a pass.
 **Scope.** These checks are offline and use only the project and the parsed output. Rules that need
 more than those two inputs — standard-state declaration, conformer coverage, comparable-energy
 bookkeeping, IRC endpoint identity — are not implemented. xTB records are judged by the subset that
-applies to them: charge/multiplicity, geometry sanity, imaginary modes and optimisation convergence.
+applies to them: charge/multiplicity, geometry sanity, stationary-point frequencies, optimisation
+convergence, engine/settings, solvation evidence and conformer spread.
 The Gaussian-route checks are reported as *not applicable* for xTB, never as a pass.
 
 ## ONIOM
@@ -229,6 +241,11 @@ total is `ONIOM: extrapolated energy`, and the parser also keeps the three gridp
 line (the link atom and its low-layer partner, with the scale factors) and the charge/multiplicity
 line for each layer calculation. The card verifies `E(high, model) + E(low, real) − E(low, model)`
 against the extrapolated energy; a mismatch is shown, not smoothed over.
+
+Two more things travel with it. The layer methods are taken from the echoed `ONIOM(high:low)` route,
+so the card names the levels it is looking at rather than "high" and "low"; and the ONIOM dipole
+Gaussian prints under the energy block is kept as printed, in debye. A log that echoes no layer route
+says so on the card rather than leaving the method blank.
 
 The fixture is a real Gaussian 09 C.01 ONIOM(B3LYP/6-31G(d):PM6) frequency log (74 atoms, 54
 high-layer, 20 low-layer, six cuts).
@@ -476,8 +493,16 @@ provenance may name the calculation that produced σ_ref (method, basis, solvent
 that states it; either way it is printed, never implied.
 
 Broadening is a Lorentzian with a FWHM you set in the card (default 0.10 ppm) and the caption always
-states it, along with the number of nuclei in the trace. VCD/ROA rotational strengths and
-conformer-weighted spectra are not implemented; see the Raman section below for what is.
+states it, along with the number of nuclei in the trace. VCD and ROA rotational strengths are read
+from the frequency job, not from the NMR section — see [VCD rotational strengths](#vcd-rotational-strengths)
+and the ROA paragraphs under [Raman activities](#raman-activities) — and conformer-weighted spectra
+are still not implemented: every card draws one run.
+
+An **imported ORCA** NMR log fills the same shielding table from its `CHEMICAL SHIELDING SUMMARY
+(ppm)`: isotropic and anisotropy per nucleus, with the gauge when the log names one. ORCA numbers
+nuclei from 0 in input order and the card numbers atoms from 1, so the 0→1 renumbering happens in the
+reader and nowhere else; ORCA's summary prints no tensor eigenvalues, and that column is absent rather
+than filled from the earlier per-nucleus blocks.
 
 ### Referencing: a shift carries its source
 
@@ -574,6 +599,39 @@ dashed behind the simulation, scaled so its strongest point matches the simulate
 caption prints the factor that was applied — an overlay whose heights were silently rescaled would
 invite a comparison that is not available.
 
+An imported ORCA log is read as well: the `Mode freq (cm**-1) Activity Depolarization` table a
+`%elprop Polar 1` NumFreq job prints becomes the same per-mode rows, with ORCA's own mode numbering.
+A job without that section has no Raman rows rather than a table of zeros.
+
+### Raman optical activity
+
+Turn on **ROA** in the same inspector; the switch is offered on a Gaussian block. It is the third flag
+on the frequency keyword: `Freq=ROA`, `Opt Freq=ROA`, and with Raman and VCD also on one parenthesised
+list, `Freq=(Raman,VCD,ROA)`. A block that is not a frequency job is refused, because there is no
+frequency section for Gaussian to print the rows in.
+
+Gaussian prints, per mode, three far-from-resonance scattering intensities and their invariants, each
+with its own unit:
+
+- `AlphaG`, `Gamma2` and `Delta2` are the invariants, in 10⁴ Å⁵/amu;
+- `ROA1`, `ROA2` and `ROA3` are three **different scattering geometries** — ICPu/SCPu backscattering
+  (180°), ICPd/SCPd (90°) and DCPI backscattering (180°); the card reads the geometry names from the
+  log's own header and never averages the three;
+- `RC180` is the degree of circularity and is unitless.
+
+ROA intensities are in 10⁴ K and are **signed**, so the curve is drawn around a zero line and
+normalised to the strongest |ROA| — not to the strongest positive band, which would hide half the
+spectrum. You choose the geometry and the Lorentzian FWHM (12 cm⁻¹ by default) on the card; the
+caption names the geometry, the FWHM, the normalisation and the count of positive and negative bands,
+and the per-mode table keeps all three geometries and `RC180` beside the frequency. The incident-light
+wavenumber is printed when the log states it, and the card says it is not stated when it does not.
+
+The pinned fixture is a real Gaussian 09 E.01 `# freq=roa hf/3-21g` log, and it is formaldehyde, which is
+achiral: every `ROA1`/`ROA2`/`ROA3` intensity on every mode is `0.000`, while `RC180` — a ratio, not an
+intensity — still prints values such as `0.714`. So the fixture proves the table layout and the
+parser's unit handling, not the sign. Gaussian 16 B.01+ is not claimed because no public log of that
+revision was found, and the table itself names no release.
+
 ## VCD rotational strengths
 
 Turn on **VCD** in a frequency block's inspector (it adds `=VCD` to the frequency keyword:
@@ -596,10 +654,9 @@ Three things the card refuses to smooth over:
 - **Nothing is converted into an instrument intensity.** As with Raman, the plotted quantity is the
   printed rotational strength, not an absorbance.
 
-ROA is read from the same frequency section: `ROA1`, `ROA2` and `ROA3` are the three scattering
-geometries the log names, `RC180` is the degree of circularity, and the results card plots one
-chosen geometry as a signed curve. The pinned fixture is a Gaussian 09 E.01 log; Gaussian 16
-B.01+ is not claimed because no public log of that revision was found.
+An imported ORCA log's `VCD SPECTRUM CALCULATION` table (mode, frequency, rotational strength in
+10⁻⁴⁴ esu² cm²) is read into the same per-mode rows, with the sign as printed; a `Freq` job without
+`%freq DOVCD true` has no such table, and that absence is kept as an absence.
 
 ## Emission
 
@@ -1000,7 +1057,11 @@ alpha/beta counts, and a charge-sum check against the total charge.
 The numbers are summarised in the run record next to the file digests, and the dataset export gains
 a column group for them. The **Wavefunction view** card at the bottom of the results surface draws
 the field: a plane slice or an isosurface, evaluated from the basis the record carries, or from a
-`.cube` you open from the card. There is still no ESP colour map and no QTAIM analysis.
+`.cube` you open from the card. When a surface is drawn, that card also computes the density's
+topology — the bond critical points and their ρ, ∇²ρ and ellipticity — and an NCI summary from the
+same density, and prints the electrostatic-potential range over the surface. What it does not do is
+colour the 3D surface by that potential: the coloured figure is the report's vector figure, and the
+viewport keeps the numbers.
 [Wavefunctions](wavefunction.md) describes the format, the units rule (a negative grid count means
 Å), the angular conventions the renderer uses and exactly what is deferred.
 

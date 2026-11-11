@@ -201,7 +201,7 @@ fixtures (`test/fixtures/real/g16-a03-*`).
 | Reporting (#53) | One self-contained `report.html` plus `report.json` per finished queue; graph laid out from queue edges, gates copied not recomputed | `workflowReport.js`, `docs/REPORT_GENERATOR.md`, `test/workflowReport.test.js` |
 | Export and CLI (#65, #73) | Dataset CSV/JSON with a versioned envelope; `ncs validate`, `build-input`, `run`, `diff`, `merge` built on the app's own task builder | `datasetExport.js`, `bin/ncs.js`, `test/datasetExport.test.js`, `test/cli.test.js` |
 | Viewer (#71) | Normal-mode animation from real displacement blocks, optimisation trajectory replay, Kabsch/Horn superposition with RMSD, SVG figure export | `normalModes.js`, `trajectory.js`, `superpose.js`, `superpositionCard.js` + tests |
-| Import and corpus (#27, #28) | Batch indexing of a folder of Gaussian and xTB logs; a golden corpus of twenty real Gaussian 09/16 logs including truncated and SCF-failed cases | `logImport.js`, `test/fixtures/real/`, `test/realCorpus.test.js` |
+| Import and corpus (#27, #28) | Batch indexing of a folder of Gaussian and xTB logs; a golden corpus of twenty-four real Gaussian 09/16 logs, including truncated and SCF-failed cases | `logImport.js`, `test/fixtures/real/`, `test/realCorpus.test.js` |
 | Diagnostics and failure explanations (#55) | One-click redacted diagnostics bundle; offline signature table for known engine failures | `diagnostics.js`, `errorSignatures.js`, `test/diagnostics.test.js`, `test/errorSignatures.test.js` |
 | Conformer and protomer ensembles (#30) | A Structure block runs CREST (GFN2/GFN-FF) or imports a multi-XYZ, ranks by energy, prunes by window and RMSD, computes Boltzmann populations, refuses an automatic protomer choice, carries the chosen member into downstream inputs and into `run.json` | `conformers.js`, `electron/runner/crestRunner.js`, `test/conformers.test.js`, `test/conformerWorkflow.test.js` |
 
@@ -214,7 +214,7 @@ fixtures (`test/fixtures/real/g16-a03-*`).
 - Renderer loaded from the node-first shell.
 - Acceptance: `npm test`, `npm run check`, and `npm run build` pass.
 
-### Phase 1 — Node-first UI and single-task real runner (v0.1, current)
+### Phase 1 — Node-first UI and single-task real runner (v0.1; GN-001 still open)
 
 - Graph editing and full inspector.
 - One selected calculation can be built and run.
@@ -232,7 +232,7 @@ fixtures (`test/fixtures/real/g16-a03-*`).
 - Acceptance: malformed project files are rejected before render; a saved project reopens
   byte-stable apart from formatting.
 
-### Phase 3 — Durable queue and DAG execution
+### Phase 3 — Durable queue and DAG execution (done)
 
 - Replace the single-run `RunManager` with a queue that persists `queued/running/completed/
   failed/cancelled/needs-review` transitions.
@@ -246,7 +246,7 @@ fixtures (`test/fixtures/real/g16-a03-*`).
 - Acceptance: a 4-node chain runs unattended; killing the app marks the in-flight task
   interrupted; restart resumes at the next ready task.
 
-### Phase 4 — Conditions, loops, and human review
+### Phase 4 — Conditions, loops, and human review (done)
 
 - Semantics:
   - `condition` evaluates a named gate/field on the upstream result and releases exactly one
@@ -258,7 +258,7 @@ fixtures (`test/fixtures/real/g16-a03-*`).
 - Acceptance: a failing frequency gate routes to the retry loop; an exhausted loop stops with
   a recorded reason; a review gate blocks dependents.
 
-### Phase 5 — Structure and chemistry fidelity
+### Phase 5 — Structure and chemistry fidelity (partly done)
 
 - Native structure import: `.xyz`, `.mol`, `.sdf`, `.mol2`, `.pdb`/`.pdbqt`, `.cjson`, `.gjf`, `.com`, Gaussian `.log`; validate element symbols,
   atom counts, charge/multiplicity parity, and fragment definitions.
@@ -275,7 +275,7 @@ fixtures (`test/fixtures/real/g16-a03-*`).
 - Acceptance: imported water and benzene produce byte-deterministic inputs; a bad fragment
   total is rejected with a specific message.
 
-### Phase 6 — Packaging and operations
+### Phase 6 — Packaging and operations (partly done)
 
 - Windows installer (electron-builder or Forge), code signing if a certificate exists.
 - Linux AppImage target (unsigned), built by CI on `ubuntu-latest`; macOS only where a signing
@@ -320,14 +320,16 @@ Linux/macOS Gaussian job has been run.
 | GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
 | Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |
 | Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |
-| Live queue status on the canvas | **Open** — node cards show project state; the queue panel shows task state | `src/renderer/app.js` |
+| Cross-engine geometry hand-off (#326) | **Fixed in the unreleased tree** — `applyGeometryHandoffFor()` rewrites every engine's deck (Gaussian molecule spec, PySCF data line, Psi4 `molecule {…}`, ORCA `* xyz … *`, a fresh `.xyz` for xTB), changing only the atom rows; an upstream run with no parsed geometry, or a deck with no geometry block, is refused by name. Shipped in 0.5.1 as Gaussian/PySCF only | `electron/runner/queue.js`, `electron/runner/geometryHandoff.js` |
+| Bad-path and bad-id messages in the CLI and window (#323–#325) | **Fixed in the unreleased tree** — `ncs validate <dir>` / a missing path prints one `ncs: cannot read …` line and exits 2; `ncs convert --node <unknown>` is refused with the block list and an existing block that carries no structure is refused by name; the window reports the schema error it hit | `bin/ncs.js`, `src/renderer/app.js` |
+| Live queue status on the canvas | **Shipped** — a block card shows a `running` / `queued` indicator from the live queue task, and every kind of state is derived from the restored queue rather than from its own copy | `src/renderer/app.js` (`runStateOf`), `test/workbenchState.test.js` |
 | macOS package | **Open** — runner supports macOS; there is no build to sign or test | §5 Phase 6 |
 | Code signing | **Open** — no certificate; both installers are unsigned | §5 Phase 6 |
 | Conformer fan-out into sibling calculations (#80) | **Shipped after 0.3** — one task per retained member, member-paired edges and checkpoints, per-member `run.json`, report grouping. The fan now follows the branch (#87), so `conformers → opt → freq` runs per member with `opt~c1.chk` / `freq~c1` pairing. A block that mixes fanned and unfanned branches, or receives two ensembles, is refused (#86) | §4b, `src/shared/workflowTasks.js` |
 | Engine abstraction + ORCA (#31) | **Shipped after 0.3** — engine interface, ORCA input builder, log parser, preflight and a stdout-capturing runner that imports logs and hands off `.gbw` (#98); Psi4 shipped the same way (#111). Validity and renderer copy still assume Gaussian in places | `src/shared/engines/` |
 | Multi-flow projects, dataset inputs, barrier stages and artifact outputs (RFC 0001) | **Merged to `main`** (#112) — schema v2 (`flows[]`, `datasets[]`, `runner.maxParallel`, `reports[]`), `input` blocks with per-record expansion (`opt~m1`), `barrier` edges, parallel drain, `partial` verdict, artifact outputs (CSV/JSON/HTML/ZIP with a hashed manifest), per-flow and combined HTML reports, and the flow tabs / dataset import in the UI. v1 files migrated with byte-identical plans under schema v2 (that path was removed by ADR 0001; behaviour neutrality is pinned by `test/examplePlanIdentity.test.js`); groups, nested iteration, per-record method overrides and PDF are out of scope | `docs/PROJECT-FORMAT.md` §4, `docs/guide/flows.md`, `src/shared/flows.js` |
 | Molecular builder (#58) | Backlog, no milestone yet | GitHub issue |
-| Wavefunction analysis (#59) | **Ingest half shipped** — cube and fchk parsers, derived values, export columns; orbital rendering, QTAIM, NCI and the attach flow remain | `src/shared/wavefunction.js` |
+| Wavefunction analysis (#59) | **Shipped** — cube, fchk, Molden, WFN/WFX and QCSchema ingest; slice and isosurface viewport; ESP-coloured isosurface; frontier orbitals with Koopmans descriptors; QTAIM bond critical points; an NCI/RDG figure; cube writing (`ncs cube`); and the Multiwfn 3.8 sidecar for QTAIM basin integration, ESP statistics and ELF/LOL cubes. ELF and LOL come from Multiwfn, not from an internal grid routine | `src/shared/wavefunction.js`, `volume.js`, `orbitals.js`, `qtaim.js`, `nci.js`, `esp.js`, `multiwfn.js`, `test/wavefunction.test.js` |
 | Composite methods and counterpoise (#77) | **Shipped** — composite job types with a gate that refuses a component energy, counterpoise/BSSE, docs; per-link expansion is not implemented | `src/shared/gaussianOutput.js` |
 | Multiscale QM/MM, MD and docking (#67) | **On hold by decision** (2026-11-08) — not scoped or scheduled; the issue stays open | GitHub issue |
 | HPC submit/monitor (#64) | **Deferred by decision** (2026-11-08) — no cluster work until the local workflow is settled; cluster export remains the supported path | GitHub issue |
@@ -339,6 +341,10 @@ Linux/macOS Gaussian job has been run.
 | Method sensitivity (#96) | **Shipped** — Helgaker two-point CBS on the correlation energy with the method's tabulated exponent, CCCBDB benchmark with per-entry provenance, Boltzmann-weighted observables over the retained ensemble, spread shown beside every derived value | `src/shared/cbs.js`, `src/shared/benchmark.js`, `docs/guide/results.md` |
 | Scripting surface (#97) | **Shipped** — `schemas/run-record.v1.schema.json` + validator, `ncs export --schema-version`, stdlib-only Python client, `registerEngine` plugin seam | `schemas/`, `clients/python/`, `docs/SCRIPTING.md`, `docs/ENGINE_PLUGIN.md` |
 | Psi4 as a first-class engine (#111, #122) | **Shipped** — Psithon builder with its own method/basis/job list, SAPT card, per-engine executable map in the queue, Gaussian-only groups hidden and cleared on switch | `src/shared/engines/psi4.js`, `docs/guide/engines.md` |
+| PySCF as a fifth engine (#269, #296) | **Shipped in 0.5.1** — one fixed Python deck and a JSON record on stdout; HF/DFT SP, Opt and Freq, MP2, CCSD, CCSD(T), CASSCF SP, PCM/C-PCM SP and TD-DFT singlet roots. Fifteen records from PySCF 2.15.0 are fixtures, produced by running the deck directly, not through the app's runner | `src/shared/engines/pyscf.js`, `pyscfDeck.js`, `test/fixtures/pyscf/` |
+| ORCA beyond a single point (#284, #285, #286, #288) | **Shipped in 0.5.1** — NMR shieldings and spin-spin couplings, TD-DFT, Raman and VCD, `OptTS`, IRC and relaxed scan, each parsed into the shapes the Gaussian reader produces and pinned by ORCA 6.1.1 fixtures | `src/shared/engines/orca.js`, `orcaProperties.js`, `test/fixtures/orca/` |
+| Explorer role (ADR 0002) | **Documented, not implemented** — the sixth program role (saddle, path, profile) is defined and amends the block taxonomy; no explorer program ships, and ORCA `OptTS`/IRC/scan and Gaussian `Opt=TS`/IRC/scan remain job types on a calculate block | `docs/adr/0002-explorer-role.md` |
+| Multiwfn and cclib sidecars (#270, #273) | **Shipped in 0.5.1** — user-installed binaries in the Analyse block and the converter path; neither is bundled, and a missing one fails the block by name | `src/shared/multiwfn.js`, `src/shared/cclib.js`, `electron/runner/multiwfnRunner.js` |
 
 ## 7. Risks and open questions
 

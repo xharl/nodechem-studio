@@ -32,3 +32,6 @@ __pycache__/
 # committed fixture even though the line above ignores run folders generally.
 !clients/python/tests/fixtures/runs/
 !clients/python/tests/fixtures/runs/**
+
+# Local agent plans and scratch notes
+.hermes/

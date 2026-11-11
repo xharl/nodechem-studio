@@ -21,14 +21,17 @@ ncs convert project.ncs --format xyz --out geometry.xyz
 ncs convert job.fchk --format molden --out job.molden
 ```
 
-Add `--json` for a machine-readable summary: format, output path, byte count and the notes the
-writer attached.
+Add `--json` for a machine-readable summary: format, media type, output path, byte count and the
+notes the writer attached.
 
 From the window, **Export as…** in the run console's Tools offers the same formats, Molden included.
 A log carries no basis, so Molden needs the job's formatted checkpoint: run `formchk -3` on the
 `.chk` (bare `formchk` writes a reduced backward-compatibility subset), copy the `.fchk` beside
 `run.json`, and the export reads it. Without one the export refuses with that instruction instead
 of writing a Molden file with no basis in it.
+
+In the window, a dry run's output is refused for every one of those formats: it is a fixture, and a
+converted file on disk would no longer carry that label.
 
 ## Foreign logs: cclib to Chemical JSON
 
@@ -98,9 +101,9 @@ ncs cache field.cube --out field.ncsr     # one volumetric field
 ncs cache run.ncsr --inspect              # what is inside
 ```
 
-A real six-frame optimisation log (210 729 bytes of text) becomes **1 977 bytes**: coordinates
-as `f32`, energies as `f64`, a symbol table and the step numbers. The container is a 12-byte
-prefix, a JSON header with a section table, and aligned binary payloads — no zip, no
+A real six-frame optimisation log (`g16-dvb-gopt.out`, 210 729 bytes) becomes **2 129 bytes**:
+coordinates as `f32`, energies as `f64`, a symbol table and the step numbers. The container is a
+12-byte prefix, a JSON header with a section table, and aligned binary payloads — no zip, no
 dependency, no per-value formatting.
 
 Two decisions worth knowing:
@@ -136,6 +139,8 @@ What the writer does with a checkpoint:
   Reordering would need a convention table that, if wrong, corrupts every orbital.
 - **An unsupported shell is an error.** Molden has no `h`; a checkpoint with one is refused instead
   of dropping six functions and shifting every coefficient after them.
+- **A failed checkpoint is refused.** A `Job Status 3` checkpoint records an error termination in
+  Link 9999, so its orbitals are not a completed result and no Molden file is written from it.
 - **Spherical or Cartesian is stated, not assumed.** `[5D]`, `[7F]` and `[9G]` are written when the
   checkpoint's shell types say pure functions, and a basis that mixes both for the same angular
   momentum is refused because one marker cannot express it.
@@ -238,9 +243,10 @@ Refusals are a value, not an error: `ncs export-input` exits 2 and prints
 `{ "ok": false, "code": "export-refused", "engine": "...", "message": "..." }` on stderr, so a
 script can branch on it. A project with **no geometry** is refused with `export-no-geometry` — the
 builder would otherwise substitute the demo water molecule, and a deck that computes water is worse
-than no deck. A block that sets Gaussian-only fields (`customKeywords`, `scf`, `grid`, `population`,
-`solvation`, `tdStates`, constraints) is refused naming the field, because translating it would be a
-guess.
+than no deck. A block that sets Gaussian-only fields is refused naming the field, because
+translating it would be a guess: `customKeywords`, `scf`, `grid`, `population`, `solvation`,
+`tdStates`, constraints, QST, a method ladder, a spin sweep, counterpoise, `Stable=Opt`, Raman/VCD,
+orbital printing, `verbosity` and the Opt convergence flag.
 
 `Opt Freq` is refused as one deck for all three: each program runs one job per input here, so export
 the Opt block, import the optimised geometry, and export the Freq block. The deck also states its
@@ -259,6 +265,11 @@ does carry them.
   CLI-only: `projectSchema.js` has no `geometry.format` id for `nwchem`, `gamess` or `qchem`, so a
   project saved with an imported deck could not be reopened. `ncs convert job.nw --format xyz` reads
   one back in the meantime.
+- **`--node` selects a block's structure.** `ncs convert project.ncs --format xyz|extxyz|sdf --node
+  <id>` writes that block's geometry; an id that names no block is refused with the block list, and a
+  block type that never carries a structure (`condition`, `loop`, `merge`, `output`, `analyse`,
+  `note`) is refused by name. Without `--node`, the project's `molecule.coords` is converted. The
+  three deck formats require `--node`, because a deck needs a block's settings.
 
 ## Next
 

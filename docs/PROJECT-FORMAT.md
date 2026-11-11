@@ -40,14 +40,16 @@ A saved file is produced by `stringifyProject()` in
 Consequence: `open → save` of an unmodified project is byte-identical, which
 makes project files diffable in git.
 
-Validation is non-throwing: `parseProjectText()` and `stringifyProject()`
-return `{ ok, errors[], warnings[], project, migrated, schemaVersion }`, where
-every error carries a JSON path (`nodes[3].settings.basis`).
+Validation is non-throwing: `parseProjectText()` and `stringifyProject()` return
+`{ ok, errors[], warnings[], project, migrated, schemaVersion, validity }`, where
+every error carries a JSON path (`nodes[3].settings.basis`). `migrated` is always `false` in this
+build — there is no version below 3 that is read — and `validity` carries the project-wide checks:
+`{ overall, findings[], blocking[] }`.
 
 ## 3. Versioning
 
 - `schemaVersion` is currently `3`.
-- Version 3 is **breaking** (ADR 0001): the block types are `input`,
+- Version 3 is **breaking** (ADR 0001): the block types are `input`, `prepare`,
   `generate`, `calculate`, `analyse`, `output`, plus the `condition`, `loop`,
   `merge` and `note` axes. A version 1, 2 or unversioned file is **refused by
   version**, not migrated; rebuild the project in this build.
@@ -58,7 +60,7 @@ every error carries a JSON path (`nodes[3].settings.basis`).
 
 ## 4. Document schema
 
-Top level, all six keys required after normalization:
+Top level — every key below is present after normalization:
 
 | Key | Type | Notes |
 | --- | --- | --- |
@@ -94,7 +96,7 @@ graph.
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `engine` | enum | `gaussian`, `xtb`, `orca`, `psi4` |
+| `engine` | enum | `gaussian`, `xtb`, `orca`, `psi4`, `pyscf` — the same list `settings.engine` accepts (`ENGINE_IDS`) |
 | `method` | string | Gaussian functional / xTB method default |
 | `basis` | string | Gaussian basis |
 | `memory`, `memoryUnit` | string, enum | Gaussian-only |
@@ -117,7 +119,7 @@ Type-specific payloads:
 | `condition` | `condition { expression, unknown, notes }` |
 | `loop` | `loop { maxAttempts, mode, target, until }` |
 | `merge` | `merge { policy, notes }` |
-| `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2). An **ensemble** input is `input { kind: "ensemble", path, format: "xyz", energyUnit, energyMethod, origin { program, version, method }, sourceSha256? }` — it reads an external multi-XYZ at run time (ADR 0001, 4.3.3) |
+| `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits?, complex? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2), `complex` a combined system (4.3.4). An **ensemble** input is `input { kind: "ensemble", path, format: "xyz", energyUnit, energyMethod, origin { program, version, method }, sourceSha256? }` — it reads an external multi-XYZ at run time (ADR 0001, 4.3.3) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
 | `analyse` | `analyse { mode?, expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block. `mode` is `expression` (the default, and absent when never set) or `dp4`, the DP4+ probability comparison whose definition lives under `dp4` (issue 165), or `multiwfn`, a user-installed Multiwfn sidecar whose definition lives under `multiwfn` (`{ analysis, input: { runId? | nodeId? | path? }, grid?, isovalue?, rhoCutoff? }`, issue 270) |
 | `note` | `note { text }` |
@@ -150,12 +152,12 @@ provider does not require an engine executable, but it does require the scorer s
 edge between them is a geometry hand-off the queue either accepts or refuses with a recorded reason.
 `solvationModel` is validated against the engine the block resolves to:
 
-| Resolved engine | Accepted `solvationModel` values |
-| --- | --- |
-| `gaussian`, `orca` | `PCM`, `SMD`, `CPCM` |
-| `psi4` | `PCM`, `COSMO` |
-| `pyscf` | `PCM`, `C-PCM` |
-| `xtb` | `ALPB`, `GBSA`; an empty string means "not chosen" and an absent value defaults to `ALPB` |
+| Resolved engine | Accepted `solvationModel` values | Refused |
+| --- | --- | --- |
+| `gaussian`, `orca` | `PCM`, `SMD`, `CPCM` | at save |
+| `psi4` | `PCM`, `COSMO` | at build — the schema keeps the historical `PCM`/`SMD`/`CPCM` list, and the Psi4 builder refuses `SMD`, `CPCM` and `LPB` by name when solvation is on |
+| `pyscf` | `PCM`, `C-PCM` | at save |
+| `xtb` | `ALPB`, `GBSA`; an empty string means "not chosen" and an absent value defaults to `ALPB` | at save |
 
 A Gaussian-only model on an xTB block is a validation error naming the engine and the two xTB
 models, because xTB never implements PCM, SMD or CPCM. There is one compatibility exception: a
@@ -237,19 +239,24 @@ naming the first differing index, and nothing is reordered automatically.
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `kind` | `relax` or `embed3d` | default `relax` |
-| `converter` | `uff`, `openbabel` or `aimnet2` | `relax` only; `embed3d` is always `openbabel` |
-| `forceField` | `UFF`, `MMFF94` or `AIMNet2` | the force field or scorer the converter uses |
-| `smiles` | string | required for `embed3d`; ignored by `relax` |
+| `kind` | `embed3d`, `relax` or `solvate` | default `relax` |
+| `converter` | `uff`, `openbabel`, `aimnet2` or `geometric` | `embed3d` always resolves to `openbabel`, `solvate` to `geometric`, and `relax` keeps `uff`, `openbabel` or `aimnet2`; a mismatched pair is a validation error |
+| `forceField` | `UFF`, `MMFF94`, `AIMNet2` or `none` | the force field or scorer the converter uses; `none` is what `solvate` defaults to, because deterministic placement is not a relaxation |
+| `smiles` | string | required for `embed3d`; ignored by `relax` and `solvate` |
 | `charge`, `multiplicity` | integer | the structure's chemistry, not a method |
+| `solvent` | string | explicit-solvent id: `water`, `methanol` or `acetonitrile`; default `water` |
+| `solventCount` | integer | 1–64 solvent molecules; default 10 |
+| `seed` | integer | 0–2147483647; default 1 |
+| `shellAngstrom` | number | 1–20 Å placement shell; default 3.5 |
 
 A prepare block takes one structure in (the project molecule, or one upstream structure) and writes
 one `prepared.xyz`; a calculate block wired from it runs on that geometry. It never enumerates:
 protonation-state and tautomer enumeration belongs to `generate`.
 
 `generate.settings` is a separate key space — route keys cannot leak into a conformer search:
-`source` (`search` or `imported`, default `search`), `generator` (`crest`, `uff` or `obabel`,
-search only), `method`, `energyWindowKcal`, `rmsdThreshold`,
+`source` (`search` or `imported`, default `search`), `generator` (`crest`, `uff`, `obabel` or
+`rdkit` — `rdkit` only when `produces` is `tautomers`, see below — search only), `method`,
+`energyWindowKcal`, `rmsdThreshold`,
 `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`, `rankBy`, `charge`,
 `multiplicity`, `fanOut`, `group` (an optional study id shared by blocks that belong together,
 1–32 letters, digits, `.`, `_` or `-`; empty means no group). Defaults: source `search`, generator
@@ -281,6 +288,8 @@ The in-app `uff` route adds two optional keys, present only when the block state
 that never chose the route serialises as before: `torsionStepDegrees` (15–360, default 120) and
 `maxTrials` (1–2000, default 200). A `uff` block's `method` is `UFF` (there is no other value for
 this generator), and its ensemble always records `energyUnit: kcal/mol` and `energyMethod: UFF`.
+The Open Babel route has one optional key of its own: `nconf` (1–1000, default 20), the number of
+conformers the genetic algorithm is asked for; like the two above it is written only when stated.
 
 `produces` is what the block enumerates: `conformers` (the default, and what a file that omits the
 key means) or `tautomers`. A tautomer block is deliberately narrow — `generator` must be `rdkit`,
@@ -342,9 +351,9 @@ iterates. It lives in the project file, so a project is still one document.
 | --- | --- | --- |
 | `id` | string | 1–64 chars, `[A-Za-z0-9][A-Za-z0-9._-]*`, unique in the project |
 | `title` | string | display name |
-| `source` | object | `{ kind: 'file' or 'inline', path, format }`; `format` is `sdf`, `xyz`, `csv` or `json`; `path` is relative and has no `..` |
+| `source` | object | `{ kind: 'file' or 'inline', path, format }`; `format` is `sdf`, `xyz`, `csv`, `json` or `cdxml` (`sdf` when omitted); `path` is relative and has no `..` |
 | `fields` | object | optional column mapping `{ label, charge, multiplicity }` read from the file's properties |
-| `records[]` | array | at most 2 000, each `{ id, label, charge, multiplicity, coords[], bonds[]?, enabled }` |
+| `records[]` | array | at most 2 000, each `{ id, label, charge, multiplicity, coords[], bonds[]?, geometry?, drawingConfirmed?, enabled }` |
 | `notes` | string | at most 2 000 chars |
 
 A record's `id` uses the node-id grammar because it becomes a task-id segment.
@@ -356,7 +365,10 @@ is how a family member is skipped without deleting it. `bonds[]` is optional and
 absent by default; when present it uses the molecule bond shape (`{ a, b, order }`,
 1-based, `order` 1, 1.5, 2 or 3) and is the topology a derivative block edits —
 a record without it is refused by a derivative block rather than given a
-perceived one.
+perceived one. A record imported from a CDXML or CDX drawing carries `geometry: { dimension: "2d" }` so
+the "this is a depiction" claim survives a save, and `drawingConfirmed: true` once the user has
+accepted that a drawing is being run. Both keys are absent unless the geometry came from a drawing,
+which is what keeps an SDF, XYZ, CSV or JSON record byte-identical to what earlier builds wrote.
 
 ### 4.2 `flows[]`
 
@@ -535,6 +547,49 @@ block reads that record; it never opens the original path. A calculate block
 may not consume an ensemble input directly — a generate block must rank and
 select first.
 
+### 4.3.4 A complex block (`kind: "complex"`)
+
+A structure block may combine several records into **one** system. It is the same `input` node type
+with `kind: "complex"` and it yields exactly one record, so fan-out, conformer searches, gates,
+writers and the report each see one ordinary record.
+
+```json
+{ "type": "input", "kind": "complex",
+  "input": { "datasetId": "monomers",
+    "complex": {
+      "members": [ { "recordId": "water-a" },
+                   { "datasetId": "guests", "recordId": "water-b" } ],
+      "placement": { "mode": "axis", "axis": [1, 0, 0],
+                     "distanceAngstrom": 3.0, "angleDegrees": 0 } } } }
+```
+
+| Key | Type | Notes |
+| --- | --- | --- |
+| `complex.members[]` | object[] | 2–4 members, each `{ datasetId?, recordId, charge?, multiplicity? }`; `datasetId` defaults to the block's dataset, `charge`/`multiplicity` override the record's |
+| `complex.placement.mode` | enum | `as-drawn` (default), `axis` or `principal` |
+| `complex.placement.axis` | number[3] | required for `axis`; the direction the member centres of mass are laid along |
+| `complex.placement.distanceAngstrom` | number | required for `axis` and `principal`; centre-of-mass separation, 0.1–100 Å |
+| `complex.placement.angleDegrees` | number | `axis` only, −360 to 360; the turn about the axis |
+| `complex.homodimer` | boolean | absent by default; the only way to place the same record twice |
+
+`kind` and `complex` are absent by default: a project that never asked for a complex saves the same
+bytes it did before, and a block whose `kind` is `"complex"` without `input.complex` is a validation
+error. A block may carry at most one of `series`, `edits` and `complex`. The generated record's id
+names every parent (`complex-water-a-water-b`), and the record carries
+`complex { members, placement, homodimer?, geometryStatus, geometryNote }` as provenance.
+
+**Geometry.** Every placement is a rigid-body move — members are translated, and in `axis` mode
+rotated, as a whole — so each member keeps its own bond lengths, angles and dihedrals. The result is
+therefore **a starting geometry, not a minimum**, and `geometryStatus` says exactly
+`needs optimisation`. Charge is the sum of the members; multiplicity is the highest-spin coupling
+(sum of member multiplicities, minus the member count, plus one), which is a stated rule rather than
+a guess.
+
+**Refusals** (by name, from `src/shared/complex.js`): a member with no coordinates; more than four
+members or more than 1 000 atoms in total; the same record twice without `homodimer`; a separation
+below the two members' covalent-radii sum; any interatomic distance between members below 0.7 Å; an
+unknown placement mode; a zero-length axis; a spherical top with no unique principal axis.
+
 ### 4.4 `output` blocks
 
 | Key | Type | Notes |
@@ -567,6 +622,8 @@ Failed and partial records are named in its index, never hidden.
 | Records per dataset | 2 000 |
 | Series members per block | 24 |
 | Edits per derivative block | 32 |
+| Members of one complex | 4 |
+| Atoms in one complex | 1 000 |
 | Atoms in one series member | 1 000 |
 | Datasets | 64 |
 | Flows | 32 |
@@ -605,8 +662,9 @@ constant of the layout, so the storage location does not depend on how Electron
 derives its default directory.
 
 ```
-<userData>/
-  runs/
+<userData>/                 # <appData>/nodechem-studio
+  settings.json           # app settings, including advanced.dataDir
+  runs/                   # the default data root
     <runId>/
       request.json      # what was asked for (engine, argv, names, settings)
       <input>           # the exact bytes handed to the engine (.gjf or .xyz)
@@ -617,6 +675,10 @@ derives its default directory.
     <queueId>/
       queue.json        # durable workflow task list and per-task state
 ```
+
+`settings.json` always lives in `userData`. `runs/` and `queues/` live there too unless the user
+sets `advanced.dataDir` in `settings.json`, which moves the data root (both folders) without moving
+the settings file.
 
 `runId` and `queueId` are validated before any path join; a record is never
 addressed by user-typed text.

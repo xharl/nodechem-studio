@@ -41,7 +41,8 @@ absent says so: `figure not available: no cube file in the run folder`. The whol
 5 MB; anything dropped for the cap is named in the document.
 
 `ncs report --figures none|basic|surfaces` selects how much is drawn. `none` reproduces the
-table-only document of 0.4.0; `surfaces` adds the projected isosurface (the slab slice is drawn at every level when a cube is present).
+table-only document of 0.4.0; `basic` and `surfaces` both draw the slab slice when a cube is present,
+and `surfaces` adds the projected isosurface.
 
 The window offers the same three names in the select beside **Report…**. `basic` is the default and
 writes the document the window has always written; `surfaces` also reads the `.cube` files in each
@@ -59,12 +60,15 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    in kcal mol⁻¹; a record with no energy leaves the cell as `not reported`.
 3. **One section per record** — the record's own task table and its failed blocks named with the
    error. A record is `completed` when every block completed, `partial` when some blocks completed
-   and some failed, and `failed` when nothing usable came out.
-4. **Method ladders, conformer ensembles, spin sweeps and reaction energetics** — unchanged from
-   the single-molecule report, printed after the record sections. A tautomer Generate block gets a
-   *Tautomer candidates* section: one row per candidate with its label and SMILES, and the energy
-   spread across the set at the level the runs were made at. It is never Boltzmann-averaged — the
-   candidates are different molecules, and the section says so instead of printing a population.
+   and some failed or never ran, `failed` when every block that ran failed, and `incomplete` when
+   nothing failed but some blocks never ran.
+4. **The first analysis sections, unchanged from the single-molecule report** — method ladders,
+   conformer ensembles, spin sweeps, reaction energetics, DP4+ probabilities, EPR and NMR, printed
+   after the record sections. A section with nothing to show is omitted rather than printed empty. A
+   tautomer Generate block gets a *Tautomer candidates* section: one row per candidate with its label
+   and SMILES, and the energy spread across the set at the level the runs were made at. It is never
+   Boltzmann-averaged — the candidates are different molecules, and the section says so instead of
+   printing a population.
 5. **Uncertainty** — the measured error bar, one row per method ladder, retained conformer ensemble
    and reaction path. A ladder contributes the spread across the rungs that actually ran; an
    ensemble contributes the lowest member and the Boltzmann-weighted value side by side; a reaction
@@ -73,7 +77,8 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    list under the table, *What would change the conclusion*, is derived from each measured number:
    the ladder's headroom against its tolerance, the population a conformer would need to dominate,
    or the rate ratio the barrier error cannot resolve.
-6. **Provenance** — run ids and the input/output SHA-256 prefixes.
+6. **Derived quantities, Multiwfn analyses and imported results**, then **Methods**, then
+   **Provenance** — run ids and the input/output SHA-256 prefixes.
 
 A v1 project (no dataset) is unchanged: one table of blocks, no record sections.
 

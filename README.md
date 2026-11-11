@@ -166,6 +166,7 @@ CycloneDX SBOM and a build-provenance attestation accompany every release. See
 | [Flows, datasets and stages](docs/guide/flows.md) | Several graphs per project, a family of records, barrier stages |
 | [Datasets and input blocks](docs/guide/datasets.md) | Importing a family, one run per record, outputs for the set |
 | [Engines](docs/guide/engines.md) | Gaussian 16, xTB, ORCA, Psi4 and PySCF — job types, defaults, setup, what each parser proves |
+| [Feature map](docs/FEATURE-MAP.md) | What each engine offers, what the app implements, and every gap that is still open |
 | [Conformers and protomers](docs/guide/conformers.md) | CREST, UFF, Open Babel and RDKit tautomer enumeration, imports, ranking, choosing a member |
 | [ML scorers](docs/guide/scorers.md) | The AIMNet2 sidecar, its domain guard, units and provenance |
 | [Workflows](docs/guide/workflow.md) | Queue, conditions, loops, checkpoints, timeouts, cluster export |
@@ -268,10 +269,11 @@ docs/              documentation; the user guide lives in docs/guide/, decisions
   so the parser is pinned against output from a release the app does not ship; the end-to-end suite
   still only runs when `XTB_BIN` points at a real binary.
 - **Sidecars are driven, not bundled, and not all have been run here.** CREST argues, ranks and
-  fails by name but has not been executed in this checkout; Open Babel 3.2.1 segfaults in
-  `--conformer`, which the block cannot yet detect (#239); the RDKit tautomer enumerator and the
-  AIMNet2 scorer are exercised against recorded sidecar answers, not against a live RDKit or torch
-  install. None of the four is required for the rest of the app to work.
+  fails by name but has not been executed in this checkout; Open Babel 3.2.x is refused before
+  spawning, because that series segfaults in `--conformer` and the queue reads `obabel -V` to say
+  so by version (#239); the RDKit tautomer enumerator and the AIMNet2 scorer are exercised against
+  recorded sidecar answers, not against a live RDKit or torch install. None of the four is required
+  for the rest of the app to work.
 - **No packaged macOS build.** The runner and preflight support macOS; there is no build to sign or
   test.
 - **xTB validity checks are narrower than Gaussian's.** xTB has no route, basis or ECP to inspect, so
@@ -311,7 +313,9 @@ docs/              documentation; the user guide lives in docs/guide/, decisions
 
 NodeChem Studio is **single-user and local**: no accounts, no server, no shared store. A project is
 one `.ncs` file, and the app refuses to overwrite a file that changed on disk since it was opened
-(hash check, with a message telling you to reopen or save under a new name).
+(hash check, with a message telling you to reopen or save under a new name). A name that already
+ends in `.ncs` keeps that one suffix rather than gaining a second, saving over a file this session
+did not open asks first, and the next save dialog opens in the folder the last save used.
 
 Two people *can* work on the same project on a shared drive, reconciled rather than live-synced:
 

@@ -11,7 +11,7 @@ does not damage a project.
 | Extension | `.ncs` — the only extension accepted |
 | Content | canonical JSON (the extension names the product, not the encoding) |
 | Size cap | 8 MB before parsing |
-| Limits | 2 000 blocks, 4 000 connections, 64 fragments, 1 000 atoms |
+| Limits | 2 000 blocks, 4 000 connections, 64 fragments and 1 000 atoms per flow; 32 flows; 2 000 records per dataset |
 | Version | `schemaVersion: 3` |
 
 - **Validation before render.** A malformed file is refused with the failing JSON paths instead of
@@ -24,11 +24,18 @@ does not damage a project.
   `.ncs` files diff cleanly in git.
 - **Unknown fields** are dropped on save with a warning.
 - **Save** writes back to the opened file; a new project prompts for a path. Closing with unsaved
-  changes asks before discarding. There is no autosave and no crash-recovery copy of the project.
+  changes asks before discarding. A save is refused, with the reason, when the bytes on disk changed
+  since the app last read or wrote that file — another editor got there first.
+- **Unsaved work survives a crash.** While the project differs from the saved file the renderer keeps
+  a recovery copy in `localStorage['ncs.draft.v1']`, rewritten about 600 ms after the last edit. A
+  project too large for it (about 1 MB) keeps no draft at all rather than a truncated one. The next
+  start offers **Unsaved draft from <time>** with **Restore** and **Discard**: a restored draft is
+  schema-checked like a file, a draft identical to the project that loaded is dropped silently, and
+  saving clears it.
 - **The chosen name carries exactly one `.ncs`.** `foo` is saved as `foo.ncs`, `foo.ncs` stays
   `foo.ncs`, and a name that arrives with the extension twice (`foo.ncs.ncs`) is collapsed rather
-  than extended. Saving over a file this session did not open asks before replacing it, and the next
-  save dialog opens in the folder the last save used.
+  than extended. Saving over a file the app has not read or written this session asks before
+  replacing it, and the next save dialog opens in the folder the last save used.
 
 File naming: a new project is suggested as `<stem>.ncs`, where the stem is the project name
 lowercased, accent-folded, stripped to `[A-Za-z0-9._ -]`, whitespace collapsed to dashes and
@@ -77,14 +84,22 @@ Every run gets its own immutable folder:
 <userData>/runs/<runId>/
 ```
 
-| File | Gaussian 16 | xTB |
-| --- | --- | --- |
-| `request.json` | engine, argv, names, settings | same |
-| input | `<name>.gjf` | `<name>.xyz` |
-| output | `<name>.out`, or `<name>.log` when Gaussian wrote that name | `<name>.out` — the captured stdout |
-| `run.json` | status, exit code, parsed record, gates, hashes, provenance | same, with the xTB method block |
-| `scratch/` | `GAUSS_SCRDIR` for this run | not used |
-| extra | — | `xtbopt.xyz`, `xtbrestart` |
+`userData` here is the folder from [Install](install.md#where-your-data-lives) unless **Settings… →
+Advanced → Data directory** has moved runs and queues somewhere else.
+
+| File | What it holds |
+| --- | --- |
+| `request.json` | the request that launched the run: engine, argv, input and output names, the input hash and the method block (the input text is not duplicated) |
+| input | `<name>.gjf` (Gaussian), `<name>.xyz` (xTB), `<name>.inp` (ORCA), `<name>.dat` (Psi4), `<name>.py` (PySCF) |
+| output | `<name>.out` — the file Gaussian or Psi4 wrote, or the captured stdout of xTB, ORCA and PySCF. Gaussian's `<name>.log` is kept when Gaussian wrote that name |
+| `run.json` | status, exit code, parsed record, gates, hashes, provenance, and the method block of the engine that ran |
+| `scratch/` | the run's own scratch folder, created for every engine: `GAUSS_SCRDIR` for Gaussian and `PSI_SCRATCH` for Psi4. xTB, ORCA and PySCF run in the run folder itself and leave it empty. A scratch directory typed in the run console (seeded from **Settings → Tools**) replaces it for that run |
+| extra | xTB's `xtbopt.xyz` and `xtbrestart`; ORCA's `.gbw` and `<job>.xyz`; Gaussian's `<name>.chk` when the block sets a checkpoint file |
+
+A non-dry run whose scratch filesystem has less than 1 GiB free is refused before the engine starts.
+A run that dies of a full disk anyway is recorded as `failed` with a `scratch` block naming the
+directory, the space at launch and at exit, and `exhausted: true` — instead of leaving "no
+termination marker" to stand in for the real cause.
 
 Output capture is capped at 32 MiB and the record carries a `truncated` flag when that limit is hit;
 a truncated parse makes the "Output complete" gate `unknown`, not `pass`.
@@ -95,7 +110,7 @@ It contains:
 
 - the run status, exit code and timestamps;
 - the parsed record the results panel renders;
-- the **gate verdict** and, for Gaussian, the **validity findings** kept beside it;
+- the **gate verdict** and the **validity findings** kept beside it (they never change the verdict);
 - the SHA-256 of the exact input written and of the output parsed;
 - the engine and version banner (`parsed.program`), the app version and commit;
 - a normalised **method block** from the engine that ran — for Gaussian the functional, basis,
@@ -129,9 +144,9 @@ in-flight task becomes `interrupted` and can be resumed, rather than being repor
 ## Sharing
 
 A run folder is self-contained. To hand a result to someone else, either zip the folder or use
-**Export run bundle**, which copies the input and output, writes `methods.md` and hashes everything
-into `manifest.json`. The bundle is a folder so the recipient can verify it with `sha256sum` and read
-it without the app.
+**Export run bundle**, which copies the input and output, writes `methods.md`, `README.md` and a
+`manifest.json` with a SHA-256 per file. The bundle is a folder so the recipient can verify it with
+`sha256sum` and read it without the app.
 
 Nothing is uploaded, and no run data leaves the machine.
 
