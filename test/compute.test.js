@@ -15,6 +15,8 @@ import {
   describeCompute,
   evaluateCompute,
   evaluateExpression,
+  parseExpression,
+  unitOfAst,
 } from '../src/shared/compute.js';
 import { DATASET_CSV_COLUMNS } from '../src/shared/datasetExport.js';
 import {
@@ -652,5 +654,46 @@ describe('issue 175 — report and card', () => {
     const model = buildWorkflowReport({ ...queue(), tasks: [refused] }, {});
     expect(model.derived[0].paragraph).toContain('not computed: finalEnergyHartree missing for record sp2');
     expect(workflowReportHtml(model)).toContain('data-field="derived-refusal"');
+  });
+});
+
+/**
+ * Issue 328 — an expression's unit was the string "hartree", always.
+ *
+ * `(EB - EH) * 627.5094740631` is a Hartree difference in kcal/mol, and the
+ * record and the report both printed "hartree" — a factor of 627.5 out, and in
+ * contradiction with the block's own title.
+ */
+describe('the unit a derived value carries (issue 328)', () => {
+  const units = new Map([['EB', 'hartree'], ['EH', 'hartree'], ['GAP', 'eV']]);
+
+  it('follows a recognised conversion factor instead of assuming hartree', () => {
+    expect(unitOfAst(parseExpression('(EB - EH) * 627.5094740631'), units)).toBe('kcal/mol');
+    // The roundings people actually type.
+    expect(unitOfAst(parseExpression('(EB - EH) * 627.5095'), units)).toBe('kcal/mol');
+    expect(unitOfAst(parseExpression('(EB - EH) * 27.211386245988'), units)).toBe('eV');
+    expect(unitOfAst(parseExpression('(EB - EH) * 2625.4996394799'), units)).toBe('kJ/mol');
+    // And the inverse direction: kcal/mol divided by the factor is Hartree.
+    expect(unitOfAst(parseExpression('K / 627.5094740631'), new Map([['K', 'kcal/mol']]))).toBe('hartree');
+  });
+
+  it('leaves a plain energy difference in Hartree alone', () => {
+    expect(unitOfAst(parseExpression('EB - EH'), units)).toBe('hartree');
+    expect(unitOfAst(parseExpression('(EB - EH) * 2'), units)).toBe('hartree');
+    expect(unitOfAst(parseExpression('(EB - EH) / 2'), units)).toBe('hartree');
+  });
+
+  it('records and reports kcal/mol for the reported expression', () => {
+    const evaluated = evaluateCompute({
+      expression: '(EB - EH) * 627.5094740631',
+      inputs: [
+        { name: 'EB', field: 'finalEnergyHartree', source: 'b3lyp' },
+        { name: 'EH', field: 'finalEnergyHartree', source: 'hf' },
+      ],
+    }, {
+      resolveSource: (id) => ({ run: runRecord(id === 'b3lyp' ? -76.4 : -76.0), recordId: id }),
+    });
+    expect(evaluated.unit).toBe('kcal/mol');
+    expect(evaluated.value).toBeCloseTo(-0.4 * 627.5094740631, 6);
   });
 });
