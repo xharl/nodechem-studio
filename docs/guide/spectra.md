@@ -152,7 +152,10 @@ function, one plot area, no resampling of either series.
 
 The second column is the intensity, and the file must say which axis it is on:
 units come from the column name, never from the data's range. A headerless
-file is refused, because its axis would have to be guessed.
+file is refused, because its axis would have to be guessed. The header cell is
+normalised before it is matched — case, spaces, underscores and `⁻¹` are
+ignored — so `wavelength_nanometers` and `wavelength (nm)` name the same axis,
+and so do `wavenumber`, `wavenumber_cm-1` and `cm-1`.
 
 The trace is recorded on the run as `spectrumOverlay`:
 
@@ -175,7 +178,8 @@ byte-identical to the computed-only one.
 The caption of a figure carrying both traces says which is which: the file name,
 its digest, the point count, the FWHM the computed curve was broadened with, and
 the one scaling applied to the measured intensity (division by its own maximum,
-so heights are comparable in shape and not in absolute units).
+so a shape can be compared), together with the sentence that measured and
+computed heights are not comparable.
 
 ### Refusals
 
@@ -187,9 +191,11 @@ have been — never a silently emptied plot:
 | a PNG/JPEG/GIF/TIFF/WebP, by extension or by magic bytes | names it as an image and states that this build does no digitisation |
 | a JCAMP-DX document | names the format and points at the Raman card, which reads it |
 | no header row | says the x axis unit is undeclared and will not be guessed |
+| an x column whose name is not an axis this import knows | quotes the column name and lists `wavelength_nm` and `wavenumber_cm-1` |
 | one column, or more than two | names the column count and what two columns mean |
 | both a wavelength and a wavenumber column | names both units and refuses the conversion |
 | a non-numeric cell | names the line, the cell and the column |
+| two intensities at one x | names both line numbers and the repeated x |
 | an x axis that both rises and falls | names the turn; the trace is not sorted to fit |
 | fewer than 5 points, or more than 20000 | names the count and the bound |
 

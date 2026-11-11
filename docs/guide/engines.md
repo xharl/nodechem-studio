@@ -2,9 +2,9 @@
 
 NodeChem Studio drives five calculation engines. The engine is resolved per block: a calculation
 block that names its own engine (inspector → **Engine**) runs on that engine, and a block that leaves
-the field at **Project default** follows **Molecule → Defaults**. A saved project keeps whatever it
-saved; the app never switches an engine behind your back, and a block that never set the field keeps
-following the project default exactly as before.
+the field at **Project default** follows the project's defaults in **Project settings…**. A saved
+project keeps whatever it saved; the app never switches an engine behind your back, and a block
+that never set the field keeps following the project default exactly as before.
 
 This is what makes a mixed workflow possible in one project:
 
@@ -25,10 +25,11 @@ blocks, when the upstream run recorded no geometry or when the deck has no geome
 block and both engines, and the report prints them next to the block.
 
 A setting that belongs to the other engine is refused before the run rather than silently dropped:
-a TD-DFT request, a Gaussian checkpoint, `Stable=Opt`, the NMR job type or custom route keywords on
-an xTB block stop the run with a message naming the setting. Route fields the xTB engine simply does
-not use (method, basis, SCF, grid, population, dispersion) stay ignored, as the inspector already
-says, so switching an existing block to xTB does not require clearing the form first.
+TD-DFT states or triplets, `Stable=Opt`, the NMR job type, a composite-method job type, Raman, VCD or
+ROA, frontier-orbital descriptors or custom route keywords on an xTB block stop the run with a
+message naming the setting. Route fields the xTB engine simply does not use (method, basis, SCF,
+grid, population, dispersion) stay ignored, as the inspector already says, so switching an existing
+block to xTB does not require clearing the form first.
 
 ## Gaussian 16 — licensed commercial software
 
@@ -38,7 +39,10 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
   basis set: def2-SVP, def2-TZVP, 6-31G(d), 6-311+G(d,p), cc-pVTZ or SDD.
 - **Dispersion** (D3(BJ) or D3), **SCF** tightening, **integration grid**, **population analysis**
   (NBO, Hirshfeld, MK charges), **implicit solvation** (PCM, SMD, CPCM) and **verbosity**.
-- **Job types**: `SP`, `Opt`, `Opt Freq`, `Freq`, `Opt=TS`, `IRC`, `Scan` and `NMR`.
+- **Job types**: `SP`, `Opt`, `Opt Freq`, `Freq`, `Opt=TS`, `Opt=QST2`, `Opt=QST3`, `IRC`, `Scan` and
+  `NMR`, plus the composite methods — `CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4` and
+  `G4(MP2)` — which are job types of their own rather than a method/basis pair; see
+  [Results](results.md#composite-methods).
 - **Excited states (TD-DFT/CIS)**: `TD=(NStates=N)` on an `SP` or `Opt` block, with singlets,
   triplets or a 50/50 run. The output's excitation energies, wavelengths, oscillator strengths and
   dominant transitions are parsed into the results panel. Other job types cannot carry `TD`, and
@@ -59,15 +63,15 @@ Gaussian 16 is a general-purpose electronic-structure program. In this app it gi
   log was not found, so that revision is not claimed.
 - **Validity checks** — the pre- and post-run checks in [Results](results.md#validity-checks), including
   `excited-state-root` (a root the TD job computes, and a `Pop=NTO` source with a TD record).
-- **Effective core potentials.** A basis with an ECP (def2 or SDD for any element above krypton)
-  written for a heavy atom becomes a `GenECP` route with the basis and pseudopotential blocks
-  appended after the molecule. This build ships def2-SVP for Ag, Pd, I, Pt and Au, and SDD (Basis Set
-  Exchange "Stuttgart RSC 1997") for Ag, Pd, Pt and Au, taken verbatim from the Basis Set
-  Exchange; the run records which
-  library and checksum it used. Asking for an element without bundled data is a validation error —
-  the app refuses to write a `GenECP` route that Gaussian would reject — and a light-element job is
-  written byte-for-byte as before. LANL2DZ is offered as a name but carries no bundled data, so a
-  heavy-element job with it is blocked with the same message until its blocks are added.
+- **Effective core potentials.** A basis whose pseudopotentials Gaussian 16 already ships —
+  `def2-SVP`, `def2-TZVP`, `SDD`, `LANL2DZ` — is written as the plain route keyword even for a heavy
+  atom: the program carries the matching ECP, and no `GenECP` card block is written, because a real
+  Gaussian 16 A.03 run rejected such a block at link 301. A basis with no ECP for a heavy element
+  (`6-31G(d)` on Pd, say) is a validation error that names the elements and points at `LANL2DZ`,
+  `SDD` or a def2 basis, so the app never writes a route Gaussian cannot run. A light-element job is
+  written byte-for-byte as before. The repository still carries Basis Set Exchange copies of def2-SVP
+  (Ag, Pd, I, Pt, Au) and SDD (Ag, Pd, Pt, Au) with their library name and checksum, and `run.json`
+  records an ECP section when an input actually carries one.
 - **ONIOM results** — a Gaussian ONIOM log is read: the extrapolated energy is the reported total,
   and the card prints the three gridpoint components, the layer counts, the cuts Gaussian used as
   link atoms and the per-layer charge/multiplicity lines. The reader checks
@@ -308,10 +312,12 @@ What xTB does **not** give you here:
   hidden in an xTB project and stripped from the run payload. GFN2-xTB already includes D4
   dispersion, and xTB's free energy already uses the mRRHO entropy treatment, so the app adds no
   quasi-harmonic or standard-state correction on top of it.
-- No Gaussian-route checks. xTB has no route, basis or ECP, so method/basis compatibility and spin
-  contamination do not apply and are reported as **not applicable** — never as a pass. The checks
-  that do apply run for xTB too: charge/multiplicity parity, geometry sanity, imaginary modes and
-  optimisation convergence (read from xTB's own convergence banner).
+- No Gaussian-route checks. xTB has no route, basis or ECP, so method/basis compatibility, spin
+  contamination, frontier-orbital descriptors, the excited-state root check and counterpoise do not
+  apply and are reported as **not applicable** — never as a pass. The seven
+  checks that do apply run for xTB too: charge/multiplicity parity, geometry sanity, imaginary modes,
+  the engine-settings refusal above, solvation evidence, optimisation convergence (read from xTB's own
+  convergence banner) and the conformer-ensemble check.
 - No TD-DFT excited states, NMR shielding or NBO/ESP population analysis.
 
 **An xTB run is not a substitute for a Gaussian result.** GFN methods are parameterised
@@ -323,9 +329,9 @@ workflow needs a Gaussian level of theory, it needs a licensed Gaussian installa
 
 1. Install xTB so the executable and its `share/xtb` parameter directory are available (release
    tarballs ship `bin/xtb` beside `share/xtb`). No licence file is needed.
-2. Open **Molecule → Defaults**, set **Engine** to `xTB (GFN-xTB)`, then choose the **Hamiltonian**
-   and **Optimisation level**. The geometry comes from the **Structure** tab; until you import a
-   file, the labelled demo water geometry is used.
+2. Open **Project settings…**, set **Engine** to `xTB (GFN-xTB)`, then choose the **Hamiltonian**
+   and **Optimisation level**. The geometry comes from **Molecule… → Structure**; until you import
+   a file, the labelled demo water geometry is used.
 3. Open **Run** and click **Browse** next to *xTB executable*; select `xtb` (or `xtb.exe` on
    Windows). The app looks for parameters in `../share/xtb` relative to the executable. If your
    install is elsewhere, export `XTBPATH` pointing at that directory; preflight accepts either.
@@ -347,7 +353,8 @@ no licence file and no ORCA source. Install ORCA yourself and follow its licence
 In this app ORCA gives you:
 
 - **Methods** `B3LYP`, `PBE0`, `M06-2X`, `MP2`, `CCSD(T)`, `DLPNO-CCSD(T)` and `HF`, with **basis
-  sets** `def2-SVP`, `def2-TZVP`, `cc-pVTZ`, `6-31G(d)` (written as ORCA's `6-31G*`) and
+  sets** `def2-SVP`, `def2-TZVP` (or `def2-TZVP(PP)`, the same ORCA keyword with the Stuttgart ECPs
+  where the all-electron set is not defined), `cc-pVTZ`, `6-31G(d)` (written as ORCA's `6-31G*`) and
   `6-311+G(d,p)`. `DLPNO-CCSD(T)` is a **single point** in this builder — a request for `Opt` or
   `Freq` with it is refused by name — and it carries a **PNO threshold** (`NormalPNO` or `TightPNO`),
   written explicitly so the route preview states the truncation level instead of leaving it to ORCA's
@@ -435,11 +442,10 @@ H     0.000000   -0.757200   -0.469200
 
 What ORCA does **not** give you through this builder:
 
-- No transition-state search, IRC or relaxed PES scan. Those need `%geom` or `%irc` blocks, so the
-  input builder refuses them instead of writing a keyword that runs a different job.
-- No TD-DFT excited states, population analysis (NBO/ESP), Raman activities, `Stable=Opt` or custom
-  route keywords. Those are Gaussian-only form fields in this app; a block that carries one is
-  refused with a message naming the field.
+- No population analysis (NBO/ESP), `Stable=Opt` or custom route keywords. Those are Gaussian-only
+  form fields in this app; a block that carries one is refused with a message naming the field. The
+  same refusal covers TD-DFT states or triplets set on a job type that is not `TD-DFT`: ORCA would run
+  a plain single point and the record would claim a spectrum that was never computed.
 - No Gaussian `PCM` keyword: ORCA implements CPCM and SMD. `SDD` has no simple-input keyword in
   this builder; use `def2-TZVP`, which carries ECPs for the heavy elements it covers. `ωB97X-D` is
   also refused: ORCA's `wB97X-D3`/`wB97X-D4` are different functionals from the Gaussian keyword, so
@@ -454,8 +460,8 @@ What ORCA does **not** give you through this builder:
 1. Install ORCA 6 (or ORCA 5) so the `orca` driver (`orca.exe` on Windows) and its module binaries
    are in one directory. No licence file is needed for academic use, but you must accept ORCA's
    licence yourself.
-2. Open **Molecule → Defaults**, set **Engine** to `ORCA 6`, then choose the method and basis. The
-   geometry comes from the **Structure** tab.
+2. Open **Project settings…**, set **Engine** to `ORCA 6`, then choose the method and basis. The
+   geometry comes from **Molecule… → Structure**.
 3. Open **Run** and click **Browse** next to the executable field; select the `orca` driver by its
    **full path** (`/opt/orca/orca`, `C:\ORCA\orca.exe`). ORCA's parallel driver must be called by
    full pathname — preflight warns when it is not.
@@ -484,16 +490,20 @@ What ORCA does **not** give you through this builder:
 The parser was written from the output shapes documented in the **ORCA 6.0 manual and tutorials**
 (`SCF CONVERGED AFTER … CYCLES`, `FINAL SINGLE POINT ENERGY`, the `HURRAY` convergence banner,
 `VIBRATIONAL FREQUENCIES`, `THERMOCHEMISTRY AT 298.15K`, `ORCA TERMINATED NORMALLY` and
-`ORCA finished by error termination in <module>`). **No live ORCA binary was run for this build.**
+`ORCA finished by error termination in <module>`). An installed **ORCA 6.1.1 (RELEASE)** has since
+been run on this project's own host (2026-11-10, `test/fixtures/orca/PROVENANCE.md`), and the NMR,
+TD-DFT, Raman, VCD, `Opt=TS`, IRC and scan numbers quoted above are read from those logs — each job's
+deck was written by this builder.
 
-Two real ORCA 5.0 logs now pin the line shapes that matter for a single point and a frequency job —
+Two real ORCA 5.0 logs pin the line shapes of a single point and a frequency job —
 `test/fixtures/real/orca-5.0-dvb-ir/` (5.0.1, `FINAL SINGLE POINT ENERGY`, `VIBRATIONAL
 FREQUENCIES`, `Total Enthalpy`, `Final Gibbs free energy`) and `test/fixtures/real/orca-5.0-water-mp2/`
-(5.0.0, energy and termination), both verbatim files from cclib's test data. What is still synthetic is
-the optimisation banner: `test/fixtureCoverage.test.js` prints that branch as a named gap because no
-captured ORCA optimisation log is committed (issue 176). So the single-point, SCF, frequency and
-thermochemistry readings are checked against real output; the optimisation verdict is checked against
-the 6.0 manual's documented shape only.
+(5.0.0, energy and termination), both verbatim files from cclib's test data. The optimisation banner
+is the one branch still counted as a gap **in that corpus**: `test/fixtureCoverage.test.js` scans
+`test/fixtures/real/`, which carries no captured ORCA optimisation log (issue 176). A real 6.1.1
+optimisation log with the `HURRAY` banner is committed outside it — `test/fixtures/orca/nh3-optts.out`,
+the saddle search quoted above — so the verdict is exercised against real output, just not by the
+coverage table.
 
 The magnetic-property readers added for issue 222 are pinned by two more public logs, both verbatim
 and both under `test/fixtures/real-public/`:
@@ -510,9 +520,10 @@ and both under `test/fixtures/real-public/`:
   printed, so `kMatrix` is null and the record says why.
 
 
-The same limit applies to execution: the runner is tested against a stand-in driver script that
+Execution is still proved only that far: the runner is tested against a stand-in driver script that
 prints those fixtures, exits 0 after an error banner, prints nothing, sleeps and gets cancelled. It
-proves the spawning, capture, termination and cancellation paths, and nothing about ORCA itself.
+proves the spawning, capture, termination and cancellation paths, not how a given installation
+behaves.
 
 The first run on an installed ORCA should be a small single point. Check the parsed
 `FINAL SINGLE POINT ENERGY`, the SCF cycle count and the termination line against the log; if a
@@ -613,9 +624,10 @@ What a Psi4 block will **not** do in this build, each refused by name rather tha
 - **Frequencies at CCSD/CCSD(T)** — Psi4 has no analytic Hessian there; run the frequency at DFT
   or MP2 level.
 - **Checkpoint hand-off** — Psi4 leaves no restart file this app can hand to another block; a
-  downstream block reads the upstream geometry instead. The `.fchk` an open-shell single point writes
-  for the EPR block is read by this run's parser and kept with its `run.json`; it is not a restart
-  file and is not passed to another block.
+  downstream **Gaussian or PySCF** block reads the upstream geometry instead, while a Psi4, ORCA or
+  xTB block downstream keeps its planned geometry (#326). The `.fchk` an open-shell single point
+  writes for the EPR block is read by this run's parser and kept with its `run.json`; it is not a
+  restart file and is not passed to another block.
 
 Two things the parser does deliberately, because a Psi4 log can mislead:
 
@@ -632,8 +644,8 @@ Two things the parser does deliberately, because a Psi4 log can mislead:
 1. Install Psi4 1.4 or newer (conda-forge is the usual route) so a `psi4` executable exists
    (`psi4.exe` on Windows). Psi4 needs `PSIDATADIR` to find its basis sets; a conda installation
    sets it from its launcher.
-2. Set **Molecule → Defaults → Engine** to `Psi4`, then choose method and basis. The geometry comes
-   from the **Structure** tab.
+2. Set **Project settings… → Engine** to `Psi4`, then choose method and basis. The geometry comes
+   from **Molecule… → Structure**.
 3. In **Run**, select the `psi4` executable with **Browse**.
 4. **Preflight** checks the platform, that the executable exists and is named `psi4`, that it is
    runnable on Linux/macOS, and warns when `PSIDATADIR` is not set in the environment.
@@ -744,8 +756,9 @@ What a PySCF block will **not** do in this build, each refused by name rather th
 - **SMD, CPCM and COSMO** — PySCF's `solvent.PCM` writes PCM and C-PCM; the other models are refused
   by name, and the result is an electronic energy, not a solvation free energy.
 - **Checkpoint hand-off** — PySCF leaves no restart file this app hands to another block. A downstream
-  block reads the upstream geometry instead; the queue marks the edge geometry-only and rewrites the
-  downstream deck's molecule.
+  **Gaussian or PySCF** block reads the upstream geometry instead; the queue marks the edge
+  geometry-only and, for a PySCF receiver, rewrites the deck's molecule. A Psi4, ORCA or xTB block
+  downstream keeps its planned geometry (#326).
 - **A method or basis not in the lists above** — refused by name with the supported list. No
   functional or basis is guessed from a Gaussian route.
 
@@ -753,7 +766,7 @@ What a PySCF block will **not** do in this build, each refused by name rather th
 
 1. Install PySCF 2.x into a Python 3.9+ environment: `pip install pyscf geometric` (or
    `conda install -c conda-forge pyscf geometric`). The app does not bundle Python or PySCF.
-2. Set **Molecule → Defaults → Engine** to `PySCF`, then choose method and basis. For CASSCF, enter
+2. Set **Project settings… → Engine** to `PySCF`, then choose method and basis. For CASSCF, enter
    the active space on the block.
 3. In **Run**, select the Python interpreter that has PySCF — `/usr/bin/python3`, a virtualenv's
    `python`, or a `pyscf-runner` wrapper — with **Browse**. A bare `python3` is accepted and resolved
@@ -785,15 +798,19 @@ parser does not recognise is reported as `unknown`, never guessed.
 | Level of theory | Method + basis set | `--gfn 0/1/2` or `--gfnff` | `! method basis` | `set reference` + method/basis | Recorded method/basis; CASSCF takes an active space |
 | Basis set, dispersion, SCF, grid, population | Used | Ignored — fields hidden and stripped from the payload | Mapped to ORCA keywords; population refused | Basis used; unsupported fields refused by name | Basis used; dispersion, SCF, grid and population refused |
 | Solvation | PCM / SMD / CPCM, Water…Acetonitrile | ALPB / GBSA, Water…Acetonitrile | CPCM / SMD, Water…Acetonitrile | DDX PCM / COSMO, Water…DMSO | PCM / C-PCM, Water…DMSO |
-| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, NMR, TD-DFT, Opt=TS, IRC, Scan | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq, TD-DFT |
+| Job types | SP, Opt, Opt Freq, Freq, Opt=TS, IRC, Scan, NMR, Opt=QST2/QST3, composite methods | SP, Opt, Opt Freq, Freq | SP, Opt, Opt Freq, Freq, NMR, TD-DFT, Opt=TS, IRC, Scan | SP, Opt, Opt Freq, Freq, TD-DFT | SP, Opt, Opt Freq, Freq, TD-DFT |
 | Optimisation control | `Opt=Tight`/`VeryTight`, force constants | `--opt <level>` / `--ohess <level>` | `TightOpt` / `VeryTightOpt`, `DEFGRID2/3` | Psi4 optimizer defaults | geomeTRIC defaults |
 | Resources | `Memory` + unit, `Cores (nproc)`, checkpoint file | `Threads (OMP_NUM_THREADS)` | `%maxcore` (MB per core), `%pal nprocs` | `Threads (OMP_NUM_THREADS)` | `Threads (OMP_NUM_THREADS)` |
 | Checkpoint hand-off | `%OldChk` + `Geom=Check`/`Guess=Read` | Copies `xtbrestart` into the downstream run folder | `%moinp "<job>.gbw"`; the upstream `.gbw` is copied into this run folder | None; geometry-only hand-off | None; geometry-only hand-off |
-| Validity checks | Six checks, pre and post run | Four applicable checks; Gaussian-only ones reported *not applicable* | Canonical gates on the parsed result; Gaussian-route checks do not apply | Canonical gates on the parsed result | Canonical gates plus named refusals |
+| Validity checks | Twelve checks, pre and post run | Seven applicable checks; the Gaussian-only ones reported *not applicable* | Canonical gates on the parsed result; Gaussian-route checks do not apply | Canonical gates on the parsed result | Canonical gates plus named refusals |
 | Dry run | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture | Labelled `FIXTURE OUTPUT` fixture |
 
 A dry run is a fixture for every engine: it writes a synthetic file headed `FIXTURE OUTPUT`, starts
 no process, and is never a calculation.
+
+The PySCF and Psi4 "geometry-only hand-off" cells describe what the engine leaves behind, not what
+the receiver does with it: it is written into the next block's input only when that block is Gaussian
+or PySCF (#326).
 
 ## Next
 

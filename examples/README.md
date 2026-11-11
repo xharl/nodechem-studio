@@ -1,8 +1,9 @@
 # Example projects
 
-Three `.ncs` files, one per built-in workflow template. They are ordinary
-schema-v3 projects: open one with **Open** in the top bar, or double-click the
-file once the desktop build is associated with `.ncs`.
+Five `.ncs` files: one per built-in workflow template, plus a reproduction of a
+published protocol. They are ordinary schema-v3 projects: open one with
+**⋯ → Open project…**, or double-click the file once the desktop build is
+associated with `.ncs`.
 
 | File | Template | Blocks |
 | --- | --- | --- |
@@ -16,12 +17,13 @@ The transition-state example also carries a note block explaining the
 `Opt=TS`/`CalcFC` route, so its block count is one higher than its three
 calculation steps.
 
-These files are generated from `src/shared/templates.js` with
-`stringifyProject(templateProject(id))`, which is why they are canonical JSON
-and byte-stable. They exist so the templates can be read, diffed and tested
-outside the app; the template chooser (the **New** button) does not read them
-from disk. The test suite asserts that each file still parses and deep-equals
-its `templateProject(id)` output.
+The four recipe files are generated from `src/shared/templates.js` with
+`stringifyProject(templateProject(id))`, which is why they are canonical JSON and
+byte-stable; `apn-fluorescence.ncs` is a hand-written reproduction, not a recipe.
+They exist so the templates can be read, diffed and tested outside the app; the
+template chooser (**New project**) does not read them from disk. `test/examplePlanIdentity.test.js`
+parses all five and asserts that each still produces the task ids, input hashes and
+edges recorded in `test/fixtures/example-plan-golden.json`.
 
 Opening an example and saving it writes a new file through the normal save
-path. To get back to the untouched recipe, start it again from **New**.
+path. To get back to the untouched recipe, start it again from **New project**.

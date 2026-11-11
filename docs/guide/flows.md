@@ -73,8 +73,10 @@ barrier only changes behaviour once runs overlap.
 ## Parallel execution
 
 `runner.maxParallel` (project) and the run console's "at a time" field decide how
-many tasks may be in flight. The scheduler never exceeds
-`floor(cores / nproc)` for the block, and a barrier still holds.
+many tasks may be in flight, up to the schema ceiling of 64. The scheduler does
+not look at host cores: preflight reports the logical core count and memory it
+detected, and it is your decision whether two 8-core jobs on a 4-core machine is
+oversubscription you can afford. A barrier still holds at any value.
 
 The default is 1: an existing project behaves exactly as it did. Raising it makes
 independent records and independent branches overlap; ready tasks still start in

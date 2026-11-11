@@ -55,8 +55,11 @@ other users.
 
 The menu numbers are pinned to **Multiwfn 3.8**. They are transcribed from the 3.8 manual examples
 (topology analysis, basin analysis, quantitative molecular surface, grid export and NCI), and a
-different release renumbers them. A binary whose banner is not `3.8` is refused by name — the block
-does not guess that a newer menu still means the same thing.
+different release renumbers them. A binary whose banner is not a 3.8 banner is refused by name — the
+block does not guess that a newer menu still means the same thing. A point release inside the band
+(`3.8.1`, `3.8(dev)`) is accepted, because the banner says the menus are the same generation; a
+banner the block cannot read at all is its own refusal, since "unknown version" is not permission to
+use 3.8 menu numbers.
 
 ### Analyses in v1
 
@@ -167,8 +170,9 @@ unary      := ('+' | '-') unary | primary
 primary    := number | name | name '(' [expression (',' expression)*] ')' | '(' expression ')'
 ```
 
-`−`, `×` and `÷` may be typed instead of `-`, `*` and `/`. Numbers may be written `2`, `-2.5`, `.5`,
-`1.0e-3`.
+`−`, `×` and `÷` may be typed instead of `-`, `*` and `/`; so may an en dash (as a minus) and a middle
+dot (as a times), which is what a formula pasted out of a paper usually carries. Numbers may be
+written `2`, `-2.5`, `.5`, `1.0e-3`.
 
 | Function | Arity | Result |
 | --- | --- | --- |
@@ -228,7 +232,9 @@ Nothing is guessed and nothing is zero:
   block it is waiting for;
 - division by zero, a non-finite result, an unknown function, a wrong arity, an unknown identifier,
   unbalanced parentheses, a trailing token, a character that is not part of the language: each is
-  refused by name, with its position in the expression.
+  refused by name, with its position in the expression;
+- an empty expression, one longer than 2000 characters, or more than 24 declared inputs is refused at
+  save time — a protocol is a line, not a script.
 
 ## Where the value appears
 

@@ -8,11 +8,12 @@ in the application, described below, and the automated test suite fails if a sec
 
 ### Checking for updates
 
-**Check for updates** (in the **⋯** menu) asks GitHub for this repository's published releases. The
+**Check for updates…** (in the **⋯** menu) asks GitHub for this repository's published releases. The
 request goes to `api.github.com/repos/xharl/nodechem-studio/releases?per_page=20` at the moment you
 click; nothing is checked at startup, on a timer, or in the background. It carries no identifier — no
-account, no machine name, no installation id, no project data. The only header set beyond the
-defaults is a `User-Agent` naming the application version, which GitHub's API requires.
+account, no machine name, no installation id, no project data. The only headers beyond the defaults
+are an `Accept` naming GitHub's JSON media type and a `User-Agent` naming the application version,
+which GitHub's API requires.
 
 The response is parsed in memory, compared with the version stamped into this build, and then
 discarded: it is not written to disk, not forwarded anywhere and not retained between clicks. If a
@@ -26,9 +27,13 @@ What exists on disk:
 | Data | Where | Who can read it |
 | --- | --- | --- |
 | Project (`.ncs`) | Wherever you saved it | You, and anyone you share the file with |
-| Run records | `<userData>/runs/<runId>/` | You |
-| Queue state | `<userData>/queues/<queueId>/` | You |
-| Preferences (executable path, layout) | Electron `userData` local storage | You |
+| Run records | `<data root>/runs/<runId>/` | You |
+| Queue state | `<data root>/queues/<queueId>/` | You |
+| Machine settings (executable paths, data directory) | `settings.json` under Electron `userData` | You |
+| Window layout, theme, last run configuration | Electron `localStorage` in the renderer | You |
+
+`<data root>` is Electron's `userData` directory unless **Settings → Advanced** sets a data
+directory, in which case the runs and queues are written there instead.
 
 Run records contain the exact input, the raw output and the parsed result — which means a run record
 can contain your chemistry, including structures you would rather not publish. Treat a run folder

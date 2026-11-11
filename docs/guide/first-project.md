@@ -25,20 +25,22 @@ show the project's saved state; live status during a run is in the queue panel
 
 ### Start from a template
 
-**New** in the top bar opens a chooser. Pick a recipe and it replaces the graph in memory; **Save**
-then asks for a new `.ncs` path. If the current project has unsaved changes, the chooser asks before
-discarding them.
+**New project** in the **⋯** menu opens a chooser. Pick a recipe and it replaces the graph in memory;
+**Save** then asks for a new `.ncs` path. If the current project has unsaved changes, the chooser
+asks before discarding them.
 
 | Template | Blocks | Starting point |
 | --- | --- | --- |
 | Reactant optimization + frequency | 2 | `Opt` → `Freq`, with the frequency block requiring zero imaginary modes |
 | Transition-state search | 4 | Reactant `Opt` → `Opt=TS` with `CalcFC` → `Freq`, plus a checkpoint hand-off and a note explaining the route |
+| Emission from S1 (Opt then TD) | 3 | `Opt` with `TD=(NStates=1,Root=1)` → a TD single point at that minimum, plus a note on what the energy is |
 | Single-point energy + NBO charges | 1 | One `SP` job with `Pop=NBO`; no frequency gates |
 
-The TS template's frequency block requires exactly one imaginary mode at or above 50 cm⁻¹.
-**Blank project** is also in the list: one calculation block with the default route and gates. The
-same three recipes are checked in under [`examples/`](../../examples/README.md) as `.ncs` files, so
-you can open one directly with **Open**.
+The TS template's frequency block requires exactly one imaginary mode at or above 50 cm⁻¹. The
+emission template reports a **vertical** emission energy, not a 0-0 energy. **Blank project** is also
+in the list: one empty optimisation block you configure before it runs. The four recipes are checked
+in under [`examples/`](../../examples/README.md) as `.ncs` files, so you can open one directly with
+**Open**.
 
 ## 2. Run one block
 
@@ -61,7 +63,8 @@ are chemical results.
 
 ## 3. Run the whole workflow
 
-Click **Run workflow** in the console. The queue runs blocks in dependency order, one at a time:
+Click **Run workflow** in the console. The queue runs blocks in dependency order, one at a time by
+default (the **Parallel tasks** field in **Run → Setup** raises that; see the [FAQ](faq.md)):
 
 1. Reactant optimization → Reactant frequency.
 2. TS guess optimization → TS frequency (a checkpoint hand-off between the two).
@@ -82,28 +85,39 @@ findings kept separate from the gate verdict. See [Results](results.md).
 ## 5. Save the project
 
 Click **Save**. A new project prompts for a path and writes a `.ncs` file — canonical JSON, fixed key
-order, byte-stable when nothing changed. The tab title stops showing *unsaved changes*.
+order, byte-stable when nothing changed. The **unsaved changes** pill beside the project name
+disappears.
+
+Three details of that dialog are worth knowing. The name you choose carries exactly one `.ncs`
+(`foo` becomes `foo.ncs`, `foo.ncs` stays as typed, and a doubled `foo.ncs.ncs` is collapsed to one);
+saving over a file the app has not read or written this session asks first; and the next save dialog
+opens in the folder the last save used.
 
 `.ncs` is the only project extension the app accepts. The format is defined in
 [`docs/PROJECT-FORMAT.md`](../PROJECT-FORMAT.md).
 
 ## 6. Use your own geometry
 
-Open **Molecule** in the top bar. The drawer has three tabs:
+Open **Molecule** in the top bar. The drawer has two tabs — **Structure** and **Charge & fragments** —
+plus a **Records** tab when the project holds a dataset with more than one record.
 
-- **Structure** — import a `.xyz`, `.mol`, `.sdf`, `.mol2`, `.pdb`/`.pdbqt`, `.cjson`, `.gjf`, `.com` file,
-  or a Gaussian `.log`/`.out` (its optimisation frames become selectable records), with the file picker or by
-  drag-and-drop. Element symbols, finite coordinates and charge/multiplicity parity are validated;
-  Z-matrix input is refused rather than guessed.
+- **Structure** — import a `.xyz`, `.mol`, `.sdf`, `.mol2`, `.pdb`/`.pdbqt`, `.cjson`, `.gjf`, `.com`
+  file, a ChemDraw `.cdxml`/`.cdx` drawing, or a Gaussian `.log`/`.out` (its optimisation frames become
+  selectable records), with the file picker or by drag-and-drop. Element symbols, finite coordinates
+  and charge/multiplicity parity are validated; Z-matrix input is refused rather than guessed.
 
   A file that holds more than one structure — a multi-record `.sdf`, a multi-frame `.xyz` — shows a
   **Record** selector, so you choose which one becomes the project's molecule instead of the first
   being taken silently. A `.mol`/`.sdf` that states its bonds keeps them, orders included: the 3D
-  viewer draws double and triple bonds as such, and the inspector says whether the topology came
-  from the file or from distance perception.
-- **Charge & fragments** — total charge, multiplicity and fragment bookkeeping.
-- **Defaults** — the **Engine** choice and the project-wide route defaults. New blocks snapshot
-  these defaults when they are added.
+  viewer draws double and triple bonds as such, and its caption says whether the bonds came from the
+  file or were perceived from distances.
+- **Charge & fragments** — total charge, multiplicity, fragment bookkeeping and the per-atom fragment
+  partition (the labels Psi4 SAPT splits the complex at).
+
+The project-wide route defaults are **not** in this drawer. Open **Project settings…** in the **⋯**
+menu: **Engine**, the method and basis pair (or the xTB Hamiltonian and optimisation level), memory,
+cores and a preview of the route a new block would be given. New blocks snapshot these defaults when
+they are added; changing them later does not rewrite an existing block.
 
 Until you import a structure, the runner uses a clearly labelled demo water geometry. Every
 calculation block builds its input from the imported geometry, so one molecule drives the whole
@@ -113,9 +127,9 @@ graph.
 
 When you are ready to run something real:
 
-- **xTB** — set **Engine** to `xTB (GFN-xTB)` in **Molecule → Defaults**, then point the run console
-  at your `xtb` executable. No licence is involved. Follow
-  [Setting up xTB](engines.md#setting-up-xtb).
+- **xTB** — set **Engine** to `xTB (GFN-xTB)` in **Project settings…**, then pick your `xtb`
+  executable in **⋯ → Settings… → Engines** (or in the run console, for one run). No licence is
+  involved. Follow [Setting up xTB](engines.md#setting-up-xtb).
 - **Gaussian 16** — point the run console at your licensed console executable (`g16.exe`,
   or `g16` on Linux/macOS), run **Preflight**, then uncheck **Dry run**. Follow
   [Running a real Gaussian job](engines.md#running-a-real-gaussian-job).

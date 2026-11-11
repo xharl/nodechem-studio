@@ -24,16 +24,16 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ```
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
-ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--tautomer <path>] [--tautomer-script <path>] [--timeout <seconds>]
+ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>] [--scorer <path>] [--settings <file>] [--timeout <seconds>] [--json]
 ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
 ncs validation <cases.json> [--run] [--executable <python>] [--work <dir>] [--timeout <seconds>] [--out <file>] [--json]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
-ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--json]
+ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--title <text>] [--notes <text>] [--json]
 ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicity <n>] [--out <file>] [--json]
 ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
 ncs diff <a.ncs> <b.ncs> [--json]
-ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
-ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden|cjson> [--spectrum ir|raman|uv] [--from <log>] [--to <cjson>] [--cclib <python>] [--node <id>] [--out <file>] [--json]
+ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file> [--json]
+ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden|cjson> [--spectrum ir|raman|uv] [--from <log>] [--to <cjson>] [--cclib <python>] [--cclib-script <file>] [--node <id>] [--out <file>] [--json]
 ncs convert <project.ncs> --node <id> --format <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs smiles <file|string> [--name <label>] [--out <file.json>] [--json]
@@ -42,8 +42,11 @@ ncs cache <file.ncsr> --inspect [--json]
 ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cube> [--units bohr|angstrom] [--grid <angstrom>] [--padding <angstrom>] [--json]
 ```
 
-- `validate` prints the schema errors, warnings and the pre-run validity findings as JSON. Every
-  shipped example validates with exit 0.
+- `validate` prints the schema errors, warnings and the pre-run validity findings as JSON when
+  `--json` is given or stdout is not a terminal; on a terminal it prints `<file>: valid` or
+  `<file>: invalid` and the errors one per line. Every shipped example validates with exit 0. A path
+  that is a directory or does not exist is refused with one line — `ncs: cannot read <path>: is a
+  directory` or `not found` — and exit 2.
 - `build-input` prints the exact input text for one node — the same bytes the queue would write —
   without running anything. Use `--out` to write it to a file.
 - `run` queues the workflow, waits for it to finish and prints a JSON summary: the queue status and,
@@ -54,16 +57,22 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   console does: `--crest`, `--obabel`, `--tautomer`, `--tautomer-script`, `--multiwfn` and
   **`--scorer`** (the ML scorer sidecar, for `rankBy`, a calculate `provider` or an `aimnet2` relax).
   Each falls back to Settings → Tools when the flag is absent; a block that needs one and has no path
-  fails by name and names the flag.
+  fails with a sentence naming the tool it wants, and only the scorer refusal also names its flag
+  (`CLI: --scorer <path>`). `--settings <file>` reads a settings file other than the platform
+  default; a file named explicitly that is missing or invalid is a usage error, while a missing
+  default file is normal on a fresh machine.
   **`--timeout` is the watcher's clock, not a task limit.** Without it the command waits as long as
   the queue needs, because each task already has its own budget (`runner.timeoutSeconds` in the
   project, then Settings → Runs, then 3600 s). Passing `--timeout N` stops the wait after N seconds;
   the running block is stopped, its task is recorded `interrupted` and the queue is left `paused`, so
-  a later `ncs run` or the app can resume it. The message names the flag, the block that was running
-  and — when the project declares one — the value to pass to let it finish.
-- `report` rebuilds the HTML report from the newest queue under `<out-dir>/queues/` and writes
-  `<out-dir>/reports/index.html` unless `--out` names another file. `--flow` restricts it to one
-  flow; without it every flow that has a queue is combined into one document.
+  a later `ncs run` or the app can resume it; the command itself exits 4. The message names the flag,
+  the block that was running and — when the project declares one — the value to pass to finish it.
+- `report` rebuilds the HTML report from the newest queue of each flow under `<out-dir>/queues/` and
+  writes `<out-dir>/reports/index.html` unless `--out` names another file. `--flow` restricts it to
+  one flow; without it every flow that has a queue is combined into one document. `--figures
+  basic|surfaces|none` picks the figure set (`basic` is the default; `none` reads no cube at all).
+  `--include-imported` also prints an imported result's number in the energy columns, labelled; an
+  imported record is listed either way, because dropping it would hide the thing it exists to say.
 - `validation` reads a case set that records a method ladder (method, basis, energy in hartree, or
   `null` plus a reason) and prints the per-case spread, the aggregate MAE/RMSE and every
   `not computed` rung. `--run` executes any rung whose energy is `null` with PySCF, in its own
@@ -74,10 +83,11 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   rewritten. The case set is refused as a whole when a reference, a rung or the schema version is
   malformed.
 - `export` prints every `run.json` under `<out-dir>/runs/` in one versioned envelope, with the
-  absolute path of the schema the records were validated against. `--schema-version` defaults to 1;
-  an unknown version is refused with the path of the version this build ships. One non-conforming
-  record refuses the whole export instead of returning the readable subset. `--out` writes the
-  envelope to a file and prints its path.
+  absolute path of the schema the records were validated against. `--schema-version` defaults to `2`,
+  the record version this build writes; `--schema-version 1` still emits the v1 envelope, because the
+  v1 schema is kept unchanged beside it. An unknown version is refused with the path of the version
+  this build ships. One non-conforming record refuses the whole export instead of returning the
+  readable subset. `--out` writes the envelope to a file and prints its path.
 - `convert` turns a finished log (`.log`/`.out`), a formatted checkpoint, a structure file (including
   binary ChemDraw `.cdx`) or a saved
   `.ncs` into a format other software reads: `extxyz`, `xyz`, `sdf`, `jcamp`, `molden` or `cjson`.
@@ -101,6 +111,11 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   `qchem` on a `.ncs` project plus `--node <id>`. That is the same text `ncs export-input` and the
   window's **Export** menu write, because all three call one function; a structure file is refused
   by name (`a deck needs a block's settings`) rather than given an invented method and basis.
+  `--node` selects the block whose structure is converted, for every form: a structure format writes
+  that block's geometry, the deck formats write its route plus that geometry. An id that names no
+  block is refused with the block list, and a block that carries no structure (`condition`, `loop`,
+  `merge`, `output`, `analyse`, `note`) is refused by name rather than falling back to the project
+  molecule. Without `--node`, a structure format converts `molecule.coords`.
 - `export-input` writes the input one block would be for an engine the app **exports but does not
   run**: `--engine nwchem`, `gamess` or `qchem`. It uses the block's own settings and the project
   geometry, and refuses with a named reason (exit 2, `code: "export-refused"`) anything it cannot
@@ -149,7 +164,7 @@ this table fails the suite, so a new CLI-only capability cannot ship undocumente
 | `ncs validate` | window: **Validate** | Schema errors, warnings and pre-run findings. |
 | `ncs build-input` | window: the input preview | The exact bytes the queue would write for one block. |
 | `ncs run` | window: **Run workflow** / **Run selected block** | Queue the workflow and run it. |
-| `ncs report` | window: **Report…** and the figure set beside it | `report.html` + `report.json` for the newest queue. |
+| `ncs report` | window: **Report…** and the figure set beside it | The HTML report and its JSON model, for the newest queue of each flow. |
 | `ncs validation` | **CLI only** | A recorded method ladder across reference cases: per-case spread, aggregate MAE/RMSE, `not computed` preserved. |
 | `ncs convert` | window: **Export as…** | A finished run as extxyz, xyz, sdf, JCAMP or Molden. |
 | `ncs cube` | window: **Write cube…** on the wavefunction card | One orbital's cube from a checkpoint, without `cubegen`. |
@@ -170,8 +185,8 @@ terminal is told these exist rather than left to infer their absence.
 | Code | Meaning |
 | --- | --- |
 | 0 | The workflow finished and every run passed its gates. |
-| 1 | The command was used incorrectly. |
-| 2 | The project does not validate, or a task could not be built. |
+| 1 | The command was used incorrectly — an unknown command, or a flag with no value where one is needed. |
+| 2 | The project does not validate, a task could not be built, or a QCSchema document or payload does not conform. |
 | 3 | A run finished but its gates failed — the result exists and needs review. |
 | 4 | A run or the queue failed outright; nothing usable was produced. |
 | 5 | The queue is **partial** (some records finished, some failed), or a merge found overlapping edits and wrote nothing. |
@@ -218,8 +233,9 @@ the executable the way the app does:
 ncs run my-project.ncs --out ./runs --executable /opt/g16/g16
 ```
 
-If the workflow contains a Generate block, `ncs run` also needs CREST unless the block imports its
-ensemble or uses the in-app `uff` route (which spawns nothing):
+If the workflow contains a conformer Generate block, `ncs run` also needs the binary that block's
+generator spawns: CREST by default, Open Babel for the `obabel` route. The in-app `uff` route spawns
+nothing, and a block that imports its ensemble needs neither:
 
 ```
 ncs run my-project.ncs --out ./runs --executable /opt/g16/g16 --crest /opt/crest/crest --obabel /usr/local/bin/obabel

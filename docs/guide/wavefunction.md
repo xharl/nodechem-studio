@@ -114,6 +114,8 @@ reads is the one the results surface can use:
 | `Shell types`, `Number of primitives per shell`, `Shell to atom map` | The basis, for the Molden writer (#113) |
 | `Primitive exponents`, `Contraction coefficients`, `P(S=P) Contraction coefficients` | The contracted Gaussian primitives |
 | `Alpha MO coefficients`, `Beta MO coefficients` | The orbital coefficient matrices |
+| `Total SCF Density` (`Total SCD Density` is the same block under its other spelling) | The density matrix, as a lower triangle in `NBasis(NBasis+1)/2` values, that the ESP, QTAIM and NCI analyses integrate |
+| `Spin SCF Density` (`Spin Density` on Gaussian's side) | The α − β density the spin-population and hyperfine blocks read; absent for a closed shell, where it is zero by construction and not a block of zeros |
 
 Polarisabilities and the two-electron integrals are still ignored: nothing in the app reads them,
 and they are large enough that copying them would make a checkpoint read feel slow for no result.
@@ -746,9 +748,12 @@ deformation density.
 
 The readers are bounded, and they say what they refused instead of returning a partial answer.
 
-- **Size.** A cube over 64 M characters, or a grid over 4 M points, is refused with the limit in the
-  message; an fchk or a Molden file over 64 M characters likewise. Cubes are parsed in memory: this
-  is a desktop app, not a node with 64 GB.
+- **Size.** A cube over 64 M characters, a grid over 4 M points or a cube that declares more than 2000
+  atoms is refused with the limit in the message. A formatted checkpoint is allowed up to 256 M
+  characters and 16 M values in one block: the old 64 MiB cap refused a 2000-function open-shell
+  checkpoint, whose alpha and beta MO blocks plus the density triangle are about 160 MB of text. A
+  Molden, WFN or WFX file is refused over 64 M characters. Cubes are parsed in memory: this is a
+  desktop app, not a node with 64 GB.
 - **Truncation.** A data block shorter than `nx·ny·nz` is an error that states how many values
   arrived. A grid with *more* values than it declares is refused too — that is a second dataset
   appended to the first, and reading only the first would silently drop a field.
@@ -917,8 +922,9 @@ otherwise:
 - **Molden's vibrational sections.** `[FREQ]`, `[FR-COORD]`, `[INT]` and `[GEOMETRIES]` are ignored;
   frequencies come from the engine output parsers, not from a Molden file.
 - **Molden in the CLI and the window.** The shared reader is wired into `readWavefunction`, but
-  `ncs convert job.molden --format xyz|sdf|qcschema` and the window's file picker are not. The
-  shared reader is the piece both would call.
+  `ncs convert job.molden --format xyz|sdf` and the window's file picker are not: `ncs convert` reads
+  a `.fchk`, a log or a structure file, and writes Molden with `--format molden` from a checkpoint.
+  The shared reader is the piece both would call.
 - **WFN/WFX in the CLI and the window.** `ncs convert job.wfn|job.wfx --format molden|xyz` is not
   implemented; only `detectWavefunctionFormat`/`readWavefunction` accept the two formats. WFN and
   WFX carry occupied orbitals only, so a Molden file written from them would have no virtuals.
