@@ -15,10 +15,14 @@ This is what makes a mixed workflow possible in one project:
   academic use and reads a simple `.inp` instead of a Gaussian route.
 
 The step that crosses an engine boundary hands over a **geometry**, not a checkpoint: xTB writes its
-result to `xtbopt.xyz` instead of printing it, so the downstream Gaussian block reads the parsed
-final geometry from the finished run and rewrites its own molecule specification. The queue refuses
-the hand-off, with a specific message, when the upstream run recorded no geometry. Provenance names
-the source block and both engines, and the report prints them next to the block.
+result to `xtbopt.xyz` instead of printing it, so the downstream block reads the parsed final geometry
+from the finished run and rewrites its own deck — Gaussian's molecule specification, PySCF's data
+line, Psi4's `molecule { … }` block, ORCA's `* xyz … *` block, or a fresh `.xyz` frame for xTB. Only
+the atom rows change: the route, the charge/multiplicity header, fragment separators and anything
+after the geometry stay as they were. The queue refuses the hand-off, with a message naming both
+blocks, when the upstream run recorded no geometry or when the deck has no geometry block to rewrite
+— it never runs the unoptimised structure and calls that a hand-off. Provenance names the source
+block and both engines, and the report prints them next to the block.
 
 A setting that belongs to the other engine is refused before the run rather than silently dropped:
 a TD-DFT request, a Gaussian checkpoint, `Stable=Opt`, the NMR job type or custom route keywords on

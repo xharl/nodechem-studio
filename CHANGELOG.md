@@ -19,6 +19,13 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- A cross-engine chain hands the optimised geometry to Psi4, ORCA and xTB as well as to Gaussian and
+  PySCF: those three decks used to be run with the *planned* coordinates while the queue recorded a
+  hand-off, so `xtb(opt) → psi4(SP)` (or ORCA, or xTB again) computed its energy at the unoptimised
+  structure and reported `completed`. Each deck now has its own rewrite — Psi4's `molecule { … }`
+  block, ORCA's `* xyz … *`, xTB's `.xyz` frame — keeping headers, fragment separators and everything
+  after the geometry. A deck that cannot be rewritten, or one whose atom count disagrees, fails the
+  task naming both blocks and records no hand-off (#326).
 - Opening a project that fails validation now reports the validator's own first error, with the file
   name — `flows[0].nodes: must contain at most 2000 nodes.` instead of a stand-in message from the
   delete-flow guard. A project whose `flows` array is empty says so instead of complaining about a

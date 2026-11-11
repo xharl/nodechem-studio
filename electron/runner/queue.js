@@ -2747,7 +2747,20 @@ export class QueueManager {
           this.publish(queue);
           return;
         }
-        inputText = applyGeometryHandoffFor(task.engine, inputText, prepared.frames[0].atoms);
+        // Issue 326: every engine's deck is rewritten now. A deck that cannot
+        // take the geometry fails here, naming both blocks, instead of running
+        // the planned structure and claiming a hand-off.
+        try {
+          inputText = applyGeometryHandoffFor(task.engine, inputText, prepared.frames[0].atoms);
+        } catch (error) {
+          task.status = 'failed';
+          task.error = `"${task.title}" cannot receive the prepared structure of `
+            + `"${prepareTask.title || prepareTask.nodeId}": ${error.message}`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          return;
+        }
         task.geometryHandoff = {
           from: prepareTask.nodeId,
           fromEngine: 'prepare',
@@ -2772,8 +2785,20 @@ export class QueueManager {
           this.publish(queue);
           return;
         }
-        if (task.engine === 'gaussian' || task.engine === 'pyscf') {
+        // Issue 326: Psi4, ORCA and xTB used to fall through here unchanged —
+        // the optimised geometry was read and thrown away, and the task then
+        // reported a hand-off it never made. Every engine rewrites its deck now,
+        // and a refusal is a failure that names both blocks.
+        try {
           inputText = applyGeometryHandoffFor(task.engine, inputText, atoms);
+        } catch (error) {
+          task.status = 'failed';
+          task.error = `"${task.title}" cannot receive the optimised geometry of `
+            + `"${upstreamTask.title || upstreamTask.nodeId}": ${error.message}`;
+          task.finishedAt = new Date().toISOString();
+          await this.persist(queue);
+          this.publish(queue);
+          return;
         }
         task.geometryHandoff = {
           from: upstreamTask.nodeId,
