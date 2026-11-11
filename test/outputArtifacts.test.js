@@ -164,6 +164,41 @@ describe('output blocks write artifacts and a hashed manifest', () => {
     }
   });
 
+  it('never publishes the verdict before every artifact and its manifest entry agree', async () => {
+    const { queuesRoot, exe, queueManager } = await makeStack();
+    // Slow the settling rewrite down, so a queue that flips to its final status
+    // first is caught holding a rewritten file beside its old manifest entry.
+    const write = queueManager.writeOutputArtifact.bind(queueManager);
+    queueManager.writeOutputArtifact = async (...args) => {
+      if (args[3]?.replace) await new Promise((resolve) => setTimeout(resolve, 40));
+      return write(...args);
+    };
+    const plan = buildWorkflowPlan(projectWithOutput({ include: 'record' }));
+    const started = await queueManager.start({
+      projectName: 'family artifacts',
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: { executable: exe, scratchDir: '' },
+    });
+    const seen = await waitFor(async () => {
+      const queue = await queueManager.get(started.id);
+      return settled(queue) ? queue : null;
+    }, { label: 'artifact queue settlement' });
+
+    const root = path.join(queuesRoot, seen.id, 'artifacts');
+    const manifest = JSON.parse(await fsp.readFile(path.join(root, 'manifest.json'), 'utf8'));
+    expect(manifest.length).toBe(2);
+    for (const entry of manifest) {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = await fsp.readFile(path.join(root, entry.path));
+      expect(entry.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
+    }
+    // The report the block wrote said `running`; the one on disk must say the verdict.
+    const first = await fsp.readFile(path.join(root, 'reports', 'barrier-m1.html'), 'utf8');
+    expect(first).toContain(`status ${seen.status}`);
+    expect(first).not.toContain('finished not reported');
+  });
+
   it('writes a CSV that equals the app dataset export for the same run records', async () => {
     const outRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'gns-artifacts-root-'));
     roots.push(outRoot);

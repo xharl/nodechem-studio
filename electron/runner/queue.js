@@ -1948,14 +1948,17 @@ export class QueueManager {
       if (queue.status !== 'running') return;
       const status = finalStatus(queue.tasks);
       if (status) {
+        const finishedAt = new Date().toISOString();
+        // Issue 337: the artifact rewrite has to happen while the queue still
+        // reads `running`. Setting the verdict first makes it observable — a
+        // poller or the window sees a finished queue and reads reports that are
+        // half rewritten: the file replaced, its manifest entry not yet. The
+        // rewrite therefore gets the verdict as a pending value, and the queue
+        // only carries it once the files and the manifest agree.
+        await this.restampReports({ ...queue, status, finishedAt });
         queue.status = status;
-        queue.finishedAt = new Date().toISOString();
+        queue.finishedAt = finishedAt;
         queue.currentTaskId = null;
-        // Issue 327: an output block wrote its HTML while this queue was still
-        // `running`, so its header said "status running · finished not reported".
-        // Rewrite those artifacts now that the verdict exists — before the publish
-        // below, so whoever sees the finished queue also sees a truthful report.
-        await this.restampReports(queue);
         // Emit before persisting: a poller that sees the finished status must
         // already have been told the queue is done, otherwise the two views
         // disagree for a moment and a listener can miss the last event.
