@@ -50,7 +50,11 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   per task, the run id, the run status, the gate verdict and the run folder. `--flow` selects a flow
   (the project's active flow is the default), `--record` runs one record's subgraph plus the control
   blocks, and `--max-parallel` overrides `runner.maxParallel`. Output blocks write their artifacts
-  under `--out` (`reports/…` and `manifest.json`).
+  under `--out` (`reports/…` and `manifest.json`). The external stages take the same paths the run
+  console does: `--crest`, `--obabel`, `--tautomer`, `--tautomer-script`, `--multiwfn` and
+  **`--scorer`** (the ML scorer sidecar, for `rankBy`, a calculate `provider` or an `aimnet2` relax).
+  Each falls back to Settings → Tools when the flag is absent; a block that needs one and has no path
+  fails by name and names the flag.
   **`--timeout` is the watcher's clock, not a task limit.** Without it the command waits as long as
   the queue needs, because each task already has its own budget (`runner.timeoutSeconds` in the
   project, then Settings → Runs, then 3600 s). Passing `--timeout N` stops the wait after N seconds;

@@ -10,6 +10,13 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ## [Unreleased]
 
+### Added
+
+- **`ncs run --scorer <path>`** — the ML scorer sidecar the run console already had is reachable
+  headlessly, for `rankBy` on a generate block, a `provider` on calculate and an `aimnet2` relax on
+  prepare. It falls back to Settings → Tools like the other sidecars, and a block that needs it
+  without a path now fails with a message that names the flag (#309).
+
 ### Fixed
 
 - Saving a project no longer appends a second `.ncs`: a chosen name that already ends in the

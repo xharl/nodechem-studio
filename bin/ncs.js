@@ -99,6 +99,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
       [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>]
       [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>]
+      [--scorer <path>]
       [--settings <file>]
       [--timeout <seconds>] [--json]
   ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
@@ -387,6 +388,11 @@ async function commandRun({ positional, flags }) {
       // Issue #270: the user-installed Multiwfn binary for analyse blocks.
       multiwfnExecutable: flags.multiwfn
         ? String(flags.multiwfn) : String(settingsTools.multiwfn || ''),
+      // Issue #309: the ML scorer sidecar. rankBy on a generate block, a
+      // `provider` on calculate and an ML relax on prepare all spawn this one
+      // executable, so a headless run needs the same path the run console has.
+      scorerExecutable: flags.scorer
+        ? String(flags.scorer) : String(settingsTools.scorer || ''),
       scratchDir: String(settingsTools.scratch || ''),
       maxParallel,
       // Issue 177: the project's per-task wall clock. Absent from the project

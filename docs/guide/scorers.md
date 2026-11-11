@@ -32,7 +32,8 @@ export AIMNET2_WEIGHTS=/path/to/aimnet2_weights.pt
 ```
 
 Point the run console at `scripts/aimnet2-scorer.py` (or a wrapper that runs it with that venv's
-Python). The installer does not embed the script: download it from the repository at the release tag,
+Python), or pass the same path headlessly as `ncs run … --scorer scripts/aimnet2-scorer.py`. The
+installer does not embed the script: download it from the repository at the release tag,
 or use a source checkout. The sidecar reads one JSON request on stdin and writes one JSON object on
 stdout; see the file header for the exact shape. Without the weights and the packages it exits 2 with
 a clear message and **no energy**.

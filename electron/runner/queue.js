@@ -1457,7 +1457,7 @@ export class QueueManager {
       }
       if (needsScorer) {
         const scorerExecutable = String(options.scorerExecutable || '').trim();
-        if (!scorerExecutable) throw new Error('Choose the ML scorer sidecar before running a block with rankBy set.');
+        if (!scorerExecutable) throw new Error('Choose the ML scorer sidecar before running a block with rankBy set (CLI: --scorer <path>).');
         const stat = await fsp.stat(scorerExecutable).catch(() => null);
         if (!stat?.isFile()) throw new Error(`ML scorer sidecar not found: ${scorerExecutable}`);
       }
