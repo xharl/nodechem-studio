@@ -8,6 +8,15 @@ The history starts at **0.2.1**, the first release after this repository was pre
 0.1.0 was published and then withdrawn; it is not listed. Sections for released versions summarise
 what the build contains — the GitHub release for each tag carries the long form.
 
+## [Unreleased]
+
+### Fixed
+
+- Saving a project no longer appends a second `.ncs`: a chosen name that already ends in the
+  extension stays as typed, and a doubled `foo.ncs.ncs` collapses to `foo.ncs`. Saving over a file
+  this session did not open asks first, and the next save dialog opens where the last save went
+  (#315).
+
 ## [0.5.1] - 2026-11-10
 
 Thirty-nine non-merge commits since 0.5.0. There is no format change: `schemaVersion` stays 3, and a

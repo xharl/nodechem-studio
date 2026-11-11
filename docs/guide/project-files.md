@@ -25,6 +25,10 @@ does not damage a project.
 - **Unknown fields** are dropped on save with a warning.
 - **Save** writes back to the opened file; a new project prompts for a path. Closing with unsaved
   changes asks before discarding. There is no autosave and no crash-recovery copy of the project.
+- **The chosen name carries exactly one `.ncs`.** `foo` is saved as `foo.ncs`, `foo.ncs` stays
+  `foo.ncs`, and a name that arrives with the extension twice (`foo.ncs.ncs`) is collapsed rather
+  than extended. Saving over a file this session did not open asks before replacing it, and the next
+  save dialog opens in the folder the last save used.
 
 File naming: a new project is suggested as `<stem>.ncs`, where the stem is the project name
 lowercased, accent-folded, stripped to `[A-Za-z0-9._ -]`, whitespace collapsed to dashes and
