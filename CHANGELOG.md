@@ -19,6 +19,24 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- A Multiwfn child killed by a signal is a failed run, not a parse failure: the queue tested
+  `Number(raw.exitCode) !== 0`, and `Number(null)` is `0`, so a crashed binary was read as a successful
+  run whose output the parser then blamed. The signal is the verdict, and the message says `killed by
+  signal <SIG>` (#344).
+- Multiwfn's RDG–NCI points are read from the columns the file actually has: `output.txt` is
+  `X Y Z sign(lambda2)rho RDG`, and the parser stored the x/y coordinates as the density sign and the
+  RDG, so the record described a rectangle instead of the NCI plane. Rows with fewer than five fields
+  are counted as skipped, never parsed as points (#340).
+- The pinned QTAIM, ESP and NCI menu recipes now run on a real binary. Against Multiwfn 2026.11.3 the
+  ESP and NCI sequences died with `forrtl: severe (59)` after the expensive part had already run, and
+  QTAIM never wrote `CPprop.txt`, so its comparison was never evaluated. The `2024+` band uses the
+  sequences the reporter verified end to end (exit 0, `CPprop.txt`, `output.txt`, the ESP statistics),
+  and the unused `esp.grid` / `rdg.rhoCutoff` fields are gone rather than recorded as parameters the
+  binary never receives (#339).
+- Multiwfn releases are matched by menu band instead of pinned to 3.8: a `2024+` banner (the release
+  the vendor's download page installs) runs the current recipes, `3.8` keeps the manual's, and a
+  banner outside both bands is refused by name — without telling the user to install a release that is
+  only offered through an archive (#341).
 - A run record now carries the `wavefunction` block when its folder holds a wavefunction file — a
   checkpoint Psi4's open-shell decks write, a Molden/WFN/WFX file, or a cube — with each file's kind,
   name, SHA-256 and size plus the counts the dataset export reads. `wavefunctionRecord()` was only

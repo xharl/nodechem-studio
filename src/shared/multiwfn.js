@@ -38,11 +38,11 @@
 
 import { parseCube } from './cubeFile.js';
 
-/** The Multiwfn release whose menu numbering this module pins. */
+/** The oldest release whose menus this build still writes. Kept for the UI. */
 export const MULTIWFN_SUPPORTED_VERSION = '3.8';
 
-/** The version recorded with every menu script. */
-export const MULTIWFN_MENU_VERSION = MULTIWFN_SUPPORTED_VERSION;
+/** The version recorded with every menu script when no band is named. */
+export const MULTIWFN_MENU_VERSION = '2024+';
 
 /** The citation Multiwfn requires; printed on every card and record. */
 export const MULTIWFN_CITATION = 'Tian Lu, Feiwu Chen, J. Comput. Chem. 2012, 33, 580-592. '
@@ -95,11 +95,10 @@ export const MULTIWFN_ANALYSES = Object.freeze([
     short: 'ESP',
     inputs: MULTIWFN_INPUT_FORMATS.esp,
     parameters: Object.freeze({
-      grid: Object.freeze({
-        type: 'integer', min: 20, max: 240, default: 80,
-        label: 'Surface grid points per axis',
-        help: 'Grid points per axis for the surface tessellation.',
-      }),
+      // Issue 339: the surface tessellation is chosen *inside* Multiwfn's own
+      // post-processing menu; there is no menu answer that carries a grid, so a
+      // `grid` field here would be a parameter the record claims and the binary
+      // never receives. It is gone rather than decorative.
       isovalue: Object.freeze({
         type: 'number', min: 1e-6, max: 1, default: 0.001,
         label: 'Density isovalue / a.u.',
@@ -152,14 +151,13 @@ export const MULTIWFN_ANALYSES = Object.freeze([
       }),
       isovalue: Object.freeze({
         type: 'number', min: 0.01, max: 5, default: 0.5,
-        label: 'RDG isovalue',
-        help: 'The s isovalue a reader uses to draw the NCI surface; the points themselves are not thresholded by it.',
+        label: 'RDG threshold',
+        help: 'The s value the record counts as “below the isovalue” and a plot draws the surface at. '
+          + 'Multiwfn writes every scatter point; this threshold is applied when the points are read, not by the binary.',
       }),
-      rhoCutoff: Object.freeze({
-        type: 'number', min: 1e-4, max: 0.5, default: 0.05,
-        label: 'Density cutoff / a.u.',
-        help: 'Points above this density are excluded from the NCI set.',
-      }),
+      // Issue 339: a density cutoff was stored and never applied — the scatter
+      // file carries no rho column of its own, only sign(lambda2)rho — so it is
+      // gone rather than a parameter the record claims and nothing uses.
     }),
     outputs: Object.freeze(['points', 'summary']),
     summary: 'NCI points in the sign(lambda2)rho / RDG plane',
@@ -199,22 +197,56 @@ export function multiwfnExtension(name) {
 }
 
 /**
- * Is this Multiwfn version inside the pinned band?
+ * The menu-number bands this build knows (issue 341).
  *
- * Accepted: `3.8`, `3.8(dev)`, `3.8.1`. A banner that could not be read is its
- * own refusal, because "unknown version" is not permission to use 3.8 menus.
+ * Multiwfn's top-level menus have been stable for years, but the submenus behind
+ * them changed between 3.8 and the 2024+ releases: the CP-export submenu, the ESP
+ * post-processing menu and the NCI scatter menu all moved. A single pin to 3.8
+ * made the feature unreachable, because 3.8 is archive-only and the download page
+ * installs a 2026 release. So the scripts are kept per band, and a version
+ * outside every band is refused by name.
+ */
+export const MULTIWFN_BANDS = Object.freeze([
+  Object.freeze({
+    id: '3.8',
+    label: 'Multiwfn 3.8',
+    matches: (version) => /^3\.8(?:\D|$)/.test(String(version ?? '').trim()),
+  }),
+  Object.freeze({
+    id: '2024+',
+    label: 'Multiwfn 2024 or later',
+    matches: (version) => {
+      const match = /^((?:19|20)\d\d)\./.exec(String(version ?? '').trim());
+      return Boolean(match) && Number(match[1]) >= 2024;
+    },
+  }),
+]);
+
+/** The band a banner names, or null when no band claims it. */
+export function multiwfnBandFor(version) {
+  const text = String(version ?? '').trim();
+  if (!text) return null;
+  return MULTIWFN_BANDS.find((band) => band.matches(text)) || null;
+}
+
+/**
+ * Is this Multiwfn version inside a band whose menus this build writes?
+ *
+ * Accepted: `3.8`, `3.8(dev)`, `3.8.1`, and any `YYYY.n` release from 2024 on
+ * (`2026.11.3`). A banner that could not be read is its own refusal, because
+ * "unknown version" is not permission to use any menu numbers.
  */
 export function multiwfnVersionRefusal(version) {
   const text = String(version ?? '').trim();
   if (!text) {
-    return 'The Multiwfn version could not be read from its banner, and this block pins the menu '
-      + `numbers to Multiwfn ${MULTIWFN_SUPPORTED_VERSION}. Choose a ${MULTIWFN_SUPPORTED_VERSION} `
-      + 'executable; no menu is guessed for an unknown version.';
+    return 'The Multiwfn version could not be read from its banner, so no menu script is guessed. '
+      + `Known menu bands: ${MULTIWFN_BANDS.map((band) => band.label).join(', ')}.`;
   }
-  if (/^3\.8(?:\D|$)/.test(text)) return null;
-  return `Multiwfn ${text} is not supported by this block: its menu numbers are pinned to `
-    + `Multiwfn ${MULTIWFN_SUPPORTED_VERSION}. Install ${MULTIWFN_SUPPORTED_VERSION}, or add a `
-    + 'version-pinned recipe before using this release.';
+  if (multiwfnBandFor(text)) return null;
+  return `Multiwfn ${text} is not in a menu band this build writes `
+    + `(${MULTIWFN_BANDS.map((band) => band.label).join(', ')}). Multiwfn's download page installs a `
+    + 'current release; 3.8 is archive-only, so "install 3.8" is not an instruction this app can give. '
+    + 'Install a 2024-or-later build, or add a version-pinned recipe for this release.';
 }
 
 /** Is this version string inside the pinned band? */
@@ -368,47 +400,90 @@ function menuNumber(value) {
  * The exact stdin script for one analysis.
  *
  * The script is a list of menu answers, one per line, in the order Multiwfn
- * prompts for them. `-silent` is a command-line argument, not a line. The
- * numbers are pinned to 3.8 and each line is documented in `steps`.
+ * prompts for them. `-silent` is a command-line argument, not a line. Which
+ * numbers are right depends on the release band (issue 341): the `2024+` scripts
+ * below were run against Multiwfn 2026.11.3 — the release the vendor's download
+ * page installs — and the `3.8` scripts are the ones transcribed from the 3.8
+ * manual (issue 339). Each line is documented in `steps`.
  */
-export function multiwfnMenuScript(analysisId, parameters = {}) {
+export function multiwfnMenuScript(analysisId, parameters = {}, { band = MULTIWFN_MENU_VERSION } = {}) {
   const analysis = multiwfnAnalysis(analysisId);
   if (!analysis) {
     throw new MultiwfnError(`"${String(analysisId)}" is not a supported Multiwfn analysis.`, 'multiwfn-analysis');
   }
+  if (!MULTIWFN_BANDS.some((entry) => entry.id === band)) {
+    throw new MultiwfnError(`"${String(band)}" is not a Multiwfn menu band this build writes.`, 'multiwfn-band');
+  }
   const grid = Number(parameters.grid ?? analysis.parameters.grid?.default ?? 80);
   const isovalue = Number(parameters.isovalue ?? analysis.parameters.isovalue?.default ?? 0.001);
+  const legacy = band === '3.8';
   let steps;
   if (analysis.id === 'qtaim') {
-    steps = [
-      ['2', 'Topology analysis'],
-      ['2', 'Search critical points from nuclear positions'],
-      ['3', 'Search critical points from midpoints of atom pairs'],
-      ['-4', 'Modify or export critical points'],
-      ['-1', 'Print summary of critical points in Angstrom'],
-      ['7', 'Show real-space function values at all critical points'],
-      ['0', 'Write CPprop.txt for all critical points'],
-      ['-10', 'Return to the main menu'],
-      ['17', 'Basin analysis'],
-      ['1', 'Generate basins and locate attractors'],
-      ['1', 'Electron density'],
-      [String(grid), `Grid quality ${grid} (1 low, 2 medium, 3 high, 4 lunatic)`],
-      ['7', 'Integrate real-space functions in AIM basins with mixed grids'],
-      ['2', 'Integrate and refine the basin boundary'],
-      ['1', 'Electron density'],
-      ['-10', 'Return to the main menu'],
-      ['q', 'Exit'],
-    ];
+    steps = legacy
+      ? [
+        ['2', 'Topology analysis'],
+        ['2', 'Search critical points from nuclear positions'],
+        ['3', 'Search critical points from midpoints of atom pairs'],
+        ['-4', 'Modify or export critical points'],
+        ['-1', 'Print summary of critical points in Angstrom'],
+        ['7', 'Show real-space function values at all critical points'],
+        ['0', 'Write CPprop.txt for all critical points'],
+        ['-10', 'Return to the main menu'],
+        ['17', 'Basin analysis'],
+        ['1', 'Generate basins and locate attractors'],
+        ['1', 'Electron density'],
+        [String(grid), `Grid quality ${grid} (1 low, 2 medium, 3 high, 4 lunatic)`],
+        ['7', 'Integrate real-space functions in AIM basins with mixed grids'],
+        ['2', 'Integrate and refine the basin boundary'],
+        ['1', 'Electron density'],
+        ['-10', 'Return to the main menu'],
+        ['q', 'Exit'],
+      ]
+      // Issue 339: the CP properties are written by topology option 7 (show
+      // function values at all CPs) followed by -1 (skip the expensive ESP
+      // property); the -4 export submenu has no 7 and wrote nothing at all.
+      : [
+        ['2', 'Topology analysis'],
+        ['2', 'Search critical points from nuclear positions'],
+        ['3', 'Search critical points from midpoints of atom pairs'],
+        ['7', 'Show real-space function values at all critical points'],
+        ['-1', 'All critical points, skipping the ESP property'],
+        ['-10', 'Return to the main menu'],
+        ['17', 'Basin analysis'],
+        ['1', 'Generate basins and locate attractors'],
+        ['1', 'Electron density'],
+        [String(grid), `Grid quality ${grid} (1 low, 2 medium, 3 high, 4 lunatic)`],
+        ['7', 'Integrate real-space functions in AIM basins with mixed grids'],
+        ['2', 'Integrate and refine the basin boundary'],
+        ['1', 'Electron density'],
+        ['-10', 'Return to the main menu'],
+        ['q', 'Exit'],
+      ];
   } else if (analysis.id === 'esp') {
-    steps = [
-      ['12', 'Quantitative analysis of molecular surface'],
-      ['1', 'Select the way to define the surface'],
-      ['1', 'Isosurface of electron density'],
-      [menuNumber(isovalue), `Density isovalue ${menuNumber(isovalue)} a.u.`],
-      ['6', 'Start analysis without a mapped function'],
-      ['0', 'Return to the main menu'],
-      ['q', 'Exit'],
-    ];
+    steps = legacy
+      ? [
+        ['12', 'Quantitative analysis of molecular surface'],
+        ['1', 'Select the way to define the surface'],
+        ['1', 'Isosurface of electron density'],
+        [menuNumber(isovalue), `Density isovalue ${menuNumber(isovalue)} a.u.`],
+        ['6', 'Start analysis without a mapped function'],
+        ['0', 'Return to the main menu'],
+        ['q', 'Exit'],
+      ]
+      // Issue 339: option 0 starts the analysis *with* the mapped function (the
+      // ESP statistics the parser reads), and `-1 -1` accept the default
+      // post-processing choices. `6` analysed without the function, and the
+      // trailing `0`/`q` were not answers to that menu at all.
+      : [
+        ['12', 'Quantitative analysis of molecular surface'],
+        ['1', 'Select the way to define the surface'],
+        ['1', 'Isosurface of electron density'],
+        [menuNumber(isovalue), `Density isovalue ${menuNumber(isovalue)} a.u.`],
+        ['0', 'Start the analysis with the ESP mapped on the surface'],
+        ['-1', 'Default choice for the surface minima/maxima list'],
+        ['-1', 'Default choice for the post-processing menu'],
+        ['q', 'Exit'],
+      ];
   } else if (analysis.id === 'elf' || analysis.id === 'lol') {
     const functionNumber = analysis.id === 'elf' ? '9' : '10';
     steps = [
@@ -421,17 +496,32 @@ export function multiwfnMenuScript(analysisId, parameters = {}) {
       ['q', 'Exit'],
     ];
   } else {
-    steps = [
-      ['20', 'Visual study of weak interaction'],
-      ['1', 'NCI analysis'],
-      [String(grid), `NCI grid quality ${grid} (1 low, 2 medium, 3 high, 4 very high)`],
-      ['2', 'Output scatter points to output.txt'],
-      ['0', 'Return to the main menu'],
-      ['q', 'Exit'],
-    ];
+    steps = legacy
+      ? [
+        ['20', 'Visual study of weak interaction'],
+        ['1', 'NCI analysis'],
+        [String(grid), `NCI grid quality ${grid} (1 low, 2 medium, 3 high, 4 very high)`],
+        ['2', 'Output scatter points to output.txt'],
+        ['0', 'Return to the main menu'],
+        ['q', 'Exit'],
+      ]
+      // Issue 339: the scatter submenu's 0 is *Exit* (back to the weak-interaction
+      // menu); a second 0 leaves that menu, and `q` then quits. One 0 read `q` as
+      // an answer to the scatter menu and Multiwfn died with a list-directed
+      // I/O error after writing output.txt.
+      : [
+        ['20', 'Visual study of weak interaction'],
+        ['1', 'NCI analysis'],
+        [String(grid), `NCI grid quality ${grid} (1 low, 2 medium, 3 high, 4 very high)`],
+        ['2', 'Output scatter points to output.txt'],
+        ['0', 'Exit the scatter-point menu'],
+        ['0', 'Exit the weak-interaction menu'],
+        ['q', 'Exit'],
+      ];
   }
   return {
-    version: MULTIWFN_MENU_VERSION,
+    version: band,
+    band,
     analysis: analysis.id,
     lines: steps.map(([line]) => line),
     text: `${steps.map(([line]) => line).join('\n')}\n`,
@@ -691,10 +781,15 @@ export function parseCubeOutput(analysis, cubeText, { name = '', parameters = {}
 }
 
 /**
- * RDG-NCI: `output.txt` has one `sign(lambda2)rho RDG` pair per line, optionally
- * behind a `#` header. Non-numeric lines are skipped; the parser never invents a
- * point. The full set is capped so a dense grid cannot turn `run.json` into a
- * multi-megabyte file.
+ * RDG-NCI: `output.txt` has one row per scatter point, five whitespace-separated
+ * columns — `X Y Z sign(lambda2)rho RDG`, the Cartesian position in Å followed by
+ * the two values the plot uses (Multiwfn's own `RDGscatter.gnu` plots `u 4:5`).
+ * Issue 340: reading columns 1-2 stored the x/y coordinates as the density sign and
+ * the RDG, so the record described a rectangle instead of the NCI plane.
+ *
+ * A row with fewer than five numeric fields is counted in `skippedLines`; the
+ * parser never invents a point. The full set is capped so a dense grid cannot turn
+ * `run.json` into a multi-megabyte file.
  */
 export function parseNciOutput(text, { parameters = {}, maxPoints = 200_000 } = {}) {
   const lines = String(text ?? '').split(/\r?\n/);
@@ -705,9 +800,9 @@ export function parseNciOutput(text, { parameters = {}, maxPoints = 200_000 } = 
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const fields = trimmed.split(/\s+/);
-    if (fields.length < 2) { skipped += 1; continue; }
-    const x = finiteNumber(fields[0]);
-    const s = finiteNumber(fields[1]);
+    if (fields.length < 5) { skipped += 1; continue; }
+    const x = finiteNumber(fields[3]);
+    const s = finiteNumber(fields[4]);
     if (x === null || s === null) { skipped += 1; continue; }
     if (points.length >= maxPoints) { truncated = true; break; }
     points.push([x, s]);
@@ -717,8 +812,8 @@ export function parseNciOutput(text, { parameters = {}, maxPoints = 200_000 } = 
       ok: false,
       analysis: 'rdg',
       reason: 'Multiwfn wrote no sign(lambda2)rho / RDG points (output.txt was empty or unreadable)',
-      detail: 'The menu script asks for NCI analysis and scatter-point output; a transcript without two '
-        + 'numeric columns per line did not reach the post-processing export.',
+      detail: 'The menu script asks for NCI analysis and scatter-point output, which writes five columns '
+        + '(X Y Z sign(lambda2)rho RDG); a transcript without them did not reach the post-processing export.',
     };
   }
   let attractive = 0;
@@ -737,7 +832,7 @@ export function parseNciOutput(text, { parameters = {}, maxPoints = 200_000 } = 
   return {
     ok: true,
     analysis: 'rdg',
-    method: 'Multiwfn 3.8 NCI analysis; points in the sign(lambda2)rho / RDG plane',
+    method: `Multiwfn NCI analysis (${String(parameters.band || 'current menus')}); points in the sign(lambda2)rho / RDG plane`,
     parameters,
     points: {
       count: points.length,

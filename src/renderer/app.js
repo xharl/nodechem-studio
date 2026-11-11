@@ -53,7 +53,7 @@ import {
   MULTIWFN_ANALYSES,
   MULTIWFN_CITATION,
   MULTIWFN_LICENCE,
-  MULTIWFN_SUPPORTED_VERSION,
+  MULTIWFN_MENU_VERSION,
   multiwfnAnalysis,
   multiwfnMenuScript,
   multiwfnSummary,
@@ -2896,7 +2896,7 @@ function computePreviewHtml(node) {
     } catch (failure) {
       return `<p class="inspector-note" data-role="compute-preview">${esc(failure.message)}</p>`;
     }
-    return `<p class="inspector-note" data-role="compute-preview">Multiwfn ${MULTIWFN_SUPPORTED_VERSION} · `
+    return `<p class="inspector-note" data-role="compute-preview">Multiwfn ${MULTIWFN_MENU_VERSION} menus · `
       + `${esc(analysis.label)} · ${script.lines.length} menu answers. This block runs the user-installed `
       + 'binary in batch mode; it has no arithmetic preview.</p>'
       + `<div class="code-block" data-role="multiwfn-script">${esc(script.text)}</div>`;
@@ -3063,10 +3063,11 @@ function multiwfnInspectorBody(definition, upstream, node) {
   } catch (error) {
     script = error.message;
   }
-  return group('Multiwfn sidecar', `${MULTIWFN_SUPPORTED_VERSION} · user-installed`, true, [
+  return group('Multiwfn sidecar', `${MULTIWFN_MENU_VERSION} menus · user-installed`, true, [
     `<div class="field full"><label>Analysis</label><select class="select" data-multiwfn-field="analysis" aria-label="Multiwfn analysis">${analysisOptions}</select>`
-      + '<div class="inspector-note">Version 3.8 menus only. ELF/LOL write a cube; QTAIM integrates basins; '
-      + 'ESP reports surface statistics; RDG–NCI reports sign(λ₂)ρ / RDG points.</div></div>',
+      + '<div class="inspector-note">The menu script is chosen from the installed release band '
+      + '(<code>2024+</code> or <code>3.8</code>). ELF/LOL write a cube; QTAIM integrates basins and '
+      + 'critical points; ESP reports surface statistics; RDG–NCI reports sign(λ₂)ρ / RDG points.</div></div>',
     `<div class="field full"><label>Wavefunction from an upstream block</label><select class="select" data-multiwfn-input="nodeId" aria-label="Upstream block">${sourceOptions}</select></div>`,
     `<div class="field full"><label>…or a project-relative path</label><input class="input" data-multiwfn-input="path" value="${esc(input.path || '')}" placeholder="wavefunctions/water.fchk" aria-label="Wavefunction path" spellcheck="false" autocomplete="off">`
       + '<div class="inspector-note">Exactly one source: an upstream block, a run id, or a path. '
@@ -10637,7 +10638,7 @@ function onDocumentChange(event) {
       for (const [param, spec] of Object.entries(analysis?.parameters || {})) {
         definition[param] = spec.default;
       }
-      for (const param of ['grid', 'isovalue', 'rhoCutoff']) {
+      for (const param of ['grid', 'isovalue']) {
         if (!analysis?.parameters?.[param]) delete definition[param];
       }
       refreshDirty();
@@ -10647,7 +10648,6 @@ function onDocumentChange(event) {
     }
     if (key === 'grid') definition.grid = Number(target.value);
     else if (key === 'isovalue') definition.isovalue = Number(target.value);
-    else if (key === 'rhoCutoff') definition.rhoCutoff = Number(target.value);
     else definition[key] = target.value;
     refreshDirty();
     refreshComputePreview();
