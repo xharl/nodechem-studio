@@ -1195,7 +1195,10 @@ export function parseOrcaRaman(text) {
       misses = 0;
       modes.push({
         mode: Number(row[1]),
-        frequencyCm: num(row[2]),
+        // Issue 333: the canonical name the spectrum builders read. ORCA prints
+        // cm⁻¹ and so does Gaussian; a second field name here is why the ORCA
+        // card had rows and no curve.
+        wavenumber: num(row[2]),
         ramanActivity: num(row[3]),
         depolarization: num(row[4]),
       });
@@ -1237,7 +1240,8 @@ export function parseOrcaVcd(text) {
       misses = 0;
       modes.push({
         mode: Number(row[1]),
-        frequencyCm: num(row[2]),
+        // Issue 333: canonical name, as in `parseOrcaRaman`.
+        wavenumber: num(row[2]),
         rotationalStrength: num(row[3]),
       });
       continue;

@@ -42,6 +42,7 @@ import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
 import { ORCA_PNO_THRESHOLDS } from './engines/orca.js';
 import { PYSCF_SOLVATION_MODELS } from './engines/pyscf.js';
+import { PSI4_SOLVATION_MODELS } from './engines/psi4.js';
 import { EXPLICIT_SOLVENT_IDS } from './explicitSolvation.js';
 import { validateBlockContracts } from './blockContracts.js';
 import { SCORER_SPECS } from './scorer.js';
@@ -539,6 +540,19 @@ function readSolvationModel(c, value, path, { engine = 'gaussian', solvation = f
       `"${oneLine(value)}" is not a PySCF solvation model; PySCF accepts `
       + `${PYSCF_SOLVATION_MODELS.join(' or ')}.`);
     return PYSCF_SOLVATION_MODELS[0];
+  }
+  if (engine === 'psi4') {
+    // Issue 335: the builder writes `pcm` and `cosmo` only, so a project must not
+    // be able to save SMD or CPCM for a Psi4 block and fail when the queue gets
+    // there. The refusal belongs next to the field.
+    if (value === undefined || value === null) return PSI4_SOLVATION_MODELS[0];
+    if (value === '') return '';
+    if (PSI4_SOLVATION_MODELS.includes(value)) return value;
+    if (!solvation && SOLVATION_MODELS.includes(value)) return value;
+    c.error(path,
+      `"${oneLine(value)}" is not a Psi4 solvation model; Psi4's DDX writes `
+      + `${PSI4_SOLVATION_MODELS.join(' or ')}.`);
+    return PSI4_SOLVATION_MODELS[0];
   }
   if (engine !== 'xtb') {
     return readEnum(c, value, SOLVATION_MODELS, path, { legacy, fallback: 'PCM' });

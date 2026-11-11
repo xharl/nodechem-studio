@@ -19,6 +19,23 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- A run record now carries the `wavefunction` block when its folder holds a wavefunction file — a
+  checkpoint Psi4's open-shell decks write, a Molden/WFN/WFX file, or a cube — with each file's kind,
+  name, SHA-256 and size plus the counts the dataset export reads. `wavefunctionRecord()` was only
+  called from tests, so every shipped `run.json` had no such key and the checkpoint columns could
+  never be filled. A folder with none, or a file that will not parse, leaves the key off; the v1 and
+  v2 contracts both declare it (#334).
+- An ORCA Raman or VCD record now carries each mode's frequency under `wavenumber`, the name the
+  spectrum builders read, so the card draws the broadened curve instead of a table with no figure —
+  the parsers called it `frequencyCm` and the spectra silently found nothing to plot (#333).
+- A Psi4 block can no longer be saved with `SMD` or `CPCM` solvation: the schema refuses it next to
+  the field, naming the models DDX writes (`PCM`, `COSMO`), instead of accepting it at save and
+  failing when the queue reaches the block. `pyscf` is named in the v1 and v2 run-record engine
+  descriptions, since this build writes PySCF records into both (#335).
+- The g-tensor refusals in Psi4 and PySCF no longer end with "ORCA is not installed": ORCA has been a
+  shipped engine since 0.5.1 and its imported logs do carry the g-matrix. Each reason now states what
+  that engine cannot do, and the guide points at ORCA for the tensor without pretending an
+  installation this app cannot see (#336).
 - A report written by a workflow's `output` block is restamped when the queue settles: it used to keep
   the header the block saw while the run was live (`status running · finished not reported`), so a
   document that describes a finished workflow said it never finished. The artifact and its manifest

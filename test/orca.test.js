@@ -4,6 +4,8 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { rmrf } from './helpers/tempCleanup.js';
+import { ramanSpectrum } from '../src/shared/raman.js';
+import { vcdSpectrum } from '../src/shared/vcd.js';
 
 import {
   ORCA_BASES,
@@ -496,22 +498,30 @@ describe('ORCA output parser — synthetic fixtures in documented format', () =>
     const parsed = parseOrcaOutput(fixture('water-raman.out'));
     expect(parsed.raman).toHaveLength(3);
     expect(parsed.raman[0]).toEqual({
-      mode: 6, frequencyCm: 1596.13, ramanActivity: 6.367325, depolarization: 0.524741,
+      mode: 6, wavenumber: 1596.13, ramanActivity: 6.367325, depolarization: 0.524741,
     });
     // The two A1 modes carry most of the activity; the table keeps mode numbers.
     expect(parsed.raman.map((mode) => mode.mode)).toEqual([6, 7, 8]);
     expect(parsed.raman[1].ramanActivity).toBeCloseTo(74.743698, 6);
     expect(parsed.vcd).toBeUndefined();
+    // Issue 333: the ORCA rows now carry the canonical `wavenumber`, so the
+    // spectrum the card draws is not empty.
+    const spectrum = ramanSpectrum(parsed.raman);
+    expect(spectrum.curve.length).toBeGreaterThan(0);
+    expect(spectrum.peaks.length).toBeGreaterThan(0);
   });
 
   it('reads the VCD table and keeps the sign of each rotational strength', () => {
     const parsed = parseOrcaOutput(fixture('chfclbr-vcd.out'));
     expect(parsed.vcd).toHaveLength(9);
-    expect(parsed.vcd[0]).toEqual({ mode: 6, frequencyCm: 218.8, rotationalStrength: -0.21 });
+    expect(parsed.vcd[0]).toEqual({ mode: 6, wavenumber: 218.8, rotationalStrength: -0.21 });
     // The sign is the enantiomer signal; a reader that normalised it would be wrong.
     expect(parsed.vcd.map((mode) => Math.sign(mode.rotationalStrength)))
       .toEqual(expect.arrayContaining([-1, 1]));
     expect(parsed.raman).toBeUndefined();
+    const spectrum = vcdSpectrum(parsed.vcd);
+    expect(spectrum.curve.length).toBeGreaterThan(0);
+    expect(spectrum.peaks.some((peak) => peak.rotationalStrength < 0)).toBe(true);
   });
 
   it('carries no Raman or VCD table when the log has none', () => {
