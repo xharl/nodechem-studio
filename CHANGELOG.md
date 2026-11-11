@@ -19,6 +19,16 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- A report written by a workflow's `output` block is restamped when the queue settles: it used to keep
+  the header the block saw while the run was live (`status running · finished not reported`), so a
+  document that describes a finished workflow said it never finished. The artifact and its manifest
+  entry are rewritten in place (bytes and SHA-256), and `ncs report` on the same folder produces the
+  same header (#327).
+- An analyse block labels a derived value with the unit the expression produces: multiplying a Hartree
+  difference by one of the conversion factors this program uses (627.5094740631 → kcal/mol,
+  2625.4996394799 → kJ/mol, 27.211386245988 → eV, 219474.6313705 → cm⁻¹, and their roundings) now
+  records and reports that unit instead of `hartree`, so `(EB − EH) * 627.5094740631` is no longer
+  quoted as −249.9 Ha. Any other number is still a coefficient and keeps the unit (#328).
 - A cross-engine chain hands the optimised geometry to Psi4, ORCA and xTB as well as to Gaussian and
   PySCF: those three decks used to be run with the *planned* coordinates while the queue recorded a
   hand-off, so `xtb(opt) → psi4(SP)` (or ORCA, or xTB again) computed its energy at the unoptimised

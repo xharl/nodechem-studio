@@ -66,6 +66,31 @@ export const COMPUTE_INPUTS_MAX = 24;
 /** Hartree → kcal/mol, CODATA-2018 (the constant `cbs.js` and the report use). */
 export const HARTREE_TO_KCAL = 627.5094740631;
 
+/**
+ * Issue 328: the conversion constants an expression may carry as a literal.
+ *
+ * A free-form expression has no declared dimension, so `(EB - EH) * 627.509…`
+ * was labelled `hartree` — the static rule "a constant multiplier keeps the
+ * unit" — and the number that came out was kcal/mol. These are the constants
+ * this program itself uses (CODATA-2018), plus the roundings people type; a
+ * literal within 0.05 % of one of them is that conversion, and the unit follows
+ * the arithmetic instead of the label.
+ */
+export const CONVERSION_LITERALS = Object.freeze([
+  { factor: 627.5094740631, from: 'hartree', to: 'kcal/mol' },
+  { factor: 2625.4996394799, from: 'hartree', to: 'kJ/mol' },
+  { factor: 27.211386245988, from: 'hartree', to: 'eV' },
+  { factor: 219474.6313705, from: 'hartree', to: 'cm-1' },
+]);
+
+/** The unit a literal converts from/to, or null when it is not a conversion. */
+function conversionFor(node) {
+  if (node?.kind !== 'number') return null;
+  const value = Number(node.value);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return CONVERSION_LITERALS.find((entry) => Math.abs(value / entry.factor - 1) <= 5e-4) || null;
+}
+
 /** The formula text every CBS result carries, in the header and in `notes`. */
 export const CBS_FORMULA = 'E_CBS = (E(X)·X³ − E(Y)·Y³) / (X³ − Y³)';
 
@@ -535,6 +560,15 @@ export function unitOfAst(node, units = new Map()) {
       if (node.op === '+' || node.op === '-') return shared([node.left, node.right]);
       const left = unitOfArg(node.left);
       const right = unitOfArg(node.right);
+      // Issue 328: a conversion factor is not "a constant that keeps the unit".
+      // `(EB - EH) * 627.509…` is a Hartree difference in kcal/mol, and the
+      // record and the report must say so; only a recognised factor changes the
+      // dimension, so `x * 2` stays as it was.
+      const leftFactor = conversionFor(node.left);
+      const rightFactor = conversionFor(node.right);
+      if (node.op === '*' && rightFactor && left === rightFactor.from) return rightFactor.to;
+      if (node.op === '*' && leftFactor && right === leftFactor.from) return leftFactor.to;
+      if (node.op === '/' && rightFactor && left === rightFactor.to) return rightFactor.from;
       // Hartree × Hartree is not Hartree, and a ratio of two dimensioned
       // inputs is dimensionless only in a sense this node cannot state.
       if (isConstant(node.left)) return right;
