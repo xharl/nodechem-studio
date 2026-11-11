@@ -19,6 +19,19 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- Opening a project that fails validation now reports the validator's own first error, with the file
+  name — `flows[0].nodes: must contain at most 2000 nodes.` instead of a stand-in message from the
+  delete-flow guard. A project whose `flows` array is empty says so instead of complaining about a
+  missing `nodes` alias, and a path that is a directory or has vanished says `cannot read <path>: is a
+  directory` / `not found` instead of a Node errno string (#323).
+- `ncs convert --node <id>` refuses an unknown block id by name and lists the blocks that exist,
+  instead of exporting the project's molecule and exiting 0 — and a block with no structure (`note`,
+  `analyse`, `output`) is refused by name. Without `--out` the converted text goes to stdout; no file
+  is written beside the project. `build-input`, `convert` and `export-input` now share one refusal
+  (#324).
+- `ncs validate` on a directory or a missing file prints `ncs: cannot read <path>: is a directory` /
+  `not found` (exit 2) instead of a Node stack trace, and the same mapping covers `convert`, `cache`,
+  `cube`, `report`, `export`, `build-input`, `export-input` and `qcschema import` (#325).
 - Saving a project no longer appends a second `.ncs`: a chosen name that already ends in the
   extension stays as typed, and a doubled `foo.ncs.ncs` collapses to `foo.ncs`. Saving over a file
   this session did not open asks first, and the next save dialog opens where the last save went

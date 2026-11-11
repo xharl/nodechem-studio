@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -510,12 +510,13 @@ describe('ncs convert --format <deck>', () => {
     expect(await readFile(viaConvert, 'utf8')).toBe(await readFile(viaExportInput, 'utf8'));
   });
 
-  it('names the format extension when no --out is given', async () => {
+  it('writes the deck to stdout when no --out is given', async () => {
     const { dir, file } = await projectFile();
     const result = await ncs(['convert', file, '--node', 'sp-energy', '--format', 'gamess']);
     expect(result.code).toBe(0);
-    expect(result.stdout).toMatch(/gamess written to .*water\.inp/);
-    expect((await readFile(path.join(dir, 'water.inp'), 'utf8'))).toMatch(/RUNTYP=ENERGY/);
+    expect(result.stdout).toMatch(/RUNTYP=ENERGY/);
+    // Issue 324: no path is invented beside the project.
+    await expect(stat(path.join(dir, 'water.inp'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('writes the frequency job through the same route', async () => {

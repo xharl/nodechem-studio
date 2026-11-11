@@ -33,7 +33,7 @@ ncs qcschema export <run-dir|out-dir> [--run <id>] [--charge <n>] [--multiplicit
 ncs qcschema import <file> [--out <file.xyz|file.json>] [--json]
 ncs diff <a.ncs> <b.ncs> [--json]
 ncs merge <base.ncs> <ours.ncs> <theirs.ncs> --out <file>
-ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden|cjson> [--spectrum ir|raman|uv] [--from <log>] [--to <cjson>] [--cclib <python>] [--out <file>] [--json]
+ncs convert <input> --format <extxyz|xyz|sdf|jcamp|molden|cjson> [--spectrum ir|raman|uv] [--from <log>] [--to <cjson>] [--cclib <python>] [--node <id>] [--out <file>] [--json]
 ncs convert <project.ncs> --node <id> --format <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs export-input <project.ncs> --node <id> --engine <nwchem|gamess|qchem> [--out <file>] [--json]
 ncs smiles <file|string> [--name <label>] [--out <file.json>] [--json]
@@ -83,7 +83,13 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   `.ncs` into a format other software reads: `extxyz`, `xyz`, `sdf`, `jcamp`, `molden` or `cjson`.
   `--spectrum` picks the spectrum written from a log (`ir`, `raman` or `uv`, default `ir`); `molden`
   needs the basis and MO coefficients, so it is only offered for a formatted checkpoint. Without
-  `--out` the result lands beside the input with the format's extension.
+  `--out` the converted text goes to **stdout** and nothing is written: a read-only-looking
+  conversion never invents a path beside the input. Notes (which frame, which unit) go to stderr.
+  `--node <id>` on a `.ncs` project exports **that block's** structure — the project geometry, or the
+  conformer the block chose. An id that does not exist is refused by name with the ids that do
+  (exit 2), and a block that carries no structure (`note`, `analyse`, `output`, …) is refused by name
+  rather than answered with the project's molecule; `build-input` and `export-input` give the same
+  refusal for the same mistake.
   `--format cjson` is the **cclib sidecar**: it converts a foreign NWChem, GAMESS, Q-Chem, Molpro,
   CFOUR or Dalton log to Avogadro Chemical JSON (geometry, charge, final energy and origin) and then
   validates that `.cjson` through the normal importer. `--from`/`--to` are synonyms for the input and
