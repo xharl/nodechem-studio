@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * Issue #231: every engine names its restart artifact differently. The queue
@@ -25,7 +26,7 @@ async function waitFor(check, timeout = 10000) {
 
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((manager) => manager.flush()));
-  await Promise.all(roots.splice(0).map((dir) => fsp.rm(dir, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((dir) => rmrf(dir)));
 });
 
 async function stack() {

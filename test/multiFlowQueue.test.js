@@ -7,6 +7,7 @@ import { QueueManager } from '../electron/runner/queue.js';
 import { defaultSettings, validateProject } from '../src/shared/projectSchema.js';
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * RFC 0001, queue half: records in the queue folder, a bounded parallel drain,
@@ -95,7 +96,7 @@ async function waitFor(check, { timeout = 20000, label = 'condition' } = {}) {
 const settled = (queue) => ['completed', 'failed', 'needs-review', 'partial', 'cancelled'].includes(queue.status);
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

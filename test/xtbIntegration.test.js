@@ -7,6 +7,7 @@ import path from 'node:path';
 import { buildXtbInput, parseXtbGeometry, parseXtbOutput } from '../src/shared/engines/xtb.js';
 import { XtbRunner } from '../electron/runner/xtbRunner.js';
 import { RunManager } from '../electron/runner/runManager.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * End-to-end engine test against a real xTB binary.
@@ -68,7 +69,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     const artifact = path.join(dir, built.outputName);
     expect(fs.existsSync(artifact)).toBe(true);
     expect(fs.statSync(artifact).size).toBeGreaterThan(1000);
-    await fsp.rm(dir, { recursive: true, force: true });
+    await rmrf(dir);
   }, 60_000);
 
   it('optimises, writes xtbopt.xyz and reports convergence', async () => {
@@ -91,7 +92,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     const r = Math.hypot(o.x - h1.x, o.y - h1.y, o.z - h1.z);
     expect(r).toBeGreaterThan(0.94);
     expect(r).toBeLessThan(0.98);
-    await fsp.rm(dir, { recursive: true, force: true });
+    await rmrf(dir);
   }, 120_000);
 
   it('computes frequencies and thermochemistry with --ohess', async () => {
@@ -109,7 +110,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     expect(parsed.thermochemistry.freeEnergyHartree).not.toBeNull();
     expect(parsed.thermochemistry.zpeHartree).not.toBeNull();
     expect(parsed.frequencies.entropyTreatment).toBe('mRRHO');
-    await fsp.rm(dir, { recursive: true, force: true });
+    await rmrf(dir);
   }, 120_000);
 
   it('runs GFN-FF Opt Freq without a topology runtime exception', async () => {
@@ -127,7 +128,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     expect(parsed.finalEnergy.source).toBe('force-field');
     expect(parsed.scf.applicable).toBe(false);
     expect(parsed.frequencies.count).toBe(3);
-    await fsp.rm(dir, { recursive: true, force: true });
+    await rmrf(dir);
   }, 120_000);
 
   it('classifies a missing input file as a failure with exit 128', async () => {
@@ -136,7 +137,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     const result = await runner.run({ executable: XTB_BIN, argv: ['absent.xyz'], cwd: dir, outputName: 'absent.out' });
     expect(result.exitCode).toBe(128);
     expect(parseXtbOutput(result.outputText).status).toBe('error');
-    await fsp.rm(dir, { recursive: true, force: true });
+    await rmrf(dir);
   }, 60_000);
 
   it('records the canonical result in run.json through the production RunManager path', async () => {
@@ -177,7 +178,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
     const artifact = path.join(started.runDir, built.outputName);
     expect(fs.statSync(artifact).size).toBeGreaterThan(1000);
     expect(fs.existsSync(path.join(started.runDir, 'xtbopt.xyz'))).toBe(true);
-    await fsp.rm(runsRoot, { recursive: true, force: true });
+    await rmrf(runsRoot);
   }, 180_000);
 
   it('fails the run when the executable is missing rather than pretending', async () => {
@@ -192,7 +193,7 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
       outputName: built.outputName,
       executable: path.join(runsRoot, 'nope', 'xtb'),
     })).rejects.toThrow(/executable not found/);
-    await fsp.rm(runsRoot, { recursive: true, force: true });
+    await rmrf(runsRoot);
   }, 60_000);
 
   it('rejects a Gaussian input name on the xTB engine', async () => {
@@ -206,6 +207,6 @@ describe.skipIf(!XTB_BIN)('xTB end-to-end (real binary)', () => {
       outputName: 'water.out',
       executable: XTB_BIN,
     })).rejects.toThrow(/safe \.xyz/);
-    await fsp.rm(runsRoot, { recursive: true, force: true });
+    await rmrf(runsRoot);
   }, 30_000);
 });

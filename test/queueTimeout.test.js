@@ -9,6 +9,7 @@ import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 import { engineFor } from '../src/shared/engines/index.js';
 import { blockedPendingTasks, finalStatus } from '../src/shared/workflowGraph.js';
 import { nextAction, nodeStatesFromQueue } from '../src/shared/queueReconcile.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * Issue 177: a hung engine must not hold a queue slot.
@@ -163,7 +164,7 @@ afterEach(async () => {
     await manager.flush?.().catch(() => {});
   }
   for (const root of roots.splice(0)) {
-    await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
+    await rmrf(root).catch(() => {});
   }
 });
 

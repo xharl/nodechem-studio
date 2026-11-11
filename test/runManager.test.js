@@ -6,6 +6,7 @@ import { RunManager } from '../electron/runner/runManager.js';
 import { ENGINES } from '../src/shared/engines/index.js';
 import { readOutputFile } from '../electron/runner/gaussianRunner.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 const roots = [];
 const MIB = 1024 * 1024;
@@ -83,7 +84,7 @@ async function writeSyntheticLargeLog(file, targetBytes = 33 * MIB) {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

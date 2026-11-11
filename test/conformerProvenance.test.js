@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
   ensembleSummary,
@@ -316,7 +317,7 @@ describe('the ensemble summary carries provenance', () => {
 describe('the queue writes the origin it was given', () => {
   const roots = [];
   afterEach(async () => {
-    await Promise.all(roots.splice(0).map((dir) => fsp.rm(dir, { recursive: true, force: true })));
+    await Promise.all(roots.splice(0).map((dir) => rmrf(dir)));
   });
 
   async function stack() {

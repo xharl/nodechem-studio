@@ -9,6 +9,7 @@ import { defaultSettings, validateProject } from '../src/shared/projectSchema.js
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { datasetCsv, runRows } from '../src/shared/datasetExport.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 const roots = [];
 const water = [
@@ -129,7 +130,7 @@ async function runProject({ project, exe, queueManager, options = {} }) {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

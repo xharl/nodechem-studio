@@ -6,6 +6,7 @@ import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { defaultSettings, validateProject } from '../src/shared/projectSchema.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 const roots = [];
 const onWindows = process.platform === 'win32';
@@ -176,7 +177,7 @@ async function waitFor(check, timeout = 20000) {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => rmrf(root)));
 });
 
 describe.skipIf(onWindows)('the Open Babel route through the queue', () => {

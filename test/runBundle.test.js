@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { writeRunBundle } from '../electron/runner/runBundle.js';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   RUN_BUNDLE_FILES,
   RUN_BUNDLE_KIND,
@@ -94,7 +95,7 @@ async function readJson(file) {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

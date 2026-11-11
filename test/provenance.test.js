@@ -12,6 +12,7 @@ import { provenanceSummary } from '../src/shared/provenance.js';
 import { defaultSettings } from '../src/shared/projectSchema.js';
 import { parseGaussianOutput, outputEvidence } from '../src/shared/gaussianOutput.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 // Synthetic logs only: this machine has no Gaussian. The first line says so,
 // and the banner below reproduces the documented format for the parser test.
@@ -96,7 +97,7 @@ function fixtureSettings() {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

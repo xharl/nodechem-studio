@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   MULTIWFN_ANALYSES,
   MULTIWFN_CITATION,
@@ -88,7 +89,7 @@ function definitionFor(analysis, extra = {}) {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((root) => rmrf(root)));
 });
 
 describe('issue #270 — Multiwfn schema', () => {

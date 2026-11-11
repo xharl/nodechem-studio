@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   EV_TO_HARTREE,
   EV_TO_KCAL,
@@ -109,7 +110,7 @@ describe('scorer role (ADR 0001 §2.10)', () => {
 
 const roots = [];
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((dir) => fsp.rm(dir, { recursive: true, force: true })));
+  await Promise.all(roots.splice(0).map((dir) => rmrf(dir)));
 });
 
 async function stack() {

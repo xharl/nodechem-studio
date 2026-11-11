@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RunManager } from '../electron/runner/runManager.js';
 import { Psi4Runner } from '../electron/runner/psi4Runner.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * Issue 283: Psi4 defaults its scratch to `/tmp`, which on a laptop is a
@@ -25,7 +26,7 @@ async function tempRoot() {
 
 afterEach(async () => {
   for (const root of roots.splice(0)) {
-    await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
+    await rmrf(root).catch(() => {});
   }
 });
 

@@ -9,6 +9,7 @@ import { planClusterExport } from '../src/shared/clusterExport.js';
 import { writeClusterExport, importClusterExport } from '../electron/runner/clusterFiles.js';
 import { makeFixtureOutput } from '../src/shared/fixtureOutput.js';
 import { RunManager } from '../electron/runner/runManager.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 const roots = [];
 
@@ -19,7 +20,7 @@ async function tempRoot() {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 

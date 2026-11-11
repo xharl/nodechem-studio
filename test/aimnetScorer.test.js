@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * Issue 317 — the shipped AIMNet2 scorer sidecar could not run anywhere:
@@ -199,7 +200,7 @@ function runSidecar(env, request = WATER) {
 }
 
 afterAll(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
 });
 
 describe.skipIf(!canRun)('aimnet2 scorer sidecar (issue 317)', () => {

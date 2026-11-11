@@ -6,6 +6,7 @@ import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { defaultSettings, validateProject } from '../src/shared/projectSchema.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * Issue #87: conformer fan-out has to survive a chain, not just one hop.
@@ -289,7 +290,7 @@ describe('conformer fan-out through a chain (#87)', () => {
 
 describe('queue hand-off for a fanned-out chain (#87)', () => {
   afterEach(async () => {
-    await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+    await Promise.all(roots.map((root) => rmrf(root)));
     roots.length = 0;
   });
 

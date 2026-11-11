@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { discoverOutput, outputCandidates } from '../electron/runner/outputDiscovery.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 const roots = [];
 
@@ -13,7 +14,7 @@ async function tempDir() {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((dir) => fsp.rm(dir, { recursive: true, force: true })));
+  await Promise.all(roots.map((dir) => rmrf(dir)));
   roots.length = 0;
 });
 

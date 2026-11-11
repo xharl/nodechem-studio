@@ -8,6 +8,7 @@ import { defaultSettings, validateProject } from '../src/shared/projectSchema.js
 import { buildWorkflowPlan } from '../src/shared/workflowTasks.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 /**
  * Issue #226 — tautomer enumeration through a sidecar, in the queue.
@@ -139,7 +140,7 @@ async function runOne(queueManager, tasks, options) {
 
 afterEach(async () => {
   while (roots.length > 0) {
-    await fsp.rm(roots.pop(), { recursive: true, force: true });
+    await rmrf(roots.pop());
   }
 });
 

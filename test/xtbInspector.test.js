@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import { buildGaussianInput, methodBlockFor } from '../src/shared/gaussianInput.js';
 import { defaultSettings } from '../src/shared/projectSchema.js';
+import { rmrf } from './helpers/tempCleanup.js';
 import {
   XTB_SOLVENTS,
   buildXtbInput,
@@ -354,7 +355,7 @@ describe('xTB thread count', () => {
 describe('xTB solvation provenance', () => {
   const roots = [];
   afterEach(async () => {
-    await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+    await Promise.all(roots.map((root) => rmrf(root)));
     roots.length = 0;
   });
 

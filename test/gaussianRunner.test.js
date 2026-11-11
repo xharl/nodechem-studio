@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { readOutputFile } from '../electron/runner/gaussianRunner.js';
+import { rmrf } from './helpers/tempCleanup.js';
 
 const roots = [];
 
@@ -13,7 +14,7 @@ async function workspace() {
 }
 
 afterEach(async () => {
-  await Promise.all(roots.map((root) => fsp.rm(root, { recursive: true, force: true })));
+  await Promise.all(roots.map((root) => rmrf(root)));
   roots.length = 0;
 });
 
