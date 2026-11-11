@@ -23,6 +23,11 @@ what the build contains — the GitHub release for each tag carries the long for
   extension stays as typed, and a doubled `foo.ncs.ncs` collapses to `foo.ncs`. Saving over a file
   this session did not open asks first, and the next save dialog opens where the last save went
   (#315).
+- Preflight checks the engines the flow actually runs, instead of demanding a Gaussian executable for
+  every workflow. A Psi4/ORCA/PySCF workflow now starts on a machine with no Gaussian licence; the
+  engines a flow does not run are listed as `SKIP` with the reason, a block that does need an engine
+  still fails by name, and the failing row is written to the status bar instead of a toast that
+  disappears (#316).
 - The Settings window's version column reads the version a program states, not the first line of
   its banner: xTB no longer shows its 59-character rule and ORCA no longer shows ASCII art. An engine
   whose output carries no version token reads `version unknown` instead of a fragment, and a row that

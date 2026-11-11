@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { RunManager } from './runner/runManager.js';
 import { QueueManager } from './runner/queue.js';
 import { companionToolStatus } from './runner/companionTools.js';
-import { preflight } from './runner/preflight.js';
+import { preflight, preflightForEngines } from './runner/preflight.js';
 import { defaultGaussianExecutablePath } from './runner/gaussianPlatform.js';
 import { writeClusterExport, importClusterExport } from './runner/clusterFiles.js';
 import { writeRunBundle } from './runner/runBundle.js';
@@ -1337,11 +1337,19 @@ app.whenReady().then(async () => {
     await fsp.writeFile(result.filePath, buffer);
     return { canceled: false, path: result.filePath };
   });
-  ipcMain.handle('gaussian:preflight', (_event, config) => preflight(config || {}, {
-    platform: process.platform,
-    env: process.env,
-    userData: app.getPath('userData'),
-  }));
+  ipcMain.handle('gaussian:preflight', (_event, config) => {
+    // Issue 316: a flow that names several engines is checked engine by engine,
+    // with the unused ones listed as SKIP. A caller that names one engine (or
+    // none) keeps the single-engine preflight it always had.
+    const run = Array.isArray(config?.engines) && config.engines.length > 0
+      ? preflightForEngines
+      : preflight;
+    return run(config || {}, {
+      platform: process.platform,
+      env: process.env,
+      userData: app.getPath('userData'),
+    });
+  });
   ipcMain.handle('gaussian:run', (_event, payload) => runManager.start(payload));
   ipcMain.handle('gaussian:cancel', (_event, runId) => runManager.cancel(runId));
   ipcMain.handle('runs:list', () => runManager.list());

@@ -181,7 +181,7 @@ import { mountThermochemistryView } from './thermochemistryView.js';
 import { installResultsView } from './resultsView.js';
 import { IMPORTED_BADGE_TEXT, importedSummary, isImportedRecord } from '../shared/importedRecord.js';
 import { mountStructureViewer } from './structureViewer.js';
-import { formatPreflightReport } from './preflightReport.js';
+import { formatPreflightReport, preflightFailureMessage } from './preflightReport.js';
 import {
   runSettingsFor,
   showsCheckpointHandoff,
@@ -7638,11 +7638,40 @@ async function preflightRun({ quiet = false } = {}) {
     return null;
   }
   saveRunConfig();
+  // Issue 316: preflight the engines the plan actually runs, not the project's
+  // default one. A Psi4/ORCA flow on a machine with no Gaussian licence used to
+  // fail on "Gaussian executable configured" and never start; the queue's own
+  // preflight only ever demanded the engines in `calcEngines`.
+  let enginesInUse = [];
+  let engineBlocks = {};
+  try {
+    const plan = shared.buildWorkflowPlan(state.project);
+    enginesInUse = shared.calcEnginesIn(plan.tasks);
+    // Issue 316: a failing engine row should name the block that needs it, not
+    // only the engine.
+    for (const task of plan.tasks) {
+      if (!task.executable || task.type !== 'calculate' || task.scorer) continue;
+      const engineId = String(task.engine || 'gaussian');
+      if (!engineBlocks[engineId]) engineBlocks[engineId] = task.title || task.nodeId || '';
+    }
+  } catch {
+    // An unbuildable plan is reported by the queue's own error; fall back to the
+    // engine the selected block names.
+    enginesInUse = [];
+    engineBlocks = {};
+  }
+  const primaryEngine = enginesInUse[0] || engineOrDefault(activeRunEngineId()).id;
   const config = {
-    // Preflight names the engine the selected block will run, not the project
-    // default: a Psi4 block in an xTB-default project must not be checked as xTB.
-    engine: engineOrDefault(activeRunEngineId()).id,
-    executable: runExecutables()[activeRunEngineId()] || '',
+    // Issue 316: the engines this flow runs. Preflight checks those and lists
+    // the rest as SKIP, instead of demanding a Gaussian executable for a
+    // workflow that has no Gaussian block.
+    engines: enginesInUse.length > 0 ? enginesInUse : [primaryEngine],
+    executables: runExecutables(),
+    // The block that made each engine necessary, so a failure names it.
+    engineBlocks,
+    // Kept for the single-engine checks and for older callers.
+    engine: engineOrDefault(primaryEngine).id,
+    executable: runExecutables()[primaryEngine] || '',
     scratchDir: $('#run-scratch').value.trim(),
     dryRun: $('#run-dry').checked,
   };
@@ -7764,41 +7793,9 @@ async function preflightRun({ quiet = false } = {}) {
       };
     }
   }
-  // A mixed flow launches one binary per engine, so preflight every engine the
-  // plan needs, not only the selected block's. The queue enforces this too; the
-  // point here is to say it before the user presses Run.
-  if (!config.dryRun) {
-    try {
-      const plan = shared.buildWorkflowPlan(state.project);
-      const others = [...new Set(plan.tasks
-        .filter((task) => task.executable && task.type === 'calculate')
-        .map((task) => String(task.engine || 'gaussian')))]
-        .filter((engineId) => engineId !== config.engine);
-      const map = runExecutables();
-      for (const engineId of others) {
-        const engine = engineOrDefault(engineId);
-        const path = String(map[engineId] || '').trim();
-        let ok = Boolean(path);
-        let detail = path || 'not chosen — this flow has a block on this engine';
-        if (path) {
-          const probe = await desktop.preflight({ ...config, engine: engineId, executable: path });
-          const found = (Array.isArray(probe.checks) ? probe.checks : []).find((check) => check.id === 'executable');
-          ok = found ? found.ok : Boolean(probe.ok);
-          detail = found ? found.detail : path;
-        }
-        result = {
-          ...result,
-          ok: result.ok && ok,
-          checks: [
-            ...(Array.isArray(result.checks) ? result.checks : []),
-            { id: `engine-${engineId}`, label: `${engine.label} executable`, ok, detail },
-          ],
-        };
-      }
-    } catch {
-      // An unbuildable plan is reported by the queue; nothing to add here.
-    }
-  }
+  // Issue 316: the engine rows (which engine is checked, which is skipped) come
+  // from the main process, which knows the plan's engines — see
+  // `preflightForEngines`. Nothing is appended here for engines any more.
   appendRunOutput(formatPreflightReport(result));
   if (!quiet) toast(result.ok ? 'Preflight passed.' : 'Preflight found issues; see the run console.');
   return result;
@@ -7817,6 +7814,8 @@ async function startSelectedRun() {
   const dryRun = $('#run-dry').checked;
   const result = await preflightRun({ quiet: true });
   if (!result || (!result.ok && !dryRun)) {
+    // The toast disappears; the status bar is where a refusal has to stay.
+    if (result) setStatusMessage(preflightFailureMessage(result));
     toast('Preflight is not ready. Fix the run configuration or use dry run.');
     return;
   }
@@ -8466,6 +8465,7 @@ async function startWorkflowUnlocked() {
 
   const preflight = await preflightRun({ quiet: true });
   if (!preflight || (!preflight.ok && !dryRun)) {
+    if (preflight) setStatusMessage(preflightFailureMessage(preflight));
     toast('Preflight is not ready. Fix the run configuration or use dry run.');
     return;
   }

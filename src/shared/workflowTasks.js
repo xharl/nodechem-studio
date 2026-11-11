@@ -42,6 +42,21 @@ import { multiwfnAnalysis } from './multiwfn.js';
 
 export const safeBase = (value) => String(value).replace(/[^A-Za-z0-9._-]/g, '_');
 
+/**
+ * The engines a plan actually launches, in first-seen order.
+ *
+ * Issue 316: preflight demanded a Gaussian executable for every workflow, so a
+ * flow that runs only Psi4 or ORCA could not start on a machine without a
+ * Gaussian licence. The queue already scoped its own check this way; this is
+ * the one function both callers use, so the GUI's preflight and the queue's
+ * executable check cannot disagree about which engines a flow needs.
+ */
+export function calcEnginesIn(tasks = []) {
+  return [...new Set((Array.isArray(tasks) ? tasks : [])
+    .filter((task) => task?.executable && task.type === 'calculate' && !task.scorer)
+    .map((task) => String(task.engine || 'gaussian')))];
+}
+
 /** defaultSettings() plants these; a block only overrides a record when it differs. */
 const DEFAULT_CHARGE = 0;
 const DEFAULT_MULTIPLICITY = 1;

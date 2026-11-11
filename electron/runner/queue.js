@@ -16,6 +16,7 @@ import { deltaGDoubleDagger } from '../../src/shared/reactionPath.js';
 import { ComputeError, describeCompute, evaluateCompute } from '../../src/shared/compute.js';
 import { dp4Summary, evaluateDp4 } from '../../src/shared/dp4Workflow.js';
 import { normalizeValidityContext } from '../../src/shared/validityChecks.js';
+import { calcEnginesIn } from '../../src/shared/workflowTasks.js';
 import { LIMITS } from '../../src/shared/projectSchema.js';
 import { applyGeometryHandoffFor, readUpstreamGeometry } from './geometryHandoff.js';
 import { sha256File } from './hashing.js';
@@ -1363,9 +1364,7 @@ export class QueueManager {
     // Issue 177: the project's wall-clock limit for one task. Absent from the
     // start payload means the generous default, never "no limit".
     const timeoutSeconds = timeoutSecondsFrom(options.timeoutSeconds) ?? DEFAULT_TIMEOUT_SECONDS;
-    const calcEngines = [...new Set(tasks
-      .filter((task) => task.executable && task.type === 'calculate' && !task.scorer)
-      .map((task) => String(task.engine || 'gaussian')))];
+    const calcEngines = calcEnginesIn(tasks);
     const needsCalcEngine = calcEngines.length > 0;
     // A fanned-out member task carries an ensemble that is already stored in the
     // project; no CREST binary is needed to materialise it (#80).

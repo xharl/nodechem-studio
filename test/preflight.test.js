@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { preflight } from '../electron/runner/preflight.js';
+import { preflight, preflightForEngines } from '../electron/runner/preflight.js';
 import { GaussianRunner } from '../electron/runner/gaussianRunner.js';
 
 /**
@@ -460,5 +460,103 @@ describe.skipIf(onWindows)('runner GAUSS_EXEDIR', () => {
     expect(captured[0]).toBe(install.install);
     expect(captured[1]).toBe(scratch);
     expect(captured[2].startsWith(`${install.install}${path.delimiter}`)).toBe(true);
+  });
+});
+
+describe('preflight over the engines a flow runs (issue 316)', () => {
+  /**
+   * A fake binary with the name a check expects. Preflight only stats and names
+   * it; nothing is executed except the PySCF import probe, which these tests do
+   * not reach.
+   */
+  async function fakeBinary(name) {
+    const root = await tempRoot('gns-preflight-engine-');
+    const file = path.join(root, name);
+    await fsp.writeFile(file, '#!/bin/sh\nexit 0\n');
+    await fsp.chmod(file, 0o755);
+    return file;
+  }
+
+  async function runScoped(config, options = {}) {
+    const userData = await tempRoot('gns-preflight-user-');
+    const result = await preflightForEngines(config, { platform: 'linux', env: {}, userData, ...options });
+    return result;
+  }
+
+  it('passes a Psi4-only flow on a machine with no Gaussian at all', async () => {
+    const psi4 = await fakeBinary('psi4');
+    // PSIDATADIR is deliberately unset: it is a warning, never a blocker.
+    const result = await runScoped({ engines: ['psi4'], executables: { psi4 } });
+
+    expect(result.ok).toBe(true);
+    expect(check(result, 'executable')).toMatchObject({
+      label: 'Psi4 executable configured', ok: true, detail: psi4,
+    });
+    // The engine the flow never runs is still visible, as SKIP.
+    expect(check(result, 'engine-gaussian-skipped')).toMatchObject({ ok: true, skipped: true });
+    expect(check(result, 'engine-gaussian-skipped').detail).toContain('no block in this flow runs Gaussian 16');
+    // And it is not checked as if it were needed.
+    expect(check(result, 'gaussian-executable')).toBeUndefined();
+  });
+
+  it('still fails the flow when an engine it does run is not configured', async () => {
+    const result = await runScoped({
+      engines: ['gaussian'],
+      executables: {},
+      engineBlocks: { gaussian: 'Single-point energy' },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(check(result, 'executable')).toMatchObject({
+      label: 'Gaussian executable configured', ok: false, detail: 'Not configured · needed by Single-point energy',
+    });
+    expect(check(result, 'engine-psi4-skipped')).toMatchObject({ skipped: true });
+  });
+
+  it('checks every engine in use, with prefixed rows after the first', async () => {
+    const psi4 = await fakeBinary('psi4');
+    const orca = await fakeBinary('orca');
+    const result = await runScoped({
+      engines: ['orca', 'psi4'],
+      executables: { psi4, orca },
+    });
+
+    // ENGINE_IDS order decides which engine owns the unprefixed ids, so the
+    // report is stable whatever order the plan found them in: ORCA precedes
+    // Psi4 there.
+    expect(check(result, 'executable')).toMatchObject({ label: 'ORCA executable configured', ok: true });
+    expect(check(result, 'engine-psi4-executable')).toMatchObject({ ok: true, detail: psi4 });
+    expect(check(result, 'engine-psi4-executable-name')).toMatchObject({ ok: true });
+    expect(result.ok).toBe(true);
+  });
+
+  it('reports a failure on one engine without dropping the other', async () => {
+    const psi4 = await fakeBinary('psi4');
+    const result = await runScoped({
+      engines: ['psi4', 'orca'],
+      executables: { psi4 },
+      engineBlocks: { orca: 'Emission (TD-DFT)' },
+    });
+
+    // ORCA is the primary by canonical order and has no path; Psi4 is still
+    // reported, and still passes, in the same preflight.
+    expect(result.ok).toBe(false);
+    expect(check(result, 'executable')).toMatchObject({
+      ok: false, detail: 'Not configured · needed by Emission (TD-DFT)',
+    });
+    expect(check(result, 'engine-psi4-executable')).toMatchObject({ ok: true, detail: psi4 });
+  });
+
+  it('is the single-engine preflight when no engine list is given', async () => {
+    const install = await fakeInstall('linux');
+    const userData = await tempRoot('gns-preflight-user-');
+    const scoped = await preflightForEngines(
+      { engine: 'gaussian', executable: install.executable },
+      { platform: 'linux', env: {}, userData },
+    );
+    expect(ids(scoped)).toEqual(ids(await preflight(
+      { engine: 'gaussian', executable: install.executable },
+      { platform: 'linux', env: {}, userData: await tempRoot('gns-preflight-user-') },
+    )));
   });
 });
