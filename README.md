@@ -276,12 +276,6 @@ docs/              documentation; the user guide lives in docs/guide/, decisions
   for the rest of the app to work.
 - **No packaged macOS build.** The runner and preflight support macOS; there is no build to sign or
   test.
-- **Cross-engine geometry hand-off is incomplete (#326).** When the upstream block ran on a different
-  engine, the next block is rebuilt from that run's parsed final geometry only if it is a **Gaussian
-  or PySCF** block. A **Psi4, ORCA or xTB** block keeps the geometry it was planned with — the queue
-  task still records a `geometryHandoff` and the workflow report prints it, but `run.json` carries no
-  such field — so an xTB pre-optimisation feeding a Psi4 single point computes at the unoptimised
-  structure and reports `completed`. Chain onto Gaussian or PySCF until this is fixed.
 - **xTB validity checks are narrower than Gaussian's.** xTB has no route, basis or ECP to inspect, so
   the Gaussian-only checks are reported as *not applicable* (never as a pass). Charge/multiplicity,
   geometry sanity, imaginary modes and optimisation convergence are judged for both engines.

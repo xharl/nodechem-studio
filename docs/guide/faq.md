@@ -25,12 +25,12 @@ hand its parsed final geometry to a Gaussian block in the same workflow — the 
 geometry, not a checkpoint.
 
 **Which engines can receive a handed-over geometry?**
-Only Gaussian and PySCF today. A cross-engine edge reads the upstream run's parsed final geometry,
-but the input is rewritten only for those two receivers: a Psi4, ORCA or xTB block keeps the geometry
-it was planned with, and the queue task and the workflow report still record `geometryHandoff`
-(#326). A **Prepare structure** block feeding one of those three is dropped the same way. Until that
-is fixed, end such a chain on Gaussian or PySCF, or export the optimised geometry from the upstream
-run and import it in **Molecule → Structure**.
+All five. A cross-engine edge reads the upstream run's parsed final geometry and rewrites the
+downstream deck in place — Gaussian's molecule specification, PySCF's data line, Psi4's
+`molecule { … }` block, ORCA's `* xyz … *` block, or a fresh `.xyz` frame for xTB — changing only the
+atom rows. A **Prepare structure** block handing its structure to a calculate block takes the same
+path. The queue task records `geometryHandoff` and the workflow report prints it; an upstream run
+with no parsed geometry, or a deck with no geometry block, refuses the hand-off by name.
 
 **Can it submit to a cluster?**
 It can **export** a SLURM or PBS submission folder — one script per calculation block plus a

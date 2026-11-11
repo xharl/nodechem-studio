@@ -246,19 +246,15 @@ Rules that apply to all:
 ### Cross-engine edges
 
 When the two blocks name **different** engines there is no checkpoint to carry: the edge hands over
-the upstream run's parsed final geometry (`parsed.finalGeometry.atoms`) and, for the receivers that
-have a rewrite, rebuilds the downstream deck from it. A **Prepare** block handing its structure to a
-calculate block calls the same rewrite function.
-
-Only two receivers have a rewrite: Gaussian (`replaceInputGeometry`) and PySCF
-(`replacePyscfGeometry`).
-
-**Known limitation (#326).** A receiving ORCA, Psi4 or xTB block keeps the geometry its deck was
-planned with — the project geometry — while the queue task still records `geometryHandoff` with the
-upstream run id and atom count. That field says a hand-off was read, not that the deck changed; the
-workflow report prints it (`geometry from <block> · <engine> → <engine>, N atoms`) and the run still
-reports `completed`. Until this is fixed, optimise with Gaussian or PySCF, or compare the deck in the
-run folder with the upstream geometry.
+the upstream run's parsed final geometry (`parsed.finalGeometry.atoms`) and rebuilds the downstream
+deck from it. Every engine has a rewrite — Gaussian's molecule specification, PySCF's data line,
+Psi4's `molecule { … }` block, ORCA's `* xyz … *` block and a fresh `.xyz` frame for xTB — and only
+the atom rows change: the route, the charge/multiplicity header, fragment separators and anything
+after the geometry stay as they were. A **Prepare** block handing its structure to a calculate block
+calls the same rewrite function. The queue task records `geometryHandoff` with the upstream run id
+and atom count, and the workflow report prints `geometry from <block> · <engine> → <engine>, N atoms`.
+An upstream run with no parsed geometry, or a deck with no geometry block to rewrite, refuses the
+hand-off by name instead of running the unoptimised structure.
 
 `ReadFC` on a Gaussian transition-state block requires a hand-off from a `Freq` or `Opt=CalcFC`
 block; validation refuses the combination otherwise.

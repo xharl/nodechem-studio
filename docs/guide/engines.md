@@ -623,9 +623,9 @@ What a Psi4 block will **not** do in this build, each refused by name rather tha
 - **Gaussian grid keywords and custom routes** — no equivalent is guessed.
 - **Frequencies at CCSD/CCSD(T)** — Psi4 has no analytic Hessian there; run the frequency at DFT
   or MP2 level.
-- **Checkpoint hand-off** — Psi4 leaves no restart file this app can hand to another block; a
-  downstream **Gaussian or PySCF** block reads the upstream geometry instead, while a Psi4, ORCA or
-  xTB block downstream keeps its planned geometry (#326). The `.fchk` an open-shell single point
+- **Checkpoint hand-off** — Psi4 leaves no restart file this app can hand to another block; the edge
+  hands over the parsed final geometry instead and the receiving block's deck is rewritten from it,
+  whichever engine it runs. The `.fchk` an open-shell single point
   writes for the EPR block is read by this run's parser and kept with its `run.json`; it is not a
   restart file and is not passed to another block.
 
@@ -755,10 +755,9 @@ What a PySCF block will **not** do in this build, each refused by name rather th
   not write.
 - **SMD, CPCM and COSMO** — PySCF's `solvent.PCM` writes PCM and C-PCM; the other models are refused
   by name, and the result is an electronic energy, not a solvation free energy.
-- **Checkpoint hand-off** — PySCF leaves no restart file this app hands to another block. A downstream
-  **Gaussian or PySCF** block reads the upstream geometry instead; the queue marks the edge
-  geometry-only and, for a PySCF receiver, rewrites the deck's molecule. A Psi4, ORCA or xTB block
-  downstream keeps its planned geometry (#326).
+- **Checkpoint hand-off** — PySCF leaves no restart file this app hands to another block. The edge
+  hands over the upstream parsed geometry instead: it is marked geometry-only and the receiving
+  block's deck — PySCF's molecule line among them — is rewritten from it.
 - **A method or basis not in the lists above** — refused by name with the supported list. No
   functional or basis is guessed from a Gaussian route.
 
@@ -808,9 +807,9 @@ parser does not recognise is reported as `unknown`, never guessed.
 A dry run is a fixture for every engine: it writes a synthetic file headed `FIXTURE OUTPUT`, starts
 no process, and is never a calculation.
 
-The PySCF and Psi4 "geometry-only hand-off" cells describe what the engine leaves behind, not what
-the receiver does with it: it is written into the next block's input only when that block is Gaussian
-or PySCF (#326).
+The PySCF and Psi4 "geometry-only hand-off" cells describe what the engine leaves behind. The
+receiving block's deck is rewritten from the upstream parsed geometry whichever of the five engines
+it runs on; only the atom rows change.
 
 ## Next
 

@@ -265,12 +265,11 @@ does carry them.
   CLI-only: `projectSchema.js` has no `geometry.format` id for `nwchem`, `gamess` or `qchem`, so a
   project saved with an imported deck could not be reopened. `ncs convert job.nw --format xyz` reads
   one back in the meantime.
-- **`--node` on a structure export (#324).** `ncs convert project.ncs --format xyz` (or `extxyz`,
-  `sdf`) reads the project's own geometry. A `--node` passed with one of those formats is not
-  consulted, and an id that names no block is not refused: the export succeeds from the project
-  geometry and writes `<project>.xyz` beside the project when `--out` is omitted. `--node` is
-  honoured only by the three deck formats, and those do refuse an unknown id with
-  `no node "<id>" in <file>`.
+- **`--node` selects a block's structure.** `ncs convert project.ncs --format xyz|extxyz|sdf --node
+  <id>` writes that block's geometry; an id that names no block is refused with the block list, and a
+  block type that never carries a structure (`condition`, `loop`, `merge`, `output`, `analyse`,
+  `note`) is refused by name. Without `--node`, the project's `molecule.coords` is converted. The
+  three deck formats require `--node`, because a deck needs a block's settings.
 
 ## Next
 
