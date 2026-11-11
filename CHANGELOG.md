@@ -8,6 +8,15 @@ The history starts at **0.2.1**, the first release after this repository was pre
 0.1.0 was published and then withdrawn; it is not listed. Sections for released versions summarise
 what the build contains — the GitHub release for each tag carries the long form.
 
+## [Unreleased]
+
+### Added
+
+- **`ncs run --scorer <path>`** — the ML scorer sidecar the run console already had is reachable
+  headlessly, for `rankBy` on a generate block, a `provider` on calculate and an `aimnet2` relax on
+  prepare. It falls back to Settings → Tools like the other sidecars, and a block that needs it
+  without a path now fails with a message that names the flag (#309).
+
 ## [0.5.1] - 2026-11-10
 
 Thirty-nine non-merge commits since 0.5.0. There is no format change: `schemaVersion` stays 3, and a
