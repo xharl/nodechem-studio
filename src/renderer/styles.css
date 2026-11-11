@@ -1574,6 +1574,17 @@ body.is-dragging-run-console .run-head { cursor: grabbing; }
   font-size: var(--text-size-xs); letter-spacing: .09em; text-transform: uppercase; color: var(--text-secondary);
 }
 .run-queue-actions { display: flex; align-items: center; gap: 5px; margin-left: auto; flex-wrap: wrap; }
+/* Issue 362: a refused run says why in the pane the button lives in. */
+.queue-refusal {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 9px; border-radius: 8px;
+  border: 1px solid var(--tone-red-7a); background: var(--tone-red-3a); color: var(--tone-red-11);
+}
+.queue-refusal-head { display: flex; align-items: center; gap: 8px; font-size: var(--text-size-xs); }
+.queue-refusal-head strong { color: var(--tone-red-14); }
+.queue-refusal-head .btn { margin-left: auto; }
+.queue-refusal-list { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; font-size: var(--text-size-xs); line-height: 1.4; overflow-wrap: anywhere; }
+.queue-refusal-list strong { color: var(--tone-red-14); font-weight: 600; }
 .queue-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 170px; overflow-y: auto; }
 .queue-empty { color: var(--text-secondary); font-size: var(--text-size-xs); line-height: 1.5; }
 .queue-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding: 5px 7px; border: 1px solid var(--tone-blue-71a); border-radius: 7px; background: var(--tone-blue-33); font-size: var(--text-size-xs); }

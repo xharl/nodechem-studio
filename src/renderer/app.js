@@ -181,7 +181,7 @@ import { mountThermochemistryView } from './thermochemistryView.js';
 import { installResultsView } from './resultsView.js';
 import { IMPORTED_BADGE_TEXT, importedSummary, isImportedRecord } from '../shared/importedRecord.js';
 import { mountStructureViewer } from './structureViewer.js';
-import { formatPreflightReport, preflightFailureMessage } from './preflightReport.js';
+import { formatPreflightReport, preflightFailureMessage, preflightRefusalToast, preflightRefusals } from './preflightReport.js';
 import {
   runSettingsFor,
   showsCheckpointHandoff,
@@ -7797,6 +7797,53 @@ async function preflightRun({ quiet = false } = {}) {
   return result;
 }
 
+/**
+ * Issue 362: a refusal has to say what failed and land in the pane the button
+ * was pressed in. The toast names the requirement now, the status bar keeps it,
+ * and the queue pane shows the same lines until the run starts — the pane used
+ * to stay `idle` with zero rows, which reads as "nothing happened".
+ */
+function showRunRefusal(result) {
+  const box = $('#queue-refusal');
+  const list = $('#queue-refusal-list');
+  const fix = $('#queue-refusal-fix');
+  if (!box || !list) return;
+  const failures = preflightRefusals(result);
+  box.hidden = failures.length === 0;
+  list.innerHTML = failures.map((failure) => `<li><strong>${esc(failure.label)}</strong>${failure.detail ? ` — ${esc(failure.detail)}` : ''}</li>`).join('');
+  if (fix) {
+    const target = (failures.find((failure) => failure.target) || {}).target || '';
+    fix.dataset.fixField = target;
+    fix.hidden = !target;
+    fix.title = target
+      ? 'Open Setup at the field this refusal names'
+      : 'This requirement has no field in the run console';
+  }
+}
+
+function clearRunRefusal() {
+  const box = $('#queue-refusal');
+  if (box) box.hidden = true;
+  const list = $('#queue-refusal-list');
+  if (list) list.innerHTML = '';
+}
+
+/** Open Setup at the field a refusal named, so the fix is one click away. */
+function focusRunRefusalField(selector) {
+  setRunPane('setup');
+  const field = selector ? $(selector) : null;
+  if (!field) return;
+  field.focus();
+  if (typeof field.select === 'function') field.select();
+}
+
+/** One refusal path for both Run buttons: status bar, queue banner, toast. */
+function refuseRun(result) {
+  setStatusMessage(preflightFailureMessage(result));
+  showRunRefusal(result);
+  toast(preflightRefusalToast(result));
+}
+
 async function startSelectedRun() {
   const node = selectedCalcNode({ conformers: true });
   if (!node) { toast('Select a calculation or conformer block first.'); return; }
@@ -7810,11 +7857,11 @@ async function startSelectedRun() {
   const dryRun = $('#run-dry').checked;
   const result = await preflightRun({ quiet: true });
   if (!result || (!result.ok && !dryRun)) {
-    // The toast disappears; the status bar is where a refusal has to stay.
-    if (result) setStatusMessage(preflightFailureMessage(result));
-    toast('Preflight is not ready. Fix the run configuration or use dry run.');
+    if (result) refuseRun(result);
+    else toast('Preflight is not ready. Fix the run configuration or use dry run.');
     return;
   }
+  clearRunRefusal();
 
   let built;
   try {
@@ -8461,10 +8508,11 @@ async function startWorkflowUnlocked() {
 
   const preflight = await preflightRun({ quiet: true });
   if (!preflight || (!preflight.ok && !dryRun)) {
-    if (preflight) setStatusMessage(preflightFailureMessage(preflight));
-    toast('Preflight is not ready. Fix the run configuration or use dry run.');
+    if (preflight) refuseRun(preflight);
+    else toast('Preflight is not ready. Fix the run configuration or use dry run.');
     return;
   }
+  clearRunRefusal();
 
   state.run.output = '';
   state.run.ignoreEvents = false;
@@ -10243,6 +10291,7 @@ function handleAction(action, element) {
       break;
     }
     case 'run-hint-fix': applyRunHintFix(element); break;
+    case 'fix-run-refusal': focusRunRefusalField(element.dataset.fixField || ''); break;
     case 'failure-fix': applyRunHintFix(element); break;
     case 'cancel-run': cancelRun(); break;
     case 'verify-run': verifyCurrentRun(); break;

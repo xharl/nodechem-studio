@@ -313,6 +313,11 @@
           <button class="btn small danger" id="cancel-workflow" data-action="cancel-workflow" disabled>Cancel all</button>
         </div>
       </div>
+      <div class="queue-refusal" id="queue-refusal" hidden role="status" aria-live="polite">
+        <div class="queue-refusal-head"><strong id="queue-refusal-title">Run blocked by preflight</strong>
+          <button type="button" class="btn small" id="queue-refusal-fix" data-action="fix-run-refusal">Fix in Setup</button></div>
+        <ul class="queue-refusal-list" id="queue-refusal-list"></ul>
+      </div>
       <ol class="queue-list" id="queue-list"><li class="queue-empty">Queue the workflow to run calculation blocks in dependency order, one at a time.</li></ol>
       <section class="run-records" id="run-records" hidden aria-label="Per-record results"></section>
     </section>

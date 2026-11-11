@@ -22,6 +22,54 @@ export function formatPreflightReport(result) {
 }
 
 /**
+ * The checks that blocked a run, with the field that fixes each one.
+ *
+ * Issue 362: the refusal used to be a toast with no cause ("Preflight is not
+ * ready"), while the FAIL line lived in the other pane. A refusal now names
+ * every failing requirement, and the queue pane can offer the field that
+ * clears it. `target` is a run-console selector or null for a check the console
+ * cannot fix (an operating system, a missing licence file).
+ */
+export function preflightRefusals(result) {
+  const checks = Array.isArray(result?.checks) ? result.checks : [];
+  return checks
+    .filter((check) => !check.ok && !check.skipped)
+    .map((check) => ({
+      id: String(check.id || ''),
+      label: String(check.label || ''),
+      detail: String(check.detail || ''),
+      target: preflightFixTarget(check.id),
+    }));
+}
+
+/**
+ * Which run-console field clears a failing check. Engine executable rows carry
+ * `engine-<id>-executable` when the flow runs several engines, and the plain
+ * `executable` id for the primary one; the sidecars keep their own ids.
+ */
+export function preflightFixTarget(checkId) {
+  const id = String(checkId || '');
+  if (id === 'executable' || /^engine-[a-z0-9]+-executable$/.test(id)) return '#run-exe';
+  if (id === 'tautomer' || id === 'tautomer-sidecar') return '#run-tautomer';
+  if (id === 'scorer' || id === 'scorer-sidecar') return '#run-scorer';
+  if (id === 'scratch' || id === 'scratch-writable') return '#run-scratch';
+  return null;
+}
+
+/**
+ * The one line a refusal should say out loud. It names the requirement, the
+ * block that needs it (the row detail carries that), and nothing else — a toast
+ * the user cannot act on is the bug this replaces.
+ */
+export function preflightRefusalToast(result) {
+  const failing = preflightRefusals(result);
+  if (failing.length === 0) return 'Preflight is not ready. Fix the run configuration or use dry run.';
+  const [first] = failing;
+  const more = failing.length > 1 ? ` (and ${failing.length - 1} more)` : '';
+  return `Preflight failed: ${first.label}${first.detail ? ` — ${first.detail}` : ''}${more}`;
+}
+
+/**
  * The one line a refusal should leave behind.
  *
  * Issue 316: the console printed the failing check and then a toast that
