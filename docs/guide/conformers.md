@@ -30,11 +30,11 @@ project geometry.
 ## Preparing one structure first
 
 A **Prepare structure** block is the 1→1 stage: `relax` minimises one structure with the in-app UFF
-engine (or Open Babel MMFF94), `embed3d` turns a SMILES into one 3D structure with
-`obabel --gen3d`, and `solvate` adds a deterministic explicit solvent cluster around the current
-geometry. It never enumerates protonation states, tautomers or conformers — those are sets, and
-sets belong to Generate. A Calculate block wired from Prepare runs on its written `prepared.xyz`, not
-on the geometry the workflow was planned with.
+engine (or Open Babel MMFF94, or the AIMNet2 sidecar), `embed3d` turns a SMILES into one 3D
+structure with `obabel --gen3d`, and `solvate` adds a deterministic explicit solvent cluster around
+the current geometry. It never enumerates protonation states, tautomers or conformers — those are
+sets, and sets belong to Generate. A Calculate block wired from Prepare runs on its written
+`prepared.xyz`, not on the geometry the workflow was planned with.
 
 ### Explicit solvent clusters
 
@@ -164,6 +164,11 @@ block and the block changes accordingly:
   perceives bonds and bond orders with RDKit's `rdDetermineBonds`. Multiplicity other than 1 is
   refused: the perception assumes a closed shell, and guessing an open-shell structure would invent
   a molecule.
+- **Each candidate carries a starting geometry.** When the heavy-atom order still matches the input,
+  the input's coordinates are carried over; otherwise the sidecar re-embeds the candidate with
+  ETKDGv3 and records that. With `relaxGeometry` on (the default) each candidate is then relaxed
+  with UFF for at most 200 steps when UFF types the molecule, and the record says whether that
+  converged.
 - **Every candidate is labelled** `t1`, `t2`, … in the enumerator's order, with its canonical SMILES
   and formula. The block stores them as `tautomers: [...]` on the ensemble and `tautomer` on each
   member; the table and the report show both, so two rows are never told apart only by rank.
@@ -190,8 +195,8 @@ tautomers is a calculate-block job.
 ## Imported ensembles: what the blocks record
 
 An imported ensemble is not a result this app computed. The **Ensemble input** block therefore
-records where it came from, and says so on the card, in the inspector and in the ensemble table's
-caption:
+records where it came from, and says so on the card, in the inspector, and above the ensemble table,
+whose caption states the unit and method being shown:
 
 - **origin** — `program`, `version` and `method` as declared on the input block, plus
   `sourceSha256`, the SHA-256 digest of the file's bytes taken when the input ran. The declared
@@ -208,9 +213,9 @@ and the app has no way to check a file written by another program. The hash is a
 re-exporting the same conformers changes it. Report the origin as the source's claim, not as this
 app's verification.
 
-An imported ensemble owns no method: the generate block stores `method: ""`, because the method that
-produced the file's energies is the input's `energyMethod` (free text, e.g. `MMFF94`), shown next to
-the unit. `gfn2` therefore never appears in an imported block's provenance.
+An imported ensemble owns no method: the generate block's settings store `method: ""`, because the
+method that produced the file's energies is the input's `energyMethod` (free text, e.g. `MMFF94`),
+shown next to the unit. `gfn2` therefore never appears in an imported block's provenance.
 
 ## Energy units (Hartree vs kcal/mol)
 
@@ -238,7 +243,7 @@ running the block.
 | --- | --- | --- |
 | Energy window | 10 kcal/mol | Members above the lowest energy by more than this are pruned and labelled `energy`. |
 | RMSD threshold | 0.5 Å | Members whose best-fit RMSD to an already-kept member is below this are pruned and labelled `rmsd`. |
-| Keep at most | 20 | Hard cap after sorting by energy; the rest are labelled `count`. |
+| Keep at most | 20 | Hard cap, applied after the energy window and the RMSD prune, in that order; the rest are labelled `count`. |
 | Temperature | 298.15 K | Boltzmann populations in the table. They describe the ensemble, not a free energy. |
 | Spread warning | 2 kcal/mol | If the retained ensemble spans more than this, the downstream calculation's validity report carries a warning. |
 | Fan out | off (on for tautomers) | When on, every retained member becomes its own task downstream instead of one chosen geometry. See below. |
@@ -246,9 +251,11 @@ running the block.
 | Tautomer ruleset | `rdkit-default` | Tautomer block only: the transform set the sidecar applies. Recorded in `origin.ruleset`. |
 | Torsion grid | 120° | `uff` route only: the angle between trial values. Written to the project only when set. |
 | Max trials | 200 | `uff` route only: the cap on relaxed trials. A grid above it is truncated and labelled as such. |
+| Conformers (`--nconf`) | 20 | `obabel` route only: how many conformers the search is asked for (1–1000). |
+| Rank by | energy from the source | When set to an ML scorer, that model's energies rank the ensemble instead of the source energy. See [Scorers](scorers.md). |
 
-Charge and multiplicity are sent to CREST (`--chrg`, `--uhf` as 2S) and travel with the summary.
-The UFF route ignores them: UFF here has no charge term.
+Charge and multiplicity are sent to CREST (`--chrg`, `--uhf` as 2S) and to the tautomer sidecar,
+which keeps both in `request.json`. The UFF route ignores them: UFF here has no charge term.
 
 ## Reading the table
 
@@ -303,8 +310,9 @@ refused before queueing and names both branches: one run cannot be per-member an
 the same time. Collect the members with a merge block when one downstream run is what you want.
 
 The workflow report groups the fanned-out runs by member and reports ΔE at the level the runs
-actually used, with the search-level ΔE shown alongside. Populations at the target level are not
-recomputed yet — that needs an explicit temperature decision for the report.
+actually used, with the search-level ΔE shown alongside. Populations are not recomputed at the
+target level: the report reuses the populations the search recorded, at the search temperature, and
+labels the average that way.
 
 ## Protomers
 
@@ -374,9 +382,9 @@ group — a group is a heading, not a result.
 
 ## Dry run
 
-A dry run produces a three-member labelled fixture headed `FIXTURE OUTPUT — dry run, not a conformer
-search`. It exercises ranking, pruning, the table and the selection path with no CREST binary. No
-number from it is a chemical result.
+A dry run produces a three-member labelled fixture whose every frame is headed
+`FIXTURE ensemble — dry run, not a conformer search (member N)`. It exercises ranking, pruning, the
+table and the selection path with no CREST binary. No number from it is a chemical result.
 
 ## Provenance
 

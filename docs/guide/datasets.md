@@ -175,13 +175,14 @@ An output block names the artifact a flow produces. The inspector offers:
 | Kind | Artifact |
 | --- | --- |
 | `html` | the workflow report, one section per record |
-| `csv` | an RFC 4180 table, one row per record × block |
-| `json` | `{ schemaVersion, generatedAt, records[], runs[] }` |
+| `csv` | an RFC 4180 table, one row per finished run (one per record × block, or per conformer member) |
+| `json` | `{ schemaVersion, kind, generatedAt, appVersion, rowCount, rows[] }` — the same rows |
 | `zip` | run bundle(s) plus manifest and checksums |
 
 The path is relative and must stay inside the output folder (no `..`), and its extension must match
-the kind. **Include** chooses one artifact for the whole flow or one per record. **Include manifest**
-adds the SHA-256 list beside the artifact.
+the kind. **Include** chooses one artifact for the whole flow or one per record. Every artifact's
+SHA-256 is appended to `<artifactRoot>/manifest.json` when it is written; the **Include manifest**
+switch is stored in the project, but the manifest entry is written either way.
 
 ## Homologous series
 
@@ -248,9 +249,9 @@ Nothing is generated unless the whole series can be built. The message names the
 | `to` above 24, or `from` below 1 | the range and the cap |
 | a member that would hold more than 1 000 atoms | the member size |
 
-Bond orders are not stored on dataset records, so the unit's bonds are perceived from covalent
-radii and counted as single bonds. The valence guard therefore catches over-coordination, not an
-over-valent double bond; a linkage on an atom whose multiple bond matters is a judgement the user
+The series block perceives the unit's bonds from covalent radii and counts them as single bonds; it
+does not read a record's stored `bonds`. The valence guard therefore catches over-coordination, not
+an over-valent double bond; a linkage on an atom whose multiple bond matters is a judgement the user
 still has to make.
 
 ## Derivatives
@@ -318,9 +319,9 @@ plan would give — and it happens before a single input file is written:
 
 **A parent must state its bonds.** The edit engine refuses a molecule without a topology rather than
 perceiving one from distances, so a dataset record needs a `bonds` array (see
-[`docs/PROJECT-FORMAT.md`](../PROJECT-FORMAT.md)) for a derivative to be built at all. The SDF reader
-does not carry the bond block today, so a record imported from an SDF is refused by name instead of
-being given a guessed valence.
+[`docs/PROJECT-FORMAT.md`](../PROJECT-FORMAT.md)) for a derivative to be built at all. A CDXML
+record does carry its bonds; the SDF, XYZ and CSV readers do not carry a bond block, so a record
+imported from one of those is refused by name instead of being given a guessed valence.
 
 ## Complexes
 

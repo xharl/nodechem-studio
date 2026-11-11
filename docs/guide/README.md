@@ -59,8 +59,9 @@ Reference pages:
   gaps it does not cover yet.
 - [Privacy and licensing](privacy-and-licensing.md) — the one outbound call (an update check you
   trigger), and what the licence does and does not grant.
-- [Headless CLI](cli.md) — `ncs validate`, `ncs build-input`, `ncs run`, `ncs report`
-  and `ncs export`, with its exit codes.
+- [Headless CLI](cli.md) — every `ncs` command (`validate`, `build-input`, `run`, `report`,
+  `validation`, `export`, `record`, `diff`, `merge`, `convert`, `export-input`, `smiles`,
+  `qcschema`, `cache`, `cube`) and its exit codes.
 - [Scripting and the record schema](../SCRIPTING.md) — `run.json` as a versioned contract,
   `ncs export`, and the stdlib-only Python client.
 - [Engine plugins](../ENGINE_PLUGIN.md) — the `registerEngine` spec, its refusals, and why
@@ -76,6 +77,8 @@ Normative references, for people reading code or writing tooling:
   an imported record nests, and is still what `--schema-version 1` exports.
 - [`docs/CLUSTER_EXPORT.md`](../CLUSTER_EXPORT.md) — the SLURM/PBS export folder and manifest.
 - [`docs/IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md) — phased plan and remaining work.
+- [`docs/FEATURE-MAP.md`](../FEATURE-MAP.md) — what each engine offers, what the app implements,
+  and every gap that is still open.
 - [`CHANGELOG.md`](../../CHANGELOG.md) — what each release contains, and what is still unreleased.
 - [`README.md`](../../README.md) — the project landing page.
 
@@ -87,7 +90,8 @@ Three things, because a wrong claim in a chemistry tool is expensive:
   `FIXTURE OUTPUT`. It exercises the parser and the queue. It is never a calculation, and no number
   from it is a chemical result.
 - **Unverified paths are named as unverified.** The parsers are tested against committed real output
-  from Gaussian 09 and 16, ORCA 5.0 and 6.1, and Psi4 1.11 (see [Output corpus](parser-corpus.md)); a
+  from Gaussian 09 and 16, ORCA 5.0 and 6.1, Psi4 1.11, and PySCF 2.15 JSON records (see
+  [Output corpus](parser-corpus.md)); a
   peer run in November 2026 also drove 25 cases written by this builder through Gaussian 16 Rev A.03,
   and those logs are fixtures now. This project's own automated tests have never executed a licensed
   Gaussian job, and no engine binary ships with the app. The docs say that where it matters instead of
