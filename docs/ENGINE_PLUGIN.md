@@ -30,14 +30,17 @@ const engine = registerEngine({
 | Key | Required | Type | Contract |
 | --- | --- | --- | --- |
 | `id` | yes | string | Lowercase slug (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`), unique across static and plugin engines. A static id cannot be shadowed. |
-| `extensions` | yes | object | `{ input, output }`, each a dot-prefixed extension such as `.mop` / `.out`. Used to accept safe basenames. |
-| `buildArgv` | yes | function | `({ inputName, outputName, settings, molecule }) => string[]`. Called by the runner to build the process argv. A non-array or a non-string member is refused at call time. |
+| `extensions` | yes | object | `{ input, output }`, each a dot-prefixed extension matching `^\.[A-Za-z0-9]+$` such as `.mop` / `.out`. Used to accept safe basenames. |
+| `buildArgv` | yes | function | `({ inputName, outputName, settings, molecule }) => string[]`. Called by the host to build the process argv; the returned array is checked, and a non-array or a non-string member is refused. |
 | `parseOutput` | yes | function | `(text, options) => object`, the canonical result (see `src/shared/engines/canonical.js`). Missing values are `null`, never zero. |
 | `gates` | yes | function | `(parsed, options) => { overall, gates: [{ name, required, result, detail }] }`. `overall` is `pass`, `fail` or `unknown`; a gate result may also be `skipped`, which is not a pass. |
 | `label` | no | string | Display name; defaults to `id`. |
 | `capabilities` | no | object | Extra provenance; `id`, `label`, `inputExtension` and `outputExtension` are filled in. |
 | `detect` | no | function | `(settings) => boolean`. Defaults to `() => false`; the seam does not guess which block belongs to which engine. |
 | `toCanonical` | no | function | `(parsed) => canonical`. Defaults to identity, for a parser that already returns the canonical shape. |
+
+The descriptor contract itself is versioned: `ENGINE_SPEC_VERSION` is `1`, and every
+registered engine carries it as `specVersion`.
 
 ## Refusals
 
@@ -69,15 +72,20 @@ A frozen object with the runner-facing shape:
 | `detect(settings)`, `toCanonical(parsed)` | Your hooks, or the safe defaults. |
 
 `engineIds()`, `listEngines()` and `resolveEngine(id)` see the static engines
-first and then the plugins. `unregisterEngine(id)` removes a plugin; it returns
-`false` for a static id, which cannot be removed.
+first and then the plugins; `pluginEngine(id)` and `pluginEngineIds()` see only
+the seam, in registration order. `unregisterEngine(id)` removes a plugin; it
+returns `false` for a static id, which cannot be removed. Registering an id that
+is already taken throws `EngineSpecError` as well, with a `duplicate` problem on
+`id`.
 
 ## A parser should return the canonical record
 
 Gates and condition fields only ever read the canonical shape documented in
-`src/shared/engines/canonical.js`: `engine`, `status`, `terminationCode`,
-`complete`, `scf`, `optimization`, `frequencies`, `thermochemistry`,
-`finalEnergy`, `extras`, `lineCount`. If your program's parser has its own
+`src/shared/engines/canonical.js`: `canonicalVersion`, `engine`, `program`,
+`status`, `terminationCode`, `termination`, `complete`, `scf`, `optimization`,
+`frequencies`, `thermochemistry`, `finalEnergy`, `extras`, `lineCount`, plus the
+optional sections an engine may supply (`sapt`, `solvation`, `excitedStates`,
+`raman`, `vcd`, `epr`, `chargeTransfer`, `dlpno`). If your program's parser has its own
 vocabulary, write `toCanonical(parsed)` and keep `parseOutput` in that
 vocabulary — every consumer downstream reads only the canonical form.
 

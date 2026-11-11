@@ -64,7 +64,7 @@ themes/current.css   themes/graphite.css   themes/paper.css     ← answer the c
 Three rules make the thing hold:
 
 1. **Components never see a literal.** A colour, shadow or font stack may only appear in `src/renderer/themes/*.css`. Everything else uses `var(--…)`. CI enforces it.
-2. **Every theme answers every token.** A missing key is a build failure, not a fallback.
+2. **Every theme answers every token.** A missing key is a test failure, not a fallback.
 3. **`data-theme` is the only switch.** No JavaScript writes colours; it writes one attribute. CSS does the rest, which keeps the transition instant and testable.
 
 ---
@@ -80,13 +80,18 @@ Three rules make the thing hold:
 | Text (4) | `--text-primary`, `--text-secondary`, `--text-tertiary`, `--text-inverse` | body/titles, labels & metadata, disabled & hints, text on action |
 | Action (5) | `--action`, `--action-hover`, `--action-press`, `--action-tint`, `--focus-ring` | primary button, selection, focus, active tab |
 | State (5 + 5) | `--state-passed`, `--state-review`, `--state-ready`, `--state-blocked`, `--state-idle` (+ `-tint` each) | outcome of the calculation; dot, rail, pill |
-| Kind (6) | `--kind-calc`, `--kind-condition`, `--kind-loop`, `--kind-merge`, `--kind-output`, `--kind-note` | block type. `graphite`/`paper` map all six to one neutral; `current` keeps today's five hues |
+| Kind (6) | `--kind-calc`, `--kind-condition`, `--kind-loop`, `--kind-merge`, `--kind-output`, `--kind-note` | block type. `graphite`/`paper` map all six to one neutral; `current` keeps a distinct hue for each |
 | Type (3) | `--font-display`, `--font-ui`, `--font-mono` | titles, interface, numbers/routes |
 | Radius (3) | `--radius-sm`, `--radius-md`, `--radius-lg` | 4–6, 8–10, 12–14 px equivalents |
 | Elevation (3) | `--shadow-raised`, `--shadow-panel`, `--shadow-popover` | card, panel, modal |
 | Grid + motion (4) | `--canvas-grid-image`, `--canvas-grid-size`, `--motion-fast`, `--motion-ease` | canvas texture; transitions |
 
-**Type size is not a theme token.** The scale is fixed for all themes — 11 / 12 / 13 / 15 / 18 / 22 px, floor 11 — so the "50 declarations below 10 px" defect cannot return through a theme. Themes swap families and weights only.
+**Type size is fixed, not themeable.** The six `--text-size-*` names (`xs` 11, `sm` 12, `md` 13,
+`lg` 15, `xl` 18, `2xl` 22 px) are declared in every theme file with identical values, so
+`styles.css` has one source for sizes, but they sit outside the 45-name contract and no theme may
+change them — `test/theme.test.js` asserts the values are the same in all three. That is how the
+"50 declarations below 10 px" defect cannot return through a theme. Themes swap families and
+weights only.
 
 **State text vs state mark.** All `--state-*` values must reach **4.5:1** against the surface they sit on, even where today's UI only draws a 3 px rail. One value is therefore corrected: legacy `--state-blocked` moves `#64748b` → `#76859e` (3.98 → 5.06 on `--surface-panel`), because the contract treats a state colour as a text colour.
 
@@ -111,7 +116,9 @@ Component contract after the split:
 
 - **Rail and dot** take `--state-*`. Never a kind colour.
 - **Eyebrow/icon** takes `--kind-*`; in `graphite` and `paper` that resolves to one neutral, so type is read from the label, not the hue.
-- **Pills** take `--state-*` for text and mark, `--state-*-tint` for background, `--border-subtle` for the outline.
+- **Pills** keep their legacy `--tone-*` names for colour, background and outline for now; each tone
+  is a theme token, so all three themes stay consistent, and moving them onto `--state-*` /
+  `--state-*-tint` is the remaining step of the split.
 
 This is what lets proposal A's "colour = action, dot = state" and proposal B's "state is a margin rule" both run on the same markup.
 
@@ -121,7 +128,15 @@ This is what lets proposal A's "colour = action, dot = state" and proposal B's "
 
 ### 6.1 `current` — today's look, preserved
 
-`current.css` maps the 24 existing tokens onto the contract and keeps the legacy names as aliases (`--bg: var(--surface-canvas)` … see appendix). Aliases exist **only in this file**, are marked deprecated, and are removed at 0.4. Acceptance for PR 1: a pixel diff of the seeded project against `main` is ≤ 0.1 % apart from the one `--state-blocked` correction.
+`current.css` answers the 45 contract names with today's palette, value for value, and adds the
+generated `--tone-<family>-<n>` long tail (one custom property per former literal in
+`styles.css`). The compatibility aliases live in a separate generated file,
+`themes/legacy.css`, which maps each `--tone-*` name still referenced by `styles.css` onto a
+contract token; `index.html` loads it after the three theme files and before `styles.css`, and a
+test asserts that order (`test/theme.test.js`). It is a migration layer, not a fourth theme: it
+defines no colour values of its own except one `#fff` knob tone. Acceptance for PR 1 was a pixel
+diff of the seeded project against `main` of ≤ 0.1 %, apart from the one `--state-blocked`
+correction.
 
 ### 6.2 `graphite` — proposal A
 
@@ -137,38 +152,42 @@ Paper ramp, Prussian-blue accent, Plex Serif for names, ruled canvas, margin-rul
 |---|---|---|---|
 | `--surface-canvas` | `#07090d` | `#0A0B0D` | `#F6F3EC` |
 | `--surface-panel` | `#0c1119` | `#101215` | `#FCFAF5` |
-| `--surface-raised` | `#101722` | `#16191D` | `#FFFFFF` |
-| `--surface-well` | `#141c29` | `#1D2126` | `#EFEADD` |
-| `--border-subtle` | `rgba(148,163,184,.12)` | `#2A2F35` | `#E2DAC9` |
-| `--border-strong` | `rgba(148,163,184,.22)` | `#3B424A` | `#C9BFAA` |
+| `--surface-raised` | `#0f1520` | `#15181C` | `#FFFFFF` |
+| `--surface-well` | `#080d14` | `#0C0E11` | `#EFEBE2` |
+| `--border-subtle` | `#1b2432` | `#22262B` | `#DED7C9` |
+| `--border-strong` | `#2a3546` | `#333A41` | `#C4BAA7` |
 | `--text-primary` | `#e9edf4` | `#E8EBEF` | `#171614` |
-| `--text-secondary` | `#98a3b3` | `#A6ADB7` | `#45413A` |
-| `--text-tertiary` | `#808da3` | `#7B838D` | `#5F594D` |
+| `--text-secondary` | `#98a3b3` | `#A8AFB8` | `#4A463F` |
+| `--text-tertiary` | `#808da3` | `#7E868F` | `#6B655B` |
 | `--action` | `#7c83ff` | `#E0703F` | `#1F4E79` |
-| `--text-inverse` | `#0b0f18` | `#141110` | `#FCFAF5` |
+| `--text-inverse` | `#0b111a` | `#0A0B0D` | `#FCFAF5` |
 | `--state-passed` | `#34d399` | `#56B98A` | `#2E6B4C` |
 | `--state-review` | `#fb7185` | `#D8A33C` | `#8E6116` |
-| `--state-ready` | `#60a5fa` | `#7B838D` | `#5F594D` |
-| `--state-blocked` | `#76859e` | `#7B838D` | `#5F594D` |
-| `--state-idle` | `#76859e` | `#7B838D` | `#5F594D` |
-| `--font-display` | system sans | Plex Sans | Plex Serif |
-| `--font-ui` | system sans | Plex Sans | Plex Sans |
-| `--font-mono` | system mono | Plex Mono | Plex Mono |
+| `--state-ready` | `#6ee7b7` | `#7FC7A4` | `#3C7A5A` |
+| `--state-blocked` | `#76859e` | `#9AA4AE` | `#5A544B` |
+| `--state-idle` | `#64748b` | `#6F777F` | `#726B60` |
+| `--font-display` | Plex Sans stack | Plex Sans stack | Plex Serif stack |
+| `--font-ui` | Plex Sans stack | Plex Sans stack | Plex Sans stack |
+| `--font-mono` | Plex Mono stack | Plex Mono stack | Plex Mono stack |
+
+These are the values in `src/renderer/themes/*.css` (generated with `scripts/build-themes.mjs`);
+that file, not this table, is the source of truth.
 
 ### 6.5 Measured contrast (WCAG 2.1, computed from the values above)
 
 | Pair | `current` | `graphite` | `paper` | Floor |
 |---|---|---|---|---|
 | primary on panel | 16.11 | 15.69 | 17.34 | 7.0 |
-| secondary on panel | 7.41 | 8.29 | 9.72 | 4.5 |
-| tertiary on panel | 5.64 | 4.89 | 6.66 | 4.5 |
+| secondary on panel | 7.41 | 8.48 | 8.99 | 4.5 |
+| tertiary on panel | 5.64 | 5.09 | 5.53 | 4.5 |
 | action on panel | 5.90 | 5.86 | 8.30 | 3.0 (non-text) |
-| inverse label on action | 5.98 | 5.87 | 8.30 | 4.5 |
+| inverse label on action | 5.90 | 6.15 | 8.30 | 4.5 |
 | passed on panel | 9.84 | 7.77 | 6.06 | 4.5 |
 | review on panel | 7.03 | 8.24 | 5.20 | 4.5 |
-| blocked on panel | 5.06 (was 3.98) | 4.89 | 6.66 | 4.5 |
+| blocked on panel | 5.06 (was 3.98) | 7.41 | 7.18 | 4.5 |
 
-All three themes pass before implementation begins; the test in §9 will hold them there.
+`test/theme.test.js` recomputes these ratios from the parsed theme files on every run, so a value
+that drifts below its floor fails the suite rather than this table.
 
 ---
 
@@ -186,24 +205,28 @@ All three themes pass before implementation begins; the test in §9 will hold th
 ```js
 // public/theme-boot.js — classic script, no imports, runs before first paint
 (function () {
-  var KEY = 'ncs.theme';
-  var VALID = { current: 1, graphite: 1, paper: 1 };
-  var stored = 'system';
-  try { stored = localStorage.getItem(KEY) || 'system'; } catch (e) {}
-  var mode = stored;
-  if (mode === 'system') {
-    mode = window.matchMedia('(prefers-color-scheme: light)').matches ? 'paper' : 'graphite';
-  }
-  if (!VALID[mode]) mode = 'current';
+  var STORAGE_KEY = 'ncs.theme';
+  var THEMES = ['current', 'graphite', 'paper'];
+  var DARK = { current: true, graphite: true, paper: false };
+  var stored = 'current';                     // an install that never chose stays on `current`
+  try {
+    var raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw && THEMES.indexOf(raw) !== -1) stored = raw;
+    else if (raw === 'system') stored = 'system';
+  } catch (error) { stored = 'current'; }
+  var prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+  var resolved = stored === 'system' ? (prefersLight ? 'paper' : 'graphite') : stored;
+  if (THEMES.indexOf(resolved) === -1) resolved = 'current';
   var root = document.documentElement;
-  root.dataset.theme = mode;        // resolved id, drives CSS
-  root.dataset.themeMode = stored;  // 'system' | 'current' | 'graphite' | 'paper'
-  root.style.colorScheme = mode === 'paper' ? 'light' : 'dark';
+  root.setAttribute('data-theme', resolved);       // resolved id, drives CSS
+  root.setAttribute('data-theme-mode', stored);    // 'system' | 'current' | 'graphite' | 'paper'
+  root.style.colorScheme = DARK[resolved] ? 'dark' : 'light';
 })();
 ```
 
-`public/` does not exist yet; PR 1 adds it (Vite copies it verbatim into `dist/`, so the file keeps its name and costs no bundle).
-
+`public/theme-boot.js` is copied verbatim into `dist/` by Vite, so it keeps its name and costs no
+bundle. `test/theme.test.js` checks that it runs before `styles.css`, is a classic script, and
+contains no `fetch`, `XMLHttpRequest` or URL.
 
 `color-scheme` is set as well so native scrollbars, caret and form controls follow the theme without extra CSS.
 
@@ -211,52 +234,70 @@ All three themes pass before implementation begins; the test in §9 will hold th
 
 ```js
 // renderer — one function, one attribute
-function applyTheme(mode) {                       // 'system' | 'current' | 'graphite' | 'paper'
+function applyTheme(preference) {                 // 'system' | 'current' | 'graphite' | 'paper'
+  const mode = preference === 'system' || THEME_IDS.includes(preference) ? preference : 'current';
+  const resolved = resolveThemePreference(mode);  // system → prefers-color-scheme
+  document.documentElement.setAttribute('data-theme', resolved);
+  document.documentElement.setAttribute('data-theme-mode', mode);
+  document.documentElement.style.colorScheme = THEME_DARK[resolved] ? 'dark' : 'light';
   localStorage.setItem('ncs.theme', mode);
-  const resolved = mode === 'system'
-    ? (matchMedia('(prefers-color-scheme: light)').matches ? 'paper' : 'graphite')
-    : mode;
-  document.documentElement.dataset.theme = resolved;
   window.desktop?.setTheme({ mode, resolved });   // shell follows
 }
 ```
 
-Settings → **Appearance**: three preview cards plus *Match system*. No reload, no restart.
+The switcher is the **Theme** select in the top-bar overflow menu — *Match system*, *Current*,
+*Graphite*, *Paper*. No reload, no restart; the stored value is the mode, and the boot script
+resolves it to the same id on the next launch.
 
 ### 7.3 Shell
 
 `main.js` needs the resolved id for two things it owns: the window's pre-paint background and native chrome.
 
 ```js
-const THEME_BG = { current: '#07090d', graphite: '#0A0B0D', paper: '#F6F3EC' };
+const THEME_WINDOW_COLOUR = { current: '#07090d', graphite: '#0A0B0D', paper: '#F6F3EC' };
 
-ipcMain.handle('theme:set', (_event, { mode, resolved }) => {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.setBackgroundColor(THEME_BG[resolved] || THEME_BG.current);
-  }
-  nativeTheme.themeSource = resolved === 'paper' ? 'light' : 'dark';
-  writePreferences({ theme: mode });            // cache only — see below
-  return { ok: true };
+ipcMain.handle('app:set-theme', (_event, { mode, resolved }) => {
+  const id = THEME_WINDOW_COLOUR[resolved] ? resolved : 'current';
+  THEME_CACHE.resolved = id;
+  THEME_CACHE.mode = String(mode || 'current');
+  writeThemeCache({ mode, resolved: id });       // launch cache — see below
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(THEME_WINDOW_COLOUR[id]);
+  nativeTheme.themeSource = id === 'paper' ? 'light' : 'dark';
+  return { mode: THEME_CACHE.mode, resolved: id };
 });
 ```
 
-`createWindow()` reads that cache for `backgroundColor`. `nativeTheme` joins the existing `electron` import and `writePreferences` is a ~10-line read/write of `userData/preferences.json`; neither exists yet. **Persistence split, stated explicitly:** `localStorage['ncs.theme']` is the source of truth (it is what the boot script can read synchronously); `userData/preferences.json` is a launch-time cache so the window paints the right colour before the renderer exists. If they disagree, localStorage wins and the cache is rewritten on the next switch.
+`createWindow()` reads that cache for `backgroundColor`. **Persistence split, stated explicitly:**
+`localStorage['ncs.theme']` is the source of truth (it is what the boot script can read
+synchronously); `userData/preferences.json` holds `{ "theme": { "mode", "resolved" } }` as a
+launch-time cache so the window paints the right colour before the renderer exists. If they
+disagree, localStorage wins and the cache is rewritten on the next switch.
 
 ### 7.4 Migration
 
-- Legacy aliases live in `current.css` only; a test fails if any selector outside a theme file uses one.
-- Default for 0.3 stays `current` until a theme is chosen in settings; `system` is offered but not default, so an OS preference cannot silently re-skin an existing install.
+- Legacy `--tone-*` aliases live in `themes/legacy.css` only; a test fails if an alias depends on a
+  token no theme defines, and `legacy.css` must load after the theme files and before `styles.css`.
+- Default stays `current` until a theme is chosen; `system` is offered but not default, so an OS
+  preference cannot silently re-skin an existing install.
 - `.ncs` files never store a theme — appearance is per-user, not per-project.
 
 ---
 
 ## 8. Type and fonts
 
-- **Bundled, offline.** IBM Plex woff2 in `src/renderer/fonts/`: Sans 400/500/600, Serif 400/500/600, Mono 400/500 (8 files, ≈300–400 KB total). `@font-face` with `font-display: swap` and `unicode-range` covering Latin, Latin Ext and Greek (needed for ν, cm⁻¹, Å, °C).
-- **Licence.** IBM Plex is OFL 1.1. Ship `docs/third-party/IBM-Plex-OFL.txt` and a `THIRD_PARTY_NOTICES.md` entry; a test asserts both exist and every `@font-face` src resolves to a file on disk.
-- **Build.** Fonts are referenced from `styles.css`, so Vite hashes them into `dist/assets/`. `electron-builder` already ships `dist/**`; `build.files` needs no change.
-- **`current` keeps the system stack.** Bundling changes metrics; a pixel-compatible legacy theme must not. `graphite` and `paper` opt into Plex.
-- **Numbers** always use `--font-mono` with `font-variant-numeric: tabular-nums`, in every theme.
+- **Bundled, offline.** IBM Plex woff2 in `src/renderer/fonts/`: Sans 400 and 600, Serif 600, Mono
+  400 — four files, about 82 KB in total. `src/renderer/fonts.css` declares them with
+  `font-display: swap` and a single Latin subset each (no `unicode-range`), and `index.html` links
+  that stylesheet before the theme files.
+- **Licence.** IBM Plex is OFL 1.1; `src/renderer/fonts/OFL.txt` ships beside the faces. There is no
+  bundle-level `THIRD_PARTY_NOTICES.md` in this build.
+- **Build.** `fonts.css` references `./fonts/*.woff2`, so Vite hashes them into `dist/assets/`.
+  `electron-builder` already ships `dist/**`; `build.files` needs no change.
+- **All three themes name Plex first.** `current`'s stacks are the Plex faces with the system stacks
+  as fallback, exactly as `graphite` and `paper` are; only the display face differs (`paper` uses
+  Plex Serif).
+- **Numbers** use `--font-mono` with `font-variant-numeric: tabular-nums` in the tables that carry
+  them.
 
 ---
 
@@ -264,12 +305,24 @@ ipcMain.handle('theme:set', (_event, { mode, resolved }) => {
 
 New `test/theme.test.js`, run in the existing `vitest` suite (no new dependency):
 
-1. **Contract completeness** — parse the three theme blocks; assert each defines exactly the same key set, and that the set equals the documented contract.
-2. **No orphans, no strays** — every `var(--x)` in `styles.css`, `index.html` and component CSS resolves in all three themes; no `#hex` / `rgb()` / `rgba()` / `hsl()` literal anywhere outside `src/renderer/themes/*.css`.
-3. **Contrast floors** — recompute §6.5 from the parsed values inside the test: text ≥ 7, secondary/tertiary ≥ 4.5, every `--state-*` ≥ 4.5, `--action` vs `--surface-panel` ≥ 3, `--text-inverse` on `--action` ≥ 4.5. A new theme must pass before it can merge.
-4. **Type floor** — no `font-size` below 11 px anywhere; the six-step scale is the only source of sizes.
-5. **Boot order** — in `index.html`, `theme-boot.js` appears before the stylesheet; its whitelist equals the theme registry; the file contains no `fetch`, `XMLHttpRequest`, `http://` or `https://` (extends the existing no-network guard to `public/`).
-6. **Alias quarantine** — legacy names appear only in `current.css`.
+1. **Contract completeness** — parse the three theme blocks; assert each defines exactly the same
+   key set, that every one of the 45 contract names is present, and that the six `--text-size-*`
+   values are identical in all three.
+2. **No orphans, no strays** — every `var(--x)` in `styles.css`, `index.html` and component JS
+   resolves in all three themes (directly or through `legacy.css`); no `#hex` / `rgb()` / `rgba()` /
+   `hsl()` literal anywhere outside `src/renderer/themes/*.css`, with `structureViewer.js` exempt by
+   name because its CPK element colours are chemistry, not theme.
+3. **Contrast floors** — recompute §6.5 from the parsed values inside the test: primary ≥ 7,
+   secondary and tertiary ≥ 4.5, the three state colours that carry text (`passed`, `review`,
+   `blocked`) ≥ 4.5, `--action` vs `--surface-panel` ≥ 3, `--text-inverse` on `--action` ≥ 4.5. A
+   new theme must pass before it can merge.
+4. **Type floor** — no literal `font-size` or `font:` shorthand in px anywhere in `styles.css`,
+   `index.html` or renderer JS; every size is `var(--text-size-*)`.
+5. **Boot order** — in `index.html`, `theme-boot.js` appears before the stylesheet; its theme
+   whitelist is the three shipped ids; the file contains no `fetch`, `XMLHttpRequest`, `http://` or
+   `https://` (extends the existing no-network guard to `public/`).
+6. **Compatibility aliases** — every alias in `themes/legacy.css` resolves through a token a theme
+   defines, and `legacy.css` loads after the theme files and before `styles.css`.
 
 Manual matrix before merge: each theme × {canvas, inspector, palette open, modal, queue panel, 3D viewer} at 1440×900 and 1100×700, plus a print screenshot of `paper`.
 
@@ -297,32 +350,47 @@ Each PR ships independently. PR 1 alone removes the "202 literal colours" proble
 | Two persistence stores drift | localStorage is truth; the JSON is a cache overwritten on every switch |
 | `paper` on an OLED in a dark room | Theme is a choice, not a default; system mapping gives dark users `graphite` |
 | Docs screenshots churn on every theme | Docs pick one canonical theme (recommendation: `paper` for print, `graphite` for the app default) |
-| Legacy aliases become permanent | Alias test + removal scheduled at 0.4 |
+| Legacy aliases become permanent | Alias test keeps every alias resolving through a contract token; new component styles use the contract names, and the alias file shrinks as references migrate |
 | 3D viewer assumes dark | Viewer background becomes `--surface-well`; CPK atom colours stay theme-independent by design |
 
 ---
 
 ## 12. Open questions for review
 
-1. **Default at 0.3:** keep `current` as default (safest, but the public identity stays the old one) or ship `graphite` as default with `current` as legacy? A theme engine lets this be a one-line change, but it should be decided, not drifted into.
-2. **Docs canonical theme:** `paper` makes every screenshot print-ready; `graphite` matches the default app. One theme for all docs, or `paper` for figures and `graphite` for UI shots?
-3. **Kind colours:** keep the legacy five hues in `current` forever, or neutralise kinds in all themes at 0.4? Today's amber condition / violet loop is exactly the "six hues fighting" problem.
-4. **Font subsetting:** ship one full Latin+Greek file per face (≈40 KB each, simplest) or split by `unicode-range` to load Greek only when used?
+These were open when the split was designed. The first three are now answered by the shipped code;
+the fourth is the only one still live.
+
+1. **Default theme — settled:** `current` is the default (`theme-boot.js` falls back to it, and the
+   app writes it on first launch), because the published screenshots are `current`.
+2. **Docs canonical theme — settled:** `current` for UI shots, as `docs/guide/appearance.md` states
+   ("Default; matches the published screenshots"). Figures use an explicit theme when they need one.
+3. **Kind colours — settled:** `current` keeps a distinct hue per block kind; `graphite` and `paper`
+   map all six to one neutral. Neither choice is hard-coded — the mapping is in each theme file.
+4. **Font subsetting — open:** today one Latin subset per face, no `unicode-range` splitting. Splitting
+   Greek/Cyrillic out would cut the initial payload but adds four more `@font-face` rules and a
+   fallback seam.
 
 ---
 
-## Appendix — legacy alias map (quarantined to `current.css`)
+## Appendix — compatibility alias map (`src/renderer/themes/legacy.css`)
 
-| Legacy | Contract |
+The alias layer is generated alongside the tokens: `styles.css` still refers to `--tone-<family>-<n>`
+names produced by `scripts/build-themes.mjs`, and `legacy.css` resolves each one through a contract
+token so all three themes stay consistent. `:root` only, so nothing here varies by theme.
+
+| Legacy `--tone-*` | Resolves to |
 |---|---|
-| `--bg`, `--bg-deep` | `--surface-canvas` |
-| `--panel`, `--panel-2`, `--panel-3` | `--surface-panel`, `--surface-raised`, `--surface-well` |
-| `--input` | `--surface-well` |
-| `--line`, `--line-2` | `--border-subtle`, `--border-strong` |
-| `--text` | `--text-primary` |
-| `--muted` | `--text-secondary` |
-| `--faint` | `--text-tertiary` |
-| `--accent`, `--accent-soft` | `--action`, `--action-tint` |
-| `--green`, `--red`, `--blue`, `--amber`, `--slate`, `--teal`, `--violet` | `--state-*` / `--kind-*` per §5 |
-| `--shadow` | `--shadow-panel` |
-| `--sans`, `--mono` | `--font-ui`, `--font-mono` |
+| `--tone-blue-13`, `--tone-blue-33`, `--tone-blue-94a` | `--surface-well` |
+| `--tone-blue-19`, `--tone-blue-15a`, `-21a`, `-27a`, `-31a`, `-38a` | `--surface-panel` |
+| `--tone-blue-39`, `--tone-blue-41`, `--tone-blue-12a` | `--surface-raised` |
+| `--tone-blue-68a` | `--border-subtle` |
+| `--tone-blue-40a`, `--tone-blue-80a` | `--action-tint` |
+| `--tone-blue-53a` | `--state-blocked-tint` |
+| `--tone-blue-60`, `--tone-blue-76` | `--text-secondary` |
+| `--tone-blue-23`, `--tone-blue-28`, `--tone-blue-111` | the matching `…a` tone, defined in the theme files |
+| `--tone-orange-10` → `-14`; `-11`, `-12` → `-15`; `-13` → `-16` | a theme tone of the same family |
+| `--tone-red-11`, `-12` → `-16`; `-13` → `-17` | a theme tone of the same family |
+| `--tone-neutral-15` | `#fff` (a knob tone, the one literal in the file) |
+
+New component styles must consume the contract names directly; the file exists only until the
+remaining `--tone-*` references in `styles.css` are migrated.

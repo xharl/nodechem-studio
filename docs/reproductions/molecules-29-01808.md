@@ -32,9 +32,9 @@ Reported targets for compound **1**:
 | Paper step | Block | Route NodeChem generates |
 | --- | --- | --- |
 | Optimize at B3LYP/6-311++G(d,p) | `apn-opt` | `#p B3LYP/6-311++G(d,p) Opt=Tight Integral=UltraFine` |
-| Vibrational analysis, no imaginary modes | `apn-freq` | `#p B3LYP/6-311++G(d,p) Freq` + gate "0 imaginary modes" |
+| Vibrational analysis, no imaginary modes | `apn-freq` | `#p B3LYP/6-311++G(d,p) Freq Geom=Check Guess=Read` + gate "0 imaginary modes" |
 | TD-DFT, 5 singlet states, PCM toluene | `apn-td-toluene` | `#p B3LYP/6-311++G(d,p) SP TD=(NStates=5) SCRF=(PCM,Solvent=Toluene) Geom=Check Guess=Read` |
-| … THF / DCM / DMSO / methanol | `apn-td-{thf,dcm,dmso,meoh}` | the same, with `Solvent=THF`, `Dichloromethane`, `DMSO`, `Methanol` |
+| … THF / DCM / DMSO / methanol | `apn-td-{thf,dcm,dmso,meoh}` | the same, with `Solvent=THF`, `Dichloromethane`, `DMSO`, `Methanol`; the methanol block also writes `Pop=Full` |
 
 The five TD blocks are checkpoint children of the frequency block, so each one reads the optimised geometry
 and the ground-state orbitals from disk rather than re-optimising.

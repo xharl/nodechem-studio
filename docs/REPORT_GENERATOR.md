@@ -45,77 +45,76 @@ Gate verdicts are **copied**, never recomputed. The report is a view over record
 
 | File | Purpose | Rules |
 |---|---|---|
-| `report.html` | The document a human reads or prints | Single file: inline CSS, embedded images only (`data:`), **no JavaScript**, no external references, `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">` |
-| `report.json` | The model the HTML was rendered from | JSON-serialisable, schema-versioned (`reportVersion: 1`), stable key order, absolute paths allowed here only (they never reach the HTML) |
-| `report.pdf` | Optional | Chromium `webContents.printToPDF` from a hidden sandboxed window loading the local HTML; header/footer templates carry page numbers (Chromium ignores `@page` margin boxes) |
+| `report.html` | The document a human reads or prints | Single file: inline CSS and inline SVG figures, **no JavaScript**, no external references, no `<script>`, no `http(s)://` |
+| `report.json` | The model the HTML was rendered from | JSON-serialisable, `schemaVersion: 1` (`WORKFLOW_REPORT_SCHEMA_VERSION`) and `kind: "nodechem-studio.workflow-report"`, absolute paths allowed here only (they never reach the HTML) |
 
-- Location: `userData/reports/<queueId>/` — a report spans runs, so it does not belong inside any one run folder. `Export report…` copies the folder to a user-chosen destination.
-- Size: warn at 2 MB, hard cap 8 MB. Over the cap, large per-atom tables move to `appendix.json` and the HTML says where.
-- Determinism: same queue + same run records ⇒ byte-identical HTML apart from `meta.generatedAt`. Enforced by a frozen-clock snapshot test.
+- Location: the desktop **Save workflow report…** action writes the file the user names (default
+  `<documents>/workflow-<id>.html`) and the model beside it as `<name>.json`. `ncs report <out-dir>`
+  writes `<out-dir>/reports/index.html` unless `--out <file>` names another path; it does not write a
+  JSON model.
+- A PDF deliverable was dropped by decision; there is no `printToPDF` path in this build.
+- Determinism: same queue + same run records ⇒ byte-identical HTML apart from the generation
+  timestamp, which enters through the model.
 
 ---
 
 ## 4. Anatomy
 
+One scrolling HTML page, no cover sheet. Sections are emitted in a fixed order; the analysis sections
+appear only when the queue carries that kind of result.
+
 ```
-┌ page 1 ──────────────────────────────────────────────────────────────┐
-│ NodeChem Studio            WORKFLOW REPORT              v0.3.0       │
-│ Diels–Alder TS verification                                          │
-│ 7 blocks · Gaussian 16 · 2026-11-08 03:14 → 03:52 · 38 min          │
-│                                                                      │
-│  VERDICT   PASSED WITH REVIEW        6 passed · 1 needs review        │
-│  FINAL     −76.408 217 Eh            TS frequency · block B4          │
-│            ΔE‡ 21.4 kcal/mol         electronic, no ZPE               │
-│                                                                      │
-│  ┌ workflow graph (static SVG, 7 nodes, state-coloured) ┐            │
-│  └──────────────────────────────────────────────────────┘            │
-├ page 2 ──────────────────────────────────────────────────────────────┤
-│ 1 What happened      ordered table: block · type · start · dur ·     │
-│                      status · gates · attempt · hand-off             │
-│ 2 Final result       target block card, headline values, formula     │
-│ 3 Results by block   one card per completed block (parsed values)    │
-│ 4 Validity           errors / warnings / unknowns with evidence     │
-│ 5 Provenance         engine, executable, argv/route, hashes,          │
-│                      app version + commit, parse coverage            │
-│ 6 Artifacts          files, sizes, sha256                            │
-│ 7 Caveats            what is missing, what was not judged, why      │
-└──────────────────────────────────────────────────────────────────────┘
+Workflow report — Diels–Alder TS verification
+Queue q-… · status completed · created … · finished … · generated … · NodeChem Studio 0.5.1
+[3 tasks ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.]
+[Figures — only at the requested level]
+[Method ladder / conformer ensemble / spin sweep / DP4 / EPR / NMR / reaction energetics /
+ uncertainty / derived quantity / Multiwfn / imported results — only when present]
+Outcome     7 task(s): 6 passed, 1 failed, 0 skipped, 0 cancelled, 0 not run.
+            Gate verdict: passed.
+What ran    Block · Status · Gates · Validity · Engine · Level · E / Eh · G / Eh · Imag. · Elapsed
+Methods     one collapsible paragraph per block, only when the caller supplies them
+Provenance  Block · Run · Input SHA-256 · Output SHA-256
 ```
 
-### 4.1 Cover
+### 4.1 Header line
 
-Project name, workflow id (short), terminal status, start/finished timestamps, wall-clock duration, engines used, app version and commit (`run.json#app`), block/edge counts. Banner when any run is a fixture or truncated — the banner states it applies to the whole document.
+Queue id, queue status, created and finished timestamps, the generation timestamp, and the version
+of the app that wrote the report (`appVersion` in the model). The app **commit** is not printed. A
+fixture (dry-run) count note and an imported-results note follow when either applies. A truncated
+parse is **not** called out by this report yet.
 
-### 4.2 Verdict and final result
+### 4.2 Outcome
 
-- **Verdict** = `gates.overall` of the target block, plus the queue's task counts by status. Wording: `passed`, `passed with review`, `failed`, `cancelled`.
-- **Final result** = the target block's key numbers. Default target: the sink block (no outgoing non-loop edge). Configurable later (§13).
-- Headline values are chosen by job type, not by what happens to be present: opt → final energy + convergence; freq → imaginary count + lowest mode; TS → imaginary mode + magnitude; SP → energy.
+One paragraph: the task total and how many passed / failed / skipped / cancelled / never ran, then
+`Gate verdict: <verdict>`. A list of failed tasks follows, then a note naming records that failed or
+were only partly computed. The verdict is assembled from the queue's task gate verdicts; the report
+does not re-evaluate a gate.
 
-### 4.3 What happened
+### 4.3 What ran
 
-Ordered by `task.startedAt`, one row per task:
+One row per task: **Block · Status · Gates · Validity · Engine · Level · E / Eh · G / Eh ·
+Imag. · Elapsed**. The block cell carries a `FIXTURE` label for a dry run, the
+`imported, not run here` badge for an imported result, and the member id for a fanned-out run. A
+value the run did not produce is printed `not reported` — never blank, never zero.
 
-| Block | Type | Engine | Start | Duration | Status | Gates | Attempt | Hand-off |
-|---|---|---|---|---|---|---|---|---|
+For a record-scoped queue (a dataset, series, derivative or complex block upstream) the section
+becomes a per-record comparison table followed by one section per record, in plan order, each with
+its own task table.
 
-`Attempt` comes from `task.attempts` (`queue.js:517`); `history` (bounded to 20 at `queue.js:748`) supplies the prior attempt rows. Hand-off shows `checkpointFrom` with the source run id. Skipped/blocked tasks state the reason from `task.reason`/`task.error` — “blocked by B3 (needs review)”, not a bare status.
+### 4.4 Analysis sections
 
-### 4.4 Results by block
+Emitted only when the queue carries the result: method ladder (rungs, spread, verdict), conformer
+ensemble at the target level (members, Boltzmann populations, spreads), spin-state sweep, DP4+,
+EPR, NMR, reaction energetics, uncertainty summary, derived `analyse` quantities, Multiwfn,
+imported results. Each prints its own parameters and, when it cannot compare, the reason (§5).
 
-Reuse the results-card vocabulary (`Run`, `Program & route`, `Energy`, `Thermochemistry`, `Frequencies`, `Charges & dipole`, `Resources`, `T1`) so the report and the app never disagree about what a field means. Each card header names the block and its run id. Missing fields render `not reported` — never blank, never zero.
+### 4.5 Provenance
 
-### 4.5 Validity
-
-Grouped by severity: errors, warnings, unknowns, each with `id`, `message`, `evidence` and the check that produced it. Unknowns are listed explicitly — an unjudged check is a fact about the result, not a silence.
-
-### 4.6 Provenance
-
-Per block: engine and version line as parsed, executable path (basename + hash, full path only in `report.json`), the exact route/method block or xTB argv, input/output sha256, parse coverage windows, `provenance.kind` (`real` / `fixture`). Document level: app version + commit, report version, generation timestamp.
-
-### 4.7 Artifacts
-
-Every file the workflow produced, relative to the queue folder, with bytes and sha256, plus the run folder id. No absolute paths in HTML; `report.json` keeps them so a maintainer can debug.
+One row per task with a run: block, run id, and a 16-character prefix of the input and output
+SHA-256. The full digests, executable paths, argv/route and parse-coverage windows stay in
+`report.json`. There is no separate artifacts section, and output file names and sizes are not
+printed in the HTML.
 
 ---
 
@@ -129,9 +128,12 @@ The report may carry figures, and each one is a claim with its parameters attach
 | IR, Raman, VCD, UV-Vis, ECD, NMR | the parsed columns of `run.json`; broadening is a stated FWHM | `basic` |
 | Orbital levels (α, β) | `parsed.orbitals.manifolds`, converted to eV at 27.2114 eV/Ha | `basic` |
 | Convergence | `parsed.trajectory` step energies | `basic` |
-| Correlation (computed vs reference) | benchmark rows | `basic` |
 | Contour slice of a cube | a `.cube` **inside the task's run folder** | `basic` when present |
-| Projected isosurface | the same cube, meshed at 10 % of its largest \|ψ\| and projected from a fixed isometric angle | `surfaces` |
+| NCI diagram | the wavefunction analysis section of the record | `basic` when present |
+| Projected isosurface (ψ, or ESP-coloured when the potential is on the same mesh) | the same cube, meshed at 10 % of its largest \|ψ\| and projected from a fixed isometric angle | `surfaces` |
+
+`src/shared/figures/index.js` also registers `spectrum:roa`, `energy` (reaction-energy diagram) and
+`correlation` builders; the workflow report does not place those yet, so they are not claimed here.
 
 Rules, enforced in code and asserted in `test/reportFigures.test.js`:
 
@@ -145,36 +147,39 @@ Rules, enforced in code and asserted in `test/reportFigures.test.js`:
 
 ## 5. Derived values — the integrity core
 
-The report may compute differences. It may not compute them silently or from incomparable numbers.
+The report may compute differences. Each one has a stated comparability rule, and a value that fails
+it is omitted with one line saying why, never printed from numbers that do not belong together.
 
-A derived value is rendered only when **all** hold:
-
-1. Both source blocks have `status: completed` and `gates.overall: pass`;
-2. Same engine, method, basis, dispersion and solvation model (compared field by field, not by string);
-3. Both parses are complete (`parsed.complete !== false`) and not fixture runs;
-4. The required energy is present in both records (no `null` arithmetic);
-5. Charge and multiplicity match across the compared blocks.
-
-Otherwise the value is **omitted** and one line says why:
-
-> ΔE‡ not reported — methods differ (B3LYP/def2-SVP vs ωB97X-D/def2-TZVP).
+| Derived value | Computed when | Otherwise |
+|---|---|---|
+| ΔE of a conformer member | exactly one run per retained member at one target level | `Not compared: …` — a second run per member or several levels would mix different calculations |
+| ΔE across dataset records | against the first completed record that reported an energy | that row carries no ΔE |
+| ΔG‡ of a declared reaction path | the TS and reactant blocks both reported a free energy; the correction scheme is printed beside the number | `ΔG‡ not computed: <reason>`, e.g. no declared reactant block |
+| Spin-state ranking | the states share one starting geometry; the level is printed once for the set | `No state reported a final energy, so nothing is ranked`, and each missing state is named |
+| Imported energy | listed always; enters an energy column only with `includeImported`, labelled | `not included` |
+| `analyse` / DP4 / Multiwfn quantity | the block's own definition was valid at save time and the run produced it | the refusal is printed in full |
 
 Rendering rules:
 
-- Hartree → kcal/mol: `× 627.5094740631`, formula and inputs printed under the value.
-- Electronic energy differences are labelled `electronic, no ZPE`; free-energy differences require thermochemistry in both records at the same T and P, and state `ΔG‡ at 298.15 K, 1 atm`.
-- Display precision: 8 dp for Eh, 1 dp for cm⁻¹, 1 dp for kcal/mol. No silent truncation of significant digits.
-- Numbers are formatted with `toFixed`, never `toLocaleString` — the report must not change with the OS locale.
+- Hartree → kcal/mol: `× 627.5094740631` (`HARTREE_KCAL`).
+- Precision is fixed per field by the caller: 8 dp for absolute energies, 2 dp for a kcal/mol
+  difference, 1 dp for a duration. There is no adaptive rounding.
+- Numbers are formatted with `toFixed`, never `toLocaleString` — the report must not change with the
+  OS locale.
+
+The report does **not** run a general method/basis/dispersion equality check across blocks: two
+blocks at different levels are allowed in one queue, and a derived value that spans them must come
+from an `analyse` block whose definition names its inputs.
 
 ---
 
 ## 6. Rendering
 
-- **Pure functions only.** `reportModel(input) → model`, `reportHtml(model) → string`. No DOM, no `fs`, no `Date.now()` inside the renderer (time enters through the model).
-- **Escaping.** Every interpolation passes through one `esc()` implementation extracted from `resultsView.js`. Free text from logs (error cause, termination line) is additionally length-capped (500 chars) and stripped of control characters. A block title of `<img src=x onerror=…>` renders as text; a test asserts it.
-- **Style.** The report has its own fixed paper style, independent of app themes — a dark-mode user must not get a dark PDF. Serif for prose, sans for tables, mono for numbers; A4 and Letter via `@page`, 18 mm margins, `thead { display: table-header-group }`, no background fills behind text, table rules hairline.
-- **Fonts.** v1 uses a system serif/sans stack so the file stays small and portable. Embedding the bundled Plex faces as base64 (+350–450 KB) is an option once the theming work lands — the report must never fetch a font.
-- **No charts in v1.** The graph is static SVG generated from the queue snapshot coordinates; anything more waits for real demand.
+- **Pure functions only.** `buildWorkflowReport(queue, records, options) → model`, `workflowReportHtml(model) → string`. No DOM, no `fs` inside the renderer (the module lives in `src/shared`); time enters through `generatedAt` in the model.
+- **Escaping.** Every interpolation passes through the module's own `escapeHtml()`. Free text from logs (error cause, termination line) is additionally length-capped and stripped of control characters. A block title of `<img src=x onerror=…>` renders as text; a test asserts it.
+- **Style.** The report has its own fixed paper style, independent of app themes — a dark-mode user must not get a dark PDF-style page. One embedded `REPORT_STYLE` sheet: `system-ui` sans at 13 px on white, mono with `font-variant-numeric: tabular-nums` for numbers, hairline table rules, a 1100 px measure. There is no `@page` rule and no print-specific margin box; printing is the browser's own job.
+- **Fonts.** The report uses the system sans/mono stacks so the file stays small and portable; it does not embed the app's Plex faces and never fetches a font.
+- **Figures, not charts.** The figures in §4.8 are inline SVG built from the record — the flow graph included. There is no charting library and no canvas.
 
 ---
 
@@ -182,13 +187,18 @@ Rendering rules:
 
 ### 7.1 Graph layout
 
-Canvas coordinates live in the project, not the queue, and the project may have changed since the run. The report therefore lays out `queue.edges` itself:
+Canvas coordinates live in the project, not the queue, and the project may have changed since the run.
+The report therefore lays out `queue.edges` itself (`src/shared/figures/dag.js`):
 
-- longest-path layering (nodes with no incoming edge at layer 0), condition/loop nodes on their own row;
-- stable ordering inside a layer by `startedAt`, then `nodeId`, so two runs of the same workflow draw the same picture;
-- 220 × 96 px boxes, 60 px horizontal and 90 px vertical gaps, cubic edges, arrowheads on directed edges, branch edges labelled `true`/`false`, checkpoint edges dashed.
+- longest-path layering — a node's column is its longest path from a root, with a defensive pass cap
+  so a malformed queue cannot hang the report;
+- ordering inside a layer follows the order the tasks are supplied in;
+- 116 × 30 px boxes with a 3 px status rail, 46 px horizontal and 12 px vertical gaps, orthogonal
+  elbow edges with an arrowhead pointing from a block to the blocks that waited on it. Edges are not
+  labelled and are not dashed; the status colour and the status text on each box carry the meaning.
 
-Deterministic and independent of the canvas: the caption says the diagram is a projection of the run graph, not a screenshot of the editor. Passing the project's coordinates as a hint is a later refinement, not v1.
+Deterministic and independent of the canvas: the caption says the diagram is a projection of the run
+graph, not a screenshot of the editor (`Execution graph · N blocks · counts by status`).
 
 ### 7.2 Trigger
 
@@ -197,13 +207,12 @@ Deterministic and independent of the canvas: the caption says the diagram is a p
 
 ### 7.3 Writer
 
-`electron/runner/workflowReport.js`:
+`src/shared/workflowReport.js`:
 
-1. Read `queue.json`; for each task with `runId`, read `run.json` from the run folder; missing record → task marked `record unavailable`, report still produced with a caveat;
-2. Build the model (`src/shared/report/reportModel.js`);
-3. Render HTML (`src/shared/report/reportHtml.js` + `reportCss.js`);
-4. Write `report.json`, `report.html`, then `report.pdf` if requested;
-5. Return paths to the renderer; the UI offers *Open* and *Show folder*, no modal.
+1. `buildWorkflowReport(queue, records, { generatedAt, appVersion, recordInfo, includeImported, figureLevel, volumes, surfaces, figureBudgetBytes, wavefunction })` reads the queue model and the per-task `run.json`; a task with no readable record is still listed, with its values shown as `not reported`, and the report is produced;
+2. `workflowReportHtml(model)` renders the document, and `buildCombinedReportHtml(models, { title, generatedAt })` stacks one section per flow for a project report;
+3. the figure set comes from `src/shared/report.js` — `figureInputsFor(queue, level)` returns cube volumes for `basic` and meshed isosurfaces for `surfaces` — and the builders live in `src/shared/figures/*`;
+4. the desktop action writes the HTML and, beside it, `JSON.stringify(model, null, 2)`; `ncs report` writes the HTML only.
 
 Failure is loud and local: if rendering throws, no partial HTML is written, the queue panel shows the error, and the run records are untouched. A report never mutates run data.
 
@@ -213,8 +222,8 @@ Failure is loud and local: if rendering throws, no partial HTML is written, the 
 
 1. Every displayed value traces to `report.json`, which traces to a `run.json` field or a declared derivation.
 2. `null` renders `not reported`; absent ≠ zero.
-3. Gate verdicts and validity findings are copied verbatim; the report never re-evaluates.
-4. Fixture and truncated provenance propagate to the cover banner and every affected card.
+3. Gate verdicts, and the validity verdict column beside them, are copied verbatim; the report never re-evaluates either. Per-finding detail is not printed — the model carries what the record carried.
+4. Fixture provenance reaches the summary note and every affected row; a truncated parse is not yet flagged.
 5. Derived values obey §5 or are omitted with a reason.
 6. No JavaScript, no external URL, no `<script>`, no `javascript:` href in the output.
 7. Deterministic: same inputs + frozen clock ⇒ identical bytes.
@@ -225,36 +234,39 @@ Failure is loud and local: if rendering throws, no partial HTML is written, the 
 ## 9. Size and performance
 
 - Reads `run.json` only — never the raw logs — so a 200 k-line output costs the same as a 2 k-line one.
-- Charge/dipole per-atom tables cap at 120 rows per scheme; beyond that, `report.json` carries all rows and the HTML renders the first 60 and the last 60 with a counted gap.
-- A 50-block workflow reads ≤50 small JSON files and renders synchronously; the budget is 200 ms of CPU and no I/O beyond those reads.
-- The PDF path spawns one hidden window, prints, and destroys it; it must be closed in a `finally`.
+- Long tables are bounded and say so: a DP4+ candidate prints at most 60 nuclei in a full report (15
+  in a compact panel) and states "N more nuclei are in the result object but not printed here".
+- A 50-block workflow reads ≤50 small JSON files and renders synchronously.
 
 ---
 
 ## 10. Tests
 
-`test/reportModel.test.js`
-- Golden model from a fixture queue: statuses, counts, verdict, target selection.
-- Missing `run.json` → `record unavailable` + caveat, no throw.
+`test/workflowReport.test.js`
+- Model from a fixture queue: statuses, counts, verdict, target selection.
+- A task with no readable `run.json` is still listed, with `not reported` values instead of an invented record; an empty or malformed queue does not throw.
 - Derived ΔE‡ present when comparable; omitted with the exact reason when method, basis, dispersion, solvation, charge, multiplicity or completeness differ.
-- Fixture/truncated flags propagate.
+- Fixture provenance is counted and labelled on every affected row.
 - Unknown validity findings survive.
+- Escaping: a hostile block title renders inert; no `<script>`; no `http(s)://` anywhere in the output.
+- Figure levels and the figure size budget: dropped figures are named.
 
-`test/reportHtml.test.js`
-- Escaping: hostile title/error strings render inert; no `<script>`; CSP meta present.
-- No `http://`, `https://`, `fetch`, `XMLHttpRequest` in the output (extends the existing no-network guard).
-- Print CSS present: `@page`, `table-header-group`, no theme-variable dependency.
-- Snapshot: frozen clock → stable HTML hash.
+`test/workflowReportRecords.test.js`
+- Per-record tasks: dataset record labels, conformer members, imported results labelled and excluded from the energy columns unless `includeImported`.
 
-`test/reportFiles.test.js`
-- Writer produces `report.html` + `report.json` in a temp dir; JSON parses; `reportVersion` present.
-- HTML is a single file (no relative asset references).
-- Failure path writes nothing.
+`test/reportFigures.test.js`
+- Spectra and orbital levels are drawn with their parameters in the caption; a figure that cannot be built is named with its reason.
+- A cube volume is sliced; an isosurface is projected; a rotated cube is refused by name instead of drawn as an xy plane.
+- The 5 MB budget drops figures in build order and names them, and `--figures none` switches them off.
+- The generated bytes are script-free, network-free (no `href`/`src` other than `#`) and deterministic.
+
+`test/cliImportedReport.test.js`
+- `ncs report --include-imported` lists an imported result and only puts its number in the energy column when the flag is set.
 
 `test/docs.test.js` additions
 - `docs/guide/report.md` exists, is linked from the guide index, and every example path resolves.
 
-Acceptance criteria are the same list, plus a manual read-through of one real-looking 7-block fixture report on screen and printed to PDF at A4.
+Acceptance criteria are the same list, plus a manual read-through of one real-looking 7-block fixture report on screen.
 
 ### Acceptance criteria
 
@@ -276,7 +288,7 @@ Acceptance criteria are the same list, plus a manual read-through of one real-lo
 | **0** | Extract `esc`, `missingHtml`, `hartreeText`, `formatSeconds`, `formatBytes` from `resultsView.js` into `src/shared/format.js`; results panel keeps its output byte-identical | Removes the duplicate-formatter risk before two renderers exist |
 | **1** | `reportModel.js` (statuses, verdict, target selection, derived values) + `reportModel.test.js` | Data correctness without presentation |
 | **2** | `reportHtml.js` + `reportCss.js` + golden snapshot; “Generate report” in the queue panel | The document people actually read |
-| **3** | Auto-generate on completion, `report:workflow` IPC, PDF via `printToPDF`, export action | Convenience + print |
+| **3** | Auto-generate on completion, `report:workflow` IPC, export action. (PDF via `printToPDF` was dropped by decision; HTML + JSON only.) | Convenience |
 | **4** | `docs/guide/report.md`, README screenshot, `examples/` report fixture | Public surface |
 
 Each PR is independently shippable. PR 0 and PR 1 change no pixels; PR 2 changes no data.
@@ -288,8 +300,10 @@ Each PR is independently shippable. PR 0 and PR 1 change no pixels; PR 2 changes
 - DOCX, LaTeX, Markdown output; user-supplied HTML templates.
 - Sending or uploading a report anywhere (no network capability, ever).
 - Re-judging results, recomputing gates, or “fixing” a failed run in prose.
-- Charts, spectra plots, orbital renderings.
-- Multi-workflow aggregate reports.
+- Interactive charts: the figures in §4.8 are static SVG. 3D orbital renderings and any charting
+  library or canvas remain out of scope.
+- Multi-workflow aggregate reports (a project report stacks flows; it does not merge unrelated
+  projects).
 
 ---
 

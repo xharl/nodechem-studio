@@ -10,12 +10,15 @@ yourself with the generated `submit-all.sh`.
 One folder per export, named `cluster-<format>-<timestamp>`:
 
 ```
-manifest.json      machine-readable plan: jobs, dependencies, inputs, outputs, gates
+manifest.json      machine-readable plan: schemaVersion/kind, nodes[], edges[], warnings[]
 submit-all.sh      submits every job in dependency order
 README.txt         usage and licence notes, including the cluster licence warning
 <task>.gjf         the exact input the local runner would have written
 <task>.slurm       one SLURM script per calculation node (or <task>.pbs)
 ```
+
+If that folder name already exists, the exporter adds `-2`, `-3`, … rather than writing into the
+old one.
 
 The `.gjf` files are built by the same `buildGaussianInput` code the local
 runner uses, including the `%Chk`/`%OldChk` hand-off, so a local run and a
@@ -33,7 +36,7 @@ topological order and passes the dependencies to the scheduler:
 
 Rules, matching the local queue:
 
-- `dependency`, `checkpoint` and `branch` edges are ordering constraints.
+- `dependency`, `checkpoint`, `branch` and `barrier` edges are ordering constraints.
 - `loop` edges are control flow and are ignored.
 - A calculation depends on its nearest calculation ancestors. Control nodes
   (conditions, loops, merges) and notes are not scheduled; a calculation behind
@@ -53,11 +56,16 @@ condition and loop node; review `manifest.json` before submitting.
 | Gaussian input | SLURM | PBS |
 | --- | --- | --- |
 | `%NProcShared=N` | `#SBATCH --cpus-per-task=N` | `#PBS -l nodes=1:ppn=N` |
-| `%Mem=MGB` | `#SBATCH --mem=MG` | `#PBS -l mem=Mgb` |
-| `%Mem=MMB` | `#SBATCH --mem=MM` | `#PBS -l mem=Mmb` |
-| `%Mem=MMW` | `#SBATCH --mem=<M*8>M` | `#PBS -l mem=<M*8>mb` |
+| `%Mem=<N> GB` | `#SBATCH --mem=<N>G` | `#PBS -l mem=<N>gb` |
+| `%Mem=<N> MB` | `#SBATCH --mem=<N>M` | `#PBS -l mem=<N>mb` |
+| `%Mem=<N> MW` | `#SBATCH --mem=<N*8>M` | `#PBS -l mem=<N*8>mb` |
 
-Megawords are 64-bit words, so one MW is eight megabytes.
+Megawords are 64-bit words, so one MW is eight megabytes. An input with no `%NProcShared` line is
+refused, because the core count cannot be mapped.
+
+The exporter refuses rather than guess in three more cases: a project that contains a `generate`
+block (run the ensemble and export from a project whose geometry is the chosen member), a node id or
+input/output/checkpoint name that is not a safe basename, and an input above 2 MiB.
 
 Scratch is node-local: every script runs `export GAUSS_SCRDIR="${TMPDIR:-/tmp}"`
 and creates the directory. Clusters normally set `TMPDIR` to a per-job local
