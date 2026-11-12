@@ -2,7 +2,10 @@
 
 NodeChem Studio writes **HTML only**. A report is one self-contained file: inline CSS, no scripts,
 no external assets and no network request. It opens in any browser, can be attached to a draft, and
-can be printed by the reader if a PDF is wanted — the app does not ship a renderer.
+can be printed by the reader if a PDF is wanted — the app does not ship a renderer. The stylesheet
+carries a print block tuned for A4 (page margin, rows and figures kept whole across a page break,
+repeated table headers, badges kept in colour), so a browser's **Print → Save as PDF** is the
+intended paper path; nothing is hidden from the printed page that the screen shows.
 
 There are two reports:
 
