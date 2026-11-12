@@ -44,9 +44,37 @@ export const MULTIWFN_SUPPORTED_VERSION = '3.8';
 /** The version recorded with every menu script when no band is named. */
 export const MULTIWFN_MENU_VERSION = '2024+';
 
-/** The citation Multiwfn requires; printed on every card and record. */
-export const MULTIWFN_CITATION = 'Tian Lu, Feiwu Chen, J. Comput. Chem. 2012, 33, 580-592. '
+/** The 2012 paper every Multiwfn release requires. */
+export const MULTIWFN_CITATION_2012 = 'Tian Lu, Feiwu Chen, J. Comput. Chem. 2012, 33, 580-592. '
   + 'doi:10.1002/jcc.22885';
+
+/** The 2024 paper every 2024-and-later binary also requires (issue #342). */
+export const MULTIWFN_CITATION_2024 = 'Tian Lu, J. Chem. Phys. 2024, 161, 082503. '
+  + 'doi:10.1063/5.0216272';
+
+/**
+ * The citation Multiwfn requires by default. Every supported release band is
+ * `2024+`, whose own banner says both papers must be cited; the 2012-only form
+ * belongs to the retired 3.8 band and is selected by `multiwfnCitationFor()`.
+ */
+export const MULTIWFN_CITATION = `${MULTIWFN_CITATION_2012}; ${MULTIWFN_CITATION_2024}`;
+
+/** The vendor's wording, printed beside the citation (issue #342). */
+export const MULTIWFN_CITATION_NOTE = 'Both papers must be cited in the main text when Multiwfn 2024 '
+  + 'or later is used.';
+
+/**
+ * The citation a banner version requires (issue #342). A 3.x banner is the
+ * 3.8 band and predates the 2024 paper; anything else is a 2024+ release, whose
+ * banner asks for both papers. Unknown or empty input returns both: the menu
+ * band this build writes is `2024+`, so under-citing is the failure that
+ * matters.
+ */
+export function multiwfnCitationFor(versionOrBand = MULTIWFN_MENU_VERSION) {
+  const token = String(versionOrBand ?? '').trim();
+  if (token === '3.8' || /^3\./.test(token)) return MULTIWFN_CITATION_2012;
+  return MULTIWFN_CITATION;
+}
 
 /** The licence statement a user sees before running the sidecar. */
 export const MULTIWFN_LICENCE = 'Multiwfn is free for academic and non-profit use with citation; '
