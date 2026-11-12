@@ -18,6 +18,7 @@ import { methodsParagraphFor } from '../shared/methodsParagraph.js';
 import { dp4PanelHtml } from '../shared/workflowReport.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
+import { runFlagsFor } from '../shared/runFlags.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 import { ircGate, pathBarrier, profileSvg, profilePoints, scanExtremum, scanSurfaceSvg } from '../shared/reactionPath.js';
 import {
@@ -198,28 +199,6 @@ function engineOf(record, parsed) {
 }
 
 /* ── Fixture and truncation flags ───────────────────────────── */
-
-/**
- * A fixture record and a truncated parse are both facts about the run, not
- * presentation choices. Derive them from every field that can carry the fact
- * so an older or partially written record cannot silently look complete.
- */
-function flagsFor(record) {
-  const provenance = isObject(record?.provenance) ? record.provenance : {};
-  const bytes = isObject(record?.outputBytes) ? record.outputBytes : null;
-  const parsed = isObject(record?.parsed) ? record.parsed : {};
-  const size = finite(bytes?.size);
-  const bytesRead = finite(bytes?.bytesRead);
-  const fixture = record?.dryRun === true || provenance.kind === 'fixture';
-  // The parser's own `truncated` flag is authoritative: a windowed read covers
-  // the file without reading every byte, so `bytesRead < size` alone is not
-  // evidence of a partial parse.
-  const truncated = record?.truncated === true
-    || parsed.complete === false
-    || bytes?.truncated === true
-    || (bytes?.truncated !== false && size !== null && bytesRead !== null && bytesRead < size);
-  return { fixture, truncated, bytes };
-}
 
 function caveatHtml(flags, subject) {
   const notes = [];
@@ -2754,7 +2733,7 @@ export function resultsPanelHtml(record, options = {}) {
   if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4, record.multiwfn, record.provenance);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
-  const flags = flagsFor(record);
+  const flags = runFlagsFor(record);
   const status = statusOf(record);
   const imported = importedSummary(record);
   const engineId = engineOf(record, parsed);
