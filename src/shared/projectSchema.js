@@ -51,6 +51,7 @@ import { PSI4_SOLVATION_MODELS } from './engines/psi4.js';
 import { EXPLICIT_SOLVENT_IDS } from './explicitSolvation.js';
 import { validateBlockContracts } from './blockContracts.js';
 import { SCORER_SPECS } from './scorer.js';
+import { normalizeSimilarityOptions } from './chemSimilarity.js';
 import {
   DEFAULT_PREPARE_SETTINGS,
   PREPARE_CONVERTERS,
@@ -308,7 +309,7 @@ const SETTINGS_KEYS = new Set([
   // default so existing projects serialise unchanged.
   'matrixElement',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'roa', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'roa', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId', 'integrity',
   // Issue #146: the vertical-emission block and the two-job NTO chain.
   'emission', 'nto', 'ntoTransition',
   'counterpoise', 'counterpoiseChargeStates',
@@ -798,6 +799,8 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // Issue #226: what the block enumerates, and the tautomer ruleset. The
     // candidate cap is `maxConformers`; there is deliberately no pH setting.
     'produces', 'tautomerRuleset',
+    // ADR 0003 §3.4: the RDKit conformer search's own settings.
+    'nconf', 'seed', 'pruneRms', 'forceField', 'maxHeavyAtoms', 'threads',
   ]), path);
   // A generate block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
@@ -814,12 +817,12 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   // conformer default — and the `DEFAULT_CONFORMER_SETTINGS` merge below must
   // not smuggle CREST in when the file said nothing.
   const generatorValue = provided.generator === undefined || provided.generator === null
-    ? (produces === 'tautomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator)
+    ? (produces === 'tautomers' || produces === 'stereoisomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator)
     : source.generator;
   const generator = sourceKind === 'imported'
     ? ''
     : readEnum(c, generatorValue, CONFORMER_GENERATORS, `${path}.generator`, {
-      legacy, fallback: produces === 'tautomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator,
+      legacy, fallback: produces === 'tautomers' || produces === 'stereoisomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator,
     });
   if (sourceKind === 'imported' && provided.generator !== undefined && provided.generator !== '') {
     c.warn(`${path}.generator`, 'is not used when the source is an imported ensemble; the input block owns the file.');
@@ -828,20 +831,18 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   // Open Babel has no tautomer enumerator, CREST searches conformers, and the
   // in-app UFF route ranks geometries of one molecule — none of them can be
   // asked for a tautomer set without inventing one.
-  if (produces === 'tautomers') {
+  if (produces === 'tautomers' || produces === 'stereoisomers') {
     if (sourceKind === 'imported') {
-      c.error(`${path}.source`, 'must be "search": an imported ensemble is a set of conformers, not a tautomer enumeration.');
+      c.error(`${path}.source`, `must be "search": an imported ensemble is a set of conformers, not a ${produces} enumeration.`);
     }
     if (generator && generator !== 'rdkit') {
-      c.error(`${path}.generator`, 'must be "rdkit" when produces is "tautomers"; no other generator in this build enumerates tautomers.');
+      c.error(`${path}.generator`, `must be "rdkit" when produces is "${produces}"; no other generator in this build enumerates it.`);
     }
-  } else if (generator === 'rdkit') {
-    c.error(`${path}.generator`, 'is only wired for tautomer enumeration in this build; a conformer search uses CREST, UFF or Open Babel.');
   }
   const rankBy = readEnum(c, source.rankBy ?? '', ['', ...SCORER_SPECS], `${path}.rankBy`, {
     legacy, fallback: '',
   });
-  if (produces === 'tautomers' && rankBy) {
+  if ((produces === 'tautomers' || produces === 'stereoisomers') && rankBy) {
     c.error(`${path}.rankBy`, 'is not supported for a tautomer block: rank the candidates with a calculate block, one per candidate.');
   }
   const selected = readString(c, source.selectedConformerId, `${path}.selectedConformerId`, { legacy, fallback: '', max: 24 });
@@ -861,7 +862,7 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     : '';
   return {
     source: sourceKind,
-    ...(produces === 'tautomers' || provided.produces !== undefined ? { produces } : {}),
+    ...(produces !== 'conformers' || provided.produces !== undefined ? { produces } : {}),
     generator,
     rankBy,
     method: readConformerMethod(c, source.method, `${path}.method`, {
@@ -883,12 +884,14 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     maxConformers: readInteger(
       c,
       provided.maxConformers === undefined || provided.maxConformers === null || provided.maxConformers === ''
-        ? (produces === 'tautomers' ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers)
+        ? (produces === 'tautomers' || produces === 'stereoisomers'
+          ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers)
         : provided.maxConformers,
       `${path}.maxConformers`,
       {
         legacy,
-        fallback: produces === 'tautomers' ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers,
+        fallback: produces === 'tautomers' || produces === 'stereoisomers'
+          ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers,
         min: 1,
         max: 200,
       },
@@ -905,16 +908,33 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // rest. An explicit `fanOut: false` still means "run the chosen member".
     fanOut: readBoolean(c, provided.fanOut, `${path}.fanOut`, {
       legacy,
-      fallback: produces === 'tautomers' ? true : DEFAULT_CONFORMER_SETTINGS.fanOut,
+      fallback: produces === 'tautomers' || produces === 'stereoisomers' ? true : DEFAULT_CONFORMER_SETTINGS.fanOut,
       optional: true,
     }),
     charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
     multiplicity: readInteger(c, source.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
     // Issue #132: the study this block belongs to, or '' for "stands alone".
     group: readConformerGroup(c, source.group, `${path}.group`),
+    // ADR 0003 §3.4: the RDKit search's own settings, recorded only on a block
+    // that names that generator, so every other ensemble serialises as before.
+    ...(generator === 'rdkit' && produces === 'conformers'
+      ? {
+        nconf: readOptionalInteger(c, source.nconf, `${path}.nconf`, { fallback: 50, min: 1, max: 200 }),
+        seed: readOptionalInteger(c, source.seed, `${path}.seed`, { fallback: 1, min: 0, max: 0x7fffffff }),
+        pruneRms: readNumber(c, source.pruneRms, `${path}.pruneRms`, { legacy: true, fallback: 0.5, min: 0, max: 5 }),
+        forceField: readEnum(c, source.forceField, ['MMFF94', 'UFF'], `${path}.forceField`, { legacy, fallback: 'MMFF94' }),
+        maxHeavyAtoms: readOptionalInteger(c, source.maxHeavyAtoms, `${path}.maxHeavyAtoms`, { fallback: 60, min: 1, max: 100 }),
+        threads: readOptionalInteger(c, source.threads, `${path}.threads`, { fallback: 1, min: 1, max: 8 }),
+      }
+      : {}),
     // Issue #226: recorded only for a tautomer block, so every other generate
     // block serialises exactly as it did before.
     ...(produces === 'tautomers' || provided.tautomerRuleset !== undefined ? { tautomerRuleset } : {}),
+    // ADR 0003 §3.5: the stereoisomer enumerator's seed and cap are the
+    // tautomer-style candidate policy; the cap is `maxConformers` above.
+    ...(produces === 'stereoisomers'
+      ? { seed: readOptionalInteger(c, source.seed, `${path}.seed`, { fallback: 1, min: 0, max: 0x7fffffff }) }
+      : {}),
     // Issue 144: the UFF route's own settings. Only present when the file
     // states them, so a project that never chose the route serialises exactly
     // as it did before (the defaults live in uffConformers.js: 120° and 200).
@@ -950,6 +970,7 @@ function normalizePrepareSettings(c, raw, path, legacy) {
   warnUnknown(c, provided, new Set([
     'kind', 'converter', 'forceField', 'smiles', 'charge', 'multiplicity',
     'solvent', 'solventCount', 'seed', 'shellAngstrom',
+    'normalize', 'disconnectMetals', 'removeFragments', 'chargeParent',
   ]), path);
   const kind = readEnum(c, provided.kind, PREPARE_KINDS, `${path}.kind`, {
     legacy, fallback: DEFAULT_PREPARE_SETTINGS.kind,
@@ -959,14 +980,19 @@ function normalizePrepareSettings(c, raw, path, legacy) {
   });
   const converter = converterFor(kind, requestedConverter);
   if (kind === 'embed3d' && requestedConverter === 'uff') {
-    c.error(`${path}.converter`, 'must be "openbabel": 3D embedding needs the Open Babel converter.');
+    c.error(`${path}.converter`, 'must be "openbabel" or "rdkit": 3D embedding needs an external embedder.');
   }
   if (kind === 'solvate' && requestedConverter !== 'geometric') {
     c.error(`${path}.converter`, 'must be "geometric": explicit solvation is deterministic placement, not a force-field relaxation.');
   }
+  if (kind === 'standardize' && requestedConverter !== 'rdkit') {
+    c.error(`${path}.converter`, 'must be "rdkit": standardisation is the chemistry sidecar, not a force field.');
+  }
   const forceField = readEnum(c, provided.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, {
     legacy,
-    fallback: kind === 'embed3d' ? 'MMFF94' : (kind === 'solvate' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
+    fallback: kind === 'embed3d'
+      ? (converter === 'rdkit' ? 'MMFF94' : 'MMFF94')
+      : (kind === 'solvate' || kind === 'standardize' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
   });
   const smiles = readString(c, provided.smiles, `${path}.smiles`, { legacy, fallback: '', max: 1000 });
   if (kind === 'embed3d' && !smiles.trim()) {
@@ -988,6 +1014,16 @@ function normalizePrepareSettings(c, raw, path, legacy) {
       `${path}.seed`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.seed, min: 0, max: 0x7fffffff }),
     shellAngstrom: readNumber(c, provided.shellAngstrom ?? DEFAULT_PREPARE_SETTINGS.shellAngstrom,
       `${path}.shellAngstrom`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.shellAngstrom, min: 1, max: 20 }),
+    // ADR 0003 §3.2: a saved standardise block keeps the exact cleanup steps it
+    // ran, so reopening the project cannot silently re-enable one.
+    ...(kind === 'standardize'
+      ? {
+        normalize: readBoolean(c, provided.normalize, `${path}.normalize`, { legacy, fallback: true }),
+        disconnectMetals: readBoolean(c, provided.disconnectMetals, `${path}.disconnectMetals`, { legacy, fallback: true }),
+        removeFragments: readBoolean(c, provided.removeFragments, `${path}.removeFragments`, { legacy, fallback: true }),
+        chargeParent: readBoolean(c, provided.chargeParent, `${path}.chargeParent`, { legacy, fallback: true }),
+      }
+      : {}),
   };
 }
 
@@ -999,6 +1035,7 @@ function normalizePrepareOutput(c, raw, path, legacy) {
     'atomCount', 'generatedAt', 'origin', 'scorer',
     'solvent', 'count', 'seed', 'shellAngstrom', 'minDistanceAngstrom', 'composition',
     'formula', 'method', 'limitation', 'solvationModel',
+    'before', 'after', 'fragmentsRemoved', 'stereoAudit', 'geometry', 'identity',
   ]), path);
   const output = {
     kind: readEnum(c, source.kind, PREPARE_KINDS, `${path}.kind`, { legacy, fallback: 'relax' }),
@@ -1057,8 +1094,64 @@ function normalizePrepareOutput(c, raw, path, legacy) {
           : {}),
       }
       : {}),
+    // ADR 0003 §3.2: the cleanup is recorded as a fact, not recomputed on load.
+    // `before`/`after` say what changed; `fragmentsRemoved` names what went;
+    // `stereoAudit` is the evidence a downstream calculation was planned on.
+    ...(isPlainObject(source.before) || isPlainObject(source.after)
+      ? {
+        before: prepareStateOf(c, source.before, `${path}.before`, legacy),
+        after: prepareStateOf(c, source.after, `${path}.after`, legacy),
+        fragmentsRemoved: Array.isArray(source.fragmentsRemoved)
+          ? source.fragmentsRemoved.slice(0, 32).map((entry, index) => ({
+            smiles: readString(c, entry?.smiles, `${path}.fragmentsRemoved[${index}].smiles`, { legacy, fallback: '', max: 400 }),
+            formula: readString(c, entry?.formula, `${path}.fragmentsRemoved[${index}].formula`, { legacy, fallback: '', max: 80 }),
+            atomCount: readInteger(c, entry?.atomCount, `${path}.fragmentsRemoved[${index}].atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+          }))
+          : [],
+        stereoAudit: {
+          unassignedStereocentres: Array.isArray(source.stereoAudit?.unassignedStereocentres)
+            ? source.stereoAudit.unassignedStereocentres.slice(0, 200).map((entry) => ({
+              atomIndex: readInteger(c, entry?.atomIndex, `${path}.stereoAudit.atomIndex`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              element: readString(c, entry?.element, `${path}.stereoAudit.element`, { legacy, fallback: '', max: 3 }),
+            }))
+            : [],
+          unassignedDoubleBonds: Array.isArray(source.stereoAudit?.unassignedDoubleBonds)
+            ? source.stereoAudit.unassignedDoubleBonds.slice(0, 200).map((entry) => ({
+              beginAtomIndex: readInteger(c, entry?.beginAtomIndex, `${path}.stereoAudit.beginAtomIndex`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              endAtomIndex: readInteger(c, entry?.endAtomIndex, `${path}.stereoAudit.endAtomIndex`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+            }))
+            : [],
+        },
+        geometry: { source: readString(c, source.geometry?.source, `${path}.geometry.source`, { legacy, fallback: '', max: 20 }) },
+        ...(isPlainObject(source.identity)
+          ? {
+            identity: {
+              smiles: readString(c, source.identity.smiles, `${path}.identity.smiles`, { legacy, fallback: '', max: 400 }),
+              inchiKey: readString(c, source.identity.inchiKey, `${path}.identity.inchiKey`, { legacy, fallback: '', max: 64 }),
+              tautomerHash: readString(c, source.identity.tautomerHash, `${path}.identity.tautomerHash`, { legacy, fallback: '', max: 200 }),
+              formula: readString(c, source.identity.formula, `${path}.identity.formula`, { legacy, fallback: '', max: 80 }),
+              atomCount: readInteger(c, source.identity.atomCount, `${path}.identity.atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              heavyAtomCount: readInteger(c, source.identity.heavyAtomCount, `${path}.identity.heavyAtomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+            },
+          }
+          : {}),
+      }
+      : {}),
   };
   return output;
+}
+
+/** ADR 0003 §3.2: one side of a standardise record. */
+function prepareStateOf(c, raw, path, legacy) {
+  const source = isPlainObject(raw) ? raw : {};
+  return {
+    smiles: readString(c, source.smiles, `${path}.smiles`, { legacy, fallback: '', max: 400 }),
+    formula: readString(c, source.formula, `${path}.formula`, { legacy, fallback: '', max: 80 }),
+    atomCount: readInteger(c, source.atomCount, `${path}.atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+    heavyAtomCount: readInteger(c, source.heavyAtomCount, `${path}.heavyAtomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+    charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
+    fragments: readInteger(c, source.fragments, `${path}.fragments`, { legacy, fallback: 0, min: 0, max: 64 }),
+  };
 }
 
 /**
@@ -1943,6 +2036,12 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     forceConstants: readEnum(c, source.forceConstants, TS_FORCE_CONSTANT_IDS, `${path}.forceConstants`, { legacy, fallback: DEFAULT_TS_FORCE_CONSTANTS }),
     // A wavefunction stability optimisation (`Stable=Opt`) is opt-in.
     stableOpt: readBoolean(c, source.stableOpt, `${path}.stableOpt`, { legacy, fallback: false, optional: true }),
+    // ADR 0003 §3.6: warn by default, refuse only when the block opts in. The
+    // key is absent until a block chooses, so a project that never used the gate
+    // saves byte for byte as it did before.
+    ...(source.integrity === undefined
+      ? {}
+      : { integrity: readEnum(c, source.integrity, ['warn', 'fail'], `${path}.integrity`, { legacy, fallback: 'warn' }) }),
     // Raman activities (#76): a flag on the frequency keyword, off by default so
     // an existing project keeps emitting exactly the route it did before.
     raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),
@@ -2455,7 +2554,8 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     const settings = normalizePrepareSettings(c, raw.settings, `${path}.settings`, legacy);
     return {
       ...common,
-      kind: settings.kind === 'embed3d' ? '3D embed' : (settings.kind === 'solvate' ? 'Solvate' : 'Relax'),
+      kind: settings.kind === 'embed3d' ? '3D embed'
+        : (settings.kind === 'solvate' ? 'Solvate' : (settings.kind === 'standardize' ? 'Standardise' : 'Relax')),
       settings,
       ...(raw.output === undefined ? {} : {
         output: normalizePrepareOutput(c, raw.output, `${path}.output`, legacy),
@@ -2480,13 +2580,15 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     // `dp4`. Absent `mode` is the expression block byte for byte, so every
     // project written before this existed saves exactly as it did.
     const source = requiredObject(c, raw.analyse, `${path}.analyse`, legacy, {});
-    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4', 'multiwfn']), `${path}.analyse`);
-    if (source.mode !== undefined && source.mode !== 'dp4' && source.mode !== 'expression' && source.mode !== 'multiwfn') {
-      c.error(`${path}.analyse.mode`, 'must be "expression" (the default), "dp4" or "multiwfn".');
+    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4', 'multiwfn', 'chem', 'similarity']), `${path}.analyse`);
+    if (source.mode !== undefined && !['dp4', 'expression', 'multiwfn', 'chem', 'similarity'].includes(source.mode)) {
+      c.error(`${path}.analyse.mode`, 'must be "expression" (the default), "dp4", "multiwfn", "chem" or "similarity".');
     }
     const mode = source.mode === 'dp4'
       ? DP4_COMPUTE_MODE
-      : (source.mode === 'multiwfn' ? 'multiwfn' : 'expression');
+      : (source.mode === 'multiwfn'
+        ? 'multiwfn'
+        : (source.mode === 'chem' ? 'chem' : (source.mode === 'similarity' ? 'similarity' : 'expression')));
     if (mode === 'dp4') {
       const checked = validateDp4Definition(source.dp4);
       for (const problem of checked.errors) {
@@ -2530,6 +2632,62 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
         analyse: {
           mode: 'multiwfn',
           ...(checked.value ? { multiwfn: checked.value } : {}),
+        },
+      };
+    }
+    if (mode === 'similarity') {
+      // ADR 0003 §3.8: one block compares every wired record, so it declares no
+      // field inputs. The options are validated here, before a queue exists.
+      if (source.similarity !== undefined && !isPlainObject(source.similarity)) {
+        c.error(`${path}.analyse.similarity`, 'must be an object.');
+      }
+      let options = null;
+      try {
+        options = normalizeSimilarityOptions(isPlainObject(source.similarity) ? source.similarity : {});
+      } catch (error) {
+        c.error(`${path}.analyse.similarity`, error.message);
+      }
+      if (Array.isArray(source.inputs) && source.inputs.length) {
+        c.error(`${path}.analyse.inputs`,
+          'a similarity block reads whole run records, not fields; wire the blocks whose structures it compares and leave the input list empty.');
+      }
+      if (String(source.expression ?? '').trim()) {
+        c.warn(`${path}.analyse.expression`,
+          'is not saved or evaluated by a similarity block: it compares molecules, not an expression.');
+      }
+      return {
+        ...common,
+        analyse: { mode: 'similarity', ...(options ? { similarity: options } : {}) },
+      };
+    }
+    if (mode === 'chem') {
+      // ADR 0003 §3.1: a descriptors block reads whole run records, one row per
+      // record or ensemble member, so it declares no field inputs. The op is
+      // pinned to `descriptors`; phase 7 adds its similarity mode separately.
+      const chem = isPlainObject(source.chem) ? source.chem : {};
+      if (source.chem !== undefined && !isPlainObject(source.chem)) {
+        c.error(`${path}.analyse.chem`, 'must be an object.');
+      }
+      warnUnknown(c, chem, new Set(['op', 'options']), `${path}.analyse.chem`);
+      if (chem.op !== undefined && chem.op !== 'descriptors') {
+        c.error(`${path}.analyse.chem.op`, 'must be "descriptors" in this build.');
+      }
+      if (Array.isArray(source.inputs) && source.inputs.length) {
+        c.error(`${path}.analyse.inputs`,
+          'a descriptors block reads whole run records, not fields; wire the blocks whose structures it describes and leave the input list empty.');
+      }
+      if (String(source.expression ?? '').trim()) {
+        c.warn(`${path}.analyse.expression`,
+          'is not saved or evaluated by a descriptors block: it describes molecules, not an expression.');
+      }
+      return {
+        ...common,
+        analyse: {
+          mode: 'chem',
+          chem: {
+            op: 'descriptors',
+            ...(isPlainObject(chem.options) ? { options: chem.options } : {}),
+          },
         },
       };
     }

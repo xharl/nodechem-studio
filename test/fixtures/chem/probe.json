@@ -1,0 +1,29 @@
+{
+  "program": "RDKit",
+  "version": "2026.9.1",
+  "capabilities": {
+    "etkdgv4": true,
+    "embedMultipleConfs": true,
+    "mmff": true,
+    "uff": true,
+    "determineBonds": true,
+    "drawSvg": true,
+    "molHash": true,
+    "standardize": true,
+    "fmcs": true,
+    "shapeHelpers": true,
+    "cipLabeler": true
+  },
+  "python": "3.14.9",
+  "platform": "linux",
+  "protocol": "nodechem-chem/1",
+  "op": "probe",
+  "ok": true,
+  "_provenance": {
+    "recordedWith": "/usr/local/bin/python3",
+    "rdkit": "2026.9.1",
+    "command": "nodechem-chem.py < probe request",
+    "recordedAt": "2026-11-11",
+    "note": "Real RDKit answer; CI replays it through a fake sidecar."
+  }
+}

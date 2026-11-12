@@ -22,6 +22,13 @@ import { xtbSolvationFromArgv, parseXtbGeometry } from '../../src/shared/engines
 import { normalizeValidityContext, runValidityChecks } from '../../src/shared/validityChecks.js';
 import { cacheFromParsed, writeCache } from '../../src/shared/cache.js';
 import { wavefunctionRecord } from '../../src/shared/wavefunction.js';
+import { SidecarRunner } from './sidecarRunner.js';
+import {
+  INTEGRITY_INCONCLUSIVE_REASONS,
+  integrityRequest,
+  integrityVerdict,
+  normalizeIntegrityResult,
+} from '../../src/shared/structureIntegrity.js';
 
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 
@@ -756,6 +763,11 @@ export class RunManager {
         }
       }
     }
+    // ADR 0003 §3.6: perceive what the final geometry actually is. The gate is
+    // computed for every record and never turns a finished run into a failed
+    // one; only an opted-in block may refuse, and only on a lost atom or a
+    // changed connectivity.
+    context.structureIntegrity = await this.integrityForRun(context, parsed);
     // Issue #25: the validity checks run on the parsed records, never on the
     // exit code. They are reported next to the gates (gates.validity) and do
     // not change gates.overall: the job can run correctly while the science is
@@ -770,6 +782,20 @@ export class RunManager {
         minMagnitude: payload.gates?.minMagnitude ?? null,
       }, { phase: 'post', engine: engine.id })
       : null;
+    if (validity && context.structureIntegrity) {
+      const verdict = integrityVerdict(context.structureIntegrity);
+      validity.findings.push({
+        id: 'structure-integrity',
+        status: verdict.status === 'pass' ? 'pass' : (verdict.blocking ? 'fail' : 'warning'),
+        message: verdict.message,
+        evidence: {
+          status: context.structureIntegrity.status,
+          reason: context.structureIntegrity.reason,
+          before: context.structureIntegrity.before?.formula ?? null,
+          after: context.structureIntegrity.after?.formula ?? null,
+        },
+      });
+    }
     const gates = evaluateGates(parsed, {
       expectedImaginary: payload.gates?.expectedImaginary ?? null,
       minMagnitude: payload.gates?.minMagnitude ?? 50,
@@ -790,9 +816,83 @@ export class RunManager {
     // convenience, never a requirement — a failure here must not turn a
     // finished run into a failed one, so it is recorded and swallowed.
     context.cache = await this.writeCache(context, parsed);
-    const status = parsed.status === 'error' || gates.overall === 'fail' ? 'failed'
+    const integrityBlock = context.structureIntegrity
+      ? integrityVerdict(context.structureIntegrity)
+      : { blocking: false, message: '' };
+    const status = parsed.status === 'error' || gates.overall === 'fail' || integrityBlock.blocking ? 'failed'
       : gates.overall === 'pass' ? 'completed' : 'needs-review';
-    await this.finish(context, { status, exitCode, parsed, gates, error: null, outputProvenance });
+    await this.finish(context, {
+      status,
+      exitCode,
+      parsed,
+      gates,
+      error: integrityBlock.blocking ? `Structure integrity: ${integrityBlock.message}` : null,
+      outputProvenance,
+    });
+  }
+
+  /**
+   * ADR 0003 §3.6: run the integrity op over the input and the final geometry.
+   *
+   * A missing sidecar, a perception failure or a malformed answer is
+   * `inconclusive`, never a failed run. The gate is evidence attached to the
+   * record; the caller decides whether an opted-in block refuses.
+   */
+  async integrityForRun(context, parsed) {
+    const spec = context.payload?.integrity;
+    if (!spec || typeof spec !== 'object') return null;
+    const policy = spec.policy === 'fail' ? 'fail' : 'warn';
+    if (spec.notApplicable) {
+      return {
+        status: 'not-applicable',
+        reason: 'partial-geometry',
+        reasonText: INTEGRITY_INCONCLUSIVE_REASONS['partial-geometry'],
+        policy,
+        before: null,
+        after: null,
+      };
+    }
+    const finalAtoms = parsed?.finalGeometry?.atoms;
+    if (!Array.isArray(finalAtoms) || finalAtoms.length === 0) {
+      return {
+        status: 'inconclusive',
+        reason: 'empty-geometry',
+        reasonText: INTEGRITY_INCONCLUSIVE_REASONS['empty-geometry'],
+        policy,
+        before: null,
+        after: null,
+      };
+    }
+    if (!spec.executable) {
+      return {
+        status: 'inconclusive',
+        reason: 'rdkit-missing',
+        reasonText: INTEGRITY_INCONCLUSIVE_REASONS['rdkit-missing'],
+        policy,
+        before: null,
+        after: null,
+      };
+    }
+    try {
+      const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+        executable: spec.executable,
+        script: spec.script || '',
+        request: integrityRequest({ molecule: spec.molecule, finalAtoms, policy }),
+        timeoutMs: 60_000,
+        cwd: context.runDir,
+        onOutput: ({ text }) => this.emit({ type: 'output', runId: context.runId, text }),
+      });
+      return normalizeIntegrityResult(raw, { policy });
+    } catch (error) {
+      return {
+        status: 'inconclusive',
+        reason: 'perception-failed',
+        reasonText: `${INTEGRITY_INCONCLUSIVE_REASONS['perception-failed']} ${error?.message || String(error)}`.trim(),
+        policy,
+        before: null,
+        after: null,
+      };
+    }
   }
 
   /**
@@ -916,6 +1016,8 @@ export class RunManager {
       cache: context.cache ?? null,
       parsed,
       gates,
+      // ADR 0003 §3.6: what the final geometry is, not just what converged.
+      ...(context.structureIntegrity ? { structureIntegrity: context.structureIntegrity } : {}),
       // Issue 283: the scratch the engine wrote to, and — when it died for want
       // of space — that fact, instead of leaving "no termination marker" to
       // stand for a full filesystem.

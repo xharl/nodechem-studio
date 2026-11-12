@@ -121,6 +121,21 @@ export const COMPUTE_FIELDS = Object.freeze([
   { key: 'mullikenChargeSum', label: 'Mulliken charge sum', unit: 'e' },
   { key: 'mullikenChargeDeviation', label: 'Mulliken charge deviation', unit: 'e' },
   { key: 'unpairedElectrons', label: 'Unpaired electrons', unit: '' },
+  // ADR 0003 §3.1: the descriptor set is readable by a `condition` expression
+  // (`tpsa > 140`). Units come from the descriptor table; a count is
+  // dimensionless, not "unknown".
+  { key: 'exactMass', label: 'Exact mass', unit: 'Da' },
+  { key: 'molWeight', label: 'Molecular weight', unit: 'Da' },
+  { key: 'logP', label: 'logP (Crippen)', unit: '' },
+  { key: 'tpsa', label: 'TPSA', unit: 'Å²' },
+  { key: 'hbd', label: 'H-bond donors', unit: '' },
+  { key: 'hba', label: 'H-bond acceptors', unit: '' },
+  { key: 'rotatableBonds', label: 'Rotatable bonds', unit: '' },
+  { key: 'ringCount', label: 'Rings', unit: '' },
+  { key: 'aromaticRingCount', label: 'Aromatic rings', unit: '' },
+  { key: 'fsp3', label: 'Fsp3', unit: '' },
+  { key: 'qed', label: 'QED', unit: '' },
+  { key: 'formalCharge', label: 'Formal charge', unit: 'e' },
 ]);
 
 export const COMPUTE_FIELD_KEYS = Object.freeze(COMPUTE_FIELDS.map((field) => field.key));

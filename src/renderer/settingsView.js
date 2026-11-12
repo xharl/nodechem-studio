@@ -34,6 +34,7 @@ const TOOL_COPY = Object.freeze({
   scorer: { title: 'ML scorer', hint: 'Optional AIMNet2 sidecar' },
   multiwfn: { title: 'Multiwfn', hint: 'User-installed 3.8 binary for analyse blocks' },
   tautomer: { title: 'Tautomer sidecar', hint: 'Python interpreter for RDKit enumeration' },
+  chem: { title: 'Chemistry sidecar', hint: 'Python interpreter with rdkit (ADR 0003)' },
   cclib: { title: 'cclib (Python)', hint: 'Convert NWChem, GAMESS and Q-Chem logs' },
 });
 
@@ -61,6 +62,8 @@ export function runFieldSeed({ settings, saved = {} } = {}) {
     multiwfn: or(saved.multiwfnExecutable, tools.multiwfn),
     tautomer: or(saved.tautomerExecutable, tools.tautomer),
     tautomerScript: or(saved.tautomerScript, tools.tautomerScript),
+    chem: or(saved.chemExecutable, tools.chem),
+    chemScript: or(saved.chemScript, tools.chemScript),
     scratch: or(saved.scratchDir, tools.scratch),
     dryRun: typeof saved.dryRun === 'boolean' ? saved.dryRun : runs.dryRun !== false,
   };
@@ -241,6 +244,24 @@ function toolsPage(draft, detection, errors) {
     detected: null,
     errors,
   })}
+    ${executableRow({
+    label: 'Chemistry script',
+    hint: 'Optional script passed to the interpreter (defaults to the shipped nodechem-chem.py)',
+    field: 'tools.chemScript',
+    value: draft?.tools?.chemScript || '',
+    detected: null,
+    errors,
+  })}
+    <div class="settings-row" data-settings-row="tools.chem-probe">
+      <div class="settings-row-head">
+        <div><strong>Chemistry capability probe</strong>
+          <span class="settings-row-hint">Imports the script once and reports the RDKit version plus any missing capability</span></div>
+      </div>
+      <div class="settings-path">
+        <button type="button" class="btn small" data-action="chem-probe">Probe RDKit</button>
+      </div>
+      <p class="settings-row-meta" data-chem-probe-result>Not probed yet.</p>
+    </div>
     ${textField('Scratch directory', 'tools.scratch', draft?.tools?.scratch || '', {
     placeholder: 'defaults to the run directory',
     hint: 'Scratch files are written here; leave blank to use each run folder.',

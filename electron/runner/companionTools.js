@@ -22,6 +22,9 @@ export const COMPANION_BINARIES = Object.freeze({
   // enumerator script; python3 is preferred so a Buster-style `python` shim
   // does not win over a real Python 3.
   tautomer: ['python3', 'python', 'py'],
+  // ADR 0003: one interpreter for every chemistry op; presence-only, like the
+  // tautomer field. The probe in Settings is what says whether it has rdkit.
+  chem: ['python3', 'python', 'py'],
 });
 
 /** Candidate file names for a platform; Windows needs the explicit `.exe`. */

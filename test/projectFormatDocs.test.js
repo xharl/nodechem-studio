@@ -69,8 +69,10 @@ describe('PROJECT-FORMAT documents the settings the schema reads', () => {
     for (const state of states) expect(doc).toContain(`\`${state}\``);
   });
 
-  it('documents both analyse modes, and that the default stays absent', () => {
+  it('documents every analyse mode, and that the default stays absent', () => {
     expect(schema).toContain("'dp4'");
-    expect(doc).toMatch(/`mode` is `expression` \(the default, and absent when never set\) or `dp4`/);
+    expect(doc).toMatch(/`mode` is `expression` \(the default, and absent when never set\), `dp4`/);
+    expect(doc).toContain('`multiwfn`');
+    expect(doc).toContain('`chem`');
   });
 });

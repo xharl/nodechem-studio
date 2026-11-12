@@ -418,3 +418,13 @@ of two files assembled by hand.
 
 - [Workflows](workflow.md) — the queue, barrier edges, checkpoint hand-off and cluster export.
 - [Projects and runs on disk](project-files.md) — where the datasets and per-record run folders live.
+
+
+## Which records are the same kind of molecule
+
+A **similarity** analyse block reads every record wired into it and writes one matrix: Morgan, RDKit or
+MACCS fingerprints, a Tanimoto matrix, Butina clusters at a stated cutoff, Murcko scaffolds and the
+maximum common substructure (with its timeout recorded). The matrix is printed in full — a cluster id
+alone would be a verdict nobody can check. Wire at least two blocks; a record with no geometry refuses
+the matrix rather than comparing only the subset that happened to parse. The block refuses above its
+`maxRecords` cap (default 200) by name instead of silently truncating the dataset.

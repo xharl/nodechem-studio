@@ -32,7 +32,7 @@ const GAUSSIAN_OPT_FIELDS = [
   'solvation.enabled', 'solvation.model', 'solvation.solvent',
   'molecule.charge', 'molecule.multiplicity',
   'gates.termination', 'gates.scf', 'gates.imaginary', 'gates.minMagnitude',
-  'gates.thermo', 'gates.finalEnergy',
+  'gates.thermo', 'gates.finalEnergy', 'gates.integrity',
   'validity.checks', 'dependencies.inputs', 'dependencies.checkpointFrom',
   'output.view', 'keywords.custom',
 ];
@@ -43,7 +43,7 @@ const XTB_OPT_FIELDS = [
   'solvation.enabled', 'solvation.model', 'solvation.solvent',
   'molecule.charge', 'molecule.multiplicity',
   'gates.termination', 'gates.scf', 'gates.imaginary', 'gates.minMagnitude',
-  'gates.thermo', 'gates.finalEnergy',
+  'gates.thermo', 'gates.finalEnergy', 'gates.integrity',
   'dependencies.inputs', 'output.view',
 ];
 
@@ -138,7 +138,7 @@ describe('rendered calculation inspector', () => {
       'solvation', 'solvationModel', 'solvent',
       // Issue 186: the spin-state sweep is offered on every calculation block;
       // its legal multiplicities follow the electron count, not the engine.
-      'charge', 'multiplicity', 'spinSweepEnabled', 'imaginary', 'minMagnitude',
+      'charge', 'multiplicity', 'spinSweepEnabled', 'imaginary', 'minMagnitude', 'integrity',
     ]);
   });
 
@@ -150,7 +150,7 @@ describe('rendered calculation inspector', () => {
       'tdStates', 'tdTriplets', 'tdRoot', 'ntoTransition', 'nto',
       'raman', 'vcd', 'roa', 'frequencyScale',
       'solvation', 'solvationModel', 'solvent',
-      'charge', 'multiplicity', 'spinSweepEnabled', 'imaginary', 'minMagnitude',
+      'charge', 'multiplicity', 'spinSweepEnabled', 'imaginary', 'minMagnitude', 'integrity',
       'checkpointFrom', 'customKeywords',
     ]);
   });

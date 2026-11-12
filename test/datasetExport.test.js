@@ -163,8 +163,8 @@ describe('dataset JSON', () => {
     expect(json.rowCount).toBe(0);
   });
 
-  it('is at version 4 now that the derived-quantity columns exist', () => {
-    expect(DATASET_SCHEMA_VERSION).toBe(4);
+  it('is at version 5 now that the descriptor columns exist', () => {
+    expect(DATASET_SCHEMA_VERSION).toBe(5);
   });
 });
 
@@ -238,9 +238,12 @@ describe('wavefunction columns', () => {
     expect(labels.slice(0, 2)).toEqual(['run_id', 'finished_at']);
     expect(labels).toContain('output_sha256');
     expect(labels.indexOf('output_sha256')).toBeLessThan(labels.indexOf('fchk_sha256'));
-    // Version 4 appends the issue-175 derived columns after every earlier key,
-    // so a template built against version 3 keeps its column positions.
-    expect(labels[labels.length - 1]).toBe('derived_not_computed');
+    // Version 4 appended the issue-175 derived columns after every earlier key,
+    // and version 5 appends the ADR 0003 descriptors after those, so older
+    // templates keep their column positions.
+    expect(labels[labels.length - 1]).toBe('murcko_scaffold');
+    expect(labels.indexOf('derived_not_computed')).toBeLessThan(labels.indexOf('formula'));
+    expect(labels.indexOf('formula')).toBeLessThan(labels.indexOf('tpsa_angstrom2'));
     expect(labels.indexOf('ladder_cbs_form')).toBeLessThan(labels.indexOf('derived_value'));
     expect(labels.indexOf('conformer_population')).toBeLessThan(labels.indexOf('conformer_ensemble_spread_kcal'));
     // The frontier-orbital columns belong to the log reader (#81); this change

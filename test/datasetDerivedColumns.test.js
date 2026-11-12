@@ -98,13 +98,19 @@ describe('derived records in the dataset table', () => {
   it('appends the columns without moving any earlier one', () => {
     const labels = DATASET_CSV_COLUMNS.map((column) => column.label);
     const keys = DATASET_CSV_COLUMNS.map((column) => column.key);
-    expect(labels.slice(-5)).toEqual([
+    expect(labels.slice(-20, -15)).toEqual([
       'derived_value', 'derived_unit', 'derived_expression', 'derived_inputs', 'derived_not_computed',
     ]);
     expect(labels.indexOf('output_sha256')).toBeLessThan(labels.indexOf('derived_value'));
+    // Version 5 appends the ADR 0003 descriptor columns after the derived ones.
+    expect(labels.slice(-15)).toEqual([
+      'formula', 'exact_mass_da', 'mol_weight_da', 'logp_crippen', 'tpsa_angstrom2',
+      'hbd', 'hba', 'rotatable_bonds', 'ring_count', 'aromatic_ring_count',
+      'fsp3', 'qed', 'formal_charge', 'inchi_key', 'murcko_scaffold',
+    ]);
     expect(new Set(labels).size).toBe(labels.length);
     expect(new Set(keys).size).toBe(keys.length);
-    expect(DATASET_SCHEMA_VERSION).toBe(4);
+    expect(DATASET_SCHEMA_VERSION).toBe(5);
   });
 
   it('reaches the CSV text, quoted correctly when the expression contains a comma', () => {

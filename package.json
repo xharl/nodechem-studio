@@ -50,6 +50,15 @@
       "package.json",
       "LICENSE"
     ],
+    "extraResources": [
+      {
+        "from": "scripts",
+        "to": "scripts",
+        "filter": [
+          "**/*.py"
+        ]
+      }
+    ],
     "asar": true,
     "fileAssociations": [
       {

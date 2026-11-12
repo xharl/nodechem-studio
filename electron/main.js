@@ -39,6 +39,11 @@ import {
 import { ENGINES, engineOrDefault } from '../src/shared/engines/index.js';
 import { parseToolVersion } from '../src/shared/toolVersion.js';
 import { createSettingsStore } from './settingsStore.js';
+import { probeChem } from './runner/chemProbe.js';
+import { resolveChemScript } from './runner/chemPaths.js';
+import { SidecarRunner } from './runner/sidecarRunner.js';
+import { depictRequest, normalizeDepictResult } from '../src/shared/chemDepict.js';
+import { depictStructuresFor } from './runner/depictStructures.js';
 import { createStartupClock } from './startupTiming.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -145,7 +150,7 @@ async function detectSettings() {
   for (const entry of Object.values(status)) if (entry?.path) paths.add(entry.path);
   for (const entry of Object.values(tools)) if (entry?.path) paths.add(entry.path);
   for (const value of Object.values(settings?.engines || {})) if (String(value || '').trim()) paths.add(String(value).trim());
-  for (const id of ['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'cclib']) {
+  for (const id of ['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'chem', 'cclib']) {
     const value = String(settings?.tools?.[id] || '').trim();
     if (value) paths.add(value);
   }
@@ -584,6 +589,11 @@ const COMPANION_DIALOG = Object.freeze({
   },
   tautomer: {
     title: 'Locate the tautomer sidecar interpreter',
+    windows: 'C:\\Python\\python.exe',
+    posix: '/usr/bin/python3',
+  },
+  chem: {
+    title: 'Locate the chemistry sidecar interpreter',
     windows: 'C:\\Python\\python.exe',
     posix: '/usr/bin/python3',
   },
@@ -1047,6 +1057,31 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic', sender = nul
       artifactsRoot: queueManager.artifactsRoot || null,
     });
 
+    // ADR 0003 §3.7: draw the structures the report covers, bounded and only when
+    // a chemistry sidecar is configured. A missing sidecar drops the figures; it
+    // never stalls the report or fabricates a blank one.
+    const current = (await settingsStore.get()).settings;
+    let chemScript = String(current?.tools?.chemScript || '').trim();
+    if (!chemScript) {
+      try {
+        chemScript = resolveChemScript({
+          isPackaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          resourcesPath: process.resourcesPath,
+        });
+      } catch {
+        chemScript = '';
+      }
+    }
+    const structures = level === 'none'
+      ? null
+      : await depictStructuresFor({
+        tasks: queue.tasks,
+        records,
+        executable: String(current?.tools?.chem || '').trim(),
+        script: chemScript,
+      });
+
     const model = buildWorkflowReport(queue, records, {
       generatedAt: new Date().toISOString(),
       appVersion: currentAppInfo().version,
@@ -1054,6 +1089,7 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic', sender = nul
       volumes: figures.volumes,
       surfaces: figures.surfaces,
       artifacts,
+      structures,
     });
 
     // Issue #357: the window writes the model it rendered from, and the HTML
@@ -1327,6 +1363,74 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:set', (_event, patch) => settingsStore.set(patch));
   ipcMain.handle('settings:path', () => ({ path: settingsStore.path }));
   ipcMain.handle('settings:detect', () => detectSettings());
+  // ADR 0003 §2.1: one probe for every chemistry op. It reports the RDKit
+  // version and the capability that failed; a missing interpreter or a missing
+  // rdkit is an answer, not an exception.
+  ipcMain.handle('chem:probe', async (_event, payload = {}) => {
+    const current = (await settingsStore.get()).settings;
+    const executable = String(payload?.executable || current?.tools?.chem || '').trim();
+    let script = String(payload?.script || current?.tools?.chemScript || '').trim();
+    if (!script) {
+      try {
+        script = resolveChemScript({
+          isPackaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          resourcesPath: process.resourcesPath,
+        });
+      } catch {
+        script = '';
+      }
+    }
+    return probeChem({ executable, script });
+  });
+  // ADR 0003 §3.7: draw one structure for the results panel. The renderer never
+  // computes chemistry; it receives an SVG that main has already validated.
+  ipcMain.handle('chem:depict', async (_event, payload = {}) => {
+    const current = (await settingsStore.get()).settings;
+    const executable = String(payload?.executable || current?.tools?.chem || '').trim();
+    let script = String(payload?.script || current?.tools?.chemScript || '').trim();
+    if (!script) {
+      try {
+        script = resolveChemScript({
+          isPackaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          resourcesPath: process.resourcesPath,
+        });
+      } catch {
+        script = '';
+      }
+    }
+    if (!executable) {
+      return {
+        ok: false,
+        error: {
+          code: 'rdkit-missing',
+          message: 'No chemistry sidecar is configured. A 2D depiction needs RDKit; no figure is drawn instead.',
+        },
+      };
+    }
+    try {
+      const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+        executable,
+        script,
+        request: depictRequest({
+          molecule: payload?.molecule,
+          options: payload?.options || {},
+        }),
+        timeoutMs: 30_000,
+      });
+      const result = normalizeDepictResult(raw);
+      return { ok: true, svg: result.svg, legend: result.legend, origin: result.origin };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: error?.code || 'op-failed',
+          message: error?.message || String(error),
+        },
+      };
+    }
+  });
   // Issue #82: one user-triggered request. Nothing else in the app calls out.
   ipcMain.handle('updates:check', () => checkForUpdates());
   // Theme switching (#52): repaint the native chrome, record the launch cache.

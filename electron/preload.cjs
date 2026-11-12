@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('desktop', {
   pickCrestExecutable: () => ipcRenderer.invoke('crest:pick-executable'),
   pickObabelExecutable: () => ipcRenderer.invoke('obabel:pick-executable'),
   pickToolExecutable: (tool) => ipcRenderer.invoke('tool:pick-executable', tool),
+  // ADR 0003 §2.1: probe the chemistry interpreter once and report the RDKit
+  // version plus any capability the build lacks.
+  probeChemistry: (payload) => ipcRenderer.invoke('chem:probe', payload),
+  // ADR 0003 §3.4: a validated SVG for the results panel (main owns the sidecar).
+  depictChemistry: (payload) => ipcRenderer.invoke('chem:depict', payload),
   pickEnsembleFile: () => ipcRenderer.invoke('conformers:pick-ensemble'),
   // The wavefunction viewport: a user-supplied cube (text, capped in main) and
   // the binary PNG/STL the surface viewport exports.

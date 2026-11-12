@@ -24,7 +24,7 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ```
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
-ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>] [--scorer <path>] [--settings <file>] [--timeout <seconds>] [--json]
+ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>] [--chem <path>] [--chem-script <path>] [--scorer <path>] [--settings <file>] [--timeout <seconds>] [--json]
 ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>] [--no-model]
 ncs validation <cases.json> [--run] [--executable <python>] [--work <dir>] [--timeout <seconds>] [--out <file>] [--json]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
@@ -54,7 +54,8 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   (the project's active flow is the default), `--record` runs one record's subgraph plus the control
   blocks, and `--max-parallel` overrides `runner.maxParallel`. Output blocks write their artifacts
   under `--out` (`reports/…` and `manifest.json`). The external stages take the same paths the run
-  console does: `--crest`, `--obabel`, `--tautomer`, `--tautomer-script`, `--multiwfn` and
+  console does: `--crest`, `--obabel`, `--tautomer`, `--tautomer-script`, `--multiwfn`,
+  `--chem`, `--chem-script` and
   **`--scorer`** (the ML scorer sidecar, for `rankBy`, a calculate `provider` or an `aimnet2` relax).
   Each falls back to Settings → Tools when the flag is absent; a block that needs one and has no path
   fails with a sentence naming the tool it wants, and only the scorer refusal also names its flag

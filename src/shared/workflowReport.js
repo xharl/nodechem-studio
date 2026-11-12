@@ -23,6 +23,8 @@ import { contentHash } from './figures/primitives.js';
 import { flowGraphFigure } from './figures/dag.js';
 import { taskFigures } from './figures/report.js';
 import { nciFigure } from './figures/nci.js';
+import { DESCRIPTORS, DESCRIPTOR_SET_ID } from './chemDescriptors.js';
+import { depictFigureBlock } from './chemDepict.js';
 import { nciAnalysis } from './nci.js';
 import { bcpTable, bcpTableHtml, qtaimAnalysis } from './qtaim.js';
 import { shiftFor } from './nmrReferences.js';
@@ -290,8 +292,9 @@ function taskRow(task, record, { includeImported = false } = {}) {
         population: num(source.population),
         protomer: text(source.protomer),
         // Issue #226: a tautomer branch names the candidate molecule it ran.
-        ...(source.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
+        ...(['tautomers', 'stereoisomers'].includes(source.produces) ? { produces: source.produces } : {}),
         ...(source.tautomer ? { tautomer: text(source.tautomer) } : {}),
+        ...(source.stereoisomer ? { stereoisomer: text(source.stereoisomer) } : {}),
         ...(source.smiles ? { smiles: text(source.smiles) } : {}),
       };
     })(),
@@ -310,7 +313,157 @@ function taskRow(task, record, { includeImported = false } = {}) {
     elapsedSeconds: num(record?.elapsedSeconds ?? parsed.resources?.elapsedSeconds),
     inputSha256: text(record?.inputSha256),
     outputSha256: text(record?.outputSha256),
+    // ADR 0003 §3.8: a similarity matrix, when the record carries one.
+    similarity: record?.similarity && typeof record.similarity === 'object'
+      ? {
+        molecules: Array.isArray(record.similarity.molecules) ? record.similarity.molecules : [],
+        matrix: Array.isArray(record.similarity.matrix) ? record.similarity.matrix : [],
+        clusters: Array.isArray(record.similarity.clusters) ? record.similarity.clusters : [],
+        mcs: record.similarity.mcs && typeof record.similarity.mcs === 'object' ? record.similarity.mcs : null,
+        options: record.analyse?.options && typeof record.analyse.options === 'object' ? record.analyse.options : {},
+      }
+      : null,
+    // ADR 0003 §3.6: what the final geometry is. Absent on every record that
+    // carried no integrity gate, so no other row grows a column.
+    structureIntegrity: record?.structureIntegrity && typeof record.structureIntegrity === 'object'
+      ? {
+        status: text(record.structureIntegrity.status),
+        reason: text(record.structureIntegrity.reason),
+        reasonText: text(record.structureIntegrity.reasonText),
+        policy: text(record.structureIntegrity.policy) || 'warn',
+        beforeFormula: text(record.structureIntegrity.before?.formula),
+        afterFormula: text(record.structureIntegrity.after?.formula),
+      }
+      : null,
+    // ADR 0003 §3.1: the versioned descriptor set a chem analyse block wrote.
+    // Absent on every other record, so no other row grows a column.
+    descriptors: record?.descriptors && typeof record.descriptors === 'object'
+      ? {
+        ...record.descriptors,
+        descriptorSet: text(record.analyse?.descriptorSet) || DESCRIPTOR_SET_ID,
+        identity: record.identity && typeof record.identity === 'object' ? record.identity : null,
+        cache: record.analyse?.cache && typeof record.analyse.cache === 'object' ? record.analyse.cache : null,
+      }
+      : null,
   };
+}
+
+/**
+ * ADR 0003 §3.6 — what each calculated geometry turned out to be.
+ *
+ * `inconclusive` prints its reason: a reader must not see a blank cell and
+ * assume the structure matched.
+ */
+function integritySectionHtml(rows, headingTag = 'h2') {
+  const entries = (Array.isArray(rows) ? rows : []).filter((row) => row.structureIntegrity);
+  if (entries.length === 0) return '';
+  const body = entries.map((row) => {
+    const integrity = row.structureIntegrity;
+    return `<tr><td>${escapeHtml(row.label || row.id)}</td>`
+      + `<td>${escapeHtml(integrity.status || MISSING)}</td>`
+      + `<td>${escapeHtml(integrity.beforeFormula || MISSING)}</td>`
+      + `<td>${escapeHtml(integrity.afterFormula || MISSING)}</td>`
+      + `<td>${escapeHtml(integrity.reasonText || integrity.reason || '')}</td></tr>`;
+  }).join('');
+  return `<${headingTag}>Structure integrity</${headingTag}>`
+    + '<p class="sub">Perceived from the final coordinates, not measured: composition, connectivity, '
+    + 'tautomer and configuration are compared separately. `inconclusive` is not a pass.</p>'
+    + '<table class="integrity"><thead><tr><th>Record</th><th>Status</th><th>Before</th><th>After</th><th>Reason</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`;
+}
+
+/**
+ * ADR 0003 §3.8 — the similarity matrix and its clusters.
+ *
+ * A matrix is printed in full; a cluster list alone would hide the numbers the
+ * verdict came from.
+ */
+function similaritySectionHtml(rows, headingTag = 'h2') {
+  const entries = (Array.isArray(rows) ? rows : []).filter((row) => row.similarity);
+  if (entries.length === 0) return '';
+  return entries.map((row) => {
+    const similarity = row.similarity;
+    const molecules = similarity.molecules;
+    const matrix = similarity.matrix;
+    if (molecules.length < 2 || matrix.length !== molecules.length) return '';
+    const head = '<tr><th>Molecule</th>'
+      + molecules.map((molecule) => `<th class="num">${escapeHtml(molecule.label || molecule.id)}</th>`).join('') + '</tr>';
+    const body = matrix.map((line, i) => '<tr>'
+      + `<td>${escapeHtml(molecules[i]?.label || molecules[i]?.id || '')}</td>`
+      + line.map((value) => `<td class="num">${escapeHtml(value, 2)}</td>`).join('')
+      + '</tr>').join('');
+    const clusters = similarity.clusters.map((cluster) => {
+      const names = (cluster.members || []).map((index) => molecules[index]?.label || molecules[index]?.id).filter(Boolean);
+      return `${cluster.id} (${names.length}): ${names.join(', ')}`;
+    }).join('; ') || 'no clusters at this cutoff';
+    const mcs = similarity.mcs;
+    return `<${headingTag}>Similarity — ${escapeHtml(row.label || row.id)}</${headingTag}>`
+      + '<p class="sub">'
+      + `${escapeHtml(similarity.options?.fingerprint || 'morgan')} fingerprint`
+      + `${similarity.options?.nBits ? ` · ${escapeHtml(String(similarity.options.nBits))} bits` : ''}`
+      + ` · Tanimoto · clusters at ${escapeHtml(String(similarity.options?.clusterCutoff ?? '?'))}.`
+      + '</p>'
+      + `<table class="similarity"><thead>${head}</thead><tbody>${body}</tbody></table>`
+      + `<p class="sub">Clusters: ${escapeHtml(clusters)}</p>`
+      + (mcs ? `<p class="sub">Maximum common substructure: <code>${escapeHtml(mcs.smarts || 'not reported')}</code>`
+        + `${mcs.timedOut ? ' (the search timed out)' : ''}</p>` : '');
+  }).join('');
+}
+
+/**
+ * ADR 0003 §3.7 — the 2D structure figures, when the caller supplied them.
+ *
+ * The SVG has already been validated where it was produced. A figure level of
+ * `none` drops the section entirely, exactly as it drops every other figure.
+ */
+function structureFiguresHtml(structures, figureLevel = 'basic', headingTag = 'h2') {
+  const entries = (Array.isArray(structures) ? structures : []).filter((entry) => entry && entry.svg);
+  if (entries.length === 0 || figureLevel === 'none') return '';
+  const figures = entries.map((entry) => {
+    let block = '';
+    try {
+      block = depictFigureBlock(entry.svg, entry.caption);
+    } catch {
+      // A figure that cannot be validated is omitted, not embedded raw.
+      block = '';
+    }
+    return block;
+  }).filter(Boolean).join('');
+  if (!figures) return '';
+  return `<${headingTag}>Structures</${headingTag}>`
+    + '<p class="sub">2D depictions generated by RDKit/CoordGen from the record geometry or SMILES.</p>'
+    + `<div class="structures">${figures}</div>`;
+}
+
+/**
+ * ADR 0003 §3.1 — one table of the curated descriptor set.
+ *
+ * Numbers are formatted, never re-derived: the record already carries them. A
+ * missing value prints the report's `not reported` marker, so a gap cannot be
+ * read as zero. The set id is printed once per row group, because a report that
+ * mixes two sets must say which table produced each row.
+ */
+function descriptorsSectionHtml(rows, headingTag = 'h2') {
+  const entries = (Array.isArray(rows) ? rows : []).filter((row) => row.descriptors);
+  if (entries.length === 0) return '';
+  const header = '<tr><th>Record</th><th>Set</th>'
+    + DESCRIPTORS.map((definition) => `<th${definition.kind === 'text' ? '' : ' class="num"'}>${escapeHtml(definition.label)}${definition.unit ? ` / ${escapeHtml(definition.unit)}` : ''}</th>`).join('')
+    + '</tr>';
+  const body = entries.map((row) => {
+    const values = row.descriptors;
+    const cells = DESCRIPTORS.map((definition) => {
+      const raw = values[definition.key];
+      if (raw === null || raw === undefined || raw === '') return `<td>${escapeHtml(MISSING)}</td>`;
+      const shown = definition.kind === 'text' ? String(raw) : value(raw, definition.kind === 'count' ? 0 : 3);
+      return `<td${definition.kind === 'text' ? '' : ' class="num"'}>${escapeHtml(shown)}</td>`;
+    }).join('');
+    return `<tr><td>${escapeHtml(row.recordLabel || row.title)}</td>`
+      + `<td class="mono">${escapeHtml(values.descriptorSet || DESCRIPTOR_SET_ID)}</td>${cells}</tr>`;
+  }).join('');
+  return `<${headingTag}>Descriptors</${headingTag}>`
+    + '<p class="sub">Cheminformatics descriptors, not calculated properties: 2D/topological unless stated. '
+    + `The set id is versioned, so a later addition cannot silently re-label this table.</p>`
+    + `<table class="descriptors"><thead>${header}</thead><tbody>${body}</tbody></table>`;
 }
 
 /**
@@ -675,6 +828,9 @@ export function buildWorkflowReport(queue, records = {}, {
   surfaces = null,
   figureBudgetBytes = FIGURE_BUDGET_BYTES,
   wavefunction = null,
+  // ADR 0003 §3.7: SVGs already validated by the caller (main or the CLI). The
+  // report never draws chemistry; it only embeds what was validated.
+  structures = null,
   artifacts = null,
 } = {}) {
   const source = queue && typeof queue === 'object' ? queue : {};
@@ -755,7 +911,9 @@ export function buildWorkflowReport(queue, records = {}, {
       // Issue #226: a tautomer block's rows are distinct molecules, and the
       // spread across them is the answer. It is computed from the target-level
       // energies exactly like a conformer ΔE, but it is never averaged.
-      const tautomers = group.some((row) => row.conformer.produces === 'tautomers');
+      // ADR 0003 §3.5: a stereoisomer set is a candidate set too — distinct
+      // molecules, never averaged across.
+      const tautomers = group.some((row) => ['tautomers', 'stereoisomers'].includes(row.conformer.produces));
       const comparable = uniqueMembers.size === memberIds.length && uniqueMembers.size > 1
         && group.every((row) => row.fanOut);
       const energies = comparable
@@ -767,6 +925,7 @@ export function buildWorkflowReport(queue, records = {}, {
         memberId: row.conformer.memberId,
         protomer: row.conformer.protomer,
         ...(row.conformer.tautomer ? { tautomer: row.conformer.tautomer } : {}),
+        ...(row.conformer.stereoisomer ? { stereoisomer: row.conformer.stereoisomer } : {}),
         ...(row.conformer.smiles ? { smiles: row.conformer.smiles } : {}),
         status: row.status,
         imported: row.imported ? row.imported.badge : null,
@@ -841,7 +1000,7 @@ export function buildWorkflowReport(queue, records = {}, {
         id,
         title: group[0].conformer.title || id,
         comparable,
-        produces: tautomers ? 'tautomers' : 'conformers',
+        produces: group.find((row) => ['tautomers', 'stereoisomers'].includes(row.conformer.produces))?.conformer.produces || 'conformers',
         members,
         ensemble,
         spreadKcalTarget: lowest !== null ? (Math.max(...energies) - lowest) * HARTREE_KCAL : null,
@@ -910,6 +1069,17 @@ export function buildWorkflowReport(queue, records = {}, {
   });
   // Issue 59: the QTAIM table and the NCI figure, when a checkpoint is supplied.
   const analysis = wavefunctionAnalysis({ wavefunction, figureBudgetBytes });
+  const structureFigures = structures && typeof structures === 'object'
+    ? Object.entries(structures).slice(0, 60).flatMap(([id, entry]) => {
+      if (!entry || typeof entry.svg !== 'string') return [];
+      const row = rowByNodeId.get(id);
+      return [{
+        id,
+        caption: String(entry.caption || row?.label || id).slice(0, 200),
+        svg: entry.svg,
+      }];
+    })
+    : [];
 
   // Issue #229: the ladder and reaction models are built before the return so
   // the uncertainty section reads exactly the numbers the sections below print.
@@ -994,6 +1164,9 @@ export function buildWorkflowReport(queue, records = {}, {
     retries,
     tasks: rows,
     figures,
+    // ADR 0003 §3.7: validated 2D depictions, already bound to a block id.
+    structures: structureFigures,
+    figureLevel,
     // Issue #354: the files the workflow's output blocks recorded, with the
     // manifest's own digest. Omitted when the caller did not ask for it.
     ...(artifactSection ? { artifacts: artifactSection } : {}),
@@ -1313,12 +1486,13 @@ function taskTableHtml(rows) {
         : escapeHtml(value(row.finalEnergyHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(row.gibbsHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(row.imaginaryCount))}</td>`
+      + `<td>${escapeHtml(row.structureIntegrity?.status || '—')}</td>`
       + `<td class="num">${escapeHtml(value(row.elapsedSeconds, 1, ' s'))}</td>`
       + '</tr>';
   }).join('');
   return '<table><thead><tr><th>Block</th><th>Status</th><th>Attempts</th><th>Gates</th><th>Validity</th><th>Engine</th>'
     + '<th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th>'
-    + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
+    + '<th>Structure</th><th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
     + rows.map(attemptHistoryHtml).join('');
 }
 
@@ -1454,6 +1628,7 @@ function conformerEnsembleHtml(ensemble, headingTag) {
     + (member.imported ? ' data-kind="imported"' : '') + '>'
     + `<td>${escapeHtml(member.memberId || MISSING)}`
     + (member.tautomer ? ` · <span class="mono">${escapeHtml(member.tautomer)}</span>` : '')
+    + (member.stereoisomer ? ` · <span class="mono">${escapeHtml(member.stereoisomer)}</span>` : '')
     + (member.protomer ? ` · ${escapeHtml(member.protomer)}` : '')
     + (member.smiles ? ` <span class="mono">${escapeHtml(member.smiles)}</span>` : '')
     + `${member.imported ? ` <span class="imported">${escapeHtml(member.imported)}</span>` : ''}</td>`
@@ -2082,6 +2257,10 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
     + reactionBlocks
     + uncertaintySectionHtml(model.uncertainty, sectionHeading)
     + derivedBlocks
+    + integritySectionHtml(rows, sectionHeading)
+    + descriptorsSectionHtml(rows, sectionHeading)
+    + structureFiguresHtml(model.structures, model.figureLevel, sectionHeading)
+    + similaritySectionHtml(rows, sectionHeading)
     + multiwfnSectionHtml(model.multiwfn, sectionHeading)
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')

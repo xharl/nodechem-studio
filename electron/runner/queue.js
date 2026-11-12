@@ -44,6 +44,36 @@ import {
   parseMultiwfnOutput,
 } from '../../src/shared/multiwfn.js';
 import {
+  DESCRIPTOR_SET_ID,
+  descriptorRequest,
+  descriptorSummary,
+  normalizeDescriptorResult,
+} from '../../src/shared/chemDescriptors.js';
+import { CHEM_PROTOCOL, ChemError } from '../../src/shared/chemistry.js';
+import {
+  normalizeStandardizeResult,
+  standardizeRequest,
+  stereoAuditWarnings,
+} from '../../src/shared/chemStandardize.js';
+import {
+  normalizeRdkitConformerResult,
+  rdkitConformerOrigin,
+  rdkitConformerRequest,
+  rdkitConformerWarnings,
+} from '../../src/shared/rdkitConformers.js';
+import {
+  normalizeStereoisomerResult,
+  stereoisomerRequest,
+  stereoisomerSummary,
+} from '../../src/shared/stereoisomers.js';
+import {
+  normalizeSimilarityResult,
+  similarityRequest,
+  similaritySummary,
+} from '../../src/shared/chemSimilarity.js';
+import { SidecarRunner } from './sidecarRunner.js';
+import { cacheFingerprint, cacheGet, cachePut, readChemCache, writeChemCache } from './chemCache.js';
+import {
   DEFAULT_TAUTOMER_OPTIONS,
   TAUTOMER_PROTOCOL,
   TautomerEnumerationError,
@@ -71,7 +101,7 @@ import {
 } from '../../src/shared/obabelConformers.js';
 import { perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 import { UffJobExecutor } from './uffJob.js';
-import { prepareSummaryLine } from '../../src/shared/prepare.js';
+import { PREPARE_DRY_RUN_REASON, prepareSummaryLine } from '../../src/shared/prepare.js';
 import { buildSolventCluster } from '../../src/shared/explicitSolvation.js';
 import { relaxWithForces } from '../../src/shared/mlRelax.js';
 import {
@@ -183,6 +213,62 @@ async function writeBytesAtomic(filePath, bytes) {
   }
   await fsp.rm(temp, { force: true }).catch(() => {});
   await fsp.writeFile(filePath, bytes);
+}
+
+
+/**
+ * The geometry a record can be described from: the final one when the parser
+ * has it, else the input geometry. Never a guess — a record with no atoms is a
+ * refusal the caller names.
+ */
+/**
+ * ADR 0003 §3.6: the payload the run manager needs to perceive the final
+ * geometry. The spec is built before the engine starts, so the record cannot be
+ * compared with a geometry that changed underneath it.
+ */
+function integritySpecFor(queue, task, validity = null) {
+  if (task?.type !== 'calculate') return null;
+  if (queue.options?.dryRun) return null;
+  const settings = task.settings && typeof task.settings === 'object' ? task.settings : {};
+  const policy = settings.integrity === 'fail' ? 'fail' : 'warn';
+  // An ONIOM/QM-MM record's parsed geometry is a region, not the molecule.
+  const notApplicable = /\boniom\b/i.test(String(task.route || '')) || settings.oniom === true;
+  const molecule = validity?.molecule && typeof validity.molecule === 'object' ? validity.molecule : {};
+  const atoms = Array.isArray(molecule.coords)
+    ? molecule.coords.map((atom) => ({ element: atom.element, x: atom.x, y: atom.y, z: atom.z }))
+    : [];
+  return {
+    policy,
+    ...(notApplicable ? { notApplicable: true } : {}),
+    molecule: {
+      title: task.title,
+      charge: Number.isInteger(molecule.charge) ? molecule.charge : (Number.isInteger(settings.charge) ? settings.charge : 0),
+      multiplicity: Number.isInteger(molecule.multiplicity) ? molecule.multiplicity : (Number.isInteger(settings.multiplicity) ? settings.multiplicity : 1),
+      atoms,
+    },
+    executable: queue.options?.chemExecutable || '',
+    script: queue.options?.chemScript || '',
+  };
+}
+
+function atomsFromRecord(record) {
+  const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
+  const candidates = [parsed.finalGeometry, parsed.geometry?.final, parsed.geometry?.initial, parsed.geometry];
+  for (const candidate of candidates) {
+    const atoms = Array.isArray(candidate) ? candidate : candidate?.atoms;
+    if (!Array.isArray(atoms) || atoms.length === 0) continue;
+    const normalized = atoms.map((atom) => ({
+      element: String(atom?.element || ''),
+      x: Number(atom?.x),
+      y: Number(atom?.y),
+      z: Number(atom?.z),
+    }));
+    if (normalized.every((atom) => atom.element && Number.isFinite(atom.x)
+      && Number.isFinite(atom.y) && Number.isFinite(atom.z))) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 async function writeJsonAtomic(filePath, value) {
@@ -480,7 +566,8 @@ function conformerTaskRecord(raw, nodeId) {
   // Issue #226: what the block enumerates. Only `tautomers` changes the task's
   // shape (no method, a JSON sidecar, a candidate cap); a file that never said
   // stays a conformer search.
-  const produces = conf.produces === 'tautomers' ? 'tautomers' : 'conformers';
+  const produces = conf.produces === 'tautomers' ? 'tautomers'
+    : (conf.produces === 'stereoisomers' ? 'stereoisomers' : 'conformers');
   // A fanned-out member task (#80) carries one member of an ensemble that is
   // already stored in the project. It does not search, so it needs neither a
   // generator nor an import path — only the member row it stands for.
@@ -593,21 +680,23 @@ function conformerTaskRecord(raw, nodeId) {
       generator,
       // Issue #226: only a tautomer task states `produces`; a conformer task
       // keeps exactly the keys it always had.
-      ...(produces === 'tautomers' ? { produces } : {}),
+      ...(produces !== 'conformers' ? { produces } : {}),
       rankBy: typeof conf.rankBy === 'string' ? conf.rankBy : '',
       // Issue #240: the task records the method its generator actually runs.
       // `ff` was the pre-#240 name for Open Babel's force field; it is read
       // here only as a migration source, never written back beside `method`.
-      method: produces === 'tautomers' || source === 'imported'
+      method: produces !== 'conformers' || source === 'imported'
         ? ''
         : (generator === 'crest'
           ? (conf.method === 'gfnff' ? 'gfnff' : 'gfn2')
           : (generator === 'uff'
             ? 'UFF'
-            : (obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94'))),
+            : (generator === 'rdkit'
+              ? (conf.forceField === 'UFF' ? 'UFF' : 'MMFF94')
+              : (obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94')))),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
-      maxConformers: Math.round(number(conf.maxConformers, produces === 'tautomers' ? 16 : 20, 1, 200)),
+      maxConformers: Math.round(number(conf.maxConformers, produces !== 'conformers' ? 16 : 20, 1, 200)),
       temperature: number(conf.temperature, 298.15, 1, 1000),
       spreadThresholdKcal: number(conf.spreadThresholdKcal, 2, 0, 50),
       selectedConformerId: /^c\d+$/.test(String(conf.selectedConformerId || '')) ? String(conf.selectedConformerId) : '',
@@ -623,6 +712,9 @@ function conformerTaskRecord(raw, nodeId) {
       ...(produces === 'tautomers'
         ? { tautomerRuleset: conf.tautomerRuleset === 'rdkit-default' ? conf.tautomerRuleset : DEFAULT_TAUTOMER_OPTIONS.ruleset }
         : {}),
+      ...(produces === 'stereoisomers'
+        ? { seed: Math.round(number(conf.seed, 1, 0, 0x7fffffff)) }
+        : {}),
       // Issue 144: the UFF route's own settings and the project's bond table.
       // Bounded here like everything else, and absent for CREST/import tasks.
       ...(generator === 'uff' && Number.isFinite(Number(conf.torsionStepDegrees))
@@ -633,6 +725,17 @@ function conformerTaskRecord(raw, nodeId) {
       // hand-written queue payload could carry.
       ...(generator === 'obabel' && Number.isFinite(Number(conf.nconf))
         ? { nconf: Math.round(number(conf.nconf, 20, 1, 1000)) } : {}),
+      // ADR 0003 §3.4: the RDKit search's knobs, bounded here as well.
+      ...(generator === 'rdkit' && produces === 'conformers'
+        ? {
+          nconf: Math.round(number(conf.nconf, 50, 1, 200)),
+          seed: Math.round(number(conf.seed, 1, 0, 0x7fffffff)),
+          pruneRms: number(conf.pruneRms, 0.5, 0, 5),
+          forceField: conf.forceField === 'UFF' ? 'UFF' : 'MMFF94',
+          maxHeavyAtoms: Math.round(number(conf.maxHeavyAtoms, 60, 1, 100)),
+          threads: Math.round(number(conf.threads, 1, 1, 8)),
+        }
+        : {}),
       ...(generator === 'uff' && Array.isArray(conf.bonds)
         ? {
           bonds: conf.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
@@ -671,12 +774,15 @@ function taskAtomList(raw) {
  */
 function prepareTaskRecord(raw, nodeId) {
   const prep = raw?.prepare && typeof raw.prepare === 'object' ? raw.prepare : {};
-  const kind = prep.kind === 'embed3d' ? 'embed3d' : (prep.kind === 'solvate' ? 'solvate' : 'relax');
+  const kind = prep.kind === 'embed3d' ? 'embed3d'
+    : (prep.kind === 'solvate' ? 'solvate' : (prep.kind === 'standardize' ? 'standardize' : 'relax'));
   const converter = kind === 'embed3d'
-    ? 'openbabel'
+    ? (prep.converter === 'rdkit' ? 'rdkit' : 'openbabel')
     : (kind === 'solvate'
       ? 'geometric'
-      : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff'));
+      : (kind === 'standardize'
+        ? 'rdkit'
+        : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff')));
   const inputName = String(raw?.inputName || '');
   const inputText = String(raw?.inputText || '');
   if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
@@ -741,7 +847,16 @@ function prepareTaskRecord(raw, nodeId) {
       converter,
       forceField: prep.forceField === 'MMFF94' || prep.forceField === 'AIMNet2' || prep.forceField === 'none'
         ? prep.forceField
-        : (kind === 'solvate' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
+        : (kind === 'solvate' || kind === 'standardize' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
+      // ADR 0003 §3.2: the cleanup steps are part of the task, frozen at start.
+      ...(kind === 'standardize'
+        ? {
+          normalize: prep.normalize !== false,
+          disconnectMetals: prep.disconnectMetals !== false,
+          removeFragments: prep.removeFragments !== false,
+          chargeParent: prep.chargeParent !== false,
+        }
+        : {}),
       smiles,
       charge: Math.round(number(prep.charge, 0, -10, 10)),
       multiplicity: Math.round(number(prep.multiplicity, 1, 1, 10)),
@@ -1465,6 +1580,15 @@ export class QueueManager {
     const needsTautomer = tasks.some((task) => task.type === 'generate'
       && task.generate?.produces === 'tautomers'
       && !task.generate?.member);
+    // ADR 0003 §3.1: a descriptors analyse block spawns the chemistry sidecar.
+    // The queue options are frozen at start, exactly as the tautomer sidecar's
+    // are, so a replay names the same interpreter and script.
+    const chemExecutable = String(options.chemExecutable || '').trim();
+    const chemScript = String(options.chemScript || '').trim();
+    const needsChem = tasks.some((task) => (task.type === 'analyse' && task.analyse?.mode === 'chem')
+      || (task.type === 'prepare' && task.prepare?.kind === 'standardize')
+      || (task.type === 'generate' && task.generate?.generator === 'rdkit'
+        && task.generate?.produces !== 'tautomers' && !task.generate?.member));
     // Issue #270: a Multiwfn analyse block spawns the user-installed sidecar.
     // A dry run must not spawn it, exactly as it spawns no engine.
     const needsMultiwfn = tasks.some((task) => task.type === 'analyse'
@@ -1540,6 +1664,18 @@ export class QueueManager {
           if (!scriptStat?.isFile()) throw new Error(`Tautomer sidecar script not found: ${tautomerScript}`);
         }
       }
+      if (needsChem) {
+        if (!chemExecutable) {
+          throw new Error('Choose the chemistry sidecar before running a descriptors block. It needs Python '
+            + 'with rdkit (scripts/nodechem-chem.py); there is no in-app fallback.');
+        }
+        const stat = await fsp.stat(chemExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`Chemistry sidecar not found: ${chemExecutable}`);
+        if (chemScript) {
+          const scriptStat = await fsp.stat(chemScript).catch(() => null);
+          if (!scriptStat?.isFile()) throw new Error(`Chemistry sidecar script not found: ${chemScript}`);
+        }
+      }
       if (needsMultiwfn) {
         if (!multiwfnExecutable) {
           throw new Error('Choose the Multiwfn executable before running a Multiwfn analysis block. '
@@ -1580,6 +1716,10 @@ export class QueueManager {
         // names the same program, and a dry run records none because none ran.
         tautomerExecutable: dryRun ? null : tautomerExecutable,
         tautomerScript: dryRun ? null : tautomerScript,
+        // ADR 0003: the chemistry sidecar travels with the queue; a dry run
+        // records none because none ran.
+        chemExecutable: dryRun ? null : chemExecutable,
+        chemScript: dryRun ? null : chemScript,
         scratchDir,
         // A relative conformer `importPath` resolves against this folder, so it
         // travels with the queue and a replay resolves it the same way.
@@ -2093,6 +2233,12 @@ export class QueueManager {
         await this.runTautomerEnumeration(queue, task, conf, dir);
         return;
       }
+      // ADR 0003 §3.5: a stereoisomer set is its own job — distinct molecules,
+      // no energies, and a geometry policy that must not copy tautomer rules.
+      if (conf.produces === 'stereoisomers') {
+        await this.runStereoisomerEnumeration(queue, task, conf, dir);
+        return;
+      }
       let ensembleText = '';
       let energies = [];
       let source = conf.source === 'imported' ? 'imported' : conf.generator;
@@ -2232,6 +2378,67 @@ export class QueueManager {
           queueId: queue.id,
           nodeId: task.nodeId,
           text: 'Dry run: a labelled three-member fixture, not a conformer search.',
+        });
+      } else if (conf.generator === 'rdkit') {
+        // ADR 0003 §3.4: ETKDGv4 + MMFF94/UFF, then the shared curation below.
+        const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+        const parsedInput = parseMultiXyz(inputText);
+        if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+          throw new Error(`The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
+        }
+        if (!queue.options.chemExecutable) {
+          throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. An RDKit conformer search '
+            + 'needs Python with rdkit (scripts/nodechem-chem.py); there is no in-app fallback.');
+        }
+        const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+          executable: queue.options.chemExecutable,
+          script: queue.options.chemScript || '',
+          request: rdkitConformerRequest({
+            molecule: {
+              title: task.title,
+              charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+              multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+              atoms: parsedInput.frames[0].atoms,
+            },
+            options: {
+              nconf: conf.nconf,
+              seed: conf.seed,
+              pruneRms: conf.pruneRms,
+              forceField: conf.forceField,
+              maxHeavyAtoms: conf.maxHeavyAtoms,
+              threads: conf.threads,
+            },
+          }),
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          cwd: dir,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const result = normalizeRdkitConformerResult(raw);
+        ensembleText = result.conformers
+          .map((conformer, index) => xyzText(conformer.atoms, `${task.title} · c${index + 1}`))
+          .join('');
+        energies = result.conformers.map((conformer) => conformer.energyKcal);
+        source = 'rdkit';
+        energyUnit = 'kcal/mol';
+        energyMethod = result.forceField;
+        origin = rdkitConformerOrigin(result);
+        searchWarnings = rdkitConformerWarnings(result).map((message) => ({
+          id: 'rdkit-conformers', status: 'warn', message,
+        }));
+        await fsp.writeFile(path.join(dir, task.outputName || 'rdkit.log'), [
+          `${task.title} · RDKit conformer search`,
+          `Embedding: ${result.embedding}, seed ${result.seed}, prune ${conf.pruneRms} Å, ${result.threads} thread(s)`,
+          `Force field: ${result.forceField}${result.fallback ? ' (MMFF94 unavailable; UFF used)' : ''}`,
+          `Geometry: ${result.conformers.length} of ${result.requested} requested; ${result.convergedCount} converged`,
+          `Heavy atoms: ${result.heavyAtomCount} (cap ${conf.maxHeavyAtoms})`,
+          'Energies: force-field energies in kcal/mol. Not QM, not comparable with a Hartree value.',
+        ].join('\n') + '\n', 'utf8');
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: `RDKit ${result.embedding} + ${result.forceField}: ${result.conformers.length} geometries, `
+            + `${result.convergedCount} converged. Force-field structures, not QM.`,
         });
       } else if (conf.generator === 'obabel') {
         // Open Babel is external, like CREST: the app stages one starting
@@ -2438,7 +2645,8 @@ export class QueueManager {
           ? scorerProvenance.label
           : (conf.source === 'imported'
             ? (origin?.method || energyMethod || '')
-            : (conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method)),
+            : (conf.generator === 'uff' || conf.generator === 'obabel' || conf.generator === 'rdkit'
+              ? '' : conf.method)),
         origin: recordedOrigin,
         energyUnit,
         energyMethod,
@@ -2478,8 +2686,90 @@ export class QueueManager {
     } catch (error) {
       task.status = 'failed';
       task.error = oneLine(error?.message || String(error), 400);
+      // ADR 0003 §2.3: a sidecar refusal keeps its typed code, so `size-refused`
+      // is not flattened into a generic search failure.
+      if (error instanceof ChemError) task.refusal = { code: error.code, message: task.error };
       task.finishedAt = new Date().toISOString();
       this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Conformer search failed: ${task.error}` });
+    }
+    await this.persist(queue);
+    this.publish(queue);
+  }
+
+  /**
+   * ADR 0003 §3.5 — enumerate stereoisomers as distinct molecules.
+   *
+   * The candidate contract is shared with tautomers; the geometry policy is not.
+   * The sidecar re-embeds every candidate except the one identical to the input,
+   * and `geometry.source` says which happened for each member.
+   */
+  async runStereoisomerEnumeration(queue, task, conf, dir) {
+    try {
+      const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+      const parsedInput = parseMultiXyz(inputText);
+      if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+        throw new ChemError('bad-geometry', `The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
+      }
+      if (queue.options.dryRun) {
+        throw new ChemError('stereoisomer-dry-run', 'A dry run cannot enumerate stereoisomers: the chemistry sidecar is an '
+          + 'external program and a dry run never fabricates molecules.');
+      }
+      if (!queue.options.chemExecutable) {
+        throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. Stereoisomer enumeration needs RDKit '
+          + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+      }
+      const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+        executable: queue.options.chemExecutable,
+        script: queue.options.chemScript || '',
+        request: stereoisomerRequest({
+          molecule: {
+            title: task.title,
+            charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+            multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+            atoms: parsedInput.frames[0].atoms,
+          },
+          options: { maxCandidates: conf.maxConformers, seed: conf.seed },
+        }),
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        cwd: dir,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      });
+      const result = normalizeStereoisomerResult(raw);
+      const summary = stereoisomerSummary({
+        result,
+        group: conf.group,
+        selectedId: conf.selectedConformerId,
+      });
+      summary.generatedAt = new Date().toISOString();
+      const frames = result.candidates.map((candidate) => xyzText(
+        candidate.atoms,
+        `stereoisomer=${candidate.label} ${candidate.smiles} · ${candidate.geometry.source} · charge ${conf.charge} · multiplicity ${conf.multiplicity}`,
+      ));
+      await fsp.writeFile(path.join(dir, 'stereoisomers.xyz'), frames.join(''), 'utf8');
+      await writeJsonAtomic(path.join(dir, 'conformers.json'), summary);
+      task.status = 'completed';
+      task.ensemble = summary;
+      task.ensembleFile = 'conformers.json';
+      task.runDir = dir;
+      task.finishedAt = new Date().toISOString();
+      task.refusal = null;
+      task.summary = `${summary.count} stereoisomer candidate${summary.count === 1 ? '' : 's'} enumerated`
+        + ` (${summary.origin.program || 'RDKit'} ${summary.origin.version || 'version not reported'})`
+        + (summary.truncated ? '; candidate cap reached' : '');
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `${summary.count} stereoisomer candidate(s): ${summary.stereoisomers.join(', ')}. `
+          + 'Distinct molecules: no energies and no populations are assigned here; each candidate fans out '
+          + 'into its own calculation.',
+      });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      if (error instanceof ChemError) task.refusal = { code: error.code, message: task.error };
+      task.finishedAt = new Date().toISOString();
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Stereoisomer enumeration refused: ${task.error}` });
     }
     await this.persist(queue);
     this.publish(queue);
@@ -2636,6 +2926,7 @@ export class QueueManager {
     // Issue #226: a tautomer branch is still one member of one ensemble; the
     // task says which kind of set that was.
     const tautomerMember = task.generate?.produces === 'tautomers' || member.produces === 'tautomers';
+    const stereoisomerMember = task.generate?.produces === 'stereoisomers' || member.produces === 'stereoisomers';
     const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
     const parsed = parseMultiXyz(inputText);
     if (parsed.errors.length > 0 || parsed.frames.length !== 1) {
@@ -2662,6 +2953,7 @@ export class QueueManager {
       // Issue #226: a tautomer branch repeats what the member is, so the branch
       // folder does not read as a one-member conformer ensemble.
       ...(tautomerMember ? { produces: 'tautomers' } : {}),
+      ...(stereoisomerMember ? { produces: 'stereoisomers' } : {}),
       method: String(member.method || ''),
       ...memberEnergy,
       origin: memberOrigin,
@@ -2956,6 +3248,9 @@ export class QueueManager {
         gates: task.gates,
         validity,
         checkpointHandoff,
+        // ADR 0003 §3.6: the integrity gate travels with the run, not with the
+        // queue, so the record's own geometry is what gets compared.
+        ...(integritySpecFor(queue, task, validity) ? { integrity: integritySpecFor(queue, task, validity) } : {}),
         // Issue #30: the conformer this run is built on travels into run.json,
         // so a result can never be read as if it came from the imported geometry.
         ...(task.conformer ? { conformer: task.conformer } : {}),
@@ -2986,7 +3281,7 @@ export class QueueManager {
       // A timed-out run produced no result, so it carries no condition fields:
       // a downstream condition must block on "no parsed result", not read a
       // wall of `false` as a verdict the engine never gave.
-      task.summary = timedOut ? null : conditionFields(record.parsed, record.gates);
+      task.summary = timedOut ? null : conditionFields(record.parsed, record.gates, record.descriptors || record.parsed?.descriptors || null);
       // Keep only the records a downstream validity check needs; the full
       // parsed output stays in the run folder.
       task.parsedSummary = record.parsed ? {
@@ -3543,6 +3838,87 @@ export class QueueManager {
    * writes `prepared.xyz` and a `prepare.json` record, and a downstream
    * calculate reads that geometry — never the structure it was planned with.
    */
+  /**
+   * ADR 0003 §3.2: one structure in, one standardised structure out.
+   *
+   * The sidecar owns the chemistry; this method owns the record. A dry run
+   * carries the geometry forward and says so, and a missing sidecar is
+   * `rdkit-missing` — never an in-app imitation of a clean-up.
+   */
+  async standardizePrepare(queue, task, conf, atoms, dir) {
+    const options = {
+      normalize: conf.normalize !== false,
+      disconnectMetals: conf.disconnectMetals !== false,
+      removeFragments: conf.removeFragments !== false,
+      chargeParent: conf.chargeParent !== false,
+    };
+    if (queue.options?.dryRun) {
+      return {
+        atoms,
+        summary: {
+          kind: 'standardize',
+          converter: 'rdkit',
+          forceField: 'none',
+          energyKcal: null,
+          converged: null,
+          reason: PREPARE_DRY_RUN_REASON,
+          iterations: 0,
+          atomCount: atoms.length,
+          options,
+        },
+      };
+    }
+    if (!queue.options?.chemExecutable) {
+      throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. Standardisation needs RDKit '
+        + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+    }
+    const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+      executable: queue.options.chemExecutable,
+      script: queue.options.chemScript || '',
+      request: standardizeRequest({
+        molecule: {
+          title: task.title,
+          charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+          multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+          atoms,
+        },
+        options,
+      }),
+      timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+      cwd: dir,
+      onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+    });
+    const result = normalizeStandardizeResult(raw);
+    for (const warning of stereoAuditWarnings(result.stereoAudit)) {
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Standardise: ${warning}` });
+    }
+    return {
+      atoms: result.atoms,
+      summary: {
+        kind: 'standardize',
+        converter: 'rdkit',
+        forceField: 'none',
+        energyKcal: null,
+        converged: null,
+        reason: 'standardize-completed',
+        iterations: 0,
+        atomCount: result.atoms.length,
+        before: result.before,
+        after: result.after,
+        fragmentsRemoved: result.removed,
+        stereoAudit: result.stereoAudit,
+        geometry: result.geometry,
+        identity: result.identity,
+        options: result.options,
+        origin: {
+          program: result.program,
+          version: result.version,
+          method: `rdMolStandardize cleanup (${(result.options?.steps || []).join(' + ') || 'no steps'})`,
+        },
+      },
+    };
+  }
+
   async runPrepare(queue, task) {
     const dir = path.join(this.queueDir(queue.id), 'prepare', task.nodeId);
     await fsp.mkdir(dir, { recursive: true });
@@ -3604,6 +3980,10 @@ export class QueueManager {
           nodeId: task.nodeId,
           text: `Explicit cluster: ${cluster.formula}, ${cluster.count} solvent molecule(s), seed ${cluster.seed}.`,
         });
+      } else if (conf.kind === 'standardize') {
+        const standardized = await this.standardizePrepare(queue, task, conf, atoms, dir);
+        atoms = standardized.atoms;
+        summary = standardized.summary;
       } else if (queue.options.dryRun && conf.converter !== 'uff') {
         // A dry run spawns nothing — the queue records no binaries for it — so a
         // prepare block must not spawn either. It used to call Open Babel anyway
@@ -3625,6 +4005,54 @@ export class QueueManager {
           nodeId: task.nodeId,
           text: 'Dry run: geometry carried forward unchanged; no converter was run.',
         });
+      } else if (conf.kind === 'embed3d' && conf.converter === 'rdkit') {
+        // ADR 0003 §3.3: ETKDGv4 embedding + MMFF94/UFF through the sidecar.
+        if (!queue.options.chemExecutable) {
+          throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. RDKit 3D embedding needs '
+            + 'Python with rdkit (scripts/nodechem-chem.py); there is no in-app fallback.');
+        }
+        const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+          executable: queue.options.chemExecutable,
+          script: queue.options.chemScript || '',
+          request: rdkitConformerRequest({
+            molecule: {
+              title: task.title,
+              smiles: String(conf.smiles || ''),
+              charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+              multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+              atoms,
+            },
+            options: {
+              nconf: 1,
+              seed: 0xF00D,
+              pruneRms: 0,
+              forceField: conf.forceField === 'UFF' ? 'UFF' : 'MMFF94',
+              maxHeavyAtoms: 100,
+              threads: 1,
+            },
+          }),
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          cwd: dir,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const result = normalizeRdkitConformerResult(raw);
+        const conformer = result.conformers[0];
+        atoms = conformer.atoms;
+        summary = {
+          kind: 'embed3d',
+          converter: 'rdkit',
+          forceField: result.forceField,
+          energyKcal: conformer.energyKcal,
+          converged: true,
+          reason: 'converter-completed',
+          iterations: 0,
+          atomCount: atoms.length,
+          origin: {
+            program: result.program,
+            version: result.version,
+            method: `${result.embedding} + ${result.forceField}`,
+          },
+        };
       } else if (conf.kind === 'embed3d') {
         const outName = 'prepared.xyz';
         const result = await new ObabelRunner().convert({
@@ -3772,6 +4200,11 @@ export class QueueManager {
     } catch (error) {
       task.status = 'failed';
       task.error = oneLine(error?.message || String(error), 400);
+      // ADR 0003 §2.3: a sidecar refusal keeps its typed code in the record, so
+      // the card can distinguish "no RDKit" from "this molecule was refused".
+      if (error instanceof ChemError) {
+        task.refusal = { code: error.code, message: task.error };
+      }
       task.finishedAt = new Date().toISOString();
       this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Prepare failed: ${task.error}` });
     }
@@ -3890,6 +4323,17 @@ export class QueueManager {
       await this.runMultiwfn(queue, task);
       return;
     }
+    // ADR 0003 §3.1: a chem block describes structures with the chemistry
+    // sidecar instead of evaluating an expression.
+    if (analyse.mode === 'chem') {
+      await this.runChemAnalyse(queue, task);
+      return;
+    }
+    // ADR 0003 §3.8: one matrix over every wired record.
+    if (analyse.mode === 'similarity') {
+      await this.runSimilarity(queue, task);
+      return;
+    }
     // Issue 165: a DP4+ block is an analyse block with a definition instead of
     // an expression. It reads whole run records (candidates) rather than named
     // fields, so it has its own reader below but the same record contract.
@@ -3993,6 +4437,185 @@ export class QueueManager {
   }
 
   /**
+   * ADR 0003 §3.1 — describe a record's molecule with the chemistry sidecar.
+   *
+   * One task per record, one sidecar call, one derived `run.json`. The cache is
+   * run-local and read before the spawn, so a fan-out over the conformers of one
+   * molecule computes the 2D set once. A refusal is recorded with its code and
+   * sentence; a descriptor the sidecar did not report is null, never zero.
+   */
+  async runChemAnalyse(queue, task) {
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    task.runId = null;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+
+    const refuse = async (code, message) => {
+      task.analyse = { ...analyse, status: 'refused', value: null, unit: null, notComputed: message, refusal: { code, message } };
+      task.refusal = { code, message };
+      this.setTaskOutcome(task, 'failed', oneLine(message, 400));
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+    };
+
+    if (queue.options?.dryRun) {
+      await refuse('chem-dry-run', 'A dry run cannot compute descriptors: the chemistry sidecar is an external '
+        + 'program, and a dry run never fabricates a number.');
+      return;
+    }
+    if (!queue.options?.chemExecutable) {
+      await refuse('rdkit-missing', 'No chemistry sidecar is configured. Descriptors need RDKit '
+        + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+      return;
+    }
+
+    const sources = this.incomingSources(queue, task.nodeId);
+    let record = null;
+    for (const source of sources) {
+      if (!source.runDir) continue;
+      let run = null;
+      try {
+        run = JSON.parse(await fsp.readFile(path.join(source.runDir, 'run.json'), 'utf8'));
+      } catch {
+        run = null;
+      }
+      if (!run) continue;
+      const recordId = String(source.nodeId).includes('~')
+        ? String(source.nodeId).split('~').slice(1).join('~') : null;
+      if (task.recordId && recordId !== task.recordId) continue;
+      record = run;
+      break;
+    }
+    const atoms = record ? atomsFromRecord(record) : null;
+    if (!atoms) {
+      await refuse('bad-input', 'The upstream record carries no geometry to describe. Run the calculation again, '
+        + 'or wire a record that has a final geometry.');
+      return;
+    }
+    const charge = Number.isInteger(task.record?.charge) ? task.record.charge : 0;
+    const multiplicity = Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : 1;
+    const sourceSha256 = String(record.outputSha256 || record.inputSha256 || '');
+
+    const cache = await readChemCache(this.queueDir(queue.id));
+    const fingerprint = cacheFingerprint({
+      op: 'descriptors', descriptorSet: DESCRIPTOR_SET_ID, charge, multiplicity, options: {}, atoms,
+    });
+    const hit = cacheGet(cache, fingerprint);
+    if (hit?.refused) {
+      await refuse(hit.error?.code || 'op-failed', hit.error?.message || 'The chemistry sidecar refused this molecule.');
+      return;
+    }
+
+    let result = null;
+    let program = 'RDKit';
+    let version = 'unreported';
+    let cacheHit = false;
+    if (hit?.result?.identity && hit?.result?.descriptors) {
+      result = hit.result;
+      program = hit.program || program;
+      version = hit.version || version;
+      cacheHit = true;
+    } else {
+      try {
+        const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+          executable: queue.options.chemExecutable,
+          script: queue.options.chemScript || '',
+          request: descriptorRequest({
+            molecule: { title: task.title, charge, multiplicity, atoms },
+            options: {},
+          }),
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          cwd: dir,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const answer = normalizeDescriptorResult(raw);
+        result = { identity: answer.identity, descriptors: answer.descriptors };
+        program = answer.program;
+        version = answer.version;
+        cachePut(cache, fingerprint, {
+          op: 'descriptors', descriptorSet: DESCRIPTOR_SET_ID, program, version, result,
+        });
+        await writeChemCache(this.queueDir(queue.id), cache);
+      } catch (error) {
+        if (error instanceof ChemError) {
+          cachePut(cache, fingerprint, {
+            op: 'descriptors', descriptorSet: DESCRIPTOR_SET_ID, refused: true,
+            error: { code: error.code, message: error.message, detail: error.detail },
+          });
+          await writeChemCache(this.queueDir(queue.id), cache);
+          await refuse(error.code, error.message);
+          return;
+        }
+        await refuse('op-failed', `The chemistry sidecar could not describe this molecule: ${error.message}`);
+        return;
+      }
+    }
+
+    const origin = {
+      program,
+      version,
+      method: `descriptor set ${DESCRIPTOR_SET_ID}`,
+      op: 'descriptors',
+      protocol: CHEM_PROTOCOL,
+      sourceSha256,
+    };
+    const summary = descriptorSummary(result);
+    task.analyse = {
+      ...analyse,
+      status: 'computed',
+      value: null,
+      unit: null,
+      descriptorSet: DESCRIPTOR_SET_ID,
+      cache: { hit: cacheHit, key: fingerprint },
+      origin,
+      identity: result.identity,
+      descriptors: result.descriptors,
+      summary,
+    };
+    task.summary = summary;
+    try {
+      await writeJsonAtomic(path.join(dir, 'run.json'), {
+        schemaVersion: 1,
+        kind: 'derived',
+        nodeId: task.nodeId,
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        provenance: { kind: 'derived', jobType: 'Analyse', method: {}, basis: null },
+        analyse: {
+          mode: 'chem',
+          op: 'descriptors',
+          descriptorSet: DESCRIPTOR_SET_ID,
+          sources: analyse.sources || [],
+          ...(task.recordId ? { recordId: task.recordId } : {}),
+          status: 'computed',
+          cache: { hit: cacheHit, key: fingerprint },
+          origin,
+        },
+        identity: result.identity,
+        descriptors: result.descriptors,
+      });
+      task.runId = task.nodeId;
+    } catch (error) {
+      task.analyse = { ...task.analyse, notes: [`the derived record could not be written: ${error.message}`] };
+    }
+    this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
    * One Multiwfn analyse block (issue #270).
    *
    * The block resolves the wavefunction from an upstream run (or a
@@ -4002,6 +4625,148 @@ export class QueueManager {
    * `run.json`. The record carries the Multiwfn version, the exact script and
    * the input SHA-256; a refusal is written down too, never left as `unknown`.
    */
+  /**
+   * ADR 0003 §3.8 — fingerprint every wired record, then compare.
+   *
+   * The block reads whole run records, so a record without a geometry refuses
+   * the whole matrix: a similarity table built from the subset that happened to
+   * parse would misdescribe the dataset.
+   */
+  async runSimilarity(queue, task) {
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    task.runId = null;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+
+    const refuse = async (code, message) => {
+      task.analyse = { ...analyse, status: 'refused', value: null, unit: null, notComputed: message, refusal: { code, message } };
+      task.refusal = { code, message };
+      this.setTaskOutcome(task, 'failed', oneLine(message, 400));
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+    };
+
+    if (queue.options?.dryRun) {
+      await refuse('chem-dry-run', 'A dry run cannot compare structures: the chemistry sidecar is an external '
+        + 'program, and a dry run never fabricates a matrix.');
+      return;
+    }
+    if (!queue.options?.chemExecutable) {
+      await refuse('rdkit-missing', 'No chemistry sidecar is configured. Similarity needs RDKit '
+        + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+      return;
+    }
+
+    const sources = this.incomingSources(queue, task.nodeId);
+    const molecules = [];
+    for (const source of sources) {
+      if (!source.runDir) {
+        await refuse('bad-input', `The upstream block "${source.nodeId}" has produced no record to compare.`);
+        return;
+      }
+      let record = null;
+      try {
+        record = JSON.parse(await fsp.readFile(path.join(source.runDir, 'run.json'), 'utf8'));
+      } catch {
+        record = null;
+      }
+      const atoms = record ? atomsFromRecord(record) : null;
+      if (!atoms) {
+        await refuse('bad-input', `The record "${source.nodeId}" carries no geometry; a similarity matrix over a `
+          + 'partial set would misdescribe the dataset.');
+        return;
+      }
+      molecules.push({
+        id: source.nodeId,
+        label: String(record.title || source.title || source.nodeId).slice(0, 120),
+        charge: Number.isInteger(record.parsed?.charge) ? record.parsed.charge : 0,
+        multiplicity: Number.isInteger(record.parsed?.multiplicity) ? record.parsed.multiplicity : 1,
+        atoms,
+      });
+    }
+    if (molecules.length < 2) {
+      await refuse('bad-input', `A similarity block needs at least two records; ${molecules.length} were wired.`);
+      return;
+    }
+    const options = analyse.options && typeof analyse.options === 'object' ? analyse.options : {};
+    if (molecules.length > (options.maxRecords ?? 200)) {
+      await refuse('size-refused', `This block received ${molecules.length} records; the similarity cap is `
+        + `${options.maxRecords ?? 200}. Raise the cap deliberately or narrow the dataset.`);
+      return;
+    }
+
+    try {
+      const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+        executable: queue.options.chemExecutable,
+        script: queue.options.chemScript || '',
+        request: similarityRequest({ molecules, options }),
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        cwd: dir,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      });
+      const result = normalizeSimilarityResult(raw);
+      const summary = similaritySummary(result);
+      task.analyse = {
+        ...analyse,
+        status: 'computed',
+        value: null,
+        unit: null,
+        similarity: {
+          molecules: result.molecules,
+          matrix: result.matrix,
+          clusters: result.clusters,
+          mcs: result.mcs,
+          pairs: result.pairs,
+          origin: result.origin,
+        },
+        summary,
+      };
+      task.summary = summary;
+      await writeJsonAtomic(path.join(dir, 'run.json'), {
+        schemaVersion: 1,
+        kind: 'derived',
+        nodeId: task.nodeId,
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        provenance: { kind: 'derived', jobType: 'Analyse', method: {}, basis: null },
+        analyse: {
+          mode: 'similarity',
+          options: result.options,
+          sources: sources.map((source) => source.nodeId),
+          status: 'computed',
+          origin: result.origin,
+        },
+        similarity: {
+          molecules: result.molecules,
+          matrix: result.matrix,
+          clusters: result.clusters,
+          mcs: result.mcs,
+          pairs: result.pairs,
+        },
+      });
+      task.runId = task.nodeId;
+      this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
+    } catch (error) {
+      const code = error instanceof ChemError ? error.code : 'op-failed';
+      await refuse(code, `Similarity failed: ${error?.message || String(error)}`);
+      return;
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
   async runMultiwfn(queue, task) {
     const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
     const definition = analyse.multiwfn && typeof analyse.multiwfn === 'object' ? analyse.multiwfn : null;

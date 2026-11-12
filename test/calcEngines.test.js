@@ -75,6 +75,7 @@ describe('planToolNeeds (issue 361)', () => {
 
   it('names Multiwfn only for a multiwfn analysis', () => {
     expect(planToolNeeds([{ type: 'analyse', analyse: { mode: 'multiwfn' } }])).toEqual(['multiwfn']);
+    expect(planToolNeeds([{ type: 'analyse', analyse: { mode: 'chem' } }])).toEqual(['chem']);
     expect(planToolNeeds([{ type: 'analyse', analyse: { mode: 'dp4' } }])).toEqual([]);
     expect(planToolNeeds([{ type: 'analyse', analyse: { mode: 'arithmetic' } }])).toEqual([]);
   });

@@ -15,6 +15,7 @@
  */
 
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
+import { DESCRIPTORS, DESCRIPTOR_SET_ID } from '../shared/chemDescriptors.js';
 import { dp4PanelHtml } from '../shared/workflowReport.js';
 import { assignmentPanelHtml } from '../shared/spectrumAssignment.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
@@ -2775,11 +2776,98 @@ function multiwfnCard(analyse, multiwfn, provenance) {
  * replaced by the statement that the table is the result. A run that was
  * refused still prints its refusal, because the refusal *is* the outcome.
  */
-function analyseCard(analyse, dp4, multiwfn, provenance = null) {
+
+/**
+ * ADR 0003 §3.1 — the descriptor card.
+ *
+ * The table is the result: every value comes from the versioned set the record
+ * names, a missing one prints `not reported`, and the provenance card says which
+ * RDKit build and which interpreter produced it. These are cheminformatics
+ * numbers, never a calculated property.
+ */
+function chemCard(analyse) {
+  const descriptors = isObject(analyse?.descriptors) ? analyse.descriptors : {};
+  const origin = isObject(analyse?.origin) ? analyse.origin : {};
+  const cache = isObject(analyse?.cache) ? analyse.cache : {};
+  const rows = DESCRIPTORS.map((definition) => {
+    const raw = descriptors[definition.key];
+    const missing = raw === null || raw === undefined || raw === '';
+    const shown = missing ? missingHtml()
+      : esc(definition.kind === 'text' ? String(raw) : numberText(raw, definition.kind === 'count' ? 0 : 3));
+    return `<tr data-role="chem-descriptor" data-key="${esc(definition.key)}">`
+      + `<td>${esc(definition.label)}</td><td class="num">${shown}</td>`
+      + `<td>${esc(definition.unit || '—')}</td></tr>`;
+  }).join('');
+  const provenanceRows = kv([
+    fieldValue('Program', esc(text(origin.program) || 'RDKit'), 'chem-program'),
+    fieldValue('Version', esc(text(origin.version) || MISSING_TEXT), 'chem-version'),
+    fieldValue('Set', esc(text(analyse?.descriptorSet) || DESCRIPTOR_SET_ID), 'chem-set'),
+    fieldValue('Operation', esc(text(origin.op) || 'descriptors'), 'chem-op'),
+    fieldValue('Cache', cache.hit === true ? 'hit — computed earlier in this run' : 'miss — computed now', 'chem-cache'),
+    fieldValue('Input SHA-256', origin.sourceSha256 ? `<code>${esc(String(origin.sourceSha256))}</code>` : missingHtml(), 'chem-source-sha'),
+  ]);
+  const status = text(analyse?.status) || 'computed';
+  if (status !== 'computed') {
+    return card(`Descriptors · ${DESCRIPTOR_SET_ID}`,
+      `<p class="warn" data-role="chem-refusal">${esc(text(analyse?.notComputed) || 'not computed')}</p>`);
+  }
+  return '<div class="results-stack">'
+    + card(`Descriptors · ${DESCRIPTOR_SET_ID}`,
+      `<table class="results-table" data-role="chem-descriptors"><thead><tr><th>Descriptor</th>`
+      + '<th class="num">Value</th><th>Unit</th></tr></thead>'
+      + `<tbody>${rows}</tbody></table>`
+      + '<p class="results-note">Cheminformatics descriptors (2D/topological unless stated), not calculated properties.</p>')
+    + card('Chemistry provenance', provenanceRows)
+    + '</div>';
+}
+
+/**
+ * ADR 0003 §3.8 — the similarity card.
+ *
+ * The matrix is the result: every cell is printed, so a cluster can be checked
+ * rather than trusted. The MCS says when its search timed out; the caption
+ * names the fingerprint and the cutoff.
+ */
+function similarityCard(similarity, analyse = {}) {
+  const molecules = Array.isArray(similarity?.molecules) ? similarity.molecules : [];
+  const matrix = Array.isArray(similarity?.matrix) ? similarity.matrix : [];
+  const clusters = Array.isArray(similarity?.clusters) ? similarity.clusters : [];
+  if (molecules.length === 0 || matrix.length !== molecules.length) {
+    return card('Similarity', `<p class="warn" data-role="similarity-refusal">${esc(text(analyse?.notComputed) || 'not computed')}</p>`);
+  }
+  const head = '<tr><th>Molecule</th>' + molecules.map((molecule) => `<th class="num">${esc(text(molecule.label) || text(molecule.id))}</th>`).join('') + '</tr>';
+  const body = matrix.map((row, i) => '<tr data-role="similarity-row">'
+    + `<td>${esc(text(molecules[i]?.label) || text(molecules[i]?.id))}</td>`
+    + row.map((value) => `<td class="num">${esc(numberText(value, 2))}</td>`).join('')
+    + '</tr>').join('');
+  const clusterText = clusters.map((cluster) => {
+    const names = (cluster.members || []).map((index) => text(molecules[index]?.label) || text(molecules[index]?.id)).filter(Boolean);
+    return `${text(cluster.id) || 'cluster'} (${names.length}): ${names.join(', ')}`;
+  }).join('\n') || 'no clusters at this cutoff';
+  const mcs = similarity.mcs && typeof similarity.mcs === 'object' ? similarity.mcs : null;
+  return '<div class="results-stack">'
+    + card('Similarity matrix',
+      `<table class="results-table" data-role="similarity-matrix"><thead>${head}</thead><tbody>${body}</tbody></table>`
+      + `<p class="results-note">${esc(text(analyse?.options?.fingerprint) || 'morgan')} fingerprint`
+      + `${analyse?.options?.nBits ? ` · ${esc(String(analyse.options.nBits))} bits` : ''}`
+      + ` · Tanimoto · clusters at ${esc(String(analyse?.options?.clusterCutoff ?? '?'))}.</p>`)
+    + card('Clusters', `<pre class="results-pre" data-role="similarity-clusters">${esc(clusterText)}</pre>`)
+    + (mcs ? card('Maximum common substructure',
+      `<code data-role="similarity-mcs">${esc(text(mcs.smarts) || 'not reported')}</code>`
+      + `<p class="results-note">${esc(String(mcs.atoms ?? '?'))} atoms, ${esc(String(mcs.bonds ?? '?'))} bonds`
+      + `${mcs.timedOut ? ' · the search timed out, so this is not necessarily the largest common substructure' : ''}.</p>`) : '')
+    + '</div>';
+}
+
+function analyseCard(analyse, dp4, multiwfn, provenance = null, similarity = null) {
   // Issue 270: a Multiwfn block's record is not a derived quantity and has no
   // expression; it gets its own card with the normalised analysis and the
   // user-installed program's provenance.
   if (analyse?.mode === 'multiwfn') return multiwfnCard(analyse, multiwfn, provenance || analyse?.provenance || null);
+  // ADR 0003 §3.1: a descriptors block's result is a table, not a value.
+  if (analyse?.mode === 'chem') return chemCard(analyse);
+  // ADR 0003 §3.8: a similarity block's result is a matrix, not a value.
+  if (analyse?.mode === 'similarity') return similarityCard(similarity, analyse);
   const inputs = Array.isArray(analyse?.inputs) ? analyse.inputs : [];
   const value = finite(analyse?.value);
   const unit = text(analyse?.unit);
@@ -2823,7 +2911,7 @@ function analyseCard(analyse, dp4, multiwfn, provenance = null) {
 export function resultsPanelHtml(record, options = {}) {
   if (!isObject(record)) return emptyStateHtml();
   // Issue 175: an analyse block's record carries `analyse` and no `parsed` block.
-  if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4, record.multiwfn, record.provenance);
+  if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4, record.multiwfn, record.provenance, record.similarity);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
   const flags = runFlagsFor(record);
@@ -2982,6 +3070,56 @@ function isQueueRunning(doc) {
  * Clicking a row in "Recent runs" or the workflow queue loads that run's
  * `run.json` through `desktop.getRunRecords([id])` and renders it.
  */
+/**
+ * ADR 0003 §3.7: one 2D figure for the results panel.
+ *
+ * The SVG is produced and validated in main. A missing sidecar or a refusal is
+ * printed as a sentence — never an empty frame that could be read as a drawing.
+ */
+async function mountStructureCard({ container, record, desktop, doc }) {
+  if (!desktop?.depictChemistry || !isObject(record) || isObject(record.analyse)) return;
+  const parsed = isObject(record.parsed) ? record.parsed : {};
+  const atoms = parsed.finalGeometry?.atoms
+    || parsed.geometry?.initial?.atoms
+    || parsed.geometry?.atoms
+    || (Array.isArray(parsed.coords) ? parsed.coords : null);
+  if (!Array.isArray(atoms) || atoms.length === 0 || atoms.length > 1000) return;
+  if (!atoms.every((atom) => typeof atom?.element === 'string'
+    && Number.isFinite(Number(atom.x)) && Number.isFinite(Number(atom.y)) && Number.isFinite(Number(atom.z)))) {
+    return;
+  }
+  const slot = doc.createElement('div');
+  slot.className = 'card wide';
+  slot.dataset.structureCard = 'true';
+  slot.innerHTML = '<h3>Structure</h3><div class="structure-slot"><span class="sub">Drawing…</span></div>';
+  container.append(slot);
+  let answer = null;
+  try {
+    answer = await desktop.depictChemistry({
+      molecule: {
+        title: text(record.title),
+        charge: Number.isInteger(parsed.charge) ? parsed.charge : 0,
+        multiplicity: Number.isInteger(parsed.multiplicity) ? parsed.multiplicity : 1,
+        atoms,
+      },
+      options: {
+        width: 360,
+        height: 260,
+        legend: [text(record.title), text(parsed.formula) || text(record.formula)].filter(Boolean).join(' · '),
+      },
+    });
+  } catch (error) {
+    answer = { ok: false, error: { code: 'op-failed', message: error?.message || String(error) } };
+  }
+  const body = slot.querySelector('.structure-slot');
+  if (!body) return;
+  if (!answer?.ok) {
+    body.innerHTML = `<span class="sub">No depiction: ${esc(answer?.error?.message || 'the chemistry sidecar refused')}</span>`;
+    return;
+  }
+  body.innerHTML = `<figure class="structure">${answer.svg}<figcaption>${esc(answer.legend || 'Structure')}</figcaption></figure>`;
+}
+
 export function installResultsView({
   desktop = globalThis.window?.desktop ?? null,
   doc = globalThis.document,
@@ -3081,6 +3219,9 @@ export function installResultsView({
     mountCompareBar(record);
     mountThermoEnsemble();
     mountSuperposition({ container, currentRecord: record, desktop, doc });
+    // ADR 0003 §3.7: draw the structure beside its numbers. The figure is
+    // fetched after the panel paints, so a slow sidecar cannot delay the record.
+    void mountStructureCard({ container, record, desktop, doc });
     // The wavefunction viewport evaluates the basis this record carries (or a
     // cube the user opens) into a slice or an isosurface. It mounts last so it
     // can append its own wide card after the generated ones.

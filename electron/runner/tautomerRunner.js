@@ -1,26 +1,16 @@
-import { spawn } from 'node:child_process';
-import { terminateTree, treeSpawnOptions } from './processTree.js';
-
-const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+import { SidecarRunner, SidecarRunError } from './sidecarRunner.js';
 
 /**
- * Issue #226 — spawn the RDKit tautomer-enumeration sidecar.
+ * Issue #226 — the RDKit tautomer-enumeration sidecar.
  *
- * Contract: the process is called with no arguments (or with one script path,
- * when the executable is an interpreter) and reads one JSON object from stdin.
- * It writes one JSON object to stdout: either `{ ok: true, candidates: [...] }`
- * or `{ ok: false, error: { code, message } }`. Nothing is parsed from a log,
- * because an enumerator has no canonical log.
- *
- * A refusal is returned, not thrown: `normalizeTautomerResponse()` turns it
- * into a `TautomerEnumerationError` carrying the sidecar's code, so the queue
- * can record *why* the block refused instead of an empty ensemble.
+ * Kept as a thin caller of `SidecarRunner` (ADR 0003 §2.1): the spawn contract,
+ * the stdin/stdout rule, the wall clock and the process-tree teardown live in
+ * one place, and this class only preserves the tautomer messages the queue and
+ * its tests already rely on.
  */
 export class TautomerRunner {
   constructor() {
-    this.child = null;
-    this.cancelled = false;
-    this.timedOut = false;
+    this.runner = new SidecarRunner({ label: 'tautomer enumerator' });
   }
 
   async enumerate({
@@ -33,86 +23,23 @@ export class TautomerRunner {
   }) {
     if (!executable) throw new Error('No tautomer sidecar is configured; set the RDKit sidecar path in the run console.');
     if (!request || typeof request !== 'object') throw new Error('The tautomer request is missing.');
-    const args = script ? [String(script)] : [];
-    this.cancelled = false;
-    this.timedOut = false;
-    let text = '';
-    let stderr = '';
-    let truncated = false;
-    const child = spawn(String(executable), args, treeSpawnOptions({
-      cwd: cwd || undefined,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }));
-    this.child = child;
-    const capture = (stream) => (chunk) => {
-      const chunkText = chunk.toString('utf8');
-      if (stream === 'stderr') stderr += chunkText;
-      if (text.length < MAX_OUTPUT_BYTES) {
-        if (stream === 'stdout') {
-          text += chunkText;
-          if (text.length >= MAX_OUTPUT_BYTES) truncated = true;
-        }
-      }
-      // stdout *is* the protocol: a 20 kB JSON answer is not progress, and
-      // echoing it into the run log buries the one line that matters. stderr is
-      // where a sidecar's own diagnostics belong, so only that is forwarded.
-      if (stream === 'stderr') onOutput({ stream, text: chunkText });
-    };
-    child.stdout.on('data', capture('stdout'));
-    child.stderr.on('data', capture('stderr'));
-    child.stdin.on('error', () => {});
-    child.stdin.end(JSON.stringify(request));
-
-    let timeout = null;
-    if (timeoutMs > 0) {
-      timeout = setTimeout(() => {
-        this.timedOut = true;
-        this.cancel();
-      }, timeoutMs);
-    }
-    const result = await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (code, signal) => resolve({
-        exitCode: code,
-        signal,
-        cancelled: this.cancelled,
-        timedOut: this.timedOut,
-        truncated,
-        text,
-        stderr,
-      }));
-    }).finally(() => {
-      if (timeout) clearTimeout(timeout);
-      this.child = null;
-    });
-    if (result.timedOut) throw new Error('The tautomer enumerator was stopped by its wall-clock limit.');
-    if (result.cancelled) throw new Error('The tautomer enumeration was cancelled.');
-
-    // The sidecar writes exactly one JSON object on stdout, on success and on
-    // refusal alike; keep the stderr tail only for the case where it wrote
-    // nothing parseable.
-    const line = result.text.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean).pop() || '';
-    let parsed = null;
     try {
-      parsed = JSON.parse(line);
-    } catch {
-      parsed = null;
+      return await this.runner.run({ executable, script, request, timeoutMs, cwd, onOutput });
+    } catch (error) {
+      if (!(error instanceof SidecarRunError)) throw error;
+      if (error.code === 'timeout') throw new Error('The tautomer enumerator was stopped by its wall-clock limit.');
+      if (error.code === 'cancelled') throw new Error('The tautomer enumeration was cancelled.');
+      if (error.code === 'exit') {
+        throw new Error(`The tautomer enumerator exited with code ${error.exitCode}: ${error.detail || 'no message'}`);
+      }
+      if (error.code === 'no-json') {
+        throw new Error(`The tautomer enumerator did not return JSON: ${error.detail || 'empty output'}`);
+      }
+      throw error;
     }
-    if (parsed && typeof parsed === 'object') return parsed;
-    if (Number(result.exitCode) !== 0) {
-      const detail = lastLine(result.stderr) || lastLine(result.text) || 'no message';
-      throw new Error(`The tautomer enumerator exited with code ${result.exitCode}: ${detail}`);
-    }
-    throw new Error(`The tautomer enumerator did not return JSON: ${line.slice(0, 200) || 'empty output'}`);
   }
 
   cancel() {
-    this.cancelled = true;
-    if (this.child) terminateTree(this.child);
+    this.runner.cancel();
   }
-}
-
-function lastLine(text) {
-  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  return lines[lines.length - 1] || '';
 }

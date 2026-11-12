@@ -124,7 +124,7 @@ import {
   buildPyscfInput,
 } from '../shared/engines/pyscf.js';
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
-import { prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
+import { PREPARE_KINDS, prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
 import { EXPLICIT_SOLVENTS } from '../shared/explicitSolvation.js';
 import {
   describeFrequencyScale,
@@ -3118,6 +3118,12 @@ function calcInspector(node) {
     inputField('Min |ν| (cm⁻¹)', 'minMagnitude', gates.minMagnitude ?? '', { type: 'number', min: 0, step: 1 }),
     switchRow('Thermochemistry', 'requires a frequency output', 'thermo', gates.thermo, { gate: true }),
     switchRow('Post-HF final energy', 'requires a final energy record', 'finalEnergy', gates.finalEnergy, { gate: true }),
+    // ADR 0003 §3.6: post-run identity gate. Warn is the default: a heuristic
+    // that can be wrong must not destroy a finished calculation.
+    selectField('Structure integrity', 'integrity', [
+      ['warn', 'Warn on any change'],
+      ['fail', 'Refuse on composition/connectivity change'],
+    ], s.integrity || 'warn', true),
   ].join(''));
 
   // Issue #25: every validity check can be switched off per block. The schema
@@ -3248,6 +3254,11 @@ function computePreviewOf(node) {
       // Issue 270: a Multiwfn block has no value to preview. The inspector
       // shows the pinned script it will run instead of pretending to compute.
       return { error: null, mode: 'multiwfn', result: null };
+    }
+    if (context.mode === 'chem') {
+      // ADR 0003 §3.1: descriptors need the sidecar, so the inspector preview
+      // states the plan rather than inventing a table from the canvas.
+      return { error: null, mode: 'chem', result: null };
     }
     if (context.mode === 'dp4') {
       // Issue 165: the preview reads the same candidate rows the plan does. It
@@ -3497,7 +3508,11 @@ function computeInspector(node) {
     ? node.analyse : { expression: '', inputs: [] };
   const mode = definition.mode === 'dp4'
     ? 'dp4'
-    : (definition.mode === 'multiwfn' ? 'multiwfn' : 'expression');
+    : (definition.mode === 'multiwfn'
+      ? 'multiwfn'
+      : (definition.mode === 'chem' ? 'chem' : (definition.mode === 'similarity' ? 'similarity' : 'expression')));
+  const similarity = mode === 'similarity' && definition.similarity && typeof definition.similarity === 'object'
+    ? definition.similarity : {};
   const dp4 = mode === 'dp4' ? dp4DefinitionOf(node) : null;
   const multiwfn = mode === 'multiwfn' ? multiwfnDefinitionOf(node) : null;
   const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
@@ -3505,10 +3520,13 @@ function computeInspector(node) {
     ? inputs.map((input, index) => computeInputRow(input, index, upstream)).join('')
     : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
   const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
-  const eyebrow = mode === 'dp4' ? 'Derived · DP4+' : (mode === 'multiwfn' ? 'Sidecar · Multiwfn' : 'Derived · analyse');
+  const eyebrow = mode === 'dp4' ? 'Derived · DP4+'
+    : (mode === 'multiwfn' ? 'Sidecar · Multiwfn'
+      : (mode === 'chem' ? 'Sidecar · RDKit' : (mode === 'similarity' ? 'Sidecar · similarity' : 'Derived · analyse')));
   const subtitle = mode === 'dp4'
     ? 'candidate comparison'
-    : (mode === 'multiwfn' ? 'wavefunction analysis' : 'derived quantity');
+    : (mode === 'multiwfn' ? 'wavefunction analysis'
+      : (mode === 'chem' ? 'descriptor set' : (mode === 'similarity' ? 'dataset matrix' : 'derived quantity')));
   return `${inspectorHead(eyebrow, node.title, `${upstream.length} upstream · ${subtitle}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · ${mode === 'multiwfn' ? 'ran by the user-installed Multiwfn binary' : 'evaluated from upstream records'}</span></div>
@@ -3518,9 +3536,25 @@ function computeInspector(node) {
         <option value="expression"${mode === 'expression' ? ' selected' : ''}>Arithmetic expression over upstream fields</option>
         <option value="dp4"${mode === 'dp4' ? ' selected' : ''}>DP4+ probabilities over candidate structures</option>
         <option value="multiwfn"${mode === 'multiwfn' ? ' selected' : ''}>Multiwfn analysis of a wavefunction</option>
+        <option value="chem"${mode === 'chem' ? ' selected' : ''}>Descriptors for each record's molecule (RDKit)</option>
+        <option value="similarity"${mode === 'similarity' ? ' selected' : ''}>Similarity matrix over the wired records (RDKit)</option>
       </select></div>`,
     ].join(''))}
-    ${mode === 'multiwfn' ? multiwfnInspectorBody(multiwfn, upstream, node) : mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
+    ${mode === 'similarity' ? group('Similarity', 'fingerprints, clusters, scaffolds', true, [
+      `<div class="field"><label>Fingerprint</label><select class="select" data-similarity-field="fingerprint">
+        <option value="morgan"${(similarity.fingerprint || 'morgan') === 'morgan' ? ' selected' : ''}>Morgan (ECFP-like)</option>
+        <option value="rdkit"${similarity.fingerprint === 'rdkit' ? ' selected' : ''}>RDKit</option>
+        <option value="maccs"${similarity.fingerprint === 'maccs' ? ' selected' : ''}>MACCS keys</option>
+      </select></div>`,
+      `<div class="field"><label>Radius</label><input class="input" type="number" min="1" max="4" data-similarity-field="radius" value="${esc(similarity.radius ?? 2)}"></div>`,
+      `<div class="field"><label>Bits</label><input class="input" type="number" min="512" max="8192" step="512" data-similarity-field="nBits" value="${esc(similarity.nBits ?? 2048)}"></div>`,
+      `<div class="field"><label>Cluster cutoff</label><input class="input" type="number" min="0" max="1" step="0.05" data-similarity-field="clusterCutoff" value="${esc(similarity.clusterCutoff ?? 0.6)}"></div>`,
+      `<div class="field"><label>MCS timeout / s</label><input class="input" type="number" min="1" max="60" data-similarity-field="mcsTimeoutSeconds" value="${esc(similarity.mcsTimeoutSeconds ?? 10)}"></div>`,
+      `<div class="field"><label>Max records</label><input class="input" type="number" min="2" max="200" data-similarity-field="maxRecords" value="${esc(similarity.maxRecords ?? 200)}"></div>`,
+      `<div class="field full"><span class="inspector-note">Wire at least two blocks. One matrix is computed for the whole set; a record with no geometry refuses the matrix rather than comparing a partial set. Tanimoto is the only metric in this build.</span></div>`,
+    ].join('')) : mode === 'chem' ? group('Descriptors', 'the versioned nodechem-1 set', true, [
+      `<div class="field full"><div class="inspector-note">One row per wired record or ensemble member. The chemistry sidecar must be chosen in the run console (or Settings → Tools). The set is versioned; a value it did not report stays empty, and a molecule RDKit cannot sanitise refuses the row.</div></div>`,
+    ].join('')) : mode === 'multiwfn' ? multiwfnInspectorBody(multiwfn, upstream, node) : mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
       `<div class="field full"><label>Expression</label><textarea class="textarea" rows="3" data-compute-field="expression" data-role="compute-expression" aria-label="Expression">${esc(definition.expression || '')}</textarea></div>`,
       `<div class="field full"><label>Preview</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
     ].join(''))}
@@ -3675,15 +3709,19 @@ function loopInspector(node) {
 function prepareInspector(node) {
   const s = node.settings || {};
   const output = node.output && typeof node.output === 'object' ? node.output : null;
-  const kind = s.kind === 'embed3d' ? 'embed3d' : (s.kind === 'solvate' ? 'solvate' : 'relax');
-  const converter = kind === 'embed3d' ? 'openbabel' : (s.converter === 'openbabel' ? 'openbabel' : 'uff');
+  const kind = PREPARE_KINDS.includes(s.kind) ? s.kind : 'relax';
+  const converter = kind === 'embed3d'
+    ? (s.converter === 'rdkit' ? 'rdkit' : 'openbabel')
+    : (kind === 'standardize' ? 'rdkit' : (s.converter === 'openbabel' ? 'openbabel' : 'uff'));
   const detail = output
     ? prepareSummaryLine(output)
     : (kind === 'embed3d' ? 'SMILES → one 3D structure'
-      : (kind === 'solvate' ? 'one structure → one explicit solvent cluster' : 'one structure → one relaxed structure'));
+      : (kind === 'solvate' ? 'one structure → one explicit solvent cluster'
+        : (kind === 'standardize' ? 'one structure → one cleaned structure' : 'one structure → one relaxed structure')));
   const methodLabel = kind === 'solvate'
     ? 'Deterministic placement, rigid templates, no relaxation'
-    : (kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app')));
+    : (kind === 'standardize' ? 'RDKit rdMolStandardize, deterministic cleanup'
+      : (kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app'))));
   return `${inspectorHead('Structure · prepare', node.title, detail)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">1 structure in, 1 out · no enumeration</span></div>
@@ -3692,6 +3730,7 @@ function prepareInspector(node) {
         <option value="relax"${kind === 'relax' ? ' selected' : ''}>Relax one structure</option>
         <option value="solvate"${kind === 'solvate' ? ' selected' : ''}>Add explicit solvent</option>
         <option value="embed3d"${kind === 'embed3d' ? ' selected' : ''}>Embed SMILES in 3D</option>
+        <option value="standardize"${kind === 'standardize' ? ' selected' : ''}>Standardise (RDKit cleanup)</option>
       </select></div>`,
       ...(kind === 'solvate' ? [
         `<div class="field"><label>Solvent</label><select class="select" data-prepare-field="solvent">${Object.values(EXPLICIT_SOLVENTS)
@@ -3699,11 +3738,21 @@ function prepareInspector(node) {
         `<div class="field"><label>Molecules</label><input class="input" type="number" min="1" max="64" data-prepare-field="solventCount" value="${esc(s.solventCount ?? 10)}"></div>`,
         `<div class="field"><label>Seed</label><input class="input" type="number" min="0" max="2147483647" data-prepare-field="seed" value="${esc(s.seed ?? 1)}"></div>`,
         `<div class="field"><label>Shell / Å</label><input class="input" type="number" min="1" max="20" step="0.1" data-prepare-field="shellAngstrom" value="${esc(s.shellAngstrom ?? 3.5)}"></div>`,
+      ] : kind === 'standardize' ? [
+        `<div class="field full"><label>Cleanup steps</label><div class="inspector-note">
+          Normalise functional groups, disconnect metals, drop counterions and pick the charge parent.
+          The answer records what changed: formula, atom count, fragments removed and the stereo audit.</div></div>`,
+        ...[['normalize', 'Normalise'], ['disconnectMetals', 'Disconnect metals'],
+          ['removeFragments', 'Remove fragments'], ['chargeParent', 'Charge parent']].map(([key, label]) =>
+          `<label class="field checkbox"><input type="checkbox" data-prepare-field="${key}"${s[key] !== false ? ' checked' : ''}> ${label}</label>`),
       ] : [
-        `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
+        `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter">
+          ${kind === 'embed3d' ? `
+          <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel, --gen3d</option>
+          <option value="rdkit"${converter === 'rdkit' ? ' selected' : ''}>RDKit, ETKDGv4</option>` : `
           <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
           <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel (external)</option>
-          <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>
+          <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>`}
         </select></div>`,
         ...(kind === 'embed3d' ? [
           `<div class="field full"><label>SMILES</label><input class="input" data-prepare-field="smiles" value="${esc(s.smiles || '')}" placeholder="CCO" spellcheck="false" autocomplete="off"></div>`,
@@ -3816,7 +3865,9 @@ function conformersInspector(node) {
           ? 'Run the block: the UFF search runs here and needs no external binary.'
           : (s.generator === 'obabel'
             ? 'Run the block with an Open Babel executable configured in the run console.'
-            : 'Run the block with a CREST executable configured.')))}</div>`;
+            : (s.generator === 'rdkit'
+              ? 'Run the block with the chemistry sidecar configured; ETKDGv4 and the force field run in RDKit.'
+              : 'Run the block with a CREST executable configured.'))))}</div>`;
 
   return `${inspectorHead(tautomersBlock ? 'Generate · tautomers' : 'Generate · conformers', node.title, summaryLine)}
   <div class="inspector-scroll">
@@ -3835,12 +3886,18 @@ function conformersInspector(node) {
         ? 'wired ensemble input'
         : (s.generator === 'crest'
           ? 'CREST'
-          : (s.generator === 'uff' ? 'UFF, in-app' : 'Open Babel, external'))), true, [
+          : (s.generator === 'uff' ? 'UFF, in-app'
+            : (s.generator === 'rdkit' ? 'RDKit, external (force field)' : 'Open Babel, external')))), true, [
       `<div class="field full"><label>Produces</label><select class="select" data-conformer-field="produces">
         <option value="conformers"${!tautomersBlock ? ' selected' : ''}>Conformers — geometries of one molecule</option>
         <option value="tautomers"${tautomersBlock ? ' selected' : ''}>Tautomers — distinct molecules of one formula</option>
+        <option value="stereoisomers"${s.produces === 'stereoisomers' ? ' selected' : ''}>Stereoisomers — distinct configurations of one molecule</option>
       </select></div>`,
-      ...(tautomersBlock ? [
+      ...(s.produces === 'stereoisomers' ? [
+        `<div class="field full"><span class="inspector-note" data-conformer-stereo-note>Stereoisomer candidates are distinct molecules, not conformers: no energy window, no RMSD prune and no Boltzmann population. Each candidate is planned as its own calculation and compared at that level. Only the candidate identical to the input keeps the input coordinates; every other candidate is re-embedded, and each member records which happened.</span></div>`,
+        `<div class="field"><label>Max candidates</label><input class="input" type="number" min="1" max="128" data-conformer-field="maxConformers" value="${esc(s.maxConformers ?? 16)}"></div>`,
+        `<div class="field"><label>Seed</label><input class="input" type="number" min="0" max="2147483647" data-conformer-field="seed" value="${esc(s.seed ?? 1)}"></div>`,
+      ] : tautomersBlock ? [
         `<div class="field full"><span class="inspector-note" data-conformer-tautomer-note>Tautomer enumeration is a set of molecules, not geometries: no energy window, no RMSD prune and no Boltzmann population. Each candidate is planned as its own calculation, and the report shows the energy spread across them. pH-dependent protonation (Epik, Dimorphite-DL) is out of scope; charge and multiplicity are taken as given.</span></div>`,
         `<div class="field"><label>Ruleset</label><select class="select" data-conformer-field="tautomerRuleset">
           <option value="rdkit-default"${(s.tautomerRuleset || 'rdkit-default') === 'rdkit-default' ? ' selected' : ''}>rdkit-default (RDKit TautomerEnumerator)</option>
@@ -3870,6 +3927,7 @@ function conformersInspector(node) {
           <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
           <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
           <option value="obabel"${s.generator === 'obabel' ? ' selected' : ''}>Open Babel (external, MMFF94)</option>
+          <option value="rdkit"${s.generator === 'rdkit' ? ' selected' : ''}>RDKit (external, ETKDGv4 + MMFF94/UFF)</option>
         </select></div>`,
         ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
             <option value="gfn2"${s.method === 'gfn2' ? ' selected' : ''}>GFN2-xTB</option>
@@ -3885,6 +3943,18 @@ function conformersInspector(node) {
           </select></div>`,
           `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
           `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on the chosen force field, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name, while UFF is parameterised across the periodic table. Open Babel 3.2.x crashes in its conformer search (--conformer); the queue refuses that series by version before spawning — install 3.1.x or use the in-app UFF search.</span></div>`,
+        ] : []),
+        ...(s.generator === 'rdkit' ? [
+          `<div class="field"><label>Force field</label><select class="select" data-conformer-field="forceField">
+            <option value="MMFF94"${s.forceField === undefined || s.forceField === 'MMFF94' ? ' selected' : ''}>MMFF94</option>
+            <option value="UFF"${s.forceField === 'UFF' ? ' selected' : ''}>UFF</option>
+          </select></div>`,
+          `<div class="field"><label>Embedded geometries</label><input class="input" type="number" min="1" max="200" data-conformer-field="nconf" value="${esc(s.nconf ?? 50)}"></div>`,
+          `<div class="field"><label>Seed</label><input class="input" type="number" min="0" max="2147483647" data-conformer-field="seed" value="${esc(s.seed ?? 1)}"></div>`,
+          `<div class="field"><label>ETKDG prune / Å</label><input class="input" type="number" min="0" max="5" step="0.1" data-conformer-field="pruneRms" value="${esc(s.pruneRms ?? 0.5)}"></div>`,
+          `<div class="field"><label>Heavy-atom cap</label><input class="input" type="number" min="1" max="100" data-conformer-field="maxHeavyAtoms" value="${esc(s.maxHeavyAtoms ?? 60)}"></div>`,
+          `<div class="field"><label>Threads</label><input class="input" type="number" min="1" max="8" data-conformer-field="threads" value="${esc(s.threads ?? 1)}"></div>`,
+          `<div class="field full"><span class="inspector-note" data-conformer-rdkit-note>ETKDGv4 embedding followed by an MMFF94 (or UFF) optimisation in RDKit, run by the chemistry sidecar. This is a force-field search, not CREST/xTB and not a QM result; energies are kcal/mol. Above the heavy-atom cap the block refuses with <code>size-refused</code> rather than starting an open-ended search. The energy window, RMSD prune and retention cap below are applied by the app, not the sidecar.</span></div>`,
         ] : []),
         ...(s.generator === 'uff' ? [
           `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
@@ -3910,8 +3980,8 @@ function conformersInspector(node) {
       // Issue #80: one task per retained member instead of one chosen geometry.
       // Issue 226: a tautomer block defaults to on, because one candidate's run
       // says nothing about the other molecules in the set.
-      switchRow('Fan out the ensemble', tautomersBlock
-        ? 'one task per tautomer candidate downstream (recommended)'
+      switchRow('Fan out the ensemble', tautomersBlock || s.produces === 'stereoisomers'
+        ? 'one task per candidate molecule downstream (recommended)'
         : 'one task per retained member downstream', 'fanOut', tautomersBlock ? s.fanOut !== false : s.fanOut === true, { attr: 'data-conformer-field="fanOut"' }),
     ].join(''))}
     <div class="inspector-actions-row">
@@ -6087,6 +6157,47 @@ async function refreshSettingsDetection() {
   }
 }
 
+/**
+ * ADR 0003 §2.1 — probe the chemistry interpreter from Settings.
+ *
+ * The answer is written into the probe row instead of re-rendering the modal:
+ * a re-render would rebuild the draft's inputs and steal focus from a path the
+ * user is still typing.
+ */
+async function probeChemSettings() {
+  const drawer = state.drawer;
+  if (drawer?.type !== 'app-settings') return;
+  const output = document.querySelector('[data-chem-probe-result]');
+  if (!desktop?.probeChemistry) {
+    if (output) output.textContent = 'Open the Electron app to probe a program.';
+    return;
+  }
+  if (output) output.textContent = 'Probing…';
+  let answer = null;
+  try {
+    answer = await desktop.probeChemistry({
+      executable: drawer.draft?.tools?.chem || '',
+      script: drawer.draft?.tools?.chemScript || '',
+    });
+  } catch (error) {
+    if (output) output.textContent = `Probe failed: ${error.message}`;
+    return;
+  }
+  if (!output) return;
+  if (!answer?.ok) {
+    const code = answer?.error?.code || 'chem-probe-failed';
+    output.textContent = `${code}: ${answer?.error?.message || 'the probe returned no answer'}`;
+    return;
+  }
+  const missing = Object.entries(answer.capabilities || {})
+    .filter(([, present]) => present !== true)
+    .map(([name]) => name);
+  const version = String(answer.version || 'unknown');
+  output.textContent = missing.length
+    ? `RDKit ${version} · missing capabilities: ${missing.join(', ')}`
+    : `RDKit ${version} · all probed capabilities present`;
+}
+
 function renderAppSettings() {
   const modal = $('#modal');
   const drawer = state.drawer;
@@ -6932,6 +7043,7 @@ const COMPANION_FIELDS = Object.freeze({
   scorer: { field: '#run-scorer', marker: '#run-scorer-detected', label: 'ML scorer' },
   multiwfn: { field: '#run-multiwfn', marker: '#run-multiwfn-detected', label: 'Multiwfn' },
   tautomer: { field: '#run-tautomer', marker: '#run-tautomer-detected', label: 'Tautomer sidecar' },
+  chem: { field: '#run-chem', marker: '#run-chem-detected', label: 'Chemistry sidecar' },
 });
 
 /** The platform main reports, falling back to the user agent before it lands. */
@@ -7887,6 +7999,9 @@ function readRunConfig() {
   // Issue 226: the tautomer sidecar is remembered like the other programs.
   if ($('#run-tautomer')) $('#run-tautomer').value = seed.tautomer;
   if ($('#run-tautomer-script')) $('#run-tautomer-script').value = seed.tautomerScript;
+  // ADR 0003: the chemistry sidecar is seeded the same way.
+  if ($('#run-chem')) $('#run-chem').value = seed.chem;
+  if ($('#run-chem-script')) $('#run-chem-script').value = seed.chemScript;
   if ($('#run-scratch')) $('#run-scratch').value = seed.scratch;
   if ($('#run-dry')) $('#run-dry').checked = seed.dryRun;
   const field = $('#run-exe');
@@ -7900,7 +8015,7 @@ function readRunConfig() {
   syncCompanionExecutables();
 }
 
-const RUN_TOOL_FIELDS = Object.freeze(['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'scratch']);
+const RUN_TOOL_FIELDS = Object.freeze(['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'chem', 'chemScript', 'scratch']);
 
 function saveRunConfig() {
   try {
@@ -7922,6 +8037,8 @@ function saveRunConfig() {
       multiwfn: $('#run-multiwfn')?.value.trim() || '',
       tautomer: $('#run-tautomer')?.value.trim() || '',
       tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
+      chem: $('#run-chem')?.value.trim() || '',
+      chemScript: $('#run-chem-script')?.value.trim() || '',
       scratch: $('#run-scratch')?.value.trim() || '',
     };
     const tools = localOverrides(toolValues, state.appSettings?.tools, RUN_TOOL_FIELDS);
@@ -7934,6 +8051,8 @@ function saveRunConfig() {
       multiwfnExecutable: tools.multiwfn || '',
       tautomerExecutable: tools.tautomer || '',
       tautomerScript: tools.tautomerScript || '',
+      chemExecutable: tools.chem || '',
+      chemScript: tools.chemScript || '',
       scratchDir: tools.scratch || '',
     };
     if (typeof state.appSettings?.runs?.dryRun !== 'boolean' || dry !== state.appSettings.runs.dryRun) {
@@ -8323,6 +8442,31 @@ async function preflightRun({ quiet = false } = {}) {
             label: 'Tautomer enumerator sidecar',
             ok: Boolean(tautomer),
             detail: tautomer || 'not chosen — tautomer enumeration needs RDKit; there is no in-app fallback',
+          },
+        ],
+      };
+    }
+    // ADR 0003: a chem analyse block is a sidecar job too, and a dry run does
+    // not spawn it, so the check is advisory on a dry run like the others.
+    let needsChem = false;
+    try {
+      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      needsChem = tasks.some((task) => task.type === 'analyse' && task.analyse?.mode === 'chem');
+    } catch {
+      // An unbuildable plan is reported by the queue's own error.
+    }
+    if (needsChem) {
+      const chem = $('#run-chem')?.value.trim() || '';
+      result = {
+        ...result,
+        ok: result.ok && Boolean(chem),
+        checks: [
+          ...(Array.isArray(result.checks) ? result.checks : []),
+          {
+            id: 'chem',
+            label: 'Chemistry sidecar',
+            ok: Boolean(chem),
+            detail: chem || 'not chosen — descriptors need RDKit; there is no in-app fallback',
           },
         ],
       };
@@ -8806,6 +8950,7 @@ function executableFixFor(reason, task = null) {
   if (/open babel|obabel/i.test(message)) return { field: '#run-obabel', label: 'Open Babel' };
   if (/scorer/i.test(message)) return { field: '#run-scorer', label: 'ML scorer' };
   if (/tautomer/i.test(message)) return { field: '#run-tautomer', label: 'tautomer sidecar' };
+  if (/descriptors|chemistry sidecar/i.test(message)) return { field: '#run-chem', label: 'chemistry sidecar' };
   return { field: '#run-exe', label: engineOrDefault(task?.engine).label };
 }
 
@@ -9093,6 +9238,8 @@ async function startWorkflowUnlocked() {
         // is an interpreter, the script it should run.
         tautomerExecutable: $('#run-tautomer')?.value.trim() || '',
         tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
+        chemExecutable: $('#run-chem')?.value.trim() || '',
+        chemScript: $('#run-chem-script')?.value.trim() || '',
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue
@@ -10811,6 +10958,7 @@ function handleAction(action, element) {
       }
       break;
     case 'settings-detect': refreshSettingsDetection(); break;
+    case 'chem-probe': probeChemSettings(); break;
     case 'settings-browse': browseSettingsPath(element.dataset.settingsBrowse); break;
     case 'settings-reset-console': dockRunConsole(); toast('Run console returned to the corner.'); break;
     case 'toggle-export-menu': toggleExportMenu(); break;
@@ -10906,6 +11054,7 @@ function handleAction(action, element) {
     case 'pick-scorer': pickCompanionTool('scorer'); break;
     case 'pick-multiwfn': pickCompanionTool('multiwfn'); break;
     case 'pick-tautomer': pickCompanionTool('tautomer'); break;
+    case 'pick-chem': pickCompanionTool('chem'); break;
     case 'pause-workflow': pauseWorkflow(); break;
     case 'export-workflow-report': exportWorkflowReportAction(); break;
     case 'resume-workflow': resumeWorkflow(); break;
@@ -11283,8 +11432,13 @@ function onDocumentChange(event) {
     if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
     const mode = target.value === 'dp4'
       ? 'dp4'
-      : (target.value === 'multiwfn' ? 'multiwfn' : 'expression');
-    if (mode === 'dp4') {
+      : (target.value === 'multiwfn'
+        ? 'multiwfn'
+        : (target.value === 'chem' ? 'chem' : (target.value === 'similarity' ? 'similarity' : 'expression')));
+    if (mode === 'similarity') {
+      node.analyse.mode = 'similarity';
+      node.analyse.similarity = node.analyse.similarity || {};
+    } else if (mode === 'dp4') {
       // Switching modes creates the DP4+ definition with no level chosen: a
       // block that quietly inherited the first bank level would be computing a
       // level the user never picked.
@@ -11292,6 +11446,11 @@ function onDocumentChange(event) {
       dp4DefinitionOf(node);
       // The arithmetic declaration is kept until the file is saved, so flipping
       // the mode back does not lose an expression the user typed.
+    } else if (mode === 'chem') {
+      // ADR 0003 §3.1: a descriptors block needs no expression and no inputs;
+      // it describes the molecules its upstream records carry.
+      node.analyse.mode = 'chem';
+      node.analyse.chem = { op: 'descriptors' };
     } else if (mode === 'multiwfn') {
       // Issue 270: a new Multiwfn definition defaults to QTAIM and the only
       // upstream block, if there is exactly one; nothing is chosen silently for
@@ -11302,6 +11461,29 @@ function onDocumentChange(event) {
       delete node.analyse.mode;
     }
     updateNodeCard(node.id);
+    renderInspector();
+    return;
+  }
+  if (target.dataset.similarityField) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'analyse') return;
+    if (!node.analyse || typeof node.analyse !== 'object') node.analyse = {};
+    if (!node.analyse.similarity || typeof node.analyse.similarity !== 'object') node.analyse.similarity = {};
+    const key = target.dataset.similarityField;
+    const bounds = {
+      radius: [1, 4], nBits: [512, 8192], clusterCutoff: [0, 1],
+      mcsTimeoutSeconds: [1, 60], maxRecords: [2, 200],
+    };
+    if (key === 'fingerprint') {
+      node.analyse.similarity.fingerprint = target.value;
+    } else if (bounds[key]) {
+      const value = Number(target.value);
+      if (!Number.isFinite(value)) return;
+      node.analyse.similarity[key] = clamp(value, bounds[key][0], bounds[key][1]);
+    }
+    refreshDirty();
+    renderGraph();
     renderInspector();
     return;
   }
@@ -11557,12 +11739,17 @@ function applyPrepareField(target) {
     if (!Number.isFinite(value)) return;
     node.settings[key] = key === 'shellAngstrom' ? clamp(value, bounds[0], bounds[1]) : Math.round(clamp(value, bounds[0], bounds[1]));
   } else if (key === 'kind') {
-    node.settings.kind = target.value === 'embed3d' ? 'embed3d' : (target.value === 'solvate' ? 'solvate' : 'relax');
+    node.settings.kind = PREPARE_KINDS.includes(target.value) ? target.value : 'relax';
     node.settings.converter = node.settings.kind === 'embed3d'
-      ? 'openbabel'
-      : (node.settings.kind === 'solvate' ? 'geometric' : 'uff');
-    if (node.settings.kind === 'solvate') node.settings.forceField = 'none';
-    node.kind = node.settings.kind === 'embed3d' ? '3D embed' : (node.settings.kind === 'solvate' ? 'Solvate' : 'Relax');
+      ? (node.settings.converter === 'rdkit' ? 'rdkit' : 'openbabel')
+      : (node.settings.kind === 'solvate' ? 'geometric' : (node.settings.kind === 'standardize' ? 'rdkit' : 'uff'));
+    if (node.settings.kind === 'solvate' || node.settings.kind === 'standardize') node.settings.forceField = 'none';
+    node.kind = node.settings.kind === 'embed3d' ? '3D embed'
+      : (node.settings.kind === 'solvate' ? 'Solvate' : (node.settings.kind === 'standardize' ? 'Standardise' : 'Relax'));
+    node.output = null;
+    node.state = 'ready';
+  } else if (['normalize', 'disconnectMetals', 'removeFragments', 'chargeParent'].includes(key)) {
+    node.settings[key] = Boolean(target.checked);
     node.output = null;
     node.state = 'ready';
   } else if (key === 'converter' || key === 'forceField' || key === 'smiles' || key === 'solvent') {
@@ -11674,6 +11861,8 @@ function applyConformerField(target) {
       temperature: [1, 1000], spreadThresholdKcal: [0, 50], charge: [-10, 10], multiplicity: [1, 10],
       // Issue 144: the in-app UFF route's grid resolution and trial cap.
       torsionStepDegrees: [15, 360], maxTrials: [1, 2000],
+      // ADR 0003 §3.4: the RDKit search's knobs; the schema bounds them again.
+      seed: [0, 0x7fffffff], pruneRms: [0, 5], maxHeavyAtoms: [1, 100], threads: [1, 8],
       // The Open Babel route's conformer count; the schema bounds it the same way.
       nconf: [1, 1000],
     }[key];

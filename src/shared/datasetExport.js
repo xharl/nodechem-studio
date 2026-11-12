@@ -85,10 +85,28 @@ export const DATASET_CSV_COLUMNS = Object.freeze([
   { key: 'derivedExpression', label: 'derived_expression' },
   { key: 'derivedInputs', label: 'derived_inputs' },
   { key: 'derivedNotComputed', label: 'derived_not_computed' },
+  // ADR 0003 §3.1: the curated `nodechem-1` descriptor columns. Appended so an
+  // existing spreadsheet template keeps its positions; a record without
+  // descriptors is an empty cell, never a zero.
+  { key: 'formula', label: 'formula' },
+  { key: 'exactMass', label: 'exact_mass_da' },
+  { key: 'molWeight', label: 'mol_weight_da' },
+  { key: 'logP', label: 'logp_crippen' },
+  { key: 'tpsa', label: 'tpsa_angstrom2' },
+  { key: 'hbd', label: 'hbd' },
+  { key: 'hba', label: 'hba' },
+  { key: 'rotatableBonds', label: 'rotatable_bonds' },
+  { key: 'ringCount', label: 'ring_count' },
+  { key: 'aromaticRingCount', label: 'aromatic_ring_count' },
+  { key: 'fsp3', label: 'fsp3' },
+  { key: 'qed', label: 'qed' },
+  { key: 'formalCharge', label: 'formal_charge' },
+  { key: 'inchiKey', label: 'inchi_key' },
+  { key: 'murckoScaffold', label: 'murcko_scaffold' },
 ]);
 
-/** Version 4 added the derived-quantity columns; existing keys are unchanged. */
-export const DATASET_SCHEMA_VERSION = 4;
+/** Version 5 added the ADR 0003 descriptor columns; existing keys are unchanged. */
+export const DATASET_SCHEMA_VERSION = 5;
 
 function text(value) {
   return value === null || value === undefined ? null : String(value);
@@ -131,6 +149,12 @@ export function runRow(record) {
   // ensemble it was expanded from. Neither block is invented here; absent
   // metadata stays an empty cell.
   const ladder = run.ladder && typeof run.ladder === 'object' ? run.ladder : {};
+  // ADR 0003 §3.1: a descriptors record carries the versioned `nodechem-1` set.
+  // Absent stays null, so a record without descriptors reads as an empty cell
+  // rather than a zero.
+  const descriptorsSource = (run.descriptors && typeof run.descriptors === 'object' ? run.descriptors : null)
+    || (parsed.descriptors && typeof parsed.descriptors === 'object' ? parsed.descriptors : {});
+  const descriptors = descriptorsSource;
   const ladderCbs = ladder.cbs && typeof ladder.cbs === 'object' ? ladder.cbs : {};
   const ensemble = run.ensemble && typeof run.ensemble === 'object' ? run.ensemble : {};
   // Issue 175: a derived record carries `analyse { expression, inputs, value,
@@ -216,6 +240,21 @@ export function runRow(record) {
     derivedExpression: text(analyse?.expression),
     derivedInputs,
     derivedNotComputed: refused,
+    formula: text(descriptors.formula),
+    exactMass: num(descriptors.exactMass),
+    molWeight: num(descriptors.molWeight),
+    logP: num(descriptors.logP),
+    tpsa: num(descriptors.tpsa),
+    hbd: integer(descriptors.hbd),
+    hba: integer(descriptors.hba),
+    rotatableBonds: integer(descriptors.rotatableBonds),
+    ringCount: integer(descriptors.ringCount),
+    aromaticRingCount: integer(descriptors.aromaticRingCount),
+    fsp3: num(descriptors.fsp3),
+    qed: num(descriptors.qed),
+    formalCharge: integer(descriptors.formalCharge),
+    inchiKey: text(descriptors.inchiKey),
+    murckoScaffold: text(descriptors.murckoScaffold),
   };
 }
 

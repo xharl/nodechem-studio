@@ -38,6 +38,8 @@ const GATE_FIELDS = Object.freeze([
   'gates.minMagnitude',
   'gates.thermo',
   'gates.finalEnergy',
+  // ADR 0003 §3.6: the post-run identity gate is a setting on every engine.
+  'gates.integrity',
 ]);
 
 /** Job types whose Gaussian input reads a ModRedundant section (#93). */

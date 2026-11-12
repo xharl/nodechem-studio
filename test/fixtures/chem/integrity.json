@@ -1,0 +1,104 @@
+{
+  "program": "RDKit",
+  "options": {
+    "policy": "warn"
+  },
+  "result": {
+    "before": {
+      "formula": "H2O",
+      "atomCount": 3,
+      "heavyAtomCount": 1,
+      "charge": 0,
+      "fragments": 1,
+      "smiles": "[H]O[H]",
+      "isomericSmiles": "[H]O[H]",
+      "inchiKey": "XLYOFNOQVPJJNP-UHFFFAOYSA-N",
+      "fixedHInchiKey": "XLYOFNOQVPJJNP-UHFFFAOYNA-N",
+      "tautomerHash": "[H]O[H]_0_0",
+      "connectivityHash": "***"
+    },
+    "after": {
+      "formula": "H2O",
+      "atomCount": 3,
+      "heavyAtomCount": 1,
+      "charge": 0,
+      "fragments": 1,
+      "smiles": "[H]O[H]",
+      "isomericSmiles": "[H]O[H]",
+      "inchiKey": "XLYOFNOQVPJJNP-UHFFFAOYSA-N",
+      "fixedHInchiKey": "XLYOFNOQVPJJNP-UHFFFAOYNA-N",
+      "tautomerHash": "[H]O[H]_0_0",
+      "connectivityHash": "***"
+    },
+    "status": "match",
+    "reason": null,
+    "comparisons": {
+      "composition": true,
+      "connectivity": true,
+      "tautomer": true,
+      "configuration": true
+    }
+  },
+  "version": "2026.9.1",
+  "protocol": "nodechem-chem/1",
+  "op": "integrity",
+  "ok": true,
+  "_provenance": {
+    "recordedWith": "/usr/local/bin/python3",
+    "rdkit": "2026.9.1",
+    "request": {
+      "protocol": "nodechem-chem/1",
+      "op": "integrity",
+      "molecule": {
+        "title": "water",
+        "charge": 0,
+        "multiplicity": 1,
+        "atoms": [
+          {
+            "element": "O",
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0
+          },
+          {
+            "element": "H",
+            "x": 0.96,
+            "y": 0.0,
+            "z": 0.0
+          },
+          {
+            "element": "H",
+            "x": -0.24,
+            "y": 0.93,
+            "z": 0.0
+          }
+        ]
+      },
+      "options": {
+        "policy": "warn",
+        "finalAtoms": [
+          {
+            "element": "O",
+            "x": 0.01,
+            "y": 0.0,
+            "z": 0.0
+          },
+          {
+            "element": "H",
+            "x": 0.97,
+            "y": 0.0,
+            "z": 0.0
+          },
+          {
+            "element": "H",
+            "x": -0.23,
+            "y": 0.93,
+            "z": 0.0
+          }
+        ]
+      }
+    },
+    "recordedAt": "2026-11-11",
+    "note": "Real RDKit answer; CI replays it through a fake sidecar."
+  }
+}

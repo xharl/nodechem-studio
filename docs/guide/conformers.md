@@ -31,10 +31,45 @@ project geometry.
 
 A **Prepare structure** block is the 1→1 stage: `relax` minimises one structure with the in-app UFF
 engine (or Open Babel MMFF94, or the AIMNet2 sidecar), `embed3d` turns a SMILES into one 3D
-structure with `obabel --gen3d`, and `solvate` adds a deterministic explicit solvent cluster around
-the current geometry. It never enumerates protonation states, tautomers or conformers — those are
+structure with `obabel --gen3d` (or, when the converter is RDKit, ETKDGv4 + MMFF94/UFF through the
+chemistry sidecar; Open Babel stays the default), `solvate` adds a deterministic explicit solvent cluster around
+the current geometry, and `standardize` cleans one structure with RDKit before anything computes
+on it. It never enumerates protonation states, tautomers or conformers — those are
 sets, and sets belong to Generate. A Calculate block wired from Prepare runs on its written
 `prepared.xyz`, not on the geometry the workflow was planned with.
+
+### Stereoisomer candidates
+
+`produces: "stereoisomers"` enumerates the configurations of one molecule with RDKit's
+`EnumerateStereoisomers`. The candidates are **distinct molecules**, not conformers: there is no energy
+window, no RMSD prune and no Boltzmann population, and each candidate is meant to run as its own
+calculation. Geometry policy is explicit because the enumerator copies the input conformer onto every
+candidate: only the candidate identical to the input keeps the input coordinates
+(`geometry.source: "input"`); every other candidate is re-embedded with ETKDGv4
+(`"etkdgv4"`) so an inverted centre is never labelled with the original geometry.
+
+### RDKit conformer search
+
+`generator: "rdkit"` runs ETKDGv4 embedding followed by an MMFF94 (or UFF) optimisation in the
+chemistry sidecar. It is a force-field search, not CREST/xTB and not a QM result: energies are
+kcal/mol and the record says so. The block takes the number of embedded geometries, the seed, the
+ETKDG RMSD prune, the force field, a heavy-atom cap (default 60, hard maximum 100) and a thread
+count (default 1). Above the cap the block refuses with `size-refused` — an open-ended search on a
+large flexible molecule is not offered. The sidecar returns every geometry; the app's shared
+curation applies the energy window, RMSD prune and retention cap, exactly as it does for CREST and
+Open Babel. MMFF94 has no parameters for some elements; the sidecar falls back to UFF and records
+that fallback in both the ensemble and its warnings.
+
+### Standardisation
+
+`standardize` is RDKit's `rdMolStandardize` cleanup: normalise functional groups, disconnect
+organometallic bonds, drop counterions and pick the charge parent. Each step is a switch, and the
+answer records exactly what ran. The record states the formula, atom count, charge and fragment
+count **before and after**, names every removed fragment, and carries a stereo audit: unassigned
+stereocentres and double bonds are listed before a calculation can run on the structure. A missing
+RDKit is `rdkit-missing`; a molecule that cannot be sanitised is refused, not silently passed
+through. When the cleanup removes atoms, the input conformer no longer matches and the sidecar says
+`geometry.source: "etkdgv3"` instead of pretending the coordinates survived.
 
 ### Explicit solvent clusters
 
@@ -164,8 +199,8 @@ block and the block changes accordingly:
 
 - **The enumerator is external.** `scripts/tautomer-enumerator.py` drives RDKit's
   `rdMolStandardize.TautomerEnumerator` (BSD-3; RDKit is not bundled and not installed by this app).
-  The installer does not embed the script: download it from the repository at the release tag, or use
-  a source checkout. Point the run console's **Tautomer sidecar** at a Python that has `rdkit` — or at
+  The installed build ships the script under `resources/scripts/`; a source checkout uses the
+  repository file. Point the run console's **Tautomer sidecar** at a Python that has `rdkit` — or at
   the interpreter with **Tautomer script** naming the file. The sidecar reads one JSON object on
   stdin (XYZ, charge, multiplicity, title, options) and writes one JSON object on stdout; the request
   is kept in the task folder as `request.json`, and the raw answer as `tautomers.json`.

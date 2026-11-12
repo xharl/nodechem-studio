@@ -446,9 +446,12 @@ describe('tautomer schema round-trip (#226)', () => {
     expect(scored.errors.some((error) => /not supported for a tautomer block/.test(error.message))).toBe(true);
   });
 
-  it('refuses an rdkit conformer search, which this build does not implement', () => {
+  it('accepts the RDKit conformer search with its documented defaults (ADR 0003 §3.4)', () => {
     const result = validateProject(projectWith({ produces: 'conformers', generator: 'rdkit' }));
-    expect(result.errors.some((error) => /only wired for tautomer enumeration/.test(error.message))).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.project.nodes[0].settings).toMatchObject({
+      generator: 'rdkit', nconf: 50, forceField: 'MMFF94', maxHeavyAtoms: 60, threads: 1, pruneRms: 0.5, seed: 1,
+    });
   });
 
   it('does not add a produces key to a conformer block', () => {

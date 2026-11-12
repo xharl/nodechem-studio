@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { rmrf } from './helpers/tempCleanup.js';
+import { readFileSync } from 'node:fs';
 import {
   defaultSettings,
   validateProject,
@@ -395,5 +396,171 @@ describe.skipIf(onWindows)('prepare with an ML scorer', () => {
     expect(record.converged).toBe(true);
     expect(record.energyKcal).toBeLessThan(1);
     expect(record.scorer.comparableWithQuantumChemistry).toBe(false);
+  });
+});
+
+/**
+ * ADR 0003 §3.2: `standardize` is a prepare kind that spawns the chemistry
+ * sidecar. The answer is replayed from a real RDKit recording; these tests hold
+ * the queue contract, the record and the refusal path.
+ */
+const standardizeFixture = JSON.parse(readFileSync(
+  new URL('./fixtures/chem/standardize.json', import.meta.url),
+  'utf8',
+));
+
+async function fakeStandardize(base, answer) {
+  const answerPath = path.join(base, 'standardize-answer.json');
+  await fsp.writeFile(answerPath, JSON.stringify(answer), 'utf8');
+  const spawnPath = path.join(base, 'standardize-spawns.log');
+  const script = path.join(base, 'fake-standardize.js');
+  await fsp.writeFile(script, [
+    "const fs = require('node:fs');",
+    'let request = "";',
+    'process.stdin.on("data", (chunk) => { request += chunk; });',
+    'process.stdin.on("end", () => {',
+    `  fs.appendFileSync(${JSON.stringify(spawnPath)}, "x\\n");`,
+    `  fs.writeFileSync(${JSON.stringify(path.join(base, 'standardize-request.json'))}, request);`,
+    `  process.stdout.write(fs.readFileSync(${JSON.stringify(answerPath)}, "utf8"));`,
+    '});',
+  ].join('\n'), 'utf8');
+  return { script, spawnPath };
+}
+
+const standardizeNode = (settings = {}, output = null) => prepareNode({
+  kind: 'standardize', converter: 'rdkit', forceField: 'none',
+  normalize: true, disconnectMetals: true, removeFragments: true, chargeParent: true,
+  ...settings,
+}, output);
+
+describe('standardise block (ADR 0003 §3.2)', () => {
+  it('accepts the kind, pins the rdkit converter and keeps every cleanup flag', () => {
+    const validated = validateProject(project([standardizeNode({ removeFragments: false })]));
+    expect(validated.ok).toBe(true);
+    const node = validated.project.nodes[0];
+    expect(node.kind).toBe('Standardise');
+    expect(node.settings.converter).toBe('rdkit');
+    expect(node.settings.removeFragments).toBe(false);
+    expect(node.settings.chargeParent).toBe(true);
+
+    const wrong = validateProject(project([prepareNode({ kind: 'standardize', converter: 'uff' })]));
+    expect(wrong.ok).toBe(false);
+    expect(wrong.errors.some((error) => /settings\.converter/.test(error.path))).toBe(true);
+  });
+
+  it('reloads a standardise record with its audit and removed fragments', () => {
+    const output = standardizeFixture.result;
+    const node = standardizeNode({}, {
+      kind: 'standardize', converter: 'rdkit', forceField: 'none',
+      energyKcal: null, converged: null, reason: 'standardize-completed', iterations: 0,
+      atomCount: output.atoms.length,
+      before: output.before, after: output.after,
+      fragmentsRemoved: output.fragmentsRemoved,
+      stereoAudit: output.stereoAudit, geometry: output.geometry, identity: output.identity,
+    });
+    const validated = validateProject(project([node]));
+    expect(validated.ok).toBe(true);
+    const saved = validated.project.nodes[0].output;
+    expect(saved.after.formula).toBe('C2H4O2');
+    expect(saved.fragmentsRemoved).toHaveLength(1);
+    expect(saved.fragmentsRemoved[0].formula).toBe('Na+');
+    expect(saved.geometry.source).toBe('etkdgv3');
+  });
+
+  it('writes prepared.xyz from the sidecar answer and records the cleanup', async () => {
+    const validated = validateProject(project([standardizeNode()]));
+    expect(validated.ok).toBe(true);
+    const plan = buildWorkflowPlan(validated.project);
+    const { base, queueManager } = await stack();
+    const sidecar = await fakeStandardize(base, standardizeFixture);
+    const started = await queueManager.start({
+      projectName: 'standardise',
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: {
+        dryRun: false, executable: null, crestExecutable: '', scorerExecutable: '',
+        chemExecutable: process.execPath, chemScript: sidecar.script, scratchDir: '',
+      },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+    const prep = done.tasks.find((entry) => entry.nodeId === 'prep');
+    expect(prep.error).toBeNull();
+    expect(prep.status).toBe('completed');
+    expect(prep.prepared.after.formula).toBe('C2H4O2');
+    expect(prep.summary).toContain('1 fragment(s) removed');
+    const xyz = await fsp.readFile(path.join(prep.runDir, 'prepared.xyz'), 'utf8');
+    expect(xyz.split('\n')[0]).toBe(String(standardizeFixture.result.atoms.length));
+    const request = JSON.parse(await fsp.readFile(path.join(base, 'standardize-request.json'), 'utf8'));
+    expect(request.op).toBe('standardize');
+    expect(request.molecule.atoms).toHaveLength(3);
+    expect(request.options.removeFragments).toBe(true);
+  });
+
+  it('refuses to start without a chemistry sidecar, naming the requirement', async () => {
+    const validated = validateProject(project([standardizeNode()]));
+    const plan = buildWorkflowPlan(validated.project);
+    const { queueManager } = await stack();
+    // The queue refuses before a task runs: a prepare block that needs RDKit
+    // must not start and then fail silently on an unrelated converter.
+    await expect(queueManager.start({
+      projectName: 'standardise without rdkit',
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: {
+        dryRun: false, executable: null, crestExecutable: '', scorerExecutable: '',
+        chemExecutable: '', chemScript: '', scratchDir: '',
+      },
+    })).rejects.toThrow(/chemistry sidecar/i);
+  });
+});
+
+/**
+ * ADR 0003 §3.3: RDKit is a second `embed3d` converter. Open Babel stays the
+ * default; a block that names RDKit records the embedding version and the force
+ * field that actually ran.
+ */
+const conformerFixture = JSON.parse(readFileSync(
+  new URL('./fixtures/chem/conformers.json', import.meta.url), 'utf8',
+));
+
+describe('embed3d through RDKit (ADR 0003 §3.3)', () => {
+  it('accepts the converter and keeps Open Babel as the default', () => {
+    const rdkit = validateProject(project([prepareNode({ kind: 'embed3d', converter: 'rdkit', smiles: 'CCO' })]));
+    expect(rdkit.ok).toBe(true);
+    expect(rdkit.project.nodes[0].settings.converter).toBe('rdkit');
+
+    const obabel = validateProject(project([prepareNode({ kind: 'embed3d', converter: 'openbabel', smiles: 'CCO' })]));
+    expect(obabel.ok).toBe(true);
+    expect(obabel.project.nodes[0].settings.converter).toBe('openbabel');
+  });
+
+  it('writes prepared.xyz from the embedded conformer', async () => {
+    const validated = validateProject(project([prepareNode({ kind: 'embed3d', converter: 'rdkit', smiles: 'CCO' })]));
+    const plan = buildWorkflowPlan(validated.project);
+    const { base, queueManager } = await stack();
+    const sidecar = await fakeStandardize(base, conformerFixture);
+    const started = await queueManager.start({
+      projectName: 'rdkit embed',
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: {
+        dryRun: false, executable: null, crestExecutable: '', scorerExecutable: '',
+        chemExecutable: process.execPath, chemScript: sidecar.script, scratchDir: '',
+      },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+    const prep = done.tasks.find((entry) => entry.nodeId === 'prep');
+    expect(prep.error).toBeNull();
+    expect(prep.status).toBe('completed');
+    expect(prep.prepared.converter).toBe('rdkit');
+    expect(prep.prepared.origin.method).toBe('ETKDGv4 + MMFF94');
+    const xyz = await fsp.readFile(path.join(prep.runDir, 'prepared.xyz'), 'utf8');
+    expect(xyz.split('\n')[0]).toBe(String(conformerFixture.result.conformers[0].atoms.length));
   });
 });

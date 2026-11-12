@@ -121,7 +121,7 @@ Type-specific payloads:
 | `merge` | `merge { policy, notes }` |
 | `input` | `input { datasetId, recordFilter { field, equals }, recordId?, series?, edits?, complex? }` — starts iteration (4.3); `series` makes it a homologous-series block (4.3.1), `edits` a derivative block (4.3.2), `complex` a combined system (4.3.4). An **ensemble** input is `input { kind: "ensemble", path, format: "xyz", energyUnit, energyMethod, origin { program, version, method }, sourceSha256? }` — it reads an external multi-XYZ at run time (ADR 0001, 4.3.3) |
 | `output` | `output { kind, path, include, bundle, manifest, notes }` — writes an artifact (4.4) |
-| `analyse` | `analyse { mode?, expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block. `mode` is `expression` (the default, and absent when never set) or `dp4`, the DP4+ probability comparison whose definition lives under `dp4` (issue 165), or `multiwfn`, a user-installed Multiwfn sidecar whose definition lives under `multiwfn` (`{ analysis, input: { runId? | nodeId? | path? }, grid?, isovalue? }`, issue 270) |
+| `analyse` | `analyse { mode?, expression, inputs[] }` — arithmetic over upstream results (issue 175); each input is `{ name, field, source, scope? }`, `field` a dataset-export column key, `source` an upstream block id (empty means the only one), `scope: "records"` reads every record of that block. `mode` is `expression` (the default, and absent when never set), `dp4` (the DP4+ probability comparison whose definition lives under `dp4`, issue 165), `multiwfn` (a user-installed Multiwfn sidecar whose definition lives under `multiwfn`, `{ analysis, input: { runId? | nodeId? | path? }, grid?, isovalue? }`, issue 270), `chem` (ADR 0003 descriptors, definition under `chem: { op: "descriptors", options? }`; one row per wired record), or `similarity` (ADR 0003 §3.8, options under `similarity: { fingerprint, radius, nBits, metric, clusterCutoff, mcsTimeoutSeconds, maxRecords }`; one matrix over every wired record) |
 | `note` | `note { text }` |
 
 `calculate.settings` accepts exactly these keys — anything else is dropped:
@@ -129,7 +129,7 @@ Type-specific payloads:
 `jobType`, `engine`, `method`, `basis`, `memory`, `memoryUnit`, `nproc`, `checkpoint`,
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
 `matrixElement`, `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
-`optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
+`optConvergence`, `forceConstants`, `stableOpt`, `integrity`, `tdStates`, `tdTriplets`, `tdRoot`,
 `emission`, `nto`, `ntoTransition`,
 `raman`, `vcd`, `roa`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
@@ -144,6 +144,10 @@ Raman and VCD panels, and the derived ZPE. The parsed values stay as printed,
 and an imported record is never scaled. `"auto"` uses a published factor only
 when the table has an entry for the block's method and basis; an unknown pair is
 reported unscaled with a warning.
+
+`integrity` is `warn` (the default, and absent when never set) or `fail`. It turns on the post-run
+structure-integrity gate: warn records every change; fail refuses only `composition-changed` and
+`connectivity-changed` records. Stereo and tautomer changes remain warnings.
 
 `pnoThreshold` is `"NormalPNO"` or `"TightPNO"` and applies only to an ORCA
 `DLPNO-CCSD(T)` block. It is absent when never set; the ORCA builder writes
@@ -248,10 +252,11 @@ naming the first differing index, and nothing is reordered automatically.
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `kind` | `embed3d`, `relax` or `solvate` | default `relax` |
-| `converter` | `uff`, `openbabel`, `aimnet2` or `geometric` | `embed3d` always resolves to `openbabel`, `solvate` to `geometric`, and `relax` keeps `uff`, `openbabel` or `aimnet2`; a mismatched pair is a validation error |
-| `forceField` | `UFF`, `MMFF94`, `AIMNet2` or `none` | the force field or scorer the converter uses; `none` is what `solvate` defaults to, because deterministic placement is not a relaxation |
-| `smiles` | string | required for `embed3d`; ignored by `relax` and `solvate` |
+| `kind` | `embed3d`, `relax`, `solvate` or `standardize` | default `relax` |
+| `converter` | `uff`, `openbabel`, `aimnet2`, `geometric` or `rdkit` | `embed3d` resolves to `openbabel` by default or `rdkit` when named (ADR 0003 §3.3), `solvate` to `geometric`, `standardize` to `rdkit`, and `relax` keeps `uff`, `openbabel` or `aimnet2`; a mismatched pair is a validation error |
+| `forceField` | `UFF`, `MMFF94`, `AIMNet2` or `none` | the force field or scorer the converter uses; `none` is what `solvate` and `standardize` default to, because neither is a relaxation |
+| `smiles` | string | required for `embed3d`; ignored by `relax`, `solvate` and `standardize` |
+| `normalize`, `disconnectMetals`, `removeFragments`, `chargeParent` | boolean | `standardize` only; each cleanup step, default `true`, recorded in the answer |
 | `charge`, `multiplicity` | integer | the structure's chemistry, not a method |
 | `solvent` | string | explicit-solvent id: `water`, `methanol` or `acetonitrile`; default `water` |
 | `solventCount` | integer | 1–64 solvent molecules; default 10 |
@@ -264,7 +269,8 @@ protonation-state and tautomer enumeration belongs to `generate`.
 
 `generate.settings` is a separate key space — route keys cannot leak into a conformer search:
 `source` (`search` or `imported`, default `search`), `generator` (`crest`, `uff`, `obabel` or
-`rdkit` — `rdkit` only when `produces` is `tautomers`, see below — search only), `method`,
+`rdkit`; an RDKit block is a conformer search, a tautomer enumeration or a stereoisomer enumeration,
+depending on `produces`), `method`,
 `energyWindowKcal`, `rmsdThreshold`,
 `maxConformers`, `temperature`, `spreadThresholdKcal`, `selectedConformerId`, `rankBy`, `charge`,
 `multiplicity`, `fanOut`, `group` (an optional study id shared by blocks that belong together,
@@ -299,13 +305,18 @@ that never chose the route serialises as before: `torsionStepDegrees` (15–360,
 this generator), and its ensemble always records `energyUnit: kcal/mol` and `energyMethod: UFF`.
 The Open Babel route has one optional key of its own: `nconf` (1–1000, default 20), the number of
 conformers the genetic algorithm is asked for; like the two above it is written only when stated.
+The RDKit conformer route adds `nconf` (1–200, default 50), `seed` (default 1), `pruneRms` (0–5 Å,
+default 0.5), `forceField` (`MMFF94` or `UFF`, default `MMFF94`), `maxHeavyAtoms` (1–100, default 60)
+and `threads` (1–8, default 1). Above the heavy-atom cap the block refuses with `size-refused`.
 
 `produces` is what the block enumerates: `conformers` (the default, and what a file that omits the
-key means) or `tautomers`. A tautomer block is deliberately narrow — `generator` must be `rdkit`,
-`source` must be `search`, `rankBy` must be empty, `method` is stored empty, `fanOut` defaults to
-true, and `maxConformers` is the candidate cap (default 16). It adds one key, present only in this
-mode: `tautomerRuleset` (`rdkit-default`). The candidates are different molecules, so no energy
-window, RMSD prune, population or spread is computed at this stage.
+key means), `tautomers` or `stereoisomers`. A tautomer or stereoisomer block is deliberately narrow —
+`generator` must be `rdkit`, `source` must be `search`, `rankBy` must be empty, `method` is stored
+empty, `fanOut` defaults to true, and `maxConformers` is the candidate cap (default 16). A tautomer
+block adds `tautomerRuleset` (`rdkit-default`); a stereoisomer block adds `seed` (default 1). The
+candidates are different molecules, so no energy window, RMSD prune, population or spread is computed
+at this stage. A stereoisomer candidate that is identical to the input keeps its coordinates
+(`geometry.source: "input"`); every other candidate is re-embedded (`"etkdgv4"`).
 
 `group` is the only cross-block key a `generate` block has: two blocks with the same `group` say they
 belong to the same study. It is not a protomer or tautomer judgement, and it never causes energies to
