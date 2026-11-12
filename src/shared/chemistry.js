@@ -38,6 +38,7 @@ export const CHEM_IMPLEMENTED_OPS = Object.freeze([
   'integrity',
   'depict',
   'conformers',
+  'stereoisomers',
 ]);
 
 /** The sidecar's own atom ceiling, repeated here so this module imports nothing. */

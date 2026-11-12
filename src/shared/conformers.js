@@ -23,7 +23,7 @@ export const KB_KCAL = 0.00198720425864083;
  * molecules* of the same formula. The distinction decides whether pruning,
  * populations and averaging apply at all — they do not for tautomers.
  */
-export const CONFORMER_PRODUCES = Object.freeze(['conformers', 'tautomers']);
+export const CONFORMER_PRODUCES = Object.freeze(['conformers', 'tautomers', 'stereoisomers']);
 export const DEFAULT_PRODUCES = 'conformers';
 
 export const CONFORMER_GENERATORS = Object.freeze(['crest', 'uff', 'obabel', 'rdkit']);

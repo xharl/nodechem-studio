@@ -58,6 +58,11 @@ import {
   rdkitConformerRequest,
   rdkitConformerWarnings,
 } from '../../src/shared/rdkitConformers.js';
+import {
+  normalizeStereoisomerResult,
+  stereoisomerRequest,
+  stereoisomerSummary,
+} from '../../src/shared/stereoisomers.js';
 import { SidecarRunner } from './sidecarRunner.js';
 import { cacheFingerprint, cacheGet, cachePut, readChemCache, writeChemCache } from './chemCache.js';
 import {
@@ -537,7 +542,8 @@ function conformerTaskRecord(raw, nodeId) {
   // Issue #226: what the block enumerates. Only `tautomers` changes the task's
   // shape (no method, a JSON sidecar, a candidate cap); a file that never said
   // stays a conformer search.
-  const produces = conf.produces === 'tautomers' ? 'tautomers' : 'conformers';
+  const produces = conf.produces === 'tautomers' ? 'tautomers'
+    : (conf.produces === 'stereoisomers' ? 'stereoisomers' : 'conformers');
   // A fanned-out member task (#80) carries one member of an ensemble that is
   // already stored in the project. It does not search, so it needs neither a
   // generator nor an import path — only the member row it stands for.
@@ -650,12 +656,12 @@ function conformerTaskRecord(raw, nodeId) {
       generator,
       // Issue #226: only a tautomer task states `produces`; a conformer task
       // keeps exactly the keys it always had.
-      ...(produces === 'tautomers' ? { produces } : {}),
+      ...(produces !== 'conformers' ? { produces } : {}),
       rankBy: typeof conf.rankBy === 'string' ? conf.rankBy : '',
       // Issue #240: the task records the method its generator actually runs.
       // `ff` was the pre-#240 name for Open Babel's force field; it is read
       // here only as a migration source, never written back beside `method`.
-      method: produces === 'tautomers' || source === 'imported'
+      method: produces !== 'conformers' || source === 'imported'
         ? ''
         : (generator === 'crest'
           ? (conf.method === 'gfnff' ? 'gfnff' : 'gfn2')
@@ -666,7 +672,7 @@ function conformerTaskRecord(raw, nodeId) {
               : (obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94')))),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
-      maxConformers: Math.round(number(conf.maxConformers, produces === 'tautomers' ? 16 : 20, 1, 200)),
+      maxConformers: Math.round(number(conf.maxConformers, produces !== 'conformers' ? 16 : 20, 1, 200)),
       temperature: number(conf.temperature, 298.15, 1, 1000),
       spreadThresholdKcal: number(conf.spreadThresholdKcal, 2, 0, 50),
       selectedConformerId: /^c\d+$/.test(String(conf.selectedConformerId || '')) ? String(conf.selectedConformerId) : '',
@@ -682,6 +688,9 @@ function conformerTaskRecord(raw, nodeId) {
       ...(produces === 'tautomers'
         ? { tautomerRuleset: conf.tautomerRuleset === 'rdkit-default' ? conf.tautomerRuleset : DEFAULT_TAUTOMER_OPTIONS.ruleset }
         : {}),
+      ...(produces === 'stereoisomers'
+        ? { seed: Math.round(number(conf.seed, 1, 0, 0x7fffffff)) }
+        : {}),
       // Issue 144: the UFF route's own settings and the project's bond table.
       // Bounded here like everything else, and absent for CREST/import tasks.
       ...(generator === 'uff' && Number.isFinite(Number(conf.torsionStepDegrees))
@@ -693,7 +702,7 @@ function conformerTaskRecord(raw, nodeId) {
       ...(generator === 'obabel' && Number.isFinite(Number(conf.nconf))
         ? { nconf: Math.round(number(conf.nconf, 20, 1, 1000)) } : {}),
       // ADR 0003 §3.4: the RDKit search's knobs, bounded here as well.
-      ...(generator === 'rdkit'
+      ...(generator === 'rdkit' && produces === 'conformers'
         ? {
           nconf: Math.round(number(conf.nconf, 50, 1, 200)),
           seed: Math.round(number(conf.seed, 1, 0, 0x7fffffff)),
@@ -2170,6 +2179,12 @@ export class QueueManager {
         await this.runTautomerEnumeration(queue, task, conf, dir);
         return;
       }
+      // ADR 0003 §3.5: a stereoisomer set is its own job — distinct molecules,
+      // no energies, and a geometry policy that must not copy tautomer rules.
+      if (conf.produces === 'stereoisomers') {
+        await this.runStereoisomerEnumeration(queue, task, conf, dir);
+        return;
+      }
       let ensembleText = '';
       let energies = [];
       let source = conf.source === 'imported' ? 'imported' : conf.generator;
@@ -2615,6 +2630,85 @@ export class QueueManager {
   }
 
   /**
+   * ADR 0003 §3.5 — enumerate stereoisomers as distinct molecules.
+   *
+   * The candidate contract is shared with tautomers; the geometry policy is not.
+   * The sidecar re-embeds every candidate except the one identical to the input,
+   * and `geometry.source` says which happened for each member.
+   */
+  async runStereoisomerEnumeration(queue, task, conf, dir) {
+    try {
+      const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+      const parsedInput = parseMultiXyz(inputText);
+      if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+        throw new ChemError('bad-geometry', `The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
+      }
+      if (queue.options.dryRun) {
+        throw new ChemError('stereoisomer-dry-run', 'A dry run cannot enumerate stereoisomers: the chemistry sidecar is an '
+          + 'external program and a dry run never fabricates molecules.');
+      }
+      if (!queue.options.chemExecutable) {
+        throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. Stereoisomer enumeration needs RDKit '
+          + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+      }
+      const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+        executable: queue.options.chemExecutable,
+        script: queue.options.chemScript || '',
+        request: stereoisomerRequest({
+          molecule: {
+            title: task.title,
+            charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+            multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+            atoms: parsedInput.frames[0].atoms,
+          },
+          options: { maxCandidates: conf.maxConformers, seed: conf.seed },
+        }),
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        cwd: dir,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      });
+      const result = normalizeStereoisomerResult(raw);
+      const summary = stereoisomerSummary({
+        result,
+        group: conf.group,
+        selectedId: conf.selectedConformerId,
+      });
+      summary.generatedAt = new Date().toISOString();
+      const frames = result.candidates.map((candidate) => xyzText(
+        candidate.atoms,
+        `stereoisomer=${candidate.label} ${candidate.smiles} · ${candidate.geometry.source} · charge ${conf.charge} · multiplicity ${conf.multiplicity}`,
+      ));
+      await fsp.writeFile(path.join(dir, 'stereoisomers.xyz'), frames.join(''), 'utf8');
+      await writeJsonAtomic(path.join(dir, 'conformers.json'), summary);
+      task.status = 'completed';
+      task.ensemble = summary;
+      task.ensembleFile = 'conformers.json';
+      task.runDir = dir;
+      task.finishedAt = new Date().toISOString();
+      task.refusal = null;
+      task.summary = `${summary.count} stereoisomer candidate${summary.count === 1 ? '' : 's'} enumerated`
+        + ` (${summary.origin.program || 'RDKit'} ${summary.origin.version || 'version not reported'})`
+        + (summary.truncated ? '; candidate cap reached' : '');
+      this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `${summary.count} stereoisomer candidate(s): ${summary.stereoisomers.join(', ')}. `
+          + 'Distinct molecules: no energies and no populations are assigned here; each candidate fans out '
+          + 'into its own calculation.',
+      });
+    } catch (error) {
+      task.status = 'failed';
+      task.error = oneLine(error?.message || String(error), 400);
+      if (error instanceof ChemError) task.refusal = { code: error.code, message: task.error };
+      task.finishedAt = new Date().toISOString();
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Stereoisomer enumeration refused: ${task.error}` });
+    }
+    await this.persist(queue);
+    this.publish(queue);
+  }
+
+  /**
    * Issue #226 — enumerate tautomers through the external RDKit sidecar.
    *
    * This is deliberately not a variant of the conformer search:
@@ -2765,6 +2859,7 @@ export class QueueManager {
     // Issue #226: a tautomer branch is still one member of one ensemble; the
     // task says which kind of set that was.
     const tautomerMember = task.generate?.produces === 'tautomers' || member.produces === 'tautomers';
+    const stereoisomerMember = task.generate?.produces === 'stereoisomers' || member.produces === 'stereoisomers';
     const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
     const parsed = parseMultiXyz(inputText);
     if (parsed.errors.length > 0 || parsed.frames.length !== 1) {
@@ -2791,6 +2886,7 @@ export class QueueManager {
       // Issue #226: a tautomer branch repeats what the member is, so the branch
       // folder does not read as a one-member conformer ensemble.
       ...(tautomerMember ? { produces: 'tautomers' } : {}),
+      ...(stereoisomerMember ? { produces: 'stereoisomers' } : {}),
       method: String(member.method || ''),
       ...memberEnergy,
       origin: memberOrigin,

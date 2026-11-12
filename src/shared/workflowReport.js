@@ -131,8 +131,9 @@ function taskRow(task, record, { includeImported = false } = {}) {
         population: num(source.population),
         protomer: text(source.protomer),
         // Issue #226: a tautomer branch names the candidate molecule it ran.
-        ...(source.produces === 'tautomers' ? { produces: 'tautomers' } : {}),
+        ...(['tautomers', 'stereoisomers'].includes(source.produces) ? { produces: source.produces } : {}),
         ...(source.tautomer ? { tautomer: text(source.tautomer) } : {}),
+        ...(source.stereoisomer ? { stereoisomer: text(source.stereoisomer) } : {}),
         ...(source.smiles ? { smiles: text(source.smiles) } : {}),
       };
     })(),
@@ -679,7 +680,9 @@ export function buildWorkflowReport(queue, records = {}, {
       // Issue #226: a tautomer block's rows are distinct molecules, and the
       // spread across them is the answer. It is computed from the target-level
       // energies exactly like a conformer ΔE, but it is never averaged.
-      const tautomers = group.some((row) => row.conformer.produces === 'tautomers');
+      // ADR 0003 §3.5: a stereoisomer set is a candidate set too — distinct
+      // molecules, never averaged across.
+      const tautomers = group.some((row) => ['tautomers', 'stereoisomers'].includes(row.conformer.produces));
       const comparable = uniqueMembers.size === memberIds.length && uniqueMembers.size > 1
         && group.every((row) => row.fanOut);
       const energies = comparable
@@ -691,6 +694,7 @@ export function buildWorkflowReport(queue, records = {}, {
         memberId: row.conformer.memberId,
         protomer: row.conformer.protomer,
         ...(row.conformer.tautomer ? { tautomer: row.conformer.tautomer } : {}),
+        ...(row.conformer.stereoisomer ? { stereoisomer: row.conformer.stereoisomer } : {}),
         ...(row.conformer.smiles ? { smiles: row.conformer.smiles } : {}),
         status: row.status,
         imported: row.imported ? row.imported.badge : null,
@@ -765,7 +769,7 @@ export function buildWorkflowReport(queue, records = {}, {
         id,
         title: group[0].conformer.title || id,
         comparable,
-        produces: tautomers ? 'tautomers' : 'conformers',
+        produces: group.find((row) => ['tautomers', 'stereoisomers'].includes(row.conformer.produces))?.conformer.produces || 'conformers',
         members,
         ensemble,
         spreadKcalTarget: lowest !== null ? (Math.max(...energies) - lowest) * HARTREE_KCAL : null,
@@ -1205,6 +1209,7 @@ function conformerEnsembleHtml(ensemble, headingTag) {
     + (member.imported ? ' data-kind="imported"' : '') + '>'
     + `<td>${escapeHtml(member.memberId || MISSING)}`
     + (member.tautomer ? ` · <span class="mono">${escapeHtml(member.tautomer)}</span>` : '')
+    + (member.stereoisomer ? ` · <span class="mono">${escapeHtml(member.stereoisomer)}</span>` : '')
     + (member.protomer ? ` · ${escapeHtml(member.protomer)}` : '')
     + (member.smiles ? ` <span class="mono">${escapeHtml(member.smiles)}</span>` : '')
     + `${member.imported ? ` <span class="imported">${escapeHtml(member.imported)}</span>` : ''}</td>`

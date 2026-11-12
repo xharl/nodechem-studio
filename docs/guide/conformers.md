@@ -37,6 +37,16 @@ on it. It never enumerates protonation states, tautomers or conformers — those
 sets, and sets belong to Generate. A Calculate block wired from Prepare runs on its written
 `prepared.xyz`, not on the geometry the workflow was planned with.
 
+### Stereoisomer candidates
+
+`produces: "stereoisomers"` enumerates the configurations of one molecule with RDKit's
+`EnumerateStereoisomers`. The candidates are **distinct molecules**, not conformers: there is no energy
+window, no RMSD prune and no Boltzmann population, and each candidate is meant to run as its own
+calculation. Geometry policy is explicit because the enumerator copies the input conformer onto every
+candidate: only the candidate identical to the input keeps the input coordinates
+(`geometry.source: "input"`); every other candidate is re-embedded with ETKDGv4
+(`"etkdgv4"`) so an inverted centre is never labelled with the original geometry.
+
 ### RDKit conformer search
 
 `generator: "rdkit"` runs ETKDGv4 embedding followed by an MMFF94 (or UFF) optimisation in the

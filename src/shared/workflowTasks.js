@@ -489,7 +489,7 @@ export function fanOutMembersFor(node) {
 
 /** The label a member prints in a task title: `t1` for a tautomer, else its protomer. */
 function memberLabel(member) {
-  return String(member?.tautomer || member?.protomer || '');
+  return String(member?.tautomer || member?.stereoisomer || member?.protomer || '');
 }
 
 export function gatesForNode(node) {

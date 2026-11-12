@@ -3455,8 +3455,13 @@ function conformersInspector(node) {
       `<div class="field full"><label>Produces</label><select class="select" data-conformer-field="produces">
         <option value="conformers"${!tautomersBlock ? ' selected' : ''}>Conformers — geometries of one molecule</option>
         <option value="tautomers"${tautomersBlock ? ' selected' : ''}>Tautomers — distinct molecules of one formula</option>
+        <option value="stereoisomers"${s.produces === 'stereoisomers' ? ' selected' : ''}>Stereoisomers — distinct configurations of one molecule</option>
       </select></div>`,
-      ...(tautomersBlock ? [
+      ...(s.produces === 'stereoisomers' ? [
+        `<div class="field full"><span class="inspector-note" data-conformer-stereo-note>Stereoisomer candidates are distinct molecules, not conformers: no energy window, no RMSD prune and no Boltzmann population. Each candidate is planned as its own calculation and compared at that level. Only the candidate identical to the input keeps the input coordinates; every other candidate is re-embedded, and each member records which happened.</span></div>`,
+        `<div class="field"><label>Max candidates</label><input class="input" type="number" min="1" max="128" data-conformer-field="maxConformers" value="${esc(s.maxConformers ?? 16)}"></div>`,
+        `<div class="field"><label>Seed</label><input class="input" type="number" min="0" max="2147483647" data-conformer-field="seed" value="${esc(s.seed ?? 1)}"></div>`,
+      ] : tautomersBlock ? [
         `<div class="field full"><span class="inspector-note" data-conformer-tautomer-note>Tautomer enumeration is a set of molecules, not geometries: no energy window, no RMSD prune and no Boltzmann population. Each candidate is planned as its own calculation, and the report shows the energy spread across them. pH-dependent protonation (Epik, Dimorphite-DL) is out of scope; charge and multiplicity are taken as given.</span></div>`,
         `<div class="field"><label>Ruleset</label><select class="select" data-conformer-field="tautomerRuleset">
           <option value="rdkit-default"${(s.tautomerRuleset || 'rdkit-default') === 'rdkit-default' ? ' selected' : ''}>rdkit-default (RDKit TautomerEnumerator)</option>
@@ -3539,8 +3544,8 @@ function conformersInspector(node) {
       // Issue #80: one task per retained member instead of one chosen geometry.
       // Issue 226: a tautomer block defaults to on, because one candidate's run
       // says nothing about the other molecules in the set.
-      switchRow('Fan out the ensemble', tautomersBlock
-        ? 'one task per tautomer candidate downstream (recommended)'
+      switchRow('Fan out the ensemble', tautomersBlock || s.produces === 'stereoisomers'
+        ? 'one task per candidate molecule downstream (recommended)'
         : 'one task per retained member downstream', 'fanOut', tautomersBlock ? s.fanOut !== false : s.fanOut === true, { attr: 'data-conformer-field="fanOut"' }),
     ].join(''))}
     <div class="inspector-actions-row">

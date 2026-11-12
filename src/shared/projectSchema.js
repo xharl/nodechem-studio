@@ -807,12 +807,12 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   // conformer default — and the `DEFAULT_CONFORMER_SETTINGS` merge below must
   // not smuggle CREST in when the file said nothing.
   const generatorValue = provided.generator === undefined || provided.generator === null
-    ? (produces === 'tautomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator)
+    ? (produces === 'tautomers' || produces === 'stereoisomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator)
     : source.generator;
   const generator = sourceKind === 'imported'
     ? ''
     : readEnum(c, generatorValue, CONFORMER_GENERATORS, `${path}.generator`, {
-      legacy, fallback: produces === 'tautomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator,
+      legacy, fallback: produces === 'tautomers' || produces === 'stereoisomers' ? 'rdkit' : DEFAULT_CONFORMER_SETTINGS.generator,
     });
   if (sourceKind === 'imported' && provided.generator !== undefined && provided.generator !== '') {
     c.warn(`${path}.generator`, 'is not used when the source is an imported ensemble; the input block owns the file.');
@@ -821,18 +821,18 @@ function normalizeConformerSettings(c, raw, path, legacy) {
   // Open Babel has no tautomer enumerator, CREST searches conformers, and the
   // in-app UFF route ranks geometries of one molecule — none of them can be
   // asked for a tautomer set without inventing one.
-  if (produces === 'tautomers') {
+  if (produces === 'tautomers' || produces === 'stereoisomers') {
     if (sourceKind === 'imported') {
-      c.error(`${path}.source`, 'must be "search": an imported ensemble is a set of conformers, not a tautomer enumeration.');
+      c.error(`${path}.source`, `must be "search": an imported ensemble is a set of conformers, not a ${produces} enumeration.`);
     }
     if (generator && generator !== 'rdkit') {
-      c.error(`${path}.generator`, 'must be "rdkit" when produces is "tautomers"; no other generator in this build enumerates tautomers.');
+      c.error(`${path}.generator`, `must be "rdkit" when produces is "${produces}"; no other generator in this build enumerates it.`);
     }
   }
   const rankBy = readEnum(c, source.rankBy ?? '', ['', ...SCORER_SPECS], `${path}.rankBy`, {
     legacy, fallback: '',
   });
-  if (produces === 'tautomers' && rankBy) {
+  if ((produces === 'tautomers' || produces === 'stereoisomers') && rankBy) {
     c.error(`${path}.rankBy`, 'is not supported for a tautomer block: rank the candidates with a calculate block, one per candidate.');
   }
   const selected = readString(c, source.selectedConformerId, `${path}.selectedConformerId`, { legacy, fallback: '', max: 24 });
@@ -852,7 +852,7 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     : '';
   return {
     source: sourceKind,
-    ...(produces === 'tautomers' || provided.produces !== undefined ? { produces } : {}),
+    ...(produces !== 'conformers' || provided.produces !== undefined ? { produces } : {}),
     generator,
     rankBy,
     method: readConformerMethod(c, source.method, `${path}.method`, {
@@ -874,12 +874,14 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     maxConformers: readInteger(
       c,
       provided.maxConformers === undefined || provided.maxConformers === null || provided.maxConformers === ''
-        ? (produces === 'tautomers' ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers)
+        ? (produces === 'tautomers' || produces === 'stereoisomers'
+          ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers)
         : provided.maxConformers,
       `${path}.maxConformers`,
       {
         legacy,
-        fallback: produces === 'tautomers' ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers,
+        fallback: produces === 'tautomers' || produces === 'stereoisomers'
+          ? DEFAULT_TAUTOMER_OPTIONS.maxCandidates : DEFAULT_CONFORMER_SETTINGS.maxConformers,
         min: 1,
         max: 200,
       },
@@ -896,7 +898,7 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // rest. An explicit `fanOut: false` still means "run the chosen member".
     fanOut: readBoolean(c, provided.fanOut, `${path}.fanOut`, {
       legacy,
-      fallback: produces === 'tautomers' ? true : DEFAULT_CONFORMER_SETTINGS.fanOut,
+      fallback: produces === 'tautomers' || produces === 'stereoisomers' ? true : DEFAULT_CONFORMER_SETTINGS.fanOut,
       optional: true,
     }),
     charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
@@ -918,6 +920,11 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // Issue #226: recorded only for a tautomer block, so every other generate
     // block serialises exactly as it did before.
     ...(produces === 'tautomers' || provided.tautomerRuleset !== undefined ? { tautomerRuleset } : {}),
+    // ADR 0003 §3.5: the stereoisomer enumerator's seed and cap are the
+    // tautomer-style candidate policy; the cap is `maxConformers` above.
+    ...(produces === 'stereoisomers'
+      ? { seed: readOptionalInteger(c, source.seed, `${path}.seed`, { fallback: 1, min: 0, max: 0x7fffffff }) }
+      : {}),
     // Issue 144: the UFF route's own settings. Only present when the file
     // states them, so a project that never chose the route serialises exactly
     // as it did before (the defaults live in uffConformers.js: 120° and 200).
