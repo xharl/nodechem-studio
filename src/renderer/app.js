@@ -490,6 +490,12 @@ const state = {
   draftTimer: null,
   dirty: null,
   history: null,
+  // Issue 367: the plan cache's inputs. `planSnapshot` is the last serialized
+  // project `refreshDirty` saw and `projectRevision` counts changes to it; a
+  // repaint that changes nothing does not move the revision, so the plan built
+  // once survives every inspector/console render.
+  planSnapshot: null,
+  projectRevision: 0,
   run: {
     id: null,
     status: 'idle',
@@ -555,6 +561,9 @@ const graphIndex = {
 function invalidateGraphIndex() {
   graphIndex.nodes = null;
   graphIndex.edges = null;
+  // Issue 367: a structural graph change invalidates the plan too — the same
+  // arrays the index just dropped feed `buildWorkflowPlan`.
+  invalidatePlanCache();
 }
 
 function buildGraphIndex() {
@@ -596,6 +605,77 @@ function graphIndexFor() {
 }
 
 const nodeById = (id) => graphIndexFor().byId.get(id) || null;
+
+/* ── Workflow plan cache (issue 367) ─────────────────────────
+ * `buildWorkflowPlan` is the expensive read of a project: 274 ms on the issue's
+ * 800-node graph. The inspector, the run console's tool seeding, the cost
+ * estimate and preflight all built it again on every paint. One plan per
+ * unchanged project is enough — nothing they read differs between them.
+ *
+ * The cache key is the structural revision (moved by `refreshDirty` only when
+ * the serialized project changed) plus the fields the plan actually reads: the
+ * project object, the active flow, and the nodes/edges arrays with their
+ * lengths. A flow switch, a project load or an undo replaces those arrays and
+ * misses the cache even if the revision did not move; `invalidatePlanCache()`
+ * covers the paths that edit the graph in place.
+ */
+const planCache = {
+  project: null,
+  flowId: null,
+  nodes: null,
+  edges: null,
+  nodeCount: 0,
+  edgeCount: 0,
+  revision: -1,
+  plan: null,
+  error: null,
+  builds: 0,
+};
+
+function invalidatePlanCache() {
+  planCache.revision = -1;
+}
+
+/** The one plan every renderer read shares, rebuilt only when the project moves. */
+function workflowPlan() {
+  const project = state.project;
+  if (!project) throw new Error('No project is open.');
+  const nodes = project.nodes;
+  const edges = project.edges;
+  const flowId = project.activeFlowId ?? null;
+  const nodeCount = Array.isArray(nodes) ? nodes.length : 0;
+  const edgeCount = Array.isArray(edges) ? edges.length : 0;
+  if (planCache.project === project
+    && planCache.flowId === flowId
+    && planCache.nodes === nodes
+    && planCache.edges === edges
+    && planCache.nodeCount === nodeCount
+    && planCache.edgeCount === edgeCount
+    && planCache.revision === state.projectRevision) {
+    if (planCache.error) throw planCache.error;
+    return planCache.plan;
+  }
+  planCache.builds += 1;
+  planCache.project = project;
+  planCache.flowId = flowId;
+  planCache.nodes = nodes;
+  planCache.edges = edges;
+  planCache.nodeCount = nodeCount;
+  planCache.edgeCount = edgeCount;
+  planCache.revision = state.projectRevision;
+  try {
+    planCache.plan = shared.buildWorkflowPlan(project);
+    planCache.error = null;
+  } catch (error) {
+    // An unbuildable plan is a value the callers report, not a reason to try
+    // again on every paint: the next project change clears it.
+    planCache.plan = null;
+    planCache.error = error;
+    throw error;
+  }
+  return planCache.plan;
+}
+
 const edgeId = (edge) => `${edge.from}->${edge.to}:${edge.type}${edge.branch ? `:${edge.branch}` : ''}`;
 const edgeById = (id) => state.project.edges.find((edge) => edgeId(edge) === id) || null;
 const incoming = (id) => graphIndexFor().incomingById.get(id) || [];
@@ -1493,6 +1573,7 @@ function switchFlow(id) {
   if (!flowById(state.project, wanted)) return;
   state.project.activeFlowId = wanted;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   state.renamingFlowId = null;
   state.confirmDeleteFlowId = null;
@@ -1512,6 +1593,7 @@ function addFlow() {
   flows.push({ id, title, nodes: [], edges: [] });
   state.project.activeFlowId = id;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   state.renamingFlowId = null;
   state.confirmDeleteFlowId = null;
@@ -1534,6 +1616,7 @@ function duplicateActiveFlow() {
   state.project.flows.splice(index + 1, 0, copy);
   state.project.activeFlowId = id;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   state.renamingFlowId = null;
   state.confirmDeleteFlowId = null;
@@ -1597,6 +1680,7 @@ function confirmDeleteFlow() {
   state.project.activeFlowId = fallback.id;
   state.confirmDeleteFlowId = null;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   renderGraph();
   renderInspector();
@@ -1660,9 +1744,18 @@ function updateSavePill(dirty) {
 }
 
 function refreshDirty() {
-  const dirty = state.savedSnapshot === null || JSON.stringify(state.project) !== state.savedSnapshot;
+  const snapshot = JSON.stringify(state.project);
+  // Issue 367: this is the funnel every mutation already passes through, and
+  // `renderInspector` calls it on every paint. Move the plan revision only when
+  // the serialized project actually changed, so a repaint or a selection change
+  // keeps the plan built for the last edit.
+  if (snapshot !== state.planSnapshot) {
+    state.planSnapshot = snapshot;
+    state.projectRevision += 1;
+  }
+  const dirty = state.savedSnapshot === null || snapshot !== state.savedSnapshot;
   updateSavePill(dirty);
-  syncEditHistory();
+  syncEditHistory(snapshot);
   if (dirty !== state.dirty) {
     state.dirty = dirty;
     desktop?.setDirty?.(dirty);
@@ -1680,8 +1773,7 @@ function refreshDirty() {
  * mutation already passes through, so recording here cannot miss an edit — and
  * a render that changes nothing produces no step.
  */
-function syncEditHistory() {
-  const snapshot = JSON.stringify(state.project);
+function syncEditHistory(snapshot = JSON.stringify(state.project)) {
   if (!state.history) {
     state.history = createHistory(snapshot);
   } else {
@@ -6679,7 +6771,7 @@ function buildInputForNode(node) {
 /** The engine ids and companion tools the active flow will launch (issue 361). */
 function planNeedsForConsole() {
   try {
-    const tasks = shared.buildWorkflowPlan(state.project).tasks;
+    const tasks = workflowPlan().tasks;
     return {
       engines: shared.calcEnginesIn(tasks),
       tools: shared.planToolNeeds(tasks),
@@ -7106,7 +7198,7 @@ function updateCostEstimate() {
   el.classList.remove('is-warn');
   let plan = null;
   try {
-    plan = shared.buildWorkflowPlan(state.project);
+    plan = workflowPlan();
   } catch (error) {
     el.textContent = `No estimate: ${error.message}`;
     return;
@@ -7968,7 +8060,7 @@ async function preflightRun({ quiet = false } = {}) {
   let enginesInUse = [];
   let engineBlocks = {};
   try {
-    const plan = shared.buildWorkflowPlan(state.project);
+    const plan = workflowPlan();
     enginesInUse = shared.calcEnginesIn(plan.tasks);
     // Issue 316: a failing engine row should name the block that needs it, not
     // only the engine.
@@ -8013,7 +8105,7 @@ async function preflightRun({ quiet = false } = {}) {
   if (!config.dryRun) {
     let needsCrest = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       // A fanned-out member task carries a stored ensemble, so it does not need
       // the CREST binary (#80).
       needsCrest = tasks.some((task) => task.type === 'generate'
@@ -8040,7 +8132,7 @@ async function preflightRun({ quiet = false } = {}) {
     }
     let needsObabel = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       needsObabel = tasks.some((task) => task.type === 'generate'
         && task.generate?.generator === 'obabel'
         && !task.generate?.member);
@@ -8065,7 +8157,7 @@ async function preflightRun({ quiet = false } = {}) {
     }
     let needsScorer = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
         || (task.type === 'calculate' && task.scorer)
         || (task.type === 'prepare' && task.prepare?.converter === 'aimnet2'));
@@ -8092,7 +8184,7 @@ async function preflightRun({ quiet = false } = {}) {
     // a hard refusal rather than a slower fallback.
     let needsTautomer = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       needsTautomer = tasks.some((task) => task.type === 'generate'
         && task.generate?.produces === 'tautomers'
         && !task.generate?.member);
@@ -8823,7 +8915,7 @@ async function startWorkflowUnlocked() {
   try {
     // The plan expands method-ladder blocks into one task per rung and rewires
     // the edges so a downstream block waits for every rung.
-    const plan = shared.buildWorkflowPlan(state.project);
+    const plan = workflowPlan();
     tasks = plan.tasks;
     edges = plan.edges;
   } catch (error) {
@@ -11858,11 +11950,13 @@ export {
   historyRows,
   inputInspector,
   invalidateGraphIndex,
+  invalidatePlanCache,
   nodeById,
   nodeDetail,
   nodeFoot,
   onDocumentChange,
   onDocumentInput,
+  planCache,
   prepareInspector,
   queueBelongsToProject,
   queueFailure,
@@ -11874,6 +11968,7 @@ export {
   renderFlowTabs,
   renderGraph,
   renderIncidentEdges,
+  renderInspector,
   renderRecordSummary,
   resetRunHeader,
   resultFacts,

@@ -1,0 +1,275 @@
+{
+  "tasks": [
+    {
+      "nodeId": "of-opt",
+      "type": "calculate",
+      "title": "Reactant optimization",
+      "kind": "Opt",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "of-opt.gjf"
+      ],
+      "route": "",
+      "inputName": "of-opt.gjf",
+      "outputName": "of-opt.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=reactant_opt.chk\n#p B3LYP/def2SVP Opt EmpiricalDispersion=GD3BJ\n\nReactant optimization\n\n0 1\nO      0.000000     0.000000     0.117300\nH      0.000000     0.757200    -0.469200\nH      0.000000    -0.757200    -0.469200\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "Opt",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "reactant_opt.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 0,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": true,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "Opt",
+          "method": "B3LYP",
+          "basis": "def2-SVP",
+          "dispersion": "GD3BJ",
+          "tdStates": 0,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "O",
+              "x": 0,
+              "y": 0,
+              "z": 0.1173
+            },
+            {
+              "element": "H",
+              "x": 0,
+              "y": 0.7572,
+              "z": -0.4692
+            },
+            {
+              "element": "H",
+              "x": 0,
+              "y": -0.7572,
+              "z": -0.4692
+            }
+          ]
+        },
+        "upstream": null,
+        "conformer": null
+      },
+      "checkpointName": "reactant_opt.chk",
+      "checkpointFrom": null,
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "of-freq",
+      "type": "calculate",
+      "title": "Reactant frequency",
+      "kind": "Freq",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "of-freq.gjf"
+      ],
+      "route": "",
+      "inputName": "of-freq.gjf",
+      "outputName": "of-freq.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=of-freq.chk\n%OldChk=reactant_opt.chk\n#p B3LYP/def2SVP Freq EmpiricalDispersion=GD3BJ Geom=Check Guess=Read\n\nReactant frequency\n\n0 1\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "Freq",
+        "method": "B3LYP",
+        "basis": "def2-SVP",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "GD3BJ",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 0,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": 0,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": 0,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": true,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "Freq",
+          "method": "B3LYP",
+          "basis": "def2-SVP",
+          "dispersion": "GD3BJ",
+          "tdStates": 0,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "O",
+              "x": 0,
+              "y": 0,
+              "z": 0.1173
+            },
+            {
+              "element": "H",
+              "x": 0,
+              "y": 0.7572,
+              "z": -0.4692
+            },
+            {
+              "element": "H",
+              "x": 0,
+              "y": -0.7572,
+              "z": -0.4692
+            }
+          ]
+        },
+        "upstream": {
+          "id": "of-opt",
+          "title": "Reactant optimization",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Opt",
+            "method": "B3LYP",
+            "basis": "def2-SVP",
+            "dispersion": "GD3BJ",
+            "tdStates": 0,
+            "tdRoot": 0
+          },
+          "parsed": null
+        },
+        "conformer": null
+      },
+      "checkpointName": "of-freq.chk",
+      "checkpointFrom": {
+        "nodeId": "of-opt",
+        "checkpoint": "reactant_opt.chk"
+      },
+      "emission": null,
+      "flowId": "main"
+    }
+  ],
+  "edges": [
+    {
+      "from": "of-opt",
+      "to": "of-freq",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    }
+  ],
+  "flowId": "main"
+}

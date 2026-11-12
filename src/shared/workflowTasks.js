@@ -22,13 +22,15 @@ import {
   datasetById,
   datasetsOf,
   edgesOfFlow,
+  flowIndex,
   orderingEdgesOf,
   orderingSourceIds,
+  planIndex,
   recordsForInput,
   flowById,
   nodesOfFlow,
   parseTaskId,
-  scopeFor,
+  scopeIn,
   taskIdFor,
 } from './flows.js';
 import {
@@ -93,9 +95,14 @@ const DEFAULT_MULTIPLICITY = 1;
  * A block by id. Ids are unique per flow (schema v2), so a project-wide lookup
  * is unambiguous; the active flow is searched first because that is the graph
  * the caller is looking at.
+ *
+ * `index` is the plan's `planIndex()` (issue 367): the plan answers the lookup
+ * from a Map instead of walking the flows once per block. Callers without one
+ * get the original search, unchanged.
  */
-export function nodeById(project, id) {
+export function nodeById(project, id, index = null) {
   const wanted = String(id || '');
+  if (index) return index.nodes.get(wanted) || null;
   const local = nodesOfFlow(activeFlow(project)).find((node) => node.id === wanted);
   if (local) return local;
   for (const flow of Array.isArray(project?.flows) ? project.flows : []) {
@@ -121,7 +128,7 @@ export function settingsForNode(project, node) {
   return runSettingsFor(engine.id, { ...node.settings });
 }
 
-export function moleculeForNode(project, node, conformerMember = null, record = null, { ignoreConformer = false } = {}) {
+export function moleculeForNode(project, node, conformerMember = null, record = null, { ignoreConformer = false, index = null } = {}) {
   const settings = node?.settings && typeof node.settings === 'object' ? node.settings : {};
   const molecule = project?.molecule || {};
   // RFC 0001: a record carries its own charge and multiplicity. A block's
@@ -143,7 +150,7 @@ export function moleculeForNode(project, node, conformerMember = null, record = 
   // RFC 0001: a dataset record supplies the geometry for its own run.
   // Issue #87: a task that reads a checkpoint takes its geometry from that
   // checkpoint, so it must not also receive a member's pre-optimisation atoms.
-  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember);
+  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember, index);
   const chosen = conformer?.atoms;
   const recordCoords = Array.isArray(record?.coords) && record.coords.length > 0 ? record.coords : null;
   const coords = Array.isArray(chosen) && chosen.length > 0
@@ -207,8 +214,13 @@ export function conformerSettingsFor(node) {
  * The conformer block a calculation reads its geometry from, when one is
  * connected by a dependency edge.
  */
-export function conformerSourceFor(project, node) {
+export function conformerSourceFor(project, node, index = null) {
   if (!node || node.type === 'generate') return null;
+  if (index) {
+    const edge = (index.incoming.get(node.id) || []).find((item) => item.type === 'dependency'
+      && nodeById(project, item.from, index)?.type === 'generate');
+    return edge ? nodeById(project, edge.from, index) : null;
+  }
   const edges = Array.isArray(project?.edges) ? project.edges : [];
   const edge = edges.find((item) => item.to === node.id
     && item.type === 'dependency'
@@ -226,11 +238,13 @@ export function conformerSourceFor(project, node) {
  * ensemble it came from (`nodeId`, `title`, `generator`, `spreadKcal`), because
  * the block may be upstream through a chain rather than wired directly.
  */
-export function conformerForNode(project, node, conformerMember = null) {
+export function conformerForNode(project, node, conformerMember = null, index = null) {
   const member = conformerMember && Array.isArray(conformerMember.atoms) && conformerMember.atoms.length > 0
     ? conformerMember
     : null;
-  const source = member?.nodeId ? nodeById(project, member.nodeId) : conformerSourceFor(project, node);
+  const source = member?.nodeId
+    ? nodeById(project, member.nodeId, index)
+    : conformerSourceFor(project, node, index);
   if (!source && !member) return null;
   const output = source?.output && typeof source.output === 'object' ? source.output : null;
   const selected = member || (output?.selected && Array.isArray(output.selected.atoms) && output.selected.atoms.length > 0
@@ -280,9 +294,9 @@ export function conformerForNode(project, node, conformerMember = null) {
  * here; an ensemble that exists without a selection is still refused at plan
  * time, because that is a decision, not a pending computation.
  */
-export function pendingConformerFor(project, node) {
+export function pendingConformerFor(project, node, index = null) {
   if (!node || node.type === 'generate') return null;
-  const source = conformerSourceFor(project, node);
+  const source = conformerSourceFor(project, node, index);
   if (!source) return null;
   if (source.output && typeof source.output === 'object') return null;
   return { nodeId: source.id, title: source.title };
@@ -504,14 +518,26 @@ export function gatesForNode(node) {
   };
 }
 
-export function checkpointSourceNode(project, node) {
+/**
+ * The block a checkpoint edge hands to this one, or null.
+ *
+ * `index` is the plan's `planIndex()` (issue 367): the checkpoint edge is read
+ * from the incoming adjacency the plan already built instead of scanning every
+ * edge once per block. The standalone call keeps the original scan, so callers
+ * that hold only the project are unchanged.
+ */
+export function checkpointSourceNode(project, node, index = null) {
+  if (index) {
+    const edge = (index.incoming.get(node.id) || []).find((item) => item.type === 'checkpoint');
+    return edge ? nodeById(project, edge.from, index) : null;
+  }
   const edges = Array.isArray(project?.edges) ? project.edges : [];
   const edge = edges.find((item) => item.to === node.id && item.type === 'checkpoint');
   return edge ? nodeById(project, edge.from) : null;
 }
 
-export function validityUpstreamFor(project, node) {
-  const source = checkpointSourceNode(project, node);
+export function validityUpstreamFor(project, node, index = null) {
+  const source = checkpointSourceNode(project, node, index);
   if (!source) return null;
   return {
     id: source.id,
@@ -555,13 +581,13 @@ export function checkpointNameFor(project, node, taskId = node?.id) {
  * that a normal edge supplied no optimised geometry, so the label is not
  * silently attached to a project geometry.
  */
-export function emissionContextFor(project, node, settingsOverride = null) {
+export function emissionContextFor(project, node, settingsOverride = null, index = null) {
   const settings = settingsOverride || node?.settings || {};
   const jobType = String(settings.jobType || '');
   const states = Number(settings.tdStates || 0);
   if (jobType === 'NMR' || jobType === 'IRC' || jobType === 'Scan') return null;
   if (!Number.isFinite(states) || states <= 0) return null;
-  const source = checkpointSourceNode(project, node);
+  const source = checkpointSourceNode(project, node, index);
   if (settings.emission === true) {
     // The declared emission block: Root is fixed at 1, and the geometry source
     // is recorded, never assumed. A checkpoint edge hands over the geometry; a
@@ -612,8 +638,8 @@ function dependencySourceWithTd(project, node) {
  * a fan-out propagates (#87): `freq~c2` reads `opt~c2`'s file, so the declared
  * name must be built from that task id, never from the shared block id.
  */
-export function checkpointSourceFor(project, node, checkpointTaskId = null) {
-  const source = checkpointSourceNode(project, node);
+export function checkpointSourceFor(project, node, checkpointTaskId = null, index = null) {
+  const source = checkpointSourceNode(project, node, index);
   if (!source) return null;
   const taskId = checkpointTaskId || source.id;
   // Across engines there is no artifact the downstream engine can read: the
@@ -628,8 +654,8 @@ export function checkpointSourceFor(project, node, checkpointTaskId = null) {
   return { nodeId: taskId, checkpoint: checkpointNameFor(project, source, taskId) };
 }
 
-export function oldCheckpointFor(project, node, checkpointTaskId = null) {
-  const source = checkpointSourceNode(project, node);
+export function oldCheckpointFor(project, node, checkpointTaskId = null, index = null) {
+  const source = checkpointSourceNode(project, node, index);
   if (!source) return '';
   // A source on another engine has no checkpoint this one can read; emitting
   // %OldChk would point Gaussian at a file that does not exist.
@@ -637,28 +663,28 @@ export function oldCheckpointFor(project, node, checkpointTaskId = null) {
   return checkpointNameFor(project, source, checkpointTaskId || source.id);
 }
 
-export function tsForceConstantIssues(project, node) {
+export function tsForceConstantIssues(project, node, index = null) {
   if (node?.type !== 'calculate') return { errors: [], warnings: [] };
-  return checkTsForceConstants({ settings: node.settings, upstream: checkpointSourceNode(project, node) });
+  return checkTsForceConstants({ settings: node.settings, upstream: checkpointSourceNode(project, node, index) });
 }
 
 /** Issue #16 findings for a node's optimisation convergence and integration grid. */
-export function optConvergenceIssues(project, node) {
+export function optConvergenceIssues(project, node, index = null) {
   if (node?.type !== 'calculate') return [];
   return [
     ...optConvergenceWarnings(node.settings),
-    ...freqGeometryWarnings({ settings: node.settings, upstream: checkpointSourceNode(project, node) }),
+    ...freqGeometryWarnings({ settings: node.settings, upstream: checkpointSourceNode(project, node, index) }),
   ];
 }
 
-export function blockingValidityFinding(project, node, settings, molecule, conformerMember = null, { ignoreConformer = false } = {}) {
+export function blockingValidityFinding(project, node, settings, molecule, conformerMember = null, { ignoreConformer = false, index = null } = {}) {
   const engine = engineForNode(project, node);
-  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember);
+  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember, index);
   const result = runValidityChecks({
     settings,
     molecule,
     parsed: null,
-    upstream: validityUpstreamFor(project, node),
+    upstream: validityUpstreamFor(project, node, index),
     conformer: conformer ? {
       nodeId: conformer.nodeId,
       title: conformer.title,
@@ -676,9 +702,9 @@ export function blockingValidityFinding(project, node, settings, molecule, confo
   return result.findings.find((finding) => finding.status === CHECK_STATUS.FAIL && blocking.has(finding.id)) || null;
 }
 
-export function validityForNode(project, node, conformerMember = null, record = null, { ignoreConformer = false } = {}) {
-  const molecule = moleculeForNode(project, node, conformerMember, record, { ignoreConformer });
-  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember);
+export function validityForNode(project, node, conformerMember = null, record = null, { ignoreConformer = false, index = null } = {}) {
+  const molecule = moleculeForNode(project, node, conformerMember, record, { ignoreConformer, index });
+  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember, index);
   return {
     settings: {
       jobType: node.settings.jobType,
@@ -696,7 +722,7 @@ export function validityForNode(project, node, conformerMember = null, record = 
       disabledChecks: Array.isArray(node.settings.disabledChecks) ? node.settings.disabledChecks : [],
     },
     molecule,
-    upstream: validityUpstreamFor(project, node),
+    upstream: validityUpstreamFor(project, node, index),
     conformer: conformer ? {
       nodeId: conformer.nodeId,
       title: conformer.title,
@@ -720,17 +746,18 @@ export function buildRunInput(project, node, {
   record = null,
   checkpointTaskId = null,
   ignoreConformer = false,
+  index = null,
 } = {}) {
   const engine = engineForNode(project, node);
   // A ReadFC TS block without a usable checkpoint hand-off has nothing to read.
-  const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node);
+  const issues = engine.id === 'xtb' ? { errors: [] } : tsForceConstantIssues(project, node, index);
   if (issues.errors.length > 0) throw new Error(issues.errors[0]);
   const settings = settingsOverride || settingsForNode(project, node);
   // #146: Pop=NTO is the second job of a two-job chain. It has nothing to print
   // without a checkpoint from a TD job, so both halves are refused here with
   // the missing edge named — the schema reports the same errors before a run.
   if (settings.nto === true) {
-    const ntoSource = checkpointSourceNode(project, node);
+    const ntoSource = checkpointSourceNode(project, node, index);
     if (!ntoSource) {
       throw new Error('Pop=NTO reads its transition density from a checkpoint, but this block has no checkpoint '
         + 'edge. Connect the SP TD block that writes Density=(Check,Transition=k) with a checkpoint edge.');
@@ -742,19 +769,19 @@ export function buildRunInput(project, node, {
   }
   // A spin-state sweep varies the multiplicity per task, and the multiplicity
   // is printed in the molecule block; an override has to reach it.
-  const baseMolecule = moleculeForNode(project, node, conformerMember, record, { ignoreConformer });
+  const baseMolecule = moleculeForNode(project, node, conformerMember, record, { ignoreConformer, index });
   // A sweep override is the only reason to rewrite the multiplicity here: the
   // record's own value must survive a block whose field still holds the default.
   const molecule = settingsOverride
     && Number.isInteger(Number(settings.multiplicity)) && Number(settings.multiplicity) > 0
     ? { ...baseMolecule, multiplicity: Number(settings.multiplicity) }
     : baseMolecule;
-  const blocking = blockingValidityFinding(project, node, settings, molecule, conformerMember, { ignoreConformer });
+  const blocking = blockingValidityFinding(project, node, settings, molecule, conformerMember, { ignoreConformer, index });
   if (blocking) throw new Error(blocking.message || blocking.detail || `The ${blocking.id} check failed.`);
   // Issue #30: a block fed by a conformer ensemble may not run until a member
   // is chosen. Falling back to the project geometry would silently discard the
   // entire conformer stage, which is the error this feature exists to stop.
-  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember);
+  const conformer = ignoreConformer ? null : conformerForNode(project, node, conformerMember, index);
   if (conformer && !conformer.selected) {
     throw new Error(noSelectedConformerMessage(conformer, node));
   }
@@ -766,7 +793,7 @@ export function buildRunInput(project, node, {
       settings,
       molecule,
       inputName: `${base}.gjf`,
-      oldCheckpoint: oldCheckpointFor(project, node, checkpointTaskId),
+      oldCheckpoint: oldCheckpointFor(project, node, checkpointTaskId, index),
     });
   return {
     ...built,
@@ -915,8 +942,8 @@ function computeFanMembership(nodes, edges) {
  * ensemble it came from so `buildRunInput` can record provenance without a
  * direct edge back to the conformer block.
  */
-function fanMemberContext(project, fan, member) {
-  const source = nodeById(project, fan.nodeId);
+function fanMemberContext(project, fan, member, index = null) {
+  const source = nodeById(project, fan.nodeId, index);
   const settings = source ? conformerSettingsFor(source) : DEFAULT_CONFORMER_SETTINGS;
   const thresholdKcal = Number.isFinite(Number(settings.spreadThresholdKcal))
     ? Number(settings.spreadThresholdKcal)
@@ -964,11 +991,18 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
     ? edgesOfFlow(flow)
     : (Array.isArray(project?.edges) ? project.edges : []);
 
+  // Issue 367: both indexes are built once, here, and every block reads them.
+  // `graphIndex` answers the upstream walk for scopes and the prepare edge;
+  // `projectIndex` answers the project-wide node and checkpoint lookups the same
+  // way the per-call helpers always did (active flow first, then the rest).
+  const graphIndex = flowIndex(nodes, projectEdges);
+  const projectIndex = planIndex(project);
+
   // RFC 0001: a block downstream of an input block runs once per record of that
   // block's dataset; anything else runs once, exactly as every v1 project did.
   const scopes = new Map();
   for (const node of nodes) {
-    scopes.set(node.id, scopeFor(project, nodes, projectEdges, node));
+    scopes.set(node.id, scopeIn(graphIndex, project, node));
   }
 
   // Issue #87: fan membership is decided once, for the whole branch, before
@@ -1023,8 +1057,8 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
         idsFor.set(node.id, [node.id]);
         continue;
       }
-      // An input block is the *source* of a scope, so `scopeFor` finds nothing
-      // upstream of it; its records come straight from the dataset it names.
+      // An input block is the *source* of a scope, so the upstream walk finds
+      // nothing above it; its records come straight from the dataset it names.
       // Issue 169: a series block's records are the N generated members, so the
       // inspector and the queue rows list the oligomers, not the unit alone.
       const bound = datasetById(project, node.input?.datasetId);
@@ -1152,7 +1186,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       // Issue 165: in `dp4` mode the block compares whole candidate records, so
       // it is planned once — one comparison, not one per record, because the
       // probability of a candidate is only defined against its rivals.
-      const context = computeContext(project, node, { results, edges: projectEdges });
+      const context = computeContext(project, node, { results, edges: projectEdges, index: projectIndex });
       const { sources, declared, definition } = context;
       const ids = [];
       if (context.mode === 'multiwfn') {
@@ -1224,7 +1258,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
     const ladder = ladderRungs(node.settings);
     const spin = spinSweepFor(node.settings);
     const fanOut = fanForNode.get(node.id) || null;
-    const checkpointSource = checkpointSourceNode(project, node);
+    const checkpointSource = checkpointSourceNode(project, node, projectIndex);
     const checkpointFan = checkpointSource ? fanForNode.get(checkpointSource.id) || null : null;
     const checkpointLadder = checkpointSource ? ladderRungs(checkpointSource.settings) : null;
     const checkpointSpin = checkpointSource ? spinSweepFor(checkpointSource.settings) : null;
@@ -1271,9 +1305,10 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
           pushTask(gated(calculationTask(project, node, {
             taskId,
             record,
-            conformerMember: readsCheckpoint ? null : fanMemberContext(project, fanOut, member),
+            conformerMember: readsCheckpoint ? null : fanMemberContext(project, fanOut, member, projectIndex),
             ignoreConformer: readsCheckpoint,
             checkpointTaskId: checkpointTaskFor(member.id),
+            index: projectIndex,
             title: `${node.title} — ${member.id}${memberLabel(member) ? ` (${memberLabel(member)})` : ''}`
               + `${record ? ` · ${record.label || record.id}` : ''}`,
             fanOut: {
@@ -1298,6 +1333,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
             checkpointTaskId: checkpointTaskFor(),
             title: `${node.title} — multiplicity ${multiplicity}`,
             spin: { id: node.id, index, multiplicity, count: spin.multiplicities.length },
+            index: projectIndex,
           })), recordId);
           ids.push(taskId);
         });
@@ -1308,6 +1344,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
           taskId: base,
           record,
           checkpointTaskId: checkpointTaskFor(),
+          index: projectIndex,
         })), recordId);
         ids.push(base);
         continue;
@@ -1335,6 +1372,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
             count: ladder.rungs.length,
             toleranceKcal: ladder.toleranceKcal,
           },
+          index: projectIndex,
         })), recordId);
         ids.push(taskId);
       });
@@ -1358,8 +1396,8 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
         // One checkpoint x N fanned-out runs has no honest reading: either the
         // consumer is fanned out over the same ensemble and pairs by member, or
         // the workflow is ambiguous and must say so before queueing.
-        throw new Error(`The checkpoint hand-off from "${nodeById(project, edge.from)?.title || edge.from}" is fanned out over`
-          + ` ${fromIds.length} members, but "${nodeById(project, edge.to)?.title || edge.to}" would read one checkpoint.`
+        throw new Error(`The checkpoint hand-off from "${nodeById(project, edge.from, projectIndex)?.title || edge.from}" is fanned out over`
+          + ` ${fromIds.length} members, but "${nodeById(project, edge.to, projectIndex)?.title || edge.to}" would read one checkpoint.`
           + ' Give the consumer its own dependency on the conformer block, or join the branches with a merge first.');
       }
       for (const to of toIds) {
@@ -1411,9 +1449,9 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
   }
   for (const [taskId, entry] of fanInputs) {
     if (fanFor(taskId) || entry.count < 2) continue;
-    const node = nodeById(project, taskId.split('~')[0]);
+    const node = nodeById(project, taskId.split('~')[0], projectIndex);
     if (!node || (node.type !== 'calculate' && node.type !== 'generate')) continue;
-    const ensemble = nodeById(project, [...entry.conformerIds][0]);
+    const ensemble = nodeById(project, [...entry.conformerIds][0], projectIndex);
     throw new Error(`"${node.title}" would run once but ${entry.count} fanned-out branches feed it,`
       + ` so it could only use one member of "${ensemble?.title || 'the ensemble'}".`
       + ' Wire it to the conformer block directly so it runs once per member,'
@@ -1426,9 +1464,8 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
   for (const task of tasks) {
     if (task.type !== 'calculate') continue;
     const blockId = String(task.nodeId).split('~')[0];
-    const edge = projectEdges.find((candidate) => candidate.to === blockId
-      && candidate.type === 'dependency'
-      && nodes.find((entry) => entry.id === candidate.from)?.type === 'prepare');
+    const edge = (graphIndex.incoming.get(blockId) || []).find((candidate) => candidate.type === 'dependency'
+      && graphIndex.byId.get(candidate.from)?.type === 'prepare');
     if (edge) task.prepareFrom = { nodeId: edge.from };
   }
 
@@ -1443,8 +1480,8 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
     // a checkpoint edge starts from is still the edge's source, not a segment
     // of the task id.
     const blockId = String(task.nodeId).split('~')[0];
-    const block = nodeById(project, blockId);
-    const checkpointBlock = block ? checkpointSourceNode(project, block) : null;
+    const block = nodeById(project, blockId, projectIndex);
+    const checkpointBlock = block ? checkpointSourceNode(project, block, projectIndex) : null;
     const sourceBlockId = checkpointBlock?.id || task.checkpointFrom.nodeId;
     const sourceIds = idsFor.get(sourceBlockId) || [];
     if (sourceIds.length === 0) continue;
@@ -1465,7 +1502,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       if (!paired) {
         throw new Error(`"${task.title}" has a member ${targetFan.memberId} with no matching checkpoint source task.`);
       }
-      const sourceNode = nodeById(project, sourceBlockId);
+      const sourceNode = nodeById(project, sourceBlockId, projectIndex);
       task.checkpointFrom = {
         ...task.checkpointFrom,
         nodeId: paired,
@@ -1519,31 +1556,34 @@ function calculationTask(project, node, {
   record = null,
   checkpointTaskId = null,
   ignoreConformer = false,
+  index = null,
 }) {
   // Issue #101: the ensemble has not been searched yet, so there is no member
   // to build from. Emit a task that marks the block pending instead of throwing
   // away the whole plan (which also discarded the search task that creates the
   // ensemble). The queue fails it with the same reason if the ensemble is still
   // missing when it gets there; it never falls back to the project geometry.
-  const pending = pendingConformerFor(project, node);
+  const pending = pendingConformerFor(project, node, index);
   if (pending && !conformerMember) {
     return pendingCalculationTask(project, node, {
-      taskId, title, settingsOverride, ladder, spin, pending, checkpointTaskId,
+      taskId, title, settingsOverride, ladder, spin, pending, checkpointTaskId, index,
     });
   }
-  const built = buildRunInput(project, node, { taskId, settingsOverride, conformerMember, record, checkpointTaskId, ignoreConformer });
-  const emissionFor = emissionContextFor(project, node, settingsOverride);
+  const built = buildRunInput(project, node, {
+    taskId, settingsOverride, conformerMember, record, checkpointTaskId, ignoreConformer, index,
+  });
+  const emissionFor = emissionContextFor(project, node, settingsOverride, index);
   const taskSettings = settingsOverride || settingsForNode(project, node);
   // ADR 0001 §2.10: a scorer provider keeps the block a calculate block but
   // bypasses the engine. The structure it scores is the same one the input
   // builder consumed, carried explicitly so the queue need not parse a route.
   const scorerChemistry = taskSettings.provider
-    ? moleculeForNode(project, node, conformerMember, record, { ignoreConformer })
+    ? moleculeForNode(project, node, conformerMember, record, { ignoreConformer, index })
     : null;
   // NTO (#146): the second job of the chain. The transition it analyses lives
   // on the TD block that wrote the checkpoint, so it is read from there — never
   // guessed from the NTO block's own settings.
-  const ntoSource = taskSettings.nto === true ? checkpointSourceNode(project, node) : null;
+  const ntoSource = taskSettings.nto === true ? checkpointSourceNode(project, node, index) : null;
   const ntoFor = taskSettings.nto === true
     ? {
       sourceNodeId: ntoSource?.id || null,
@@ -1583,9 +1623,9 @@ function calculationTask(project, node, {
       },
     } : {}),
     gates: gatesForNode(node),
-    validity: validityForNode(project, node, conformerMember, record, { ignoreConformer }),
+    validity: validityForNode(project, node, conformerMember, record, { ignoreConformer, index }),
     checkpointName: checkpointNameFor(project, node, taskId),
-    checkpointFrom: checkpointSourceFor(project, node, checkpointTaskId),
+    checkpointFrom: checkpointSourceFor(project, node, checkpointTaskId, index),
     // Emission (#75, #146): a TD block whose geometry came from a block that
     // relaxed an excited state reports vertical emission, not a ground-state
     // vertical excitation. The label travels with the task so no result is
@@ -1597,7 +1637,7 @@ function calculationTask(project, node, {
     ...(String((settingsOverride || settingsForNode(project, node)).jobType || '') === 'IRC'
       ? {
         reaction: {
-          transitionStateNodeId: checkpointSourceFor(project, node, checkpointTaskId)?.nodeId || null,
+          transitionStateNodeId: checkpointSourceFor(project, node, checkpointTaskId, index)?.nodeId || null,
           reactantNodeId: (settingsOverride || settingsForNode(project, node)).referenceNodeId || null,
         },
       }
@@ -1692,7 +1732,7 @@ function multiwfnTask(node, { taskId, record = null, recordId = null, sources = 
  * an input naming a block that is not wired in, or one of several upstream
  * blocks left unnamed.
  */
-export function computeContext(project, node, { results = null, edges = null } = {}) {
+export function computeContext(project, node, { results = null, edges = null, index = null } = {}) {
   const nodeEdges = edges || edgesOfFlow(activeFlow(project));
   const sources = orderingSourceIds(nodeEdges, node.id);
   const definition = node.analyse && typeof node.analyse === 'object'
@@ -1754,7 +1794,7 @@ export function computeContext(project, node, { results = null, edges = null } =
       const run = lookup(key);
       if (run) return { run, recordId: recordId || null };
     }
-    const source = nodeById(project, id);
+    const source = nodeById(project, id, index);
     if (source?.parsed) return { run: source.parsed, recordId: recordId || null };
     return null;
   };
@@ -1768,7 +1808,7 @@ export function computeContext(project, node, { results = null, edges = null } =
       if (name === id) rows.push({ recordId: null, run: lookup(key) });
       else if (name.startsWith(prefix)) rows.push({ recordId: name.slice(prefix.length), run: lookup(key) });
     }
-    const source = nodeById(project, id);
+    const source = nodeById(project, id, index);
     if (rows.length === 0 && source?.parsed) rows.push({ recordId: null, run: source.parsed });
     return rows;
   };
@@ -1794,7 +1834,7 @@ export function computeContext(project, node, { results = null, edges = null } =
       });
     }
     if (rows.length === 0) {
-      const source = nodeById(project, id);
+      const source = nodeById(project, id, index);
       if (source?.parsed) {
         rows.push({ taskId: id, recordId: null, memberId: null, label: source.title || id, run: source.parsed });
       }
@@ -1859,7 +1899,7 @@ function computeTask(node, { taskId, record = null, recordId = null, evaluation,
  * reaches the task and the ensemble is still absent. A later plan — after the
  * search stored the ensemble — turns the block into a normal runnable task.
  */
-function pendingCalculationTask(project, node, { taskId, title, settingsOverride, ladder, spin, pending, checkpointTaskId = null }) {
+function pendingCalculationTask(project, node, { taskId, title, settingsOverride, ladder, spin, pending, checkpointTaskId = null, index = null }) {
   const engine = engineForNode(project, node);
   const base = safeBase(taskId);
   const inputName = engine.id === 'xtb' ? `${base}.xyz` : engine.id === 'orca' ? `${base}.inp` : `${base}.gjf`;
@@ -1879,7 +1919,7 @@ function pendingCalculationTask(project, node, { taskId, title, settingsOverride
     gates: gatesForNode(node),
     validity: null,
     checkpointName: checkpointNameFor(project, node, taskId),
-    checkpointFrom: checkpointSourceFor(project, node, checkpointTaskId),
+    checkpointFrom: checkpointSourceFor(project, node, checkpointTaskId, index),
     pendingInput: {
       reason: noSelectedConformerMessage(pending, node),
       conformerId: pending.nodeId,
