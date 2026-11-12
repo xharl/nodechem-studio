@@ -280,9 +280,9 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
 const attrValue = (value) => String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
 const W = 216;
-// Cards carry a result line now (energy / SAPT / ensemble), so the height has
-// room for it between the route and the footer.
-const H = 132;
+// Cards carry a route line and a result line. Issue 360 raised the route to two
+// lines, so the card grew to 150 px to keep the second line above the result.
+const H = 150;
 const STAGE_W = 1080;
 const STAGE_H = 580;
 const LOOP_LANE = 548;
