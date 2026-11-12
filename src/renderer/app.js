@@ -2840,6 +2840,11 @@ function computePreviewOf(node) {
       // shows the pinned script it will run instead of pretending to compute.
       return { error: null, mode: 'multiwfn', result: null };
     }
+    if (context.mode === 'chem') {
+      // ADR 0003 §3.1: descriptors need the sidecar, so the inspector preview
+      // states the plan rather than inventing a table from the canvas.
+      return { error: null, mode: 'chem', result: null };
+    }
     if (context.mode === 'dp4') {
       // Issue 165: the preview reads the same candidate rows the plan does. It
       // can only see the blocks' attached parsed results (a fresh project has
@@ -3084,7 +3089,7 @@ function computeInspector(node) {
     ? node.analyse : { expression: '', inputs: [] };
   const mode = definition.mode === 'dp4'
     ? 'dp4'
-    : (definition.mode === 'multiwfn' ? 'multiwfn' : 'expression');
+    : (definition.mode === 'multiwfn' ? 'multiwfn' : (definition.mode === 'chem' ? 'chem' : 'expression'));
   const dp4 = mode === 'dp4' ? dp4DefinitionOf(node) : null;
   const multiwfn = mode === 'multiwfn' ? multiwfnDefinitionOf(node) : null;
   const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
@@ -3092,10 +3097,11 @@ function computeInspector(node) {
     ? inputs.map((input, index) => computeInputRow(input, index, upstream)).join('')
     : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
   const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
-  const eyebrow = mode === 'dp4' ? 'Derived · DP4+' : (mode === 'multiwfn' ? 'Sidecar · Multiwfn' : 'Derived · analyse');
+  const eyebrow = mode === 'dp4' ? 'Derived · DP4+'
+    : (mode === 'multiwfn' ? 'Sidecar · Multiwfn' : (mode === 'chem' ? 'Sidecar · RDKit' : 'Derived · analyse'));
   const subtitle = mode === 'dp4'
     ? 'candidate comparison'
-    : (mode === 'multiwfn' ? 'wavefunction analysis' : 'derived quantity');
+    : (mode === 'multiwfn' ? 'wavefunction analysis' : (mode === 'chem' ? 'descriptor set' : 'derived quantity'));
   return `${inspectorHead(eyebrow, node.title, `${upstream.length} upstream · ${subtitle}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · ${mode === 'multiwfn' ? 'ran by the user-installed Multiwfn binary' : 'evaluated from upstream records'}</span></div>
@@ -3105,9 +3111,12 @@ function computeInspector(node) {
         <option value="expression"${mode === 'expression' ? ' selected' : ''}>Arithmetic expression over upstream fields</option>
         <option value="dp4"${mode === 'dp4' ? ' selected' : ''}>DP4+ probabilities over candidate structures</option>
         <option value="multiwfn"${mode === 'multiwfn' ? ' selected' : ''}>Multiwfn analysis of a wavefunction</option>
+        <option value="chem"${mode === 'chem' ? ' selected' : ''}>Descriptors for each record's molecule (RDKit)</option>
       </select></div>`,
     ].join(''))}
-    ${mode === 'multiwfn' ? multiwfnInspectorBody(multiwfn, upstream, node) : mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
+    ${mode === 'chem' ? group('Descriptors', 'the versioned nodechem-1 set', true, [
+      `<div class="field full"><div class="inspector-note">One row per wired record or ensemble member. The chemistry sidecar must be chosen in the run console (or Settings → Tools). The set is versioned; a value it did not report stays empty, and a molecule RDKit cannot sanitise refuses the row.</div></div>`,
+    ].join('')) : mode === 'multiwfn' ? multiwfnInspectorBody(multiwfn, upstream, node) : mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
       `<div class="field full"><label>Expression</label><textarea class="textarea" rows="3" data-compute-field="expression" data-role="compute-expression" aria-label="Expression">${esc(definition.expression || '')}</textarea></div>`,
       `<div class="field full"><label>Preview</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
     ].join(''))}
@@ -6540,6 +6549,7 @@ const COMPANION_FIELDS = Object.freeze({
   scorer: { field: '#run-scorer', marker: '#run-scorer-detected', label: 'ML scorer' },
   multiwfn: { field: '#run-multiwfn', marker: '#run-multiwfn-detected', label: 'Multiwfn' },
   tautomer: { field: '#run-tautomer', marker: '#run-tautomer-detected', label: 'Tautomer sidecar' },
+  chem: { field: '#run-chem', marker: '#run-chem-detected', label: 'Chemistry sidecar' },
 });
 
 /** The platform main reports, falling back to the user agent before it lands. */
@@ -7422,6 +7432,9 @@ function readRunConfig() {
   // Issue 226: the tautomer sidecar is remembered like the other programs.
   if ($('#run-tautomer')) $('#run-tautomer').value = seed.tautomer;
   if ($('#run-tautomer-script')) $('#run-tautomer-script').value = seed.tautomerScript;
+  // ADR 0003: the chemistry sidecar is seeded the same way.
+  if ($('#run-chem')) $('#run-chem').value = seed.chem;
+  if ($('#run-chem-script')) $('#run-chem-script').value = seed.chemScript;
   if ($('#run-scratch')) $('#run-scratch').value = seed.scratch;
   if ($('#run-dry')) $('#run-dry').checked = seed.dryRun;
   const field = $('#run-exe');
@@ -7435,7 +7448,7 @@ function readRunConfig() {
   syncCompanionExecutables();
 }
 
-const RUN_TOOL_FIELDS = Object.freeze(['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'scratch']);
+const RUN_TOOL_FIELDS = Object.freeze(['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'tautomerScript', 'chem', 'chemScript', 'scratch']);
 
 function saveRunConfig() {
   try {
@@ -7457,6 +7470,8 @@ function saveRunConfig() {
       multiwfn: $('#run-multiwfn')?.value.trim() || '',
       tautomer: $('#run-tautomer')?.value.trim() || '',
       tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
+      chem: $('#run-chem')?.value.trim() || '',
+      chemScript: $('#run-chem-script')?.value.trim() || '',
       scratch: $('#run-scratch')?.value.trim() || '',
     };
     const tools = localOverrides(toolValues, state.appSettings?.tools, RUN_TOOL_FIELDS);
@@ -7469,6 +7484,8 @@ function saveRunConfig() {
       multiwfnExecutable: tools.multiwfn || '',
       tautomerExecutable: tools.tautomer || '',
       tautomerScript: tools.tautomerScript || '',
+      chemExecutable: tools.chem || '',
+      chemScript: tools.chemScript || '',
       scratchDir: tools.scratch || '',
     };
     if (typeof state.appSettings?.runs?.dryRun !== 'boolean' || dry !== state.appSettings.runs.dryRun) {
@@ -7858,6 +7875,31 @@ async function preflightRun({ quiet = false } = {}) {
             label: 'Tautomer enumerator sidecar',
             ok: Boolean(tautomer),
             detail: tautomer || 'not chosen — tautomer enumeration needs RDKit; there is no in-app fallback',
+          },
+        ],
+      };
+    }
+    // ADR 0003: a chem analyse block is a sidecar job too, and a dry run does
+    // not spawn it, so the check is advisory on a dry run like the others.
+    let needsChem = false;
+    try {
+      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      needsChem = tasks.some((task) => task.type === 'analyse' && task.analyse?.mode === 'chem');
+    } catch {
+      // An unbuildable plan is reported by the queue's own error.
+    }
+    if (needsChem) {
+      const chem = $('#run-chem')?.value.trim() || '';
+      result = {
+        ...result,
+        ok: result.ok && Boolean(chem),
+        checks: [
+          ...(Array.isArray(result.checks) ? result.checks : []),
+          {
+            id: 'chem',
+            label: 'Chemistry sidecar',
+            ok: Boolean(chem),
+            detail: chem || 'not chosen — descriptors need RDKit; there is no in-app fallback',
           },
         ],
       };
@@ -8326,6 +8368,7 @@ function executableFixFor(reason, task = null) {
   if (/open babel|obabel/i.test(message)) return { field: '#run-obabel', label: 'Open Babel' };
   if (/scorer/i.test(message)) return { field: '#run-scorer', label: 'ML scorer' };
   if (/tautomer/i.test(message)) return { field: '#run-tautomer', label: 'tautomer sidecar' };
+  if (/descriptors|chemistry sidecar/i.test(message)) return { field: '#run-chem', label: 'chemistry sidecar' };
   return { field: '#run-exe', label: engineOrDefault(task?.engine).label };
 }
 
@@ -8613,6 +8656,8 @@ async function startWorkflowUnlocked() {
         // is an interpreter, the script it should run.
         tautomerExecutable: $('#run-tautomer')?.value.trim() || '',
         tautomerScript: $('#run-tautomer-script')?.value.trim() || '',
+        chemExecutable: $('#run-chem')?.value.trim() || '',
+        chemScript: $('#run-chem-script')?.value.trim() || '',
         scratchDir: $('#run-scratch').value.trim(),
         maxParallel: maxParallelForQueue(),
         // Issue 177: the project's per-task wall clock; null lets the queue
@@ -10350,6 +10395,7 @@ function handleAction(action, element) {
     case 'pick-scorer': pickCompanionTool('scorer'); break;
     case 'pick-multiwfn': pickCompanionTool('multiwfn'); break;
     case 'pick-tautomer': pickCompanionTool('tautomer'); break;
+    case 'pick-chem': pickCompanionTool('chem'); break;
     case 'pause-workflow': pauseWorkflow(); break;
     case 'export-workflow-report': exportWorkflowReportAction(); break;
     case 'resume-workflow': resumeWorkflow(); break;
@@ -10722,7 +10768,7 @@ function onDocumentChange(event) {
     if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
     const mode = target.value === 'dp4'
       ? 'dp4'
-      : (target.value === 'multiwfn' ? 'multiwfn' : 'expression');
+      : (target.value === 'multiwfn' ? 'multiwfn' : (target.value === 'chem' ? 'chem' : 'expression'));
     if (mode === 'dp4') {
       // Switching modes creates the DP4+ definition with no level chosen: a
       // block that quietly inherited the first bank level would be computing a
@@ -10731,6 +10777,11 @@ function onDocumentChange(event) {
       dp4DefinitionOf(node);
       // The arithmetic declaration is kept until the file is saved, so flipping
       // the mode back does not lose an expression the user typed.
+    } else if (mode === 'chem') {
+      // ADR 0003 §3.1: a descriptors block needs no expression and no inputs;
+      // it describes the molecules its upstream records carry.
+      node.analyse.mode = 'chem';
+      node.analyse.chem = { op: 'descriptors' };
     } else if (mode === 'multiwfn') {
       // Issue 270: a new Multiwfn definition defaults to QTAIM and the only
       // upstream block, if there is exactly one; nothing is chosen silently for

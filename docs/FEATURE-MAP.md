@@ -197,7 +197,7 @@ rather than scraped from a log; the text parser exists only for user-supplied lo
 | Tautomer/protomer enumeration | **Implemented** | `tautomers.js` + `tautomerRunner.js`, RDKit ruleset (issue #226) |
 | Chemistry sidecar (ADR 0003) | **Implemented (phase 0)** | one `SidecarRunner`, protocol `nodechem-chem/1`, capability probe in Settings, `scripts/**/*.py` shipped as `extraResources`; descriptor/standardisation/integrity/depiction ops land per phase |
 | `prepare` block (embed 3D, relax) | **Implemented (branch)** | ADR §2.9; `mlRelax.js` |
-| Descriptors / fingerprints | **Absent** | no RDKit descriptor path |
+| Descriptors (`analyse.mode: "chem"`) | **Implemented (ADR 0003 phase 1)** | `chemDescriptors.js`, `scripts/nodechem_chem/ops/descriptors.py`, `descriptorSet: nodechem-1`; fingerprints remain absent |
 | Validation harness across reference cases | **Implemented** | `validationMatrix.js`, `ncs validation`; `--run` executes PySCF rungs (issue #230) |
 | cclib foreign-log conversion | **Implemented** | `scripts/ncs_cclib.py`, `ncs convert --format cjson` (issue #273); cclib is user-installed |
 | Uncertainty reporting | **Implemented** | `uncertainty.js` (issue #229) |

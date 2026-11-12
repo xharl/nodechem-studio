@@ -41,6 +41,15 @@ import {
   parseMultiwfnOutput,
 } from '../../src/shared/multiwfn.js';
 import {
+  DESCRIPTOR_SET_ID,
+  descriptorRequest,
+  descriptorSummary,
+  normalizeDescriptorResult,
+} from '../../src/shared/chemDescriptors.js';
+import { CHEM_PROTOCOL, ChemError } from '../../src/shared/chemistry.js';
+import { SidecarRunner } from './sidecarRunner.js';
+import { cacheFingerprint, cacheGet, cachePut, readChemCache, writeChemCache } from './chemCache.js';
+import {
   DEFAULT_TAUTOMER_OPTIONS,
   TAUTOMER_PROTOCOL,
   TautomerEnumerationError,
@@ -180,6 +189,32 @@ async function writeBytesAtomic(filePath, bytes) {
   }
   await fsp.rm(temp, { force: true }).catch(() => {});
   await fsp.writeFile(filePath, bytes);
+}
+
+
+/**
+ * The geometry a record can be described from: the final one when the parser
+ * has it, else the input geometry. Never a guess — a record with no atoms is a
+ * refusal the caller names.
+ */
+function atomsFromRecord(record) {
+  const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
+  const candidates = [parsed.finalGeometry, parsed.geometry?.final, parsed.geometry?.initial, parsed.geometry];
+  for (const candidate of candidates) {
+    const atoms = Array.isArray(candidate) ? candidate : candidate?.atoms;
+    if (!Array.isArray(atoms) || atoms.length === 0) continue;
+    const normalized = atoms.map((atom) => ({
+      element: String(atom?.element || ''),
+      x: Number(atom?.x),
+      y: Number(atom?.y),
+      z: Number(atom?.z),
+    }));
+    if (normalized.every((atom) => atom.element && Number.isFinite(atom.x)
+      && Number.isFinite(atom.y) && Number.isFinite(atom.z))) {
+      return normalized;
+    }
+  }
+  return null;
 }
 
 async function writeJsonAtomic(filePath, value) {
@@ -1441,6 +1476,12 @@ export class QueueManager {
     const needsTautomer = tasks.some((task) => task.type === 'generate'
       && task.generate?.produces === 'tautomers'
       && !task.generate?.member);
+    // ADR 0003 §3.1: a descriptors analyse block spawns the chemistry sidecar.
+    // The queue options are frozen at start, exactly as the tautomer sidecar's
+    // are, so a replay names the same interpreter and script.
+    const chemExecutable = String(options.chemExecutable || '').trim();
+    const chemScript = String(options.chemScript || '').trim();
+    const needsChem = tasks.some((task) => task.type === 'analyse' && task.analyse?.mode === 'chem');
     // Issue #270: a Multiwfn analyse block spawns the user-installed sidecar.
     // A dry run must not spawn it, exactly as it spawns no engine.
     const needsMultiwfn = tasks.some((task) => task.type === 'analyse'
@@ -1516,6 +1557,18 @@ export class QueueManager {
           if (!scriptStat?.isFile()) throw new Error(`Tautomer sidecar script not found: ${tautomerScript}`);
         }
       }
+      if (needsChem) {
+        if (!chemExecutable) {
+          throw new Error('Choose the chemistry sidecar before running a descriptors block. It needs Python '
+            + 'with rdkit (scripts/nodechem-chem.py); there is no in-app fallback.');
+        }
+        const stat = await fsp.stat(chemExecutable).catch(() => null);
+        if (!stat?.isFile()) throw new Error(`Chemistry sidecar not found: ${chemExecutable}`);
+        if (chemScript) {
+          const scriptStat = await fsp.stat(chemScript).catch(() => null);
+          if (!scriptStat?.isFile()) throw new Error(`Chemistry sidecar script not found: ${chemScript}`);
+        }
+      }
       if (needsMultiwfn) {
         if (!multiwfnExecutable) {
           throw new Error('Choose the Multiwfn executable before running a Multiwfn analysis block. '
@@ -1556,6 +1609,10 @@ export class QueueManager {
         // names the same program, and a dry run records none because none ran.
         tautomerExecutable: dryRun ? null : tautomerExecutable,
         tautomerScript: dryRun ? null : tautomerScript,
+        // ADR 0003: the chemistry sidecar travels with the queue; a dry run
+        // records none because none ran.
+        chemExecutable: dryRun ? null : chemExecutable,
+        chemScript: dryRun ? null : chemScript,
         scratchDir,
         // A relative conformer `importPath` resolves against this folder, so it
         // travels with the queue and a replay resolves it the same way.
@@ -2924,7 +2981,7 @@ export class QueueManager {
       // A timed-out run produced no result, so it carries no condition fields:
       // a downstream condition must block on "no parsed result", not read a
       // wall of `false` as a verdict the engine never gave.
-      task.summary = timedOut ? null : conditionFields(record.parsed, record.gates);
+      task.summary = timedOut ? null : conditionFields(record.parsed, record.gates, record.descriptors || record.parsed?.descriptors || null);
       // Keep only the records a downstream validity check needs; the full
       // parsed output stays in the run folder.
       task.parsedSummary = record.parsed ? {
@@ -3822,6 +3879,12 @@ export class QueueManager {
       await this.runMultiwfn(queue, task);
       return;
     }
+    // ADR 0003 §3.1: a chem block describes structures with the chemistry
+    // sidecar instead of evaluating an expression.
+    if (analyse.mode === 'chem') {
+      await this.runChemAnalyse(queue, task);
+      return;
+    }
     // Issue 165: a DP4+ block is an analyse block with a definition instead of
     // an expression. It reads whole run records (candidates) rather than named
     // fields, so it has its own reader below but the same record contract.
@@ -3919,6 +3982,185 @@ export class QueueManager {
     } else {
       this.setTaskOutcome(task, 'failed', oneLine(evaluation.notComputed, 400));
     }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
+  /**
+   * ADR 0003 §3.1 — describe a record's molecule with the chemistry sidecar.
+   *
+   * One task per record, one sidecar call, one derived `run.json`. The cache is
+   * run-local and read before the spawn, so a fan-out over the conformers of one
+   * molecule computes the 2D set once. A refusal is recorded with its code and
+   * sentence; a descriptor the sidecar did not report is null, never zero.
+   */
+  async runChemAnalyse(queue, task) {
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    task.runId = null;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+
+    const refuse = async (code, message) => {
+      task.analyse = { ...analyse, status: 'refused', value: null, unit: null, notComputed: message, refusal: { code, message } };
+      task.refusal = { code, message };
+      this.setTaskOutcome(task, 'failed', oneLine(message, 400));
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+    };
+
+    if (queue.options?.dryRun) {
+      await refuse('chem-dry-run', 'A dry run cannot compute descriptors: the chemistry sidecar is an external '
+        + 'program, and a dry run never fabricates a number.');
+      return;
+    }
+    if (!queue.options?.chemExecutable) {
+      await refuse('rdkit-missing', 'No chemistry sidecar is configured. Descriptors need RDKit '
+        + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+      return;
+    }
+
+    const sources = this.incomingSources(queue, task.nodeId);
+    let record = null;
+    for (const source of sources) {
+      if (!source.runDir) continue;
+      let run = null;
+      try {
+        run = JSON.parse(await fsp.readFile(path.join(source.runDir, 'run.json'), 'utf8'));
+      } catch {
+        run = null;
+      }
+      if (!run) continue;
+      const recordId = String(source.nodeId).includes('~')
+        ? String(source.nodeId).split('~').slice(1).join('~') : null;
+      if (task.recordId && recordId !== task.recordId) continue;
+      record = run;
+      break;
+    }
+    const atoms = record ? atomsFromRecord(record) : null;
+    if (!atoms) {
+      await refuse('bad-input', 'The upstream record carries no geometry to describe. Run the calculation again, '
+        + 'or wire a record that has a final geometry.');
+      return;
+    }
+    const charge = Number.isInteger(task.record?.charge) ? task.record.charge : 0;
+    const multiplicity = Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : 1;
+    const sourceSha256 = String(record.outputSha256 || record.inputSha256 || '');
+
+    const cache = await readChemCache(this.queueDir(queue.id));
+    const fingerprint = cacheFingerprint({
+      op: 'descriptors', descriptorSet: DESCRIPTOR_SET_ID, charge, multiplicity, options: {}, atoms,
+    });
+    const hit = cacheGet(cache, fingerprint);
+    if (hit?.refused) {
+      await refuse(hit.error?.code || 'op-failed', hit.error?.message || 'The chemistry sidecar refused this molecule.');
+      return;
+    }
+
+    let result = null;
+    let program = 'RDKit';
+    let version = 'unreported';
+    let cacheHit = false;
+    if (hit?.result?.identity && hit?.result?.descriptors) {
+      result = hit.result;
+      program = hit.program || program;
+      version = hit.version || version;
+      cacheHit = true;
+    } else {
+      try {
+        const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+          executable: queue.options.chemExecutable,
+          script: queue.options.chemScript || '',
+          request: descriptorRequest({
+            molecule: { title: task.title, charge, multiplicity, atoms },
+            options: {},
+          }),
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          cwd: dir,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const answer = normalizeDescriptorResult(raw);
+        result = { identity: answer.identity, descriptors: answer.descriptors };
+        program = answer.program;
+        version = answer.version;
+        cachePut(cache, fingerprint, {
+          op: 'descriptors', descriptorSet: DESCRIPTOR_SET_ID, program, version, result,
+        });
+        await writeChemCache(this.queueDir(queue.id), cache);
+      } catch (error) {
+        if (error instanceof ChemError) {
+          cachePut(cache, fingerprint, {
+            op: 'descriptors', descriptorSet: DESCRIPTOR_SET_ID, refused: true,
+            error: { code: error.code, message: error.message, detail: error.detail },
+          });
+          await writeChemCache(this.queueDir(queue.id), cache);
+          await refuse(error.code, error.message);
+          return;
+        }
+        await refuse('op-failed', `The chemistry sidecar could not describe this molecule: ${error.message}`);
+        return;
+      }
+    }
+
+    const origin = {
+      program,
+      version,
+      method: `descriptor set ${DESCRIPTOR_SET_ID}`,
+      op: 'descriptors',
+      protocol: CHEM_PROTOCOL,
+      sourceSha256,
+    };
+    const summary = descriptorSummary(result);
+    task.analyse = {
+      ...analyse,
+      status: 'computed',
+      value: null,
+      unit: null,
+      descriptorSet: DESCRIPTOR_SET_ID,
+      cache: { hit: cacheHit, key: fingerprint },
+      origin,
+      identity: result.identity,
+      descriptors: result.descriptors,
+      summary,
+    };
+    task.summary = summary;
+    try {
+      await writeJsonAtomic(path.join(dir, 'run.json'), {
+        schemaVersion: 1,
+        kind: 'derived',
+        nodeId: task.nodeId,
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        provenance: { kind: 'derived', jobType: 'Analyse', method: {}, basis: null },
+        analyse: {
+          mode: 'chem',
+          op: 'descriptors',
+          descriptorSet: DESCRIPTOR_SET_ID,
+          sources: analyse.sources || [],
+          ...(task.recordId ? { recordId: task.recordId } : {}),
+          status: 'computed',
+          cache: { hit: cacheHit, key: fingerprint },
+          origin,
+        },
+        identity: result.identity,
+        descriptors: result.descriptors,
+      });
+      task.runId = task.nodeId;
+    } catch (error) {
+      task.analyse = { ...task.analyse, notes: [`the derived record could not be written: ${error.message}`] };
+    }
+    this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
     await this.persist(queue);
     this.publish(queue);
     this.announce(queue, task);

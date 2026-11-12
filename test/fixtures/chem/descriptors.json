@@ -1,0 +1,62 @@
+{
+  "program": "RDKit",
+  "options": {
+    "descriptorSet": "nodechem-1"
+  },
+  "result": {
+    "identity": {
+      "smiles": "[H]OC(=O)c1c([H])c([H])c([H])c([H])c1OC(=O)C([H])([H])[H]",
+      "inchiKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+      "tautomerHash": "[H]O[C]([O])[C]1[C]([H])[C]([H])[C]([H])[C]([H])[C]1O[C]([O])C([H])([H])[H]_0_0",
+      "formula": "C9H8O4",
+      "atomCount": 21,
+      "heavyAtomCount": 13
+    },
+    "descriptors": {
+      "formula": "C9H8O4",
+      "exactMass": 180.042258736,
+      "molWeight": 180.15900000000005,
+      "logP": 1.3101,
+      "tpsa": 63.60000000000001,
+      "hbd": 1,
+      "hba": 4,
+      "rotatableBonds": 2,
+      "ringCount": 1,
+      "aromaticRingCount": 1,
+      "fsp3": 0.1111111111111111,
+      "qed": 0.5501217966938848,
+      "formalCharge": 0,
+      "inchiKey": "BSYNRYMUTXBXSQ-UHFFFAOYSA-N",
+      "murckoScaffold": "c1ccccc1"
+    }
+  },
+  "version": "2026.9.1",
+  "protocol": "nodechem-chem/1",
+  "op": "descriptors",
+  "ok": true,
+  "_provenance": {
+    "recordedWith": "/usr/local/bin/python3",
+    "rdkit": "2026.9.1",
+    "request": {
+      "protocol": "nodechem-chem/1",
+      "op": "descriptors",
+      "molecule": {
+        "title": "aspirin",
+        "smiles": "CC(=O)Oc1ccccc1C(=O)O",
+        "charge": 0,
+        "multiplicity": 1,
+        "atoms": [
+          {
+            "element": "C",
+            "x": 0,
+            "y": 0,
+            "z": 0
+          }
+        ]
+      },
+      "options": {}
+    },
+    "recordedAt": "2026-11-11",
+    "note": "Real RDKit answer; CI replays it through a fake sidecar."
+  }
+}

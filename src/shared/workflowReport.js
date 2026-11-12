@@ -21,6 +21,7 @@ import { contentHash } from './figures/primitives.js';
 import { flowGraphFigure } from './figures/dag.js';
 import { taskFigures } from './figures/report.js';
 import { nciFigure } from './figures/nci.js';
+import { DESCRIPTORS, DESCRIPTOR_SET_ID } from './chemDescriptors.js';
 import { nciAnalysis } from './nci.js';
 import { bcpTable, bcpTableHtml, qtaimAnalysis } from './qtaim.js';
 import { shiftFor } from './nmrReferences.js';
@@ -149,7 +150,48 @@ function taskRow(task, record, { includeImported = false } = {}) {
     elapsedSeconds: num(record?.elapsedSeconds ?? parsed.resources?.elapsedSeconds),
     inputSha256: text(record?.inputSha256),
     outputSha256: text(record?.outputSha256),
+    // ADR 0003 §3.1: the versioned descriptor set a chem analyse block wrote.
+    // Absent on every other record, so no other row grows a column.
+    descriptors: record?.descriptors && typeof record.descriptors === 'object'
+      ? {
+        ...record.descriptors,
+        descriptorSet: text(record.analyse?.descriptorSet) || DESCRIPTOR_SET_ID,
+        identity: record.identity && typeof record.identity === 'object' ? record.identity : null,
+        cache: record.analyse?.cache && typeof record.analyse.cache === 'object' ? record.analyse.cache : null,
+      }
+      : null,
   };
+}
+
+/**
+ * ADR 0003 §3.1 — one table of the curated descriptor set.
+ *
+ * Numbers are formatted, never re-derived: the record already carries them. A
+ * missing value prints the report's `not reported` marker, so a gap cannot be
+ * read as zero. The set id is printed once per row group, because a report that
+ * mixes two sets must say which table produced each row.
+ */
+function descriptorsSectionHtml(rows, headingTag = 'h2') {
+  const entries = (Array.isArray(rows) ? rows : []).filter((row) => row.descriptors);
+  if (entries.length === 0) return '';
+  const header = '<tr><th>Record</th><th>Set</th>'
+    + DESCRIPTORS.map((definition) => `<th${definition.kind === 'text' ? '' : ' class="num"'}>${escapeHtml(definition.label)}${definition.unit ? ` / ${escapeHtml(definition.unit)}` : ''}</th>`).join('')
+    + '</tr>';
+  const body = entries.map((row) => {
+    const values = row.descriptors;
+    const cells = DESCRIPTORS.map((definition) => {
+      const raw = values[definition.key];
+      if (raw === null || raw === undefined || raw === '') return `<td>${escapeHtml(MISSING)}</td>`;
+      const shown = definition.kind === 'text' ? String(raw) : value(raw, definition.kind === 'count' ? 0 : 3);
+      return `<td${definition.kind === 'text' ? '' : ' class="num"'}>${escapeHtml(shown)}</td>`;
+    }).join('');
+    return `<tr><td>${escapeHtml(row.recordLabel || row.title)}</td>`
+      + `<td class="mono">${escapeHtml(values.descriptorSet || DESCRIPTOR_SET_ID)}</td>${cells}</tr>`;
+  }).join('');
+  return `<${headingTag}>Descriptors</${headingTag}>`
+    + '<p class="sub">Cheminformatics descriptors, not calculated properties: 2D/topological unless stated. '
+    + `The set id is versioned, so a later addition cannot silently re-label this table.</p>`
+    + `<table class="descriptors"><thead>${header}</thead><tbody>${body}</tbody></table>`;
 }
 
 /**
@@ -1547,6 +1589,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + reactionBlocks
     + uncertaintySectionHtml(model.uncertainty, sectionHeading)
     + derivedBlocks
+    + descriptorsSectionHtml(rows, sectionHeading)
     + multiwfnSectionHtml(model.multiwfn, sectionHeading)
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')

@@ -55,6 +55,17 @@ A machine without RDKit is not an error state for the app: every chemistry block
 `rdkit-missing` and says which interpreter it tried. CI does not install RDKit; the test suite
 replays committed fixtures through a fake sidecar.
 
+## Ops
+
+| Op | Used by | Answer |
+| --- | --- | --- |
+| `probe` | Settings → Tools | version and capability flags |
+| `descriptors` | `analyse.mode = "chem"` | the curated `nodechem-1` set for one molecule |
+
+Each answer records `program`, `version`, `op` and the parameters that change it. A repeated
+structure is answered from the run-local `chem-cache.json`; the record says whether the value was a
+cache hit.
+
 ## What ships, and where
 
 `electron-builder` copies `scripts/**/*.py` through `extraResources` to `resources/scripts/`. The

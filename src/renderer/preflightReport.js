@@ -51,6 +51,7 @@ export function preflightFixTarget(checkId) {
   const id = String(checkId || '');
   if (id === 'executable' || /^engine-[a-z0-9]+-executable$/.test(id)) return '#run-exe';
   if (id === 'tautomer' || id === 'tautomer-sidecar') return '#run-tautomer';
+  if (id === 'chem' || id === 'chem-sidecar') return '#run-chem';
   if (id === 'scorer' || id === 'scorer-sidecar') return '#run-scorer';
   if (id === 'scratch' || id === 'scratch-writable') return '#run-scratch';
   return null;

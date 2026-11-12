@@ -19,19 +19,40 @@ convergence study expressible inside the graph instead of in a shell script afte
 A derived value is **never** presented as a quantum-chemical result. It has no parsed output block,
 it never enters an energy column, and every card and report row names the values it was built from.
 
-The block has two modes (issue 165), chosen with **What this block computes** in the inspector:
+The block has four modes, chosen with **What this block computes** in the inspector:
 
 | `analyse.mode` | Computes |
 | --- | --- |
 | absent, or `"expression"` (the default) | the arithmetic this page describes — one value per record |
 | `"dp4"` | DP4+ probabilities over candidate structures, from the NMR shields of the wired blocks' runs; see [DP4 and DP4+ probabilities](dp4.md) |
+| `"multiwfn"` | a Multiwfn analysis of one wavefunction; see [Multiwfn analyses](#multiwfn-analyses) |
+| `"chem"` | the curated `nodechem-1` descriptor set for each wired record's molecule (ADR 0003); see [Descriptors](#descriptors) |
 
 A project that never asks for `"dp4"` saves and plans exactly as it did before the mode existed.
 
 A third mode, `"multiwfn"`, runs a **user-installed Multiwfn** binary as an external analysis
-sidecar (issue 270). It is additive: the expression and DP4+ modes are unchanged, and a project that
-never selects it saves exactly as it did. [Multiwfn analyses](#multiwfn-analyses) describes it,
-including the licence and the parts that need your binary to validate.
+sidecar (issue 270). A fourth, `"chem"`, runs the chemistry sidecar's `descriptors` op (ADR 0003) and
+writes one row per wired record or ensemble member. Both are additive: the expression and DP4+ modes
+are unchanged, and a project that never selects one saves exactly as it did.
+
+## Descriptors
+
+`analyse.mode = "chem"` describes the molecule an upstream record carries. The block declares no
+field inputs; it names the blocks whose structures it describes, exactly as a Multiwfn block names
+the run it analyses. Each record (or ensemble member) becomes one derived record with a versioned
+set id, `nodechem-1`:
+
+formula, exact mass, molecular weight, Crippen logP, TPSA, H-bond donors and acceptors, rotatable
+bonds, ring and aromatic-ring counts, Fsp3, QED, formal charge, InChIKey and the Murcko scaffold.
+
+Every number is a cheminformatics descriptor, never a calculated property, and the record names the
+RDKit build, the op, the set id and the input hash. A descriptor RDKit did not report is empty, not
+zero; a molecule it cannot sanitise refuses the row with a typed code instead of a table of zeros.
+The values also land in the dataset CSV (`tpsa_angstrom2`, `logp_crippen`, …) and in a `condition`
+block's field set, so a workflow can route on `tpsa > 140`.
+
+Without RDKit the block refuses with `rdkit-missing` and names the interpreter it tried; there is no
+in-app fallback and no fabricated number.
 
 ## Multiwfn analyses
 
@@ -164,6 +185,10 @@ quantity:
 | `scfCycles`, `imaginaryCount`, `conformerPopulation`, `unpairedElectrons` | dimensionless |
 | `elapsedSeconds` | s |
 | `mullikenChargeSum`, `mullikenChargeDeviation` | e |
+| `exactMass`, `molWeight` | Da |
+| `tpsa` | Å² |
+| `logP`, `hbd`, `hba`, `rotatableBonds`, `ringCount`, `aromaticRingCount`, `fsp3`, `qed` | dimensionless |
+| `formalCharge` | e |
 
 A field a record does not carry is **null**, never zero.
 

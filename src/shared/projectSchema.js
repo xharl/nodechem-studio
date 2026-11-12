@@ -2438,13 +2438,13 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     // `dp4`. Absent `mode` is the expression block byte for byte, so every
     // project written before this existed saves exactly as it did.
     const source = requiredObject(c, raw.analyse, `${path}.analyse`, legacy, {});
-    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4', 'multiwfn']), `${path}.analyse`);
-    if (source.mode !== undefined && source.mode !== 'dp4' && source.mode !== 'expression' && source.mode !== 'multiwfn') {
-      c.error(`${path}.analyse.mode`, 'must be "expression" (the default), "dp4" or "multiwfn".');
+    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4', 'multiwfn', 'chem']), `${path}.analyse`);
+    if (source.mode !== undefined && !['dp4', 'expression', 'multiwfn', 'chem'].includes(source.mode)) {
+      c.error(`${path}.analyse.mode`, 'must be "expression" (the default), "dp4", "multiwfn" or "chem".');
     }
     const mode = source.mode === 'dp4'
       ? DP4_COMPUTE_MODE
-      : (source.mode === 'multiwfn' ? 'multiwfn' : 'expression');
+      : (source.mode === 'multiwfn' ? 'multiwfn' : (source.mode === 'chem' ? 'chem' : 'expression'));
     if (mode === 'dp4') {
       const checked = validateDp4Definition(source.dp4);
       for (const problem of checked.errors) {
@@ -2488,6 +2488,37 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
         analyse: {
           mode: 'multiwfn',
           ...(checked.value ? { multiwfn: checked.value } : {}),
+        },
+      };
+    }
+    if (mode === 'chem') {
+      // ADR 0003 §3.1: a descriptors block reads whole run records, one row per
+      // record or ensemble member, so it declares no field inputs. The op is
+      // pinned to `descriptors`; phase 7 adds its similarity mode separately.
+      const chem = isPlainObject(source.chem) ? source.chem : {};
+      if (source.chem !== undefined && !isPlainObject(source.chem)) {
+        c.error(`${path}.analyse.chem`, 'must be an object.');
+      }
+      warnUnknown(c, chem, new Set(['op', 'options']), `${path}.analyse.chem`);
+      if (chem.op !== undefined && chem.op !== 'descriptors') {
+        c.error(`${path}.analyse.chem.op`, 'must be "descriptors" in this build.');
+      }
+      if (Array.isArray(source.inputs) && source.inputs.length) {
+        c.error(`${path}.analyse.inputs`,
+          'a descriptors block reads whole run records, not fields; wire the blocks whose structures it describes and leave the input list empty.');
+      }
+      if (String(source.expression ?? '').trim()) {
+        c.warn(`${path}.analyse.expression`,
+          'is not saved or evaluated by a descriptors block: it describes molecules, not an expression.');
+      }
+      return {
+        ...common,
+        analyse: {
+          mode: 'chem',
+          chem: {
+            op: 'descriptors',
+            ...(isPlainObject(chem.options) ? { options: chem.options } : {}),
+          },
         },
       };
     }

@@ -100,6 +100,7 @@ const USAGE = `ncs — headless NodeChem Studio
   ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>]
       [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>]
       [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>]
+      [--chem <path>] [--chem-script <path>]
       [--scorer <path>]
       [--settings <file>]
       [--timeout <seconds>] [--json]
@@ -431,6 +432,11 @@ async function commandRun({ positional, flags }) {
         ? String(flags.tautomer) : String(settingsTools.tautomer || ''),
       tautomerScript: flags['tautomer-script']
         ? String(flags['tautomer-script']) : String(settingsTools.tautomerScript || ''),
+      // ADR 0003: the chemistry sidecar for descriptors and the ops that follow.
+      chemExecutable: flags.chem
+        ? String(flags.chem) : String(settingsTools.chem || ''),
+      chemScript: flags['chem-script']
+        ? String(flags['chem-script']) : String(settingsTools.chemScript || ''),
       // Issue #270: the user-installed Multiwfn binary for analyse blocks.
       multiwfnExecutable: flags.multiwfn
         ? String(flags.multiwfn) : String(settingsTools.multiwfn || ''),

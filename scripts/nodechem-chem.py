@@ -46,13 +46,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from nodechem_chem import PROTOCOL  # noqa: E402
 from nodechem_chem.common import fail, read_request  # noqa: E402
-from nodechem_chem.ops import probe  # noqa: E402
+from nodechem_chem.ops import descriptors, probe  # noqa: E402
 
 # Every op implemented in this build. The app refuses an unimplemented op before
 # spawning, so reaching the fall-through below means the wire and the script
 # disagree — which is a bad request, not a silent partial answer.
 OPS = {
     "probe": probe.run,
+    "descriptors": descriptors.run,
 }
 
 
@@ -70,6 +71,15 @@ def main():
             op=op,
         )
     payload = handler(request)
+    payload.setdefault("program", "RDKit")
+    # Provenance is required on every answer (ADR §2.4). The probe reports the
+    # version itself; every other op gets the same value from the same build.
+    if not payload.get("version"):
+        from nodechem_chem.common import rdkit_version
+
+        import rdkit
+
+        payload["version"] = rdkit_version(rdkit)
     payload.update({"protocol": PROTOCOL, "op": op, "ok": True})
     print(json.dumps(payload))
 

@@ -15,6 +15,7 @@
  */
 
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
+import { DESCRIPTORS, DESCRIPTOR_SET_ID } from '../shared/chemDescriptors.js';
 import { dp4PanelHtml } from '../shared/workflowReport.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
@@ -2703,11 +2704,58 @@ function multiwfnCard(analyse, multiwfn, provenance) {
  * replaced by the statement that the table is the result. A run that was
  * refused still prints its refusal, because the refusal *is* the outcome.
  */
+
+/**
+ * ADR 0003 §3.1 — the descriptor card.
+ *
+ * The table is the result: every value comes from the versioned set the record
+ * names, a missing one prints `not reported`, and the provenance card says which
+ * RDKit build and which interpreter produced it. These are cheminformatics
+ * numbers, never a calculated property.
+ */
+function chemCard(analyse) {
+  const descriptors = isObject(analyse?.descriptors) ? analyse.descriptors : {};
+  const origin = isObject(analyse?.origin) ? analyse.origin : {};
+  const cache = isObject(analyse?.cache) ? analyse.cache : {};
+  const rows = DESCRIPTORS.map((definition) => {
+    const raw = descriptors[definition.key];
+    const missing = raw === null || raw === undefined || raw === '';
+    const shown = missing ? missingHtml()
+      : esc(definition.kind === 'text' ? String(raw) : numberText(raw, definition.kind === 'count' ? 0 : 3));
+    return `<tr data-role="chem-descriptor" data-key="${esc(definition.key)}">`
+      + `<td>${esc(definition.label)}</td><td class="num">${shown}</td>`
+      + `<td>${esc(definition.unit || '—')}</td></tr>`;
+  }).join('');
+  const provenanceRows = kv([
+    fieldValue('Program', esc(text(origin.program) || 'RDKit'), 'chem-program'),
+    fieldValue('Version', esc(text(origin.version) || MISSING_TEXT), 'chem-version'),
+    fieldValue('Set', esc(text(analyse?.descriptorSet) || DESCRIPTOR_SET_ID), 'chem-set'),
+    fieldValue('Operation', esc(text(origin.op) || 'descriptors'), 'chem-op'),
+    fieldValue('Cache', cache.hit === true ? 'hit — computed earlier in this run' : 'miss — computed now', 'chem-cache'),
+    fieldValue('Input SHA-256', origin.sourceSha256 ? `<code>${esc(String(origin.sourceSha256))}</code>` : missingHtml(), 'chem-source-sha'),
+  ]);
+  const status = text(analyse?.status) || 'computed';
+  if (status !== 'computed') {
+    return card(`Descriptors · ${DESCRIPTOR_SET_ID}`,
+      `<p class="warn" data-role="chem-refusal">${esc(text(analyse?.notComputed) || 'not computed')}</p>`);
+  }
+  return '<div class="results-stack">'
+    + card(`Descriptors · ${DESCRIPTOR_SET_ID}`,
+      `<table class="results-table" data-role="chem-descriptors"><thead><tr><th>Descriptor</th>`
+      + '<th class="num">Value</th><th>Unit</th></tr></thead>'
+      + `<tbody>${rows}</tbody></table>`
+      + '<p class="results-note">Cheminformatics descriptors (2D/topological unless stated), not calculated properties.</p>')
+    + card('Chemistry provenance', provenanceRows)
+    + '</div>';
+}
+
 function analyseCard(analyse, dp4, multiwfn, provenance = null) {
   // Issue 270: a Multiwfn block's record is not a derived quantity and has no
   // expression; it gets its own card with the normalised analysis and the
   // user-installed program's provenance.
   if (analyse?.mode === 'multiwfn') return multiwfnCard(analyse, multiwfn, provenance || analyse?.provenance || null);
+  // ADR 0003 §3.1: a descriptors block's result is a table, not a value.
+  if (analyse?.mode === 'chem') return chemCard(analyse);
   const inputs = Array.isArray(analyse?.inputs) ? analyse.inputs : [];
   const value = finite(analyse?.value);
   const unit = text(analyse?.unit);

@@ -28,13 +28,27 @@ const FIELD_ALIASES = {
   nu: 'minImaginary',
 };
 
-export function conditionFields(parsed, gates = null) {
+export function conditionFields(parsed, gates = null, descriptors = null) {
   const frequencies = parsed?.frequencies || {};
   const scf = parsed?.scf || {};
   const optimization = parsed?.optimization || {};
   const termination = terminationCodeOf(parsed);
   const minImaginary = Number.isFinite(frequencies.minImaginary) ? frequencies.minImaginary : null;
+  // ADR 0003 §3.1: the descriptor set a chem analyse record carries, so a
+  // condition can route on `tpsa > 140`. A descriptor that was not reported is
+  // `null`, which the condition language reads as unknown — never as zero.
+  const source = descriptors && typeof descriptors === 'object'
+    ? descriptors
+    : (parsed?.descriptors && typeof parsed.descriptors === 'object' ? parsed.descriptors : {});
+  const descriptorFields = {};
+  for (const key of [
+    'exactMass', 'molWeight', 'logP', 'tpsa', 'hbd', 'hba', 'rotatableBonds',
+    'ringCount', 'aromaticRingCount', 'fsp3', 'qed', 'formalCharge',
+  ]) {
+    descriptorFields[key] = Number.isFinite(Number(source?.[key])) ? Number(source[key]) : null;
+  }
   return {
+    ...descriptorFields,
     normalTermination: termination === 'normal',
     errorTermination: termination === 'error',
     scfConverged: scf.status === 'converged',

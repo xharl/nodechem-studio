@@ -12,6 +12,7 @@ import { engineOrDefault } from './engines/index.js';
 import { ladderRungs } from './methodLadder.js';
 import { spinSweepFor } from './spinSweep.js';
 import { runSettingsFor } from './engineSettings.js';
+import { DESCRIPTOR_SET_ID } from './chemDescriptors.js';
 import { DEFAULT_CONFORMER_SETTINGS, conformerMethodForGenerator, crestArgv, xyzText } from './conformers.js';
 import { OBABEL_DEFAULT_NCONF, obabelSearchArgv } from './obabelConformers.js';
 import { checkTsForceConstants, freqGeometryWarnings, optConvergenceWarnings } from './tsForceConstants.js';
@@ -67,7 +68,7 @@ export function calcEnginesIn(tasks = []) {
  * block's generator (an in-app UFF search spawns nothing), the scorer that
  * replaces an engine, or a Multiwfn analysis.
  */
-export const PLAN_TOOL_IDS = Object.freeze(['crest', 'obabel', 'scorer', 'tautomer', 'multiwfn']);
+export const PLAN_TOOL_IDS = Object.freeze(['crest', 'obabel', 'scorer', 'tautomer', 'multiwfn', 'chem']);
 
 export function planToolNeeds(tasks = []) {
   const needs = new Set();
@@ -81,6 +82,8 @@ export function planToolNeeds(tasks = []) {
       else if (generate.generator === 'obabel') needs.add('obabel');
     }
     if (task.type === 'analyse' && task.analyse?.mode === 'multiwfn') needs.add('multiwfn');
+    // ADR 0003: a chem analyse block spawns the chemistry sidecar.
+    if (task.type === 'analyse' && task.analyse?.mode === 'chem') needs.add('chem');
   }
   return PLAN_TOOL_IDS.filter((toolId) => needs.has(toolId));
 }
@@ -1168,6 +1171,19 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
         idsFor.set(node.id, ids);
         continue;
       }
+      if (context.mode === 'chem') {
+        // ADR 0003 §3.1: one descriptors task per record of the block's scope,
+        // exactly as a Multiwfn block runs once per record. There is no value
+        // to preview at plan time: the molecule is the upstream record's.
+        for (const record of records) {
+          const recordId = record?.id || null;
+          const taskId = taskIdFor(node.id, recordId);
+          pushTask(chemTask(node, { taskId, record, recordId, sources }), recordId);
+          ids.push(taskId);
+        }
+        idsFor.set(node.id, ids);
+        continue;
+      }
       if (context.mode === 'dp4') {
         const taskId = taskIdFor(node.id, null);
         const rows = dp4RowsFromSources(sources, context.rowsFor);
@@ -1704,8 +1720,8 @@ export function computeContext(project, node, { results = null, edges = null } =
   // declares none; its `input.nodeId` must name a wired block.
   const mode = definition.mode === 'dp4'
     ? 'dp4'
-    : (definition.mode === 'multiwfn' ? 'multiwfn' : 'expression');
-  const declared = mode === 'dp4' || mode === 'multiwfn' ? [] : computeInputsOf(definition);
+    : (definition.mode === 'multiwfn' ? 'multiwfn' : (definition.mode === 'chem' ? 'chem' : 'expression'));
+  const declared = mode === 'dp4' || mode === 'multiwfn' || mode === 'chem' ? [] : computeInputsOf(definition);
   if (mode === 'expression' && declared.length === 0) {
     throw new ComputeError(`"${node.title}" declares no inputs; an analyse block reads at least one field`
       + ' from an upstream block.');
@@ -1834,6 +1850,47 @@ function computeTask(node, { taskId, record = null, recordId = null, evaluation,
       sources,
       ...(recordId ? { recordId } : {}),
       summary: dp4 ? dp4Summary(evaluation) : describeCompute(evaluation),
+    },
+    ...(record ? {
+      record: {
+        id: record.id,
+        label: record.label || record.id,
+        charge: record.charge,
+        multiplicity: record.multiplicity,
+        ...(record.series ? { series: record.series } : {}),
+        ...(record.derivative ? { derivative: record.derivative } : {}),
+        ...(record.complex ? { complex: record.complex } : {}),
+      },
+    } : {}),
+  };
+}
+
+/**
+ * ADR 0003 §3.1 — one descriptors task for one upstream record.
+ *
+ * It is an `analyse` task with no expression: the queue resolves the record's
+ * geometry and spawns the chemistry sidecar once. `declared` stays empty so the
+ * arithmetic path can never read it, and `summary` names the versioned set.
+ */
+function chemTask(node, { taskId, record = null, recordId = null, sources = [] } = {}) {
+  return {
+    nodeId: taskId,
+    type: 'analyse',
+    title: record ? `${node.title} — ${record.label || record.id}` : node.title,
+    kind: node.kind || 'Analyse',
+    executable: false,
+    analyse: {
+      mode: 'chem',
+      op: 'descriptors',
+      options: {},
+      descriptorSet: DESCRIPTOR_SET_ID,
+      declared: [],
+      sources,
+      status: 'pending',
+      value: null,
+      unit: null,
+      ...(recordId ? { recordId } : {}),
+      summary: `Descriptors · ${DESCRIPTOR_SET_ID}`,
     },
     ...(record ? {
       record: {
