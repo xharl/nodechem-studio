@@ -869,7 +869,7 @@ function assignmentCurveSvg(candidate, { signed }) {
     .join(' ');
 
   return '<figure class="results-spectrum" data-field="assignment-curve">'
-    + `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="computed and measured ${escapeHtml(candidate.label)} spectrum">`
+    + `<svg viewBox="0 0 ${width} ${height}" role="img" preserveAspectRatio="xMidYMid meet" style="width:100%;max-width:560px;height:auto;display:block" aria-label="computed and measured ${escapeHtml(candidate.label)} spectrum">`
     + (signed ? `<line x1="0" y1="${mid}" x2="${width}" y2="${mid}" stroke="currentColor" stroke-width="0.4" opacity="0.5"/>` : '')
     + `<polyline points="${polyline(computedPoints)}" fill="none" stroke="currentColor" stroke-width="1"/>`
     + `<polyline points="${polyline(measuredPoints)}" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.75"/>`
