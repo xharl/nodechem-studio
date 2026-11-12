@@ -77,6 +77,43 @@ function shortHash(value) {
   return raw === null ? null : raw.slice(0, 16) + (raw.length > 16 ? '…' : '');
 }
 
+/**
+ * The queue keeps the last 20 retry resets (`electron/runner/queue.js`
+ * `resetSubtree`). The report keeps the same bound: a queue.json written by a
+ * newer build, or hand-edited, must not be able to grow the document without
+ * limit — and an attempt that was dropped is said to be dropped.
+ */
+const ATTEMPT_HISTORY_LIMIT = 20;
+
+/** A status that means the task's current attempt actually reached an outcome. */
+const ATTEMPT_STATUSES = new Set(['completed', 'passed', 'failed', 'needs-review', 'timed out', 'interrupted']);
+
+/**
+ * Issue #355: the queue appends `{ runId, status, gateVerdict, finishedAt }` to
+ * `task.history` each time a loop retry resets the block, so those entries are
+ * *earlier* attempts; the attempt in the task row is the last one.
+ *
+ * `null` means the queue record has no `history` field at all (a v1 queue.json)
+ * — absence of history is not evidence that nothing was retried. An empty array
+ * means the queue recorded the field and had no retry, which is evidence.
+ * Values are copied, never shared with the queue, and only the four recorded
+ * fields are carried: no paths and nothing the queue did not write.
+ */
+function taskHistory(task) {
+  if (!Array.isArray(task.history)) return { entries: null, truncated: false };
+  const truncated = task.history.length > ATTEMPT_HISTORY_LIMIT;
+  const kept = truncated ? task.history.slice(-ATTEMPT_HISTORY_LIMIT) : task.history;
+  return {
+    entries: kept.map((entry) => ({
+      runId: text(entry?.runId),
+      status: text(entry?.status),
+      gateVerdict: text(entry?.gateVerdict),
+      finishedAt: text(entry?.finishedAt),
+    })),
+    truncated,
+  };
+}
+
 function taskRow(task, record, { includeImported = false } = {}) {
   const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
   const method = record?.provenance?.method && typeof record.provenance.method === 'object'
@@ -88,6 +125,18 @@ function taskRow(task, record, { includeImported = false } = {}) {
   // record. It is carried as its own labelled row; its energy only enters the
   // energy columns when the caller asked for it, and never unlabelled.
   const imported = importedSummary(record);
+  // Issue #355: how many times the block ran, and the queue's own record of the
+  // earlier attempts. The counter is incremented at every run start, so it also
+  // covers a resume; `history` holds only the attempts a retry reset recorded.
+  // The number the report prints is the larger of the two — never a lower count
+  // than the queue itself recorded.
+  const status = text(task.status) || 'unknown';
+  const history = taskHistory(task);
+  const attempts = Number.isInteger(task.attempts) ? task.attempts : null;
+  const historyAttempts = history.entries === null
+    ? 0
+    : history.entries.length + (ATTEMPT_STATUSES.has(status) ? 1 : 0);
+  const attemptCount = Math.max(attempts ?? 0, historyAttempts);
   return {
     nodeId: text(task.nodeId),
     title: text(task.title) || text(task.nodeId) || 'Untitled block',
@@ -99,8 +148,15 @@ function taskRow(task, record, { includeImported = false } = {}) {
     recordLabel: text(task.record?.label),
     recordCharge: Number.isInteger(task.record?.charge) ? task.record.charge : null,
     recordMultiplicity: Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : null,
-    status: text(task.status) || 'unknown',
-    attempts: Number.isInteger(task.attempts) ? task.attempts : null,
+    status,
+    attempts,
+    // The retry record, when the queue wrote one: one entry per earlier attempt,
+    // copied. `null` is "not recorded", never "zero retries".
+    history: history.entries,
+    historyTruncated: history.truncated,
+    // The number of attempts this row's evidence supports. `0` means the queue
+    // recorded nothing to count, and the report prints `not reported`.
+    attemptCount,
     gates: text(task.gateVerdict ?? record?.gates?.overall),
     validity: text(record?.gates?.validity?.overall ?? record?.validity?.overall),
     runId: text(task.runId),
@@ -575,6 +631,20 @@ export function buildWorkflowReport(queue, records = {}, {
     : gated.some((row) => row.gates === 'fail') ? 'fail'
       : gated.length < rows.length ? 'partial' : 'pass';
 
+  // Issue #355: the retry count a reader needs before trusting a green verdict.
+  // A task counts as retried when the queue's own attempt counter or its history
+  // shows more than one attempt; `extraAttempts` is how many attempts happened
+  // after the first. A report cannot be read as "stable on the first try" when
+  // this is non-zero.
+  const retriedRows = rows.filter((row) => row.attemptCount > 1);
+  const retries = {
+    tasks: retriedRows.length,
+    extraAttempts: retriedRows.reduce((sum, row) => sum + (row.attemptCount - 1), 0),
+    // Of the retried tasks, how many carry the queue's attempt history. A
+    // retried task without one is counted but cannot be itemised.
+    withHistory: retriedRows.filter((row) => Array.isArray(row.history) && row.history.length > 0).length,
+  };
+
   // Issue #80: fanned-out branches are one row per member. Group them by the
   // conformer block and compare final energies at the level they were run at —
   // the search-level ΔE is kept beside it, never substituted for it.
@@ -823,6 +893,10 @@ export function buildWorkflowReport(queue, records = {}, {
     },
     counts,
     verdict,
+    // Issue #355: how many tasks ran more than once and how many extra attempts
+    // that took. Kept beside the counts so a reader of report.json sees the same
+    // retry statement the Outcome paragraph makes.
+    retries,
     tasks: rows,
     figures,
     // Issue 59: the wavefunction analysis, present only when the caller supplied
@@ -999,6 +1073,91 @@ function anchorId(value) {
   return String(value || 'flow').replace(/[^A-Za-z0-9._:-]+/g, '-');
 }
 
+/** The anchor for a task's attempt history; record-qualified when there is one. */
+function attemptAnchorId(row) {
+  const key = row.recordId ? `${row.recordId}-${row.nodeId || 'task'}` : (row.nodeId || 'task');
+  return `attempts-${anchorId(key)}`;
+}
+
+/**
+ * The Attempts cell. `1` is printed plainly; a retried block links to the
+ * attempt list under the table. A count the queue recorded without a history is
+ * shown with that reason, so a reader never follows a link to a list the queue
+ * did not write.
+ */
+function attemptCellHtml(row) {
+  const count = Number.isInteger(row.attemptCount) ? row.attemptCount : 0;
+  if (count <= 0) return escapeHtml(MISSING);
+  if (count === 1) return escapeHtml(String(count));
+  if (!Array.isArray(row.history) || row.history.length === 0) {
+    return `${escapeHtml(String(count))} <span class="sub">history not recorded</span>`;
+  }
+  return `<a href="#${escapeHtml(attemptAnchorId(row))}">${escapeHtml(String(count))}</a> `
+    + '<span class="sub">see history</span>';
+}
+
+/**
+ * Issue #355: the attempts a retried block took, in the queue's own vocabulary
+ * (status, gate verdict, run id, finish time). The earlier attempts come from
+ * `task.history`, written when a retry reset the block; the last row is the
+ * attempt the task table above reports. Nothing is recomputed and a value the
+ * queue did not record is printed `not reported`.
+ */
+function attemptHistoryHtml(row) {
+  const history = Array.isArray(row.history) ? row.history : null;
+  if (!history || history.length === 0 || row.attemptCount <= 1) return '';
+  const entries = history.map((entry, index) => ({
+    number: index + 1,
+    status: entry.status,
+    gates: entry.gateVerdict,
+    runId: entry.runId,
+    finishedAt: entry.finishedAt,
+  }));
+  // The current attempt is the row above, and only when its status says it
+  // reached an outcome. A block reset and never re-run keeps its recorded
+  // attempts and gains no invented final row.
+  const currentShown = ATTEMPT_STATUSES.has(row.status) && row.attemptCount > entries.length;
+  if (currentShown) {
+    entries.push({
+      number: row.attemptCount,
+      status: row.status,
+      gates: row.gates,
+      runId: row.runId,
+      finishedAt: row.finishedAt,
+    });
+  }
+  const body = entries.map((entry) => {
+    const gates = entry.gates === null || entry.gates === undefined ? MISSING : entry.gates;
+    const gateClass = gates === 'pass' || gates === 'fail' ? gates : 'unknown';
+    return `<tr data-attempt="${escapeHtml(String(entry.number))}">`
+      + `<td class="num">${escapeHtml(String(entry.number))}</td>`
+      + `<td>${escapeHtml(entry.status ?? MISSING)}</td>`
+      + `<td class="gates-${gateClass}">${escapeHtml(gates)}</td>`
+      + `<td class="mono">${escapeHtml(entry.runId ?? MISSING)}</td>`
+      + `<td class="mono">${escapeHtml(entry.finishedAt ?? MISSING)}</td>`
+      + '</tr>';
+  }).join('');
+  // The counter can exceed what history holds (a resume counts every run start),
+  // and history itself is capped. Say both instead of implying the list is whole.
+  const missing = row.attemptCount - entries.length;
+  const notes = [
+    currentShown ? `Attempt ${row.attemptCount} is the run in the table above.` : null,
+    row.historyTruncated
+      ? `The queue keeps the last ${ATTEMPT_HISTORY_LIMIT} attempts; earlier attempts are not in this report.`
+      : null,
+    missing > 0
+      ? `The queue counted ${missing} more attempt(s) than its history holds.`
+      : null,
+  ].filter(Boolean);
+  return `<details class="attempts" id="${escapeHtml(attemptAnchorId(row))}" data-attempts-for="${escapeHtml(row.nodeId || 'task')}">`
+    + `<summary>${escapeHtml(String(row.attemptCount))} attempts</summary>`
+    + '<table><thead><tr><th class="num">Attempt</th><th>Status</th><th>Gates</th><th>Run</th>'
+    + '<th>Finished</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`
+    + (notes.length > 0 ? `<p class="meta">${escapeHtml(notes.join(' '))}</p>` : '')
+    + '</details>';
+}
+
 /** The per-task table, used once for a v1 queue and once per record in a family. */
 function taskTableHtml(rows) {
   const tableRows = rows.map((row) => {
@@ -1025,6 +1184,7 @@ function taskTableHtml(rows) {
       + `<div class="sub">`
       + `${escapeHtml(level)}${escapeHtml(kindSuffix)}</div></td>`
       + `<td>${escapeHtml(row.status)}</td>`
+      + `<td data-field="attempts">${attemptCellHtml(row)}</td>`
       + `<td class="gates-${gateClass}">${escapeHtml(gates)}</td>`
       + `<td>${escapeHtml(row.validity === null ? MISSING : row.validity)}</td>`
       + `<td>${escapeHtml(row.engine === null ? MISSING : row.engine)}</td>`
@@ -1039,9 +1199,10 @@ function taskTableHtml(rows) {
       + `<td class="num">${escapeHtml(value(row.elapsedSeconds, 1, ' s'))}</td>`
       + '</tr>';
   }).join('');
-  return '<table><thead><tr><th>Block</th><th>Status</th><th>Gates</th><th>Validity</th><th>Engine</th>'
+  return '<table><thead><tr><th>Block</th><th>Status</th><th>Attempts</th><th>Gates</th><th>Validity</th><th>Engine</th>'
     + '<th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th>'
-    + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>';
+    + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
+    + rows.map(attemptHistoryHtml).join('');
 }
 
 /**
@@ -1379,6 +1540,25 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
       + (row.error ? `; ${escapeHtml(row.error)}` : '') + '</li>'
     )).join('') + '</ul>';
 
+  // Issue #355: the Outcome paragraph makes the retry statement a reader needs:
+  // a green verdict on a block that ran three times is not the same claim as a
+  // first-try pass, and the report must not let the two look alike.
+  const retryTotals = model.retries && typeof model.retries === 'object' ? model.retries : {};
+  const retriedTasks = Number.isInteger(retryTotals.tasks) ? retryTotals.tasks : 0;
+  const extraAttempts = Number.isInteger(retryTotals.extraAttempts) ? retryTotals.extraAttempts : 0;
+  const itemised = Number.isInteger(retryTotals.withHistory) ? retryTotals.withHistory : 0;
+  const retrySummary = retriedTasks === 0
+    ? ''
+    : `<p data-field="retries"><strong>${retriedTasks}</strong> task(s) needed more than one attempt `
+      + `(${extraAttempts} extra attempt${extraAttempts === 1 ? '' : 's'} recorded)`
+      + `${retriedTasks > itemised
+        ? `; the queue recorded no attempt history for ${retriedTasks - itemised} of them`
+        : ''}. `
+      + (retriedTasks === itemised
+        ? 'The Attempts column links to each recorded attempt.'
+        : 'Where the queue recorded an attempt history, the Attempts column links to it.')
+      + '</p>';
+
   const failedRecords = records.filter((record) => record.status === 'failed' || record.status === 'partial');
   const failedRecordNote = failedRecords.length === 0
     ? ''
@@ -1645,6 +1825,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
     + `<p>${counts.total || 0} task(s): ${counts.passed || 0} passed, ${counts.failed || 0} failed, `
     + `${counts.skipped || 0} skipped, ${counts.cancelled || 0} cancelled, ${counts.notRun || 0} not run. `
     + `Gate verdict: <strong>${escapeHtml(model.verdict || 'unknown')}</strong>.</p>`
+    + retrySummary
     + failureList
     + failedRecordNote
     + whatRan

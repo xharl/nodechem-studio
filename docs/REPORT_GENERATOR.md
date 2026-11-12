@@ -76,7 +76,7 @@ Queue q-… · status completed · created … · finished … · generated … 
  uncertainty / derived quantity / Multiwfn / imported results — only when present]
 Outcome     7 task(s): 6 passed, 1 failed, 0 skipped, 0 cancelled, 0 not run.
             Gate verdict: passed.
-What ran    Block · Status · Gates · Validity · Engine · Level · E / Eh · G / Eh · Imag. · Elapsed
+What ran    Block · Status · Attempts · Gates · Validity · Engine · Level · E / Eh · G / Eh · Imag. · Elapsed
 Methods     one collapsible paragraph per block, only when the caller supplies them
 Provenance  Block · Run · Input SHA-256 · Output SHA-256
 ```
@@ -96,17 +96,31 @@ complete records prints no such note.
 ### 4.2 Outcome
 
 One paragraph: the task total and how many passed / failed / skipped / cancelled / never ran, then
-`Gate verdict: <verdict>`. A list of failed tasks follows, then a note naming records that failed or
-were only partly computed. The verdict is assembled from the queue's task gate verdicts; the report
-does not re-evaluate a gate.
+`Gate verdict: <verdict>`. When any task ran more than once, a second paragraph states how many
+task(s) needed more than one attempt and how many extra attempts were recorded, and whether the
+queue's attempt history covers all of them. A list of failed tasks follows, then a note naming
+records that failed or were only partly computed. The verdict is assembled from the queue's task
+gate verdicts; the report does not re-evaluate a gate.
 
 ### 4.3 What ran
 
-One row per task: **Block · Status · Gates · Validity · Engine · Level · E / Eh · G / Eh ·
+One row per task: **Block · Status · Attempts · Gates · Validity · Engine · Level · E / Eh · G / Eh ·
 Imag. · Elapsed**. The block cell carries a `FIXTURE` label for a dry run, a `PARTIAL` badge when the
 record was read through a window of its log, the
 `imported, not run here` badge for an imported result, and the member id for a fanned-out run. A
 value the run did not produce is printed `not reported` — never blank, never zero.
+
+The **Attempts** cell prints `1` for a first-try run. A block that ran more than once prints the
+count and links to an attempt list under the table: a `<details>` block, one row per attempt, with
+the attempt number, the status, the gate verdict, the run id and the finish time the queue recorded.
+The earlier attempts come from `task.history[]` (written on every retry reset, capped at the queue's
+20 entries); the last row is the attempt the table above reports. `report.json` carries the same
+capped `history` per task, so the list can be checked against the model.
+
+Absence of evidence stays visible: a task whose count came from `attempts` but which carries no
+`history` prints `history not recorded` and gets no list, and a v1 `queue.json` with no `history`
+field prints `1` for a single attempt. The report never invents a retry, and never lets a retried
+pass look like a first-try pass.
 
 For a record-scoped queue (a dataset, series, derivative or complex block upstream) the section
 becomes a per-record comparison table followed by one section per record, in plan order, each with
