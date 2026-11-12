@@ -8,8 +8,12 @@ import { rmrf } from './helpers/tempCleanup.js';
 import {
   MULTIWFN_ANALYSES,
   MULTIWFN_CITATION,
+  MULTIWFN_CITATION_2012,
+  MULTIWFN_CITATION_2024,
+  MULTIWFN_CITATION_NOTE,
   QTAIM_COMPARISON_TOLERANCES,
   compareQtaimToApp,
+  multiwfnCitationFor,
   multiwfnMenuScript,
   multiwfnArgv,
   multiwfnBandFor,
@@ -217,6 +221,23 @@ describe('issue #270 — deterministic menu scripts', () => {
     expect(multiwfnVersionRefusal('3.7')).toContain('not in a menu band');
     expect(multiwfnVersionRefusal('3.7')).toContain('archive-only');
     expect(multiwfnVersionRefusal('')).toContain('version could not be read');
+  });
+
+  it('cites both papers for a 2024+ banner and the 2012 paper alone for 3.8 (issue 342)', () => {
+    // The 2026.11.3 banner prints both DOIs and says both MUST be cited.
+    expect(MULTIWFN_CITATION_2012).toContain('10.1002/jcc.22885');
+    expect(MULTIWFN_CITATION_2024).toContain('10.1063/5.0216272');
+    expect(MULTIWFN_CITATION).toContain(MULTIWFN_CITATION_2012);
+    expect(MULTIWFN_CITATION).toContain(MULTIWFN_CITATION_2024);
+    expect(MULTIWFN_CITATION_NOTE).toContain('Both papers must be cited');
+    // The default is the current band, so anything that cannot name a version
+    // over-cites rather than under-cites.
+    expect(multiwfnCitationFor()).toBe(MULTIWFN_CITATION);
+    expect(multiwfnCitationFor('2026.11.3')).toBe(MULTIWFN_CITATION);
+    expect(multiwfnCitationFor('2024+')).toBe(MULTIWFN_CITATION);
+    expect(multiwfnCitationFor('3.8')).toBe(MULTIWFN_CITATION_2012);
+    expect(multiwfnCitationFor('3.8(dev)')).toBe(MULTIWFN_CITATION_2012);
+    expect(multiwfnCitationFor('')).toBe(MULTIWFN_CITATION);
   });
 });
 

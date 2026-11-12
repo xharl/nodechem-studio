@@ -44,9 +44,15 @@ and the record says which binary ran.
 ### Licence and citation
 
 Multiwfn is free for academic and non-profit use with citation; commercial use needs the author's
-permission. Every result card and every `run.json` carries:
+permission. Every result card and every `run.json` carries the citation its release requires:
 
 > Tian Lu, Feiwu Chen, *J. Comput. Chem.* **2012**, *33*, 580–592. doi:10.1002/jcc.22885
+
+> Tian Lu, *J. Chem. Phys.* **2024**, *161*, 082503. doi:10.1063/5.0216272
+
+Both papers must be cited in the main text when Multiwfn 2024 or later is used — the vendor's own
+banner says so, and `2024+` is the band this build runs. Only the retired 3.8 band predates the 2024
+paper and requires the 2012 paper alone; a record from a 3.8 binary names just that one.
 
 The app does not redistribute the binary. Check Multiwfn's own terms before packaging this app for
 other users.

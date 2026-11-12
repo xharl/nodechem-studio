@@ -46,7 +46,7 @@ Gate verdicts are **copied**, never recomputed. The report is a view over record
 | File | Purpose | Rules |
 |---|---|---|
 | `report.html` | The document a human reads or prints | Single file: inline CSS and inline SVG figures, **no JavaScript**, no external references, no `<script>`, no `http(s)://`; when a model is written beside it, `<html data-model-sha256="…">` and the header meta line name the model's SHA-256 |
-| `report.json` | The model the HTML was rendered from | JSON-serialisable, `schemaVersion: 1` (`WORKFLOW_REPORT_SCHEMA_VERSION`) and `kind: "nodechem-studio.workflow-report"`, absolute paths allowed here only (they never reach the HTML). A combined report writes one envelope with `kind: "nodechem-studio.project-report"` and one workflow model per flow under `flows[]` |
+| `report.json` | The model the HTML was rendered from | JSON-serialisable, `schemaVersion: 1` (`WORKFLOW_REPORT_SCHEMA_VERSION`) and `kind: "nodechem-studio.workflow-report"`, absolute paths allowed here only (they never reach the HTML). A combined report writes one envelope with `kind: "nodechem-studio.project-report"` and one workflow model per flow under `flows[]`. A task row whose log was read through a window carries `partial: {bytesRead, size, windows}`; `partials` counts those rows and `recordCount` is the denominator behind the header caveat |
 
 - Location: the desktop **Save workflow report…** action writes the file the user names (default
   `<documents>/workflow-<id>.html`) and the model beside it as `<name>.json`, and the HTML names the
@@ -70,6 +70,7 @@ appear only when the queue carries that kind of result.
 Workflow report — Diels–Alder TS verification
 Queue q-… · status completed · created … · finished … · generated … · NodeChem Studio 0.5.1
 [3 tasks ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.]
+[1 of 4 records was read from a window of the log; values may be missing or stale. Partial: Block A (200000 of 5000000 bytes).]
 [Figures — only at the requested level]
 [Method ladder / conformer ensemble / spin sweep / DP4 / EPR / NMR / reaction energetics /
  uncertainty / derived quantity / Multiwfn / imported results — only when present]
@@ -86,8 +87,11 @@ Queue id, queue status, created and finished timestamps, the generation timestam
 of the app that wrote the report (`appVersion` in the model). When a model is written beside the
 HTML, the line also ends with `model sha256 <digest>`, and `<html>` carries the same value as
 `data-model-sha256`. The app **commit** is not printed. A
-fixture (dry-run) count note and an imported-results note follow when either applies. A truncated
-parse is **not** called out by this report yet.
+fixture (dry-run) count note and an imported-results note follow when either applies. When any task
+row's log was read through a window, a partial-parse note follows as well: how many records were read
+from a window out of how many records had one, the warning that values may be missing or stale, and
+the title and byte window of each affected row (for example `head + tail`). A report built only from
+complete records prints no such note.
 
 ### 4.2 Outcome
 
@@ -101,7 +105,8 @@ gate verdicts; the report does not re-evaluate a gate.
 ### 4.3 What ran
 
 One row per task: **Block · Status · Attempts · Gates · Validity · Engine · Level · E / Eh · G / Eh ·
-Imag. · Elapsed**. The block cell carries a `FIXTURE` label for a dry run, the
+Imag. · Elapsed**. The block cell carries a `FIXTURE` label for a dry run, a `PARTIAL` badge when the
+record was read through a window of its log, the
 `imported, not run here` badge for an imported result, and the member id for a fanned-out run. A
 value the run did not produce is printed `not reported` — never blank, never zero.
 

@@ -539,3 +539,128 @@ describe('retry history in the report (#355)', () => {
     expect(html.trimEnd().endsWith('</html>')).toBe(true);
   });
 });
+
+describe('partial parses in the workflow report (#353)', () => {
+  const queueFor = (tasks) => ({
+    id: 'q-partial',
+    projectName: 'Windowed log',
+    status: 'completed',
+    tasks,
+  });
+  const completeRecord = () => ({
+    provenance: { jobType: 'SP', method: { functional: 'B3LYP', basis: 'def2-SVP' } },
+    parsed: { complete: true, finalEnergy: { hartree: -76.4 } },
+    gates: { overall: 'pass' },
+  });
+  const task = {
+    nodeId: 'sp', title: 'Single point', type: 'calculate', status: 'completed', runId: 'run-sp',
+  };
+
+  const triggers = [
+    ['record.truncated === true', (record) => { record.truncated = true; }],
+    ['parsed.complete === false', (record) => { record.parsed.complete = false; }],
+    ['outputBytes.truncated === true', (record) => {
+      record.outputBytes = { size: 5000000, bytesRead: 5000000, truncated: true };
+    }],
+    ['bytesRead < size', (record) => {
+      record.outputBytes = { size: 5000000, bytesRead: 200000 };
+    }],
+  ];
+
+  it.each(triggers)('marks the row and prints the caveat when %s', (_name, apply) => {
+    const record = completeRecord();
+    apply(record);
+    const model = buildWorkflowReport(queueFor([task]), { 'run-sp': record });
+    expect(model.partials).toBe(1);
+    expect(model.recordCount).toBe(1);
+    expect(model.tasks[0].partial).not.toBeNull();
+    const html = workflowReportHtml(model);
+    expect(html).toContain('data-partial="true"');
+    expect(html).toContain('data-field="partial-badge"');
+    expect(html).toContain('PARTIAL');
+    expect(html).toMatch(/1 of 1 record was read from a window of the log; values may be missing or stale/);
+    expect(html).toContain('Partial: <strong>Single point</strong>');
+  });
+
+  it('carries the byte window in the model and names it in the caveat', () => {
+    const record = completeRecord();
+    record.outputBytes = {
+      size: 5000000,
+      bytesRead: 200000,
+      truncated: true,
+      windows: [{ name: 'head' }, { name: 'tail' }],
+    };
+    const model = buildWorkflowReport(queueFor([task]), { 'run-sp': record });
+    expect(model.tasks[0].partial).toEqual({
+      bytesRead: 200000,
+      size: 5000000,
+      windows: ['head', 'tail'],
+    });
+    const html = workflowReportHtml(model);
+    expect(html).toContain('200000 of 5000000 bytes (head + tail)');
+  });
+
+  it('prints no badge and no caveat when every record was read in full', () => {
+    const model = buildWorkflowReport(queueFor([task]), { 'run-sp': completeRecord() });
+    expect(model.partials).toBeUndefined();
+    expect(model.recordCount).toBeUndefined();
+    expect(model.tasks[0]).not.toHaveProperty('partial');
+    const html = workflowReportHtml(model);
+    expect(html).not.toContain('data-partial');
+    expect(html).not.toContain('data-field="partial-note"');
+    expect(html).not.toContain('PARTIAL');
+    expect(html).not.toContain('window of the log');
+    // The numbers themselves are unchanged.
+    expect(html).toContain('-76.40000000');
+  });
+
+  it('does not change the numbers printed when a row becomes partial', () => {
+    const completeHtml = workflowReportHtml(buildWorkflowReport(queueFor([task]), { 'run-sp': completeRecord() }));
+    const partial = completeRecord();
+    partial.outputBytes = { size: 5000000, bytesRead: 200000 };
+    const partialHtml = workflowReportHtml(buildWorkflowReport(queueFor([task]), { 'run-sp': partial }));
+    const numericCells = (html) => [...html.matchAll(/<td class="num">([\s\S]*?)<\/td>/g)].map((match) => match[1]);
+    expect(numericCells(partialHtml)).toEqual(numericCells(completeHtml));
+    expect(numericCells(partialHtml)).toContain('-76.40000000');
+  });
+
+  it('counts one caveat and marks only the windowed row in a mixed report', () => {
+    const tasks = [
+      { nodeId: 'r1', title: 'Complete', type: 'calculate', status: 'completed', runId: 'r1' },
+      { nodeId: 'r2', title: 'Windowed', type: 'calculate', status: 'completed', runId: 'r2' },
+    ];
+    const records = {
+      r1: completeRecord(),
+      r2: { ...completeRecord(), outputBytes: { size: 5000000, bytesRead: 200000 } },
+    };
+    const model = buildWorkflowReport(queueFor(tasks), records);
+    expect(model.partials).toBe(1);
+    expect(model.recordCount).toBe(2);
+    const html = workflowReportHtml(model);
+    expect(html).toContain('1 of 2 records was read from a window of the log');
+    const rowAt = (id) => html.slice(html.indexOf(`data-node="${id}"`), html.indexOf('</tr>', html.indexOf(`data-node="${id}"`)));
+    expect(rowAt('r2')).toContain('PARTIAL');
+    expect(rowAt('r1')).not.toContain('PARTIAL');
+    expect(html).toContain('Partial: <strong>Windowed</strong>');
+    expect(html).not.toContain('Partial: <strong>Complete</strong>');
+  });
+
+  it('does not call a windowed read partial when the parser says truncated: false', () => {
+    const record = completeRecord();
+    // A head+tail read covers the file without reading every byte; the parser's
+    // explicit `false` is authoritative over `bytesRead < size`.
+    record.outputBytes = { size: 5000000, bytesRead: 200000, truncated: false };
+    const model = buildWorkflowReport(queueFor([task]), { 'run-sp': record });
+    expect(model.partials).toBeUndefined();
+    expect(workflowReportHtml(model)).not.toContain('PARTIAL');
+  });
+
+  it('escapes a task title named in the caveat', () => {
+    const record = completeRecord();
+    record.outputBytes = { size: 5000000, bytesRead: 200000 };
+    const model = buildWorkflowReport(queueFor([{ ...task, title: '<img onerror=x>' }]), { 'run-sp': record });
+    const html = workflowReportHtml(model);
+    expect(html).not.toContain('<img onerror=x>');
+    expect(html).toContain('&lt;img onerror=x&gt;');
+  });
+});

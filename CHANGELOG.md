@@ -45,6 +45,12 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- **The Multiwfn citation now matches the binary that ran** — every 2024-and-later Multiwfn banner
+  requires *both* the 2012 and the 2024 papers to be cited in the main text; the card and
+  `run.json:provenance.citation` named only the 2012 paper while the same record reported a 2026
+  version. The citation is now version-dependent: both papers for the `2024+` band, the 2012 paper
+  alone for the retired 3.8 band, with the vendor's "both papers must be cited" note on the card
+  (#342).
 - The window no longer waits for queue history: `QueueManager.init()` runs while the shell is being
   created and every queue IPC call awaits it, so a start cannot race the crash-recovery pass. The
   parsed-results surface is a dynamic import and the renderer is emitted as feature chunks, none

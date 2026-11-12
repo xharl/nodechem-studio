@@ -52,6 +52,7 @@ import { dp4RowsFromSources, dp4Summary, evaluateDp4 } from '../shared/dp4Workfl
 import {
   MULTIWFN_ANALYSES,
   MULTIWFN_CITATION,
+  MULTIWFN_CITATION_NOTE,
   MULTIWFN_LICENCE,
   MULTIWFN_MENU_VERSION,
   multiwfnAnalysis,
@@ -3438,7 +3439,7 @@ function multiwfnInspectorBody(definition, upstream, node) {
     parameterFields,
     `<div class="field full"><label>Menu script</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
     `<div class="full"><div class="inspector-note"><strong>Licence.</strong> ${esc(MULTIWFN_LICENCE)} `
-      + `<strong>Cite:</strong> ${esc(MULTIWFN_CITATION)}. A missing binary, an unsupported version or a missing `
+      + `<strong>Cite:</strong> ${esc(MULTIWFN_CITATION)}. ${esc(MULTIWFN_CITATION_NOTE)} A missing binary, an unsupported version or a missing `
       + 'density matrix fails by name; it is never reported as unknown.</div></div>',
   ].join(''));
 }
