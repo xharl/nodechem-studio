@@ -50,7 +50,9 @@ export const DEFAULT_PREPARE_SETTINGS = Object.freeze({
 
 /** The converter a kind can actually use, so the inspector and schema agree. */
 export function converterFor(kind, requested) {
-  if (kind === 'embed3d') return 'openbabel';
+  // ADR 0003 §3.3: RDKit is a second embedder; Open Babel stays the default so
+  // no existing project changes behaviour.
+  if (kind === 'embed3d') return requested === 'rdkit' ? 'rdkit' : 'openbabel';
   if (kind === 'solvate') return 'geometric';
   if (kind === 'standardize') return 'rdkit';
   return requested === 'openbabel' || requested === 'aimnet2' ? requested : 'uff';

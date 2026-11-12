@@ -31,7 +31,8 @@ project geometry.
 
 A **Prepare structure** block is the 1→1 stage: `relax` minimises one structure with the in-app UFF
 engine (or Open Babel MMFF94, or the AIMNet2 sidecar), `embed3d` turns a SMILES into one 3D
-structure with `obabel --gen3d`, `solvate` adds a deterministic explicit solvent cluster around
+structure with `obabel --gen3d` (or, when the converter is RDKit, ETKDGv4 + MMFF94/UFF through the
+chemistry sidecar; Open Babel stays the default), `solvate` adds a deterministic explicit solvent cluster around
 the current geometry, and `standardize` cleans one structure with RDKit before anything computes
 on it. It never enumerates protonation states, tautomers or conformers — those are
 sets, and sets belong to Generate. A Calculate block wired from Prepare runs on its written

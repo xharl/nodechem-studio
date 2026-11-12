@@ -971,7 +971,7 @@ function normalizePrepareSettings(c, raw, path, legacy) {
   });
   const converter = converterFor(kind, requestedConverter);
   if (kind === 'embed3d' && requestedConverter === 'uff') {
-    c.error(`${path}.converter`, 'must be "openbabel": 3D embedding needs the Open Babel converter.');
+    c.error(`${path}.converter`, 'must be "openbabel" or "rdkit": 3D embedding needs an external embedder.');
   }
   if (kind === 'solvate' && requestedConverter !== 'geometric') {
     c.error(`${path}.converter`, 'must be "geometric": explicit solvation is deterministic placement, not a force-field relaxation.');
@@ -981,7 +981,9 @@ function normalizePrepareSettings(c, raw, path, legacy) {
   }
   const forceField = readEnum(c, provided.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, {
     legacy,
-    fallback: kind === 'embed3d' ? 'MMFF94' : (kind === 'solvate' || kind === 'standardize' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
+    fallback: kind === 'embed3d'
+      ? (converter === 'rdkit' ? 'MMFF94' : 'MMFF94')
+      : (kind === 'solvate' || kind === 'standardize' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
   });
   const smiles = readString(c, provided.smiles, `${path}.smiles`, { legacy, fallback: '', max: 1000 });
   if (kind === 'embed3d' && !smiles.trim()) {

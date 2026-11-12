@@ -3297,7 +3297,8 @@ function prepareInspector(node) {
   const s = node.settings || {};
   const output = node.output && typeof node.output === 'object' ? node.output : null;
   const kind = PREPARE_KINDS.includes(s.kind) ? s.kind : 'relax';
-  const converter = kind === 'embed3d' ? 'openbabel'
+  const converter = kind === 'embed3d'
+    ? (s.converter === 'rdkit' ? 'rdkit' : 'openbabel')
     : (kind === 'standardize' ? 'rdkit' : (s.converter === 'openbabel' ? 'openbabel' : 'uff'));
   const detail = output
     ? prepareSummaryLine(output)
@@ -3332,10 +3333,13 @@ function prepareInspector(node) {
           ['removeFragments', 'Remove fragments'], ['chargeParent', 'Charge parent']].map(([key, label]) =>
           `<label class="field checkbox"><input type="checkbox" data-prepare-field="${key}"${s[key] !== false ? ' checked' : ''}> ${label}</label>`),
       ] : [
-        `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
+        `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter">
+          ${kind === 'embed3d' ? `
+          <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel, --gen3d</option>
+          <option value="rdkit"${converter === 'rdkit' ? ' selected' : ''}>RDKit, ETKDGv4</option>` : `
           <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
           <option value="openbabel"${converter === 'openbabel' ? ' selected' : ''}>Open Babel (external)</option>
-          <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>
+          <option value="aimnet2"${converter === 'aimnet2' ? ' selected' : ''}>AIMNet2 (ML scorer)</option>`}
         </select></div>`,
         ...(kind === 'embed3d' ? [
           `<div class="field full"><label>SMILES</label><input class="input" data-prepare-field="smiles" value="${esc(s.smiles || '')}" placeholder="CCO" spellcheck="false" autocomplete="off"></div>`,
@@ -11130,7 +11134,7 @@ function applyPrepareField(target) {
   } else if (key === 'kind') {
     node.settings.kind = PREPARE_KINDS.includes(target.value) ? target.value : 'relax';
     node.settings.converter = node.settings.kind === 'embed3d'
-      ? 'openbabel'
+      ? (node.settings.converter === 'rdkit' ? 'rdkit' : 'openbabel')
       : (node.settings.kind === 'solvate' ? 'geometric' : (node.settings.kind === 'standardize' ? 'rdkit' : 'uff'));
     if (node.settings.kind === 'solvate' || node.settings.kind === 'standardize') node.settings.forceField = 'none';
     node.kind = node.settings.kind === 'embed3d' ? '3D embed'

@@ -758,7 +758,7 @@ function prepareTaskRecord(raw, nodeId) {
   const kind = prep.kind === 'embed3d' ? 'embed3d'
     : (prep.kind === 'solvate' ? 'solvate' : (prep.kind === 'standardize' ? 'standardize' : 'relax'));
   const converter = kind === 'embed3d'
-    ? 'openbabel'
+    ? (prep.converter === 'rdkit' ? 'rdkit' : 'openbabel')
     : (kind === 'solvate'
       ? 'geometric'
       : (kind === 'standardize'
@@ -3943,6 +3943,54 @@ export class QueueManager {
           nodeId: task.nodeId,
           text: 'Dry run: geometry carried forward unchanged; no converter was run.',
         });
+      } else if (conf.kind === 'embed3d' && conf.converter === 'rdkit') {
+        // ADR 0003 §3.3: ETKDGv4 embedding + MMFF94/UFF through the sidecar.
+        if (!queue.options.chemExecutable) {
+          throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. RDKit 3D embedding needs '
+            + 'Python with rdkit (scripts/nodechem-chem.py); there is no in-app fallback.');
+        }
+        const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+          executable: queue.options.chemExecutable,
+          script: queue.options.chemScript || '',
+          request: rdkitConformerRequest({
+            molecule: {
+              title: task.title,
+              smiles: String(conf.smiles || ''),
+              charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+              multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+              atoms,
+            },
+            options: {
+              nconf: 1,
+              seed: 0xF00D,
+              pruneRms: 0,
+              forceField: conf.forceField === 'UFF' ? 'UFF' : 'MMFF94',
+              maxHeavyAtoms: 100,
+              threads: 1,
+            },
+          }),
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          cwd: dir,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const result = normalizeRdkitConformerResult(raw);
+        const conformer = result.conformers[0];
+        atoms = conformer.atoms;
+        summary = {
+          kind: 'embed3d',
+          converter: 'rdkit',
+          forceField: result.forceField,
+          energyKcal: conformer.energyKcal,
+          converged: true,
+          reason: 'converter-completed',
+          iterations: 0,
+          atomCount: atoms.length,
+          origin: {
+            program: result.program,
+            version: result.version,
+            method: `${result.embedding} + ${result.forceField}`,
+          },
+        };
       } else if (conf.kind === 'embed3d') {
         const outName = 'prepared.xyz';
         const result = await new ObabelRunner().convert({

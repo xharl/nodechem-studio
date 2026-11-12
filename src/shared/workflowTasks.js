@@ -1099,7 +1099,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
               : (settings.kind === 'solvate' ? 'solvate'
                 : (settings.kind === 'standardize' ? 'standardize' : 'relax')),
             converter: settings.kind === 'embed3d'
-              ? 'openbabel'
+              ? (settings.converter === 'rdkit' ? 'rdkit' : 'openbabel')
               : (settings.kind === 'solvate'
                 ? 'geometric'
                 : (settings.kind === 'standardize'

@@ -516,3 +516,51 @@ describe('standardise block (ADR 0003 §3.2)', () => {
     })).rejects.toThrow(/chemistry sidecar/i);
   });
 });
+
+/**
+ * ADR 0003 §3.3: RDKit is a second `embed3d` converter. Open Babel stays the
+ * default; a block that names RDKit records the embedding version and the force
+ * field that actually ran.
+ */
+const conformerFixture = JSON.parse(readFileSync(
+  new URL('./fixtures/chem/conformers.json', import.meta.url), 'utf8',
+));
+
+describe('embed3d through RDKit (ADR 0003 §3.3)', () => {
+  it('accepts the converter and keeps Open Babel as the default', () => {
+    const rdkit = validateProject(project([prepareNode({ kind: 'embed3d', converter: 'rdkit', smiles: 'CCO' })]));
+    expect(rdkit.ok).toBe(true);
+    expect(rdkit.project.nodes[0].settings.converter).toBe('rdkit');
+
+    const obabel = validateProject(project([prepareNode({ kind: 'embed3d', converter: 'openbabel', smiles: 'CCO' })]));
+    expect(obabel.ok).toBe(true);
+    expect(obabel.project.nodes[0].settings.converter).toBe('openbabel');
+  });
+
+  it('writes prepared.xyz from the embedded conformer', async () => {
+    const validated = validateProject(project([prepareNode({ kind: 'embed3d', converter: 'rdkit', smiles: 'CCO' })]));
+    const plan = buildWorkflowPlan(validated.project);
+    const { base, queueManager } = await stack();
+    const sidecar = await fakeStandardize(base, conformerFixture);
+    const started = await queueManager.start({
+      projectName: 'rdkit embed',
+      tasks: plan.tasks,
+      edges: plan.edges,
+      options: {
+        dryRun: false, executable: null, crestExecutable: '', scorerExecutable: '',
+        chemExecutable: process.execPath, chemScript: sidecar.script, scratchDir: '',
+      },
+    });
+    const done = await waitFor(async () => {
+      const queue = (await queueManager.list()).find((entry) => entry.id === started.id);
+      return queue && queue.status !== 'running' ? queue : null;
+    });
+    const prep = done.tasks.find((entry) => entry.nodeId === 'prep');
+    expect(prep.error).toBeNull();
+    expect(prep.status).toBe('completed');
+    expect(prep.prepared.converter).toBe('rdkit');
+    expect(prep.prepared.origin.method).toBe('ETKDGv4 + MMFF94');
+    const xyz = await fsp.readFile(path.join(prep.runDir, 'prepared.xyz'), 'utf8');
+    expect(xyz.split('\n')[0]).toBe(String(conformerFixture.result.conformers[0].atoms.length));
+  });
+});
