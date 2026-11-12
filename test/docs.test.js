@@ -123,9 +123,11 @@ describe('public documentation — copy consistency', () => {
   it('states plainly what the release is, and is not', () => {
     const readme = read('README.md');
     expect(readme).toContain('early preview');
-    // The release note has to keep saying, in some form, that a real run is
-    // unproven — the exact sentence may change as evidence arrives.
-    expect(readme).toMatch(/What has \*not\* been proven is a run driven by this app|What has \*not\* been proven is a real run/);
+    // The release note has to keep saying, in some form, what is *not*
+    // proven — the exact sentence may change as evidence arrives. GN-001
+    // closed on 2026-11-12, so the claim moved from "this app has never
+    // driven a licensed run" to "the automated tests never do".
+    expect(readme).toMatch(/What has \*not\* been proven is (a run driven by (this app|the project's automated tests)|a real run)/);
     expect(readme).toContain('GN-001');
   });
 

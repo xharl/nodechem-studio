@@ -37,11 +37,12 @@ analysis sidecar, a cclib converter for foreign logs, ONIOM and ROA result parsi
 ChemDraw import. **The format is unchanged:** `schemaVersion` stays 3, a 0.5.0 project opens here as
 it is, and a 0.4.0 project is still refused by version, not migrated.
 [`CHANGELOG.md`](CHANGELOG.md) records what changed.
-What has *not* been proven is a run driven by this app: no licensed Gaussian job and no real xTB job
-has been executed by the project's automated tests. On 2026-11-08 a peer run did execute 25
-app-written cases on Gaussian 16 Rev A.03 (Windows), and those logs now pin the parsers as fixtures;
-driving the same job from the app's own run console remains unverified. Read
-[Current limitations](#current-limitations) before you trust a result.
+What has *not* been proven is a run driven by the project's automated tests: no licensed Gaussian job
+and no real xTB job runs in CI. A peer machine did both under supervision: on 2026-11-08 a peer run
+executed 25 app-written cases on Gaussian 16 Rev A.03 (Windows) and those logs now pin the parsers as
+fixtures, and on 2026-11-12 the app's own run console drove a licensed `HF/3-21G Opt` water job end to
+end on that machine — GN-001 is closed. Read [Current limitations](#current-limitations) before you
+trust a result.
 
 ## What it does
 
@@ -260,10 +261,12 @@ docs/              documentation; the user guide lives in docs/guide/, decisions
 
 ## Current limitations
 
-- **No real Gaussian run has been recorded by this app.** On 2026-11-08 a peer run executed 25
-  cases written by this builder on Gaussian 16 Rev A.03 (Windows) and their logs are now fixtures, so
-  the parsers are pinned against real output; the runner and preflight are still covered only by unit
-  tests against fake executables, and the Windows acceptance run (GN-001) is only partly met.
+- **Real Gaussian runs come from one machine.** On 2026-11-08 a peer run executed 25 cases written by
+  this builder on Gaussian 16 Rev A.03 (Windows) and their logs are now fixtures, so the parsers are
+  pinned against real output. On 2026-11-12 the app's own run console ran a licensed `HF/3-21G Opt`
+  water job plus seven advanced jobs (TD + PCM + D3BJ, GIAO NMR, Raman, VCD, def2-SVP ECP, CBS-QB3 and
+  a relaxed scan) end to end there, closing GN-001. Nothing larger than 5 atoms, no queue behaviour
+  and no Linux or macOS Gaussian run is claimed.
 - **No real xTB run has been executed by this app's runner.** A real xTB 6.6.1 `--ohess` log is
   committed as a parser fixture (`test/fixtures/real/xtb-6.6.1-water-optfreq/`, captured on xeyve),
   so the parser is pinned against output from a release the app does not ship; the end-to-end suite

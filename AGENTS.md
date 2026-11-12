@@ -71,6 +71,9 @@ npm run build
 - Do not commit `node_modules/`, `dist/`, `.env`, run folders, or logs.
 - Do not claim success from a successful spawn or a green build alone. For runner work, include
   the run folder and `run.json` evidence.
+- The app runs the **Vite bundle**, not `src/` directly: after editing `src/shared/*`, run
+  `npm run build` before launching the app or the previous deck is used. A fixed `constraints.js`
+  still wrote the old `S 6 2` line until the bundle was rebuilt (GN-001).
 
 ## Branch and PR
 
@@ -96,6 +99,9 @@ npm run build
 - Test on Windows before calling a runner task done. This Linux container cannot launch
   Electron (no GTK/display), so renderer checks happen in Chromium and runner checks in Vitest;
   that is not a substitute for GN-001.
+- `#run-exe` shows `C:\G16W\g16.exe` as a **placeholder**, not a value: with dry run off, preflight
+  fails `Gaussian executable configured — Not configured` until the path is typed, and a dry-run
+  preflight (6 checks) never surfaces it. Type the path before judging a real run.
 
 ### Linux and macOS
 
