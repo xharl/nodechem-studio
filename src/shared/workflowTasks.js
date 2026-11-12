@@ -1104,7 +1104,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
       for (const record of records) {
         const recordId = record?.id || null;
         const taskId = taskIdFor(node.id, recordId);
-        const chemistry = moleculeForNode(project, node, null, record);
+        const chemistry = moleculeForNode(project, node, null, record, { index: projectIndex });
         const settings = node.settings || {};
         ids.push(taskId);
         pushTask({
