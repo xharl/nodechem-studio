@@ -1058,7 +1058,7 @@ async function exportDataset(format = 'csv') {
   const kind = format === 'json' ? 'json' : 'csv';
   let runs;
   try {
-    runs = await runManager.list();
+    runs = await runManager.listRecords();
   } catch (error) {
     return { canceled: false, error: { message: error.message } };
   }
@@ -1097,7 +1097,7 @@ async function collectDiagnostics(summary = {}) {
   const info = currentAppInfo();
   let runs;
   try {
-    runs = await runManager.list();
+    runs = await runManager.listRecords();
   } catch {
     // An unreadable runs folder is "not recorded", not an empty history.
     runs = undefined;
@@ -1412,6 +1412,10 @@ app.whenReady().then(async () => {
   ipcMain.handle('gaussian:run', (_event, payload) => runManager.start(payload));
   ipcMain.handle('gaussian:cancel', (_event, runId) => runManager.cancel(runId));
   ipcMain.handle('runs:list', () => runManager.list());
+  // Issue #371: the full record is fetched only for the ids a consumer names.
+  // `runs:list` stays a summary projection so opening history or the export
+  // menu cannot read every `run.json`.
+  ipcMain.handle('runs:records', (_event, ids) => runManager.records(ids));
   /**
    * Save a text artifact the renderer produced (the thermochemistry CSV). The
    * main process owns the dialog and the write; the renderer never touches the

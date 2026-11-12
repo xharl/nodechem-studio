@@ -1,5 +1,4 @@
 import fsp from 'node:fs/promises';
-import fs from 'node:fs';
 import path from 'node:path';
 import { GaussianRunner } from './gaussianRunner.js';
 import { XtbRunner } from './xtbRunner.js';
@@ -116,6 +115,84 @@ async function writeJson(filePath, value) {
   await fsp.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+/** How many `run.json` files are statted/read at once. I/O-bound, not CPU-bound. */
+const RUN_READ_POOL = 16;
+
+const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+function finiteOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function textOrNull(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+/**
+ * Run records are ordered newest first everywhere the app lists them. Imported
+ * records have no `startedAt`; they keep their place at the end, as before.
+ */
+function newestFirst(a, b) {
+  return String(b.startedAt).localeCompare(String(a.startedAt));
+}
+
+/**
+ * Run a bounded number of async jobs at once and keep the input order.
+ * `run.json` reads are independent, so a serial `for` loop wasted the time the
+ * issue measured; an unbounded `Promise.all` would open every file at once.
+ */
+async function mapPool(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * The projection `runs:list` sends: enough for the history list, the export
+ * menu's count and a "does this run have parsed results" check, without the
+ * `parsed` block (a frequency run's can be hundreds of kilobytes).
+ *
+ * `kind`, `program` and `version` are carried because an imported record has no
+ * run metadata of its own and its history row prints the imported badge.
+ */
+function runSummary(record) {
+  if (!isObject(record)) return null;
+  const parsed = isObject(record.parsed) ? record.parsed : null;
+  const provenance = isObject(record.provenance) ? record.provenance : {};
+  const output = isObject(provenance.output) ? provenance.output : {};
+  const outputBytes = isObject(record.outputBytes) ? record.outputBytes : {};
+  const verdict = record.verdict ?? record.gateVerdict ?? (isObject(record.gates) ? record.gates.overall : null);
+  return {
+    id: textOrNull(record.id),
+    title: typeof record.title === 'string' ? record.title : '',
+    engine: textOrNull(record.engine),
+    jobType: textOrNull(provenance.jobType) ?? textOrNull(record.jobType),
+    status: textOrNull(record.status),
+    verdict: textOrNull(verdict),
+    startedAt: textOrNull(record.startedAt),
+    finishedAt: textOrNull(record.finishedAt),
+    elapsedSeconds: finiteOrNull(record.elapsedSeconds ?? parsed?.resources?.elapsedSeconds),
+    hasParsed: Boolean(parsed),
+    bytes: finiteOrNull(output.bytes ?? outputBytes.size ?? outputBytes.bytesRead),
+    dryRun: record.dryRun === true,
+    // Imported records (issue 131) have `kind`, `program` and `version` at the
+    // top level, and no status, engine or startedAt.
+    kind: textOrNull(record.kind),
+    program: textOrNull(record.program),
+    version: textOrNull(record.version),
+  };
+}
+
 /**
  * The conformer a run was built on (issue #30). Bounded and coerced here for
  * the same reason every other renderer-supplied value is: run.json is written
@@ -155,6 +232,10 @@ export class RunManager {
     this.appInfo = normaliseAppInfo(appInfo);
     this.active = new Map();
     this.listeners = new Set();
+    // Issue #371: summary cache keyed by run.json path and validated by
+    // (mtimeMs, size), so re-opening the history panel does not re-read and
+    // re-parse every record.
+    this.summaryCache = new Map();
   }
 
   /** Build the process runner for an engine. Tests inject a fake one. */
@@ -317,6 +398,7 @@ export class RunManager {
       series: payload.series,
     });
     await writeJson(path.join(runDir, 'run.json'), record);
+    this.summaryCache.delete(path.join(runDir, 'run.json'));
     await writeJson(path.join(runDir, 'request.json'), {
       ...record,
       inputText: undefined,
@@ -836,6 +918,7 @@ export class RunManager {
       finishedAt: new Date().toISOString(),
     };
     await writeJson(runPath, finished);
+    this.summaryCache.delete(runPath);
     context.finished = true;
     this.active.delete(runId);
     this.emit({ type: 'done', runId, runDir, record: finished });
@@ -912,24 +995,103 @@ export class RunManager {
     };
   }
 
-  async list() {
+  /**
+   * Every `run.json` under the runs root, in readdir order. A folder without
+   * one is left out by the callers when their stat/read reports ENOENT; this is
+   * one syscall instead of the old synchronous `existsSync` per folder.
+   */
+  async runFiles() {
+    let entries;
     try {
-      const entries = await fsp.readdir(this.runsRoot, { withFileTypes: true });
-      const runs = [];
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const file = path.join(this.runsRoot, entry.name, 'run.json');
-        if (!fs.existsSync(file)) continue;
-        try {
-          runs.push(JSON.parse(await fsp.readFile(file, 'utf8')));
-        } catch {
-          // Ignore an incomplete run directory rather than hiding the rest.
-        }
-      }
-      return runs.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+      entries = await fsp.readdir(this.runsRoot, { withFileTypes: true });
     } catch (error) {
       if (error.code === 'ENOENT') return [];
       throw error;
     }
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(this.runsRoot, entry.name, 'run.json'));
+  }
+
+  /**
+   * The summary projection behind `runs:list` (issue #371). Each file is
+   * statted once; an unchanged (path, mtimeMs, size) is served from the cache,
+   * and a changed or new file is read and parsed with a bounded pool. The
+   * renderer never receives a `parsed` block from this channel.
+   */
+  async list() {
+    const files = await this.runFiles();
+    const seen = new Set();
+    const summaries = await mapPool(files, RUN_READ_POOL, async (file) => {
+      let stats;
+      try {
+        stats = await fsp.stat(file);
+      } catch {
+        // No run.json in this folder yet: an incomplete run, not a failure.
+        return null;
+      }
+      if (!stats.isFile()) return null;
+      seen.add(file);
+      const cached = this.summaryCache.get(file);
+      if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+        return cached.summary;
+      }
+      let record;
+      try {
+        record = JSON.parse(await fsp.readFile(file, 'utf8'));
+      } catch {
+        this.summaryCache.delete(file);
+        return null;
+      }
+      const summary = runSummary(record);
+      if (!summary) {
+        this.summaryCache.delete(file);
+        return null;
+      }
+      this.summaryCache.set(file, { mtimeMs: stats.mtimeMs, size: stats.size, summary });
+      return summary;
+    });
+    // A deleted run folder must not pin a summary in memory forever.
+    for (const file of this.summaryCache.keys()) {
+      if (!seen.has(file)) this.summaryCache.delete(file);
+    }
+    return summaries.filter(Boolean).sort(newestFirst);
+  }
+
+  /**
+   * Full records for exactly the requested run ids (`runs:records`). The
+   * renderer names ids, so each one is validated as a single safe path segment
+   * before it is joined under the runs root. Unknown or unreadable runs are
+   * omitted rather than failing the whole request.
+   */
+  async records(ids) {
+    const wanted = [...new Set((Array.isArray(ids) ? ids : [])
+      .map((id) => String(id ?? ''))
+      .filter((id) => SAFE_RUN_ID.test(id)))];
+    const records = await mapPool(wanted, RUN_READ_POOL, async (id) => {
+      try {
+        return JSON.parse(await fsp.readFile(path.join(this.runsRoot, id, 'run.json'), 'utf8'));
+      } catch {
+        return null;
+      }
+    });
+    return records.filter(Boolean).sort(newestFirst);
+  }
+
+  /**
+   * Every full record, for main-process callers only: the dataset export and
+   * the diagnostics bundle need the parsed payload. The renderer gets
+   * `runs:list` summaries and `runs:records(ids)` instead.
+   */
+  async listRecords() {
+    const files = await this.runFiles();
+    const records = await mapPool(files, RUN_READ_POOL, async (file) => {
+      try {
+        return JSON.parse(await fsp.readFile(file, 'utf8'));
+      } catch {
+        return null;
+      }
+    });
+    return records.filter(Boolean).sort(newestFirst);
   }
 }
