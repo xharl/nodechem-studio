@@ -263,6 +263,36 @@ rather than implied. Where the parser finds no thermochemistry section, the pane
 xTB's free energy already uses mRRHO; the app adds no quasi-harmonic or standard-state correction on
 top of it.
 
+### Frequency scaling
+
+A harmonic frequency is systematically high, and comparing it with an experimental fundamental
+needs a published scale factor. A Gaussian frequency block carries `frequencyScale`:
+
+- `"unscaled"` (the default, and what an absent key means) — the panel prints the numbers the log
+  printed;
+- `"auto"` — look the block's method and basis up in `src/shared/frequencyScaling.js` and apply the
+  cited factor;
+- a number between 0.5 and 1.5 — an explicit factor, recorded as the user's own choice rather than
+  as a table entry.
+
+The factor is a **display and derivation** choice. The parsed record keeps every printed
+wavenumber, ZPE correction and free energy. What moves is the band positions in the Raman and VCD
+panels, the derived ZPE (`raw ZPE correction × factor`) and the harmonic/quasi-RRHO entropy
+recomputed from the scaled wavenumbers. The printed `G` is not re-derived: a scaled ZPE folded into
+a `G` whose translational and rotational terms came from the raw frequencies would mix two
+thermochemistries in one number, so the card prints both and says which is which.
+
+`"auto"` never guesses. If the table has no entry for the method/basis pair, the block stays
+unscaled and the card and report print the warning, naming the pair and the table version. An
+imported record is never scaled, whatever the setting says: another program printed those numbers,
+and the record says so.
+
+The table's entries are hand-checked, not fitted here. Each one names its source — Merrick, Moran
+and Radom, *J. Phys. Chem. A* 2007, 111, 11683–11700, Tables 2 and 4
+(doi:10.1021/jp073974n), or the NIST
+CCCBDB precomputed scale-factor tables (SRD 101, Release 22). The two compilations can differ in
+the third decimal; the entry's source says which number is used.
+
 ## Composite methods
 
 `CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4` and `G4(MP2)` are **job types**, not method

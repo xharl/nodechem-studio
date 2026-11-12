@@ -12,6 +12,19 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Added
 
+- **Harmonic frequency scaling with a sourced table** — a Gaussian frequency block now carries
+  `frequencyScale`: `unscaled` (the default, and what an absent key means), `auto`, or an explicit
+  factor between 0.5 and 1.5. `auto` looks the block's method and basis up in
+  `src/shared/frequencyScaling.js`, a versioned hand-checked table whose entries cite Merrick, Moran
+  and Radom, *J. Phys. Chem. A* 2007, 111, 11683–11700, or the NIST CCCBDB SRD 101 Release 22
+  precomputed tables. The factor moves only what is derived for display: Raman and VCD band
+  positions, the derived ZPE (`raw × factor`) and the harmonic/quasi-RRHO entropy baseline. Parsed
+  wavenumbers, the printed ZPE correction, the printed `G` and every intensity stay as the program
+  printed them; an imported record is never scaled, and an unknown pair is offered unscaled with a
+  warning naming the pair and table version rather than a guessed factor. The decision, factor,
+  table version and source are written to `run.json` provenance and printed in the result cards and
+  workflow report beside the raw value (#350).
+
 - **Workflow reports list the artifacts the workflow wrote** — `report.html` now has an *Artifacts
   written* section built from the queue's `<artifactRoot>/manifest.json`: one row per file with its
   kind, queue-relative path, byte count and 16-character SHA-256, plus the manifest's own digest and

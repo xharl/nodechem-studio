@@ -126,6 +126,11 @@ import {
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import { prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
 import { EXPLICIT_SOLVENTS } from '../shared/explicitSolvation.js';
+import {
+  describeFrequencyScale,
+  normaliseFrequencyScaleSetting,
+  resolveFrequencyScale,
+} from '../shared/frequencyScaling.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
 import { SPIN_SWEEP_MAX, multiplicitiesFor, spinSweepFor } from '../shared/spinSweep.js';
@@ -3069,6 +3074,42 @@ function calcInspector(node) {
       + '</span></div>',
   ].join(''));
 
+  // Issue 350: harmonic frequency scaling. It is a presentation/derived
+  // choice — the parsed record keeps the printed numbers — so the control only
+  // appears on a Gaussian frequency job, the only place a table entry can be
+  // looked up.
+  const frequencyScaleSetting = s.frequencyScale ?? 'unscaled';
+  const frequencyScaleResolution = resolveFrequencyScale({
+    setting: frequencyScaleSetting,
+    // `routeValues` defaults an empty pair to B3LYP/6-31G(d); mirror that here
+    // so the inspector's hint matches what the run will record.
+    method: s.method || 'B3LYP',
+    basis: s.basis || '6-31G(d)',
+  });
+  const frequencyScaleGroup = group(
+    'Frequency scaling',
+    frequencyScaleResolution.applied
+      ? `×${Number(frequencyScaleResolution.factor).toFixed(4)}`
+      : (frequencyScaleResolution.mode === 'unknown' ? 'no factor — unscaled' : 'unscaled'),
+    true,
+    [
+      inputField('Scale factor', 'frequencyScale', frequencyScaleSetting, { full: true }),
+      '<div class="field full"><span class="inspector-note">'
+        + '<code>unscaled</code> (default), <code>auto</code>, or an explicit factor between 0.5 and 1.5. '
+        + 'The factor moves only the displayed band positions, the derived ZPE and the quasi-RRHO entropy; '
+        + 'the stored record keeps the numbers Gaussian printed. '
+        + (frequencyScaleResolution.applied
+          ? `Now: ${esc(describeFrequencyScale(frequencyScaleResolution))}.`
+          : (frequencyScaleResolution.mode === 'unknown'
+            ? `No published factor for ${esc(s.method || 'B3LYP')}/${esc(s.basis || '6-31G(d)')} `
+              + `in table ${esc(frequencyScaleResolution.tableVersion)}; the block stays unscaled and says so.`
+            : (frequencyScaleResolution.mode === 'invalid'
+              ? 'Not a valid setting: use unscaled, auto, or a factor between 0.5 and 1.5. The project cannot be saved until it is fixed.'
+              : 'The spectrum and ZPE are shown as printed.')))
+        + '</span></div>',
+    ].join(''),
+  );
+
   const gates = s.gates;
   const gatesGroup = group('Gates', `${[gates.thermo, gates.finalEnergy, gates.imaginary !== null, gates.scf].filter(Boolean).length} active`, true, [
     switchRow('Normal termination', 'always required', 'termination', true, { gate: true, disabled: true }),
@@ -3150,6 +3191,7 @@ function calcInspector(node) {
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : ramanGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : vcdGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : roaGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob || !frequencyJob ? '' : frequencyScaleGroup}
     ${isXtb ? xtbSolvationGroup : isPsi4 ? '' : isPyscf ? pyscfSolvationGroup : compositeJob ? '' : isOrca ? orcaSolvationGroup : gaussianSolvationGroup}
     ${moleculeGroup}
     ${spinGroup}
@@ -5330,6 +5372,15 @@ function updateNodeField(node, key, value) {
   if (key === 'matrixElement') {
     if (value) node.settings.matrixElement = value;
     else delete node.settings.matrixElement;
+    return;
+  }
+  // Issue 350: `frequencyScale` is a small vocabulary plus a number, not a
+  // free string. A complete value is stored canonically; an incomplete one is
+  // kept as typed so the next keystroke is not discarded, and the schema
+  // reports it at save time instead of this field silently reverting.
+  if (key === 'frequencyScale') {
+    const text = String(value ?? '').trim();
+    node.settings.frequencyScale = normaliseFrequencyScaleSetting(text) ?? text;
     return;
   }
   if (key in node.settings) {
@@ -8521,7 +8572,13 @@ function handleRunEvent(event) {
     state.run.id = record.id || state.run.id;
     setRunState(record.status, record.status);
     renderRunGates(record.gates?.gates || [], record.gates?.validity || null);
-    mountThermochemistryView($('#run-thermo'), record.parsed, { engine: record.engine });
+    mountThermochemistryView($('#run-thermo'), record.parsed, {
+      engine: record.engine,
+      // Issue 350: the run recorded the setting it was launched with; the
+      // panel applies the same one, never a later project edit.
+      settings: { frequencyScale: record.provenance?.frequencyScale?.setting ?? 'unscaled' },
+      frequencyScaleResolution: record.provenance?.frequencyScale ?? null,
+    });
     attachParsedRun(record, state.run.nodeId);
     autoRunPane('results');
     $('#cancel-run')?.setAttribute('disabled', '');

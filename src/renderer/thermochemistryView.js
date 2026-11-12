@@ -40,6 +40,10 @@ function constantLabel(line) {
  * Render the thermochemistry panel. Every correction is its own row with its
  * constant; the total is a separate row. A disabled correction shows its
  * computed value but contributes zero.
+ *
+ * Issue 350: when a frequency factor was applied, the ZPE correction is shown
+ * as `raw → scaled` with the factor and its source. The printed G is not
+ * re-derived, and the note beside the row says so.
  */
 export function thermochemistryPanelHtml(report) {
   if (!report) return '';
@@ -60,6 +64,18 @@ export function thermochemistryPanelHtml(report) {
       + `<span class="run-thermo-value">${esc(value)}</span>`
       + '</label>';
   }).join('');
+  const zeroPoint = report.zeroPoint;
+  const zpeRow = zeroPoint && Number.isFinite(zeroPoint.rawHartree)
+    ? '<div class="run-thermo-row" data-field="thermo-zpe">'
+      + '<span class="run-thermo-label">ZPE correction'
+      + `<small>${zeroPoint.applied
+        ? `×${Number(zeroPoint.factor).toFixed(4)} · ${esc(zeroPoint.source || 'source not recorded')}`
+        : 'unscaled — as printed'}</small></span>`
+      + `<span class="run-thermo-value">${zeroPoint.applied
+        ? `${number(zeroPoint.rawHartree, 6)} → ${number(zeroPoint.scaledHartree, 6)} Eh`
+        : `${number(zeroPoint.rawHartree, 6)} Eh`}</span>`
+      + '</div>'
+    : '';
   const total = report.available
     ? `<strong>${number(report.total.hartree, 6)} Eh</strong>`
       + `<span>${number(report.total.kcalPerMol)} kcal/mol</span>`
@@ -71,10 +87,12 @@ export function thermochemistryPanelHtml(report) {
   return `<div class="run-thermo-head"><span>Thermochemistry</span>`
     + `<span>G from log: ${esc(baseline)}</span></div>`
     + rows
+    + zpeRow
     + `<div class="run-thermo-total"><span>Corrected G</span>${total}</div>`
     + `<div class="run-thermo-note">1 Ha = ${number(HARTREE_TO_KCAL_PER_MOL, 4)} kcal/mol · `
     + `standard state ${number(STANDARD_STATE_CORRECTION_KCAL_PER_MOL)} kcal/mol `
-    + `(298.15 K, RT ln 24.465)</div>`
+    + `(298.15 K, RT ln 24.465)`
+    + `${zeroPoint?.applied ? ' · the printed G is not re-derived from scaled frequencies' : ''}</div>`
     + warnings;
 }
 
@@ -84,7 +102,7 @@ export function thermochemistryPanelHtml(report) {
  * xTB already reports a free energy with mRRHO entropy; the Gaussian
  * quasi-RRHO / standard-state corrections must not be offered on top of it.
  */
-export function mountThermochemistryView(container, parsed, { engine = null } = {}) {
+export function mountThermochemistryView(container, parsed, { engine = null, settings = null, frequencyScaleResolution = null } = {}) {
   if (!container) return;
   if (engine === 'xtb') {
     container.hidden = false;
@@ -102,7 +120,12 @@ export function mountThermochemistryView(container, parsed, { engine = null } = 
     container.innerHTML = '';
     return;
   }
-  const options = { quasiRRHO: true, standardState: true };
+  const options = {
+    quasiRRHO: true,
+    standardState: true,
+    frequencyScale: settings?.frequencyScale ?? 'unscaled',
+    frequencyScaleResolution,
+  };
   const render = () => {
     const report = buildThermochemistryReport(parsed, options);
     container.innerHTML = thermochemistryPanelHtml(report);
