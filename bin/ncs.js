@@ -30,7 +30,13 @@ import { fileReadReason } from '../src/shared/fsError.js';
 import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { flowById } from '../src/shared/flows.js';
 import { buildWorkflowPlan, moleculeForNode } from '../src/shared/workflowTasks.js';
-import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
+import {
+  buildCombinedReportHtml,
+  buildProjectReportModel,
+  buildWorkflowReport,
+  serializeReportModel,
+  workflowReportHtml,
+} from '../src/shared/workflowReport.js';
 import { parseGaussianOutput, geometryToXyz } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
 import { kineticsSummary } from '../src/shared/kinetics.js';
@@ -104,7 +110,8 @@ const USAGE = `ncs — headless NodeChem Studio
       [--scorer <path>]
       [--settings <file>]
       [--timeout <seconds>] [--json]
-  ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
+  ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none]
+      [--out <file>] [--no-model]
   ncs validation <cases.json> [--run] [--executable <python>] [--work <dir>] [--timeout <seconds>]
       [--out <file>] [--json]
   ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
@@ -743,19 +750,38 @@ async function commandReport({ positional, flags }) {
       ? `no queue for flow "${wantedFlow}" under ${outDir}.`
       : `no readable queue.json under ${path.join(outDir, 'queues')}.`, EXIT.invalid);
   }
-  const generatedAt = new Date().toISOString();
+  // Issue #357: the HTML and its model are two halves of one contract. The
+  // digest is computed from the exact JSON text written beside the HTML, after
+  // `generatedAt` is fixed, so `sha256sum` of the file equals both the digest
+  // the document prints and its `data-model-sha256` attribute.
+  const writeModel = !(flags['no-model'] === true || flags['no-model'] === 'true');
+  const generatedAt = models[0]?.generatedAt || new Date().toISOString();
+  const title = `Project report — ${models[0].queue.projectName || path.basename(outDir)}`;
+  const document = models.length === 1
+    ? models[0]
+    : buildProjectReportModel(models, { title, generatedAt });
+  const modelJson = writeModel ? serializeReportModel(document) : null;
+  const modelDigest = modelJson
+    ? createHash('sha256').update(modelJson, 'utf8').digest('hex')
+    : null;
   const html = models.length === 1
-    ? workflowReportHtml(models[0])
-    : buildCombinedReportHtml(models, {
-      title: `Project report — ${models[0].queue.projectName || path.basename(outDir)}`,
-      generatedAt,
-    });
+    ? workflowReportHtml(models[0], { modelDigest })
+    : buildCombinedReportHtml(models, { title, generatedAt, modelDigest });
   // `--out` is the user's path: unlike an artifact declared inside a project,
   // it is not confined to the output folder — the caller asked for it by name.
   const outFile = path.resolve(String(flags.out || path.join(outDir, 'reports', 'index.html')));
+  // `<file>.json` beside `<file>.html`; a name with no HTML suffix simply gains
+  // `.json`, the same rule the window's Save action uses.
+  const modelFile = `${outFile.replace(/\.html?$/i, '')}.json`;
   await fs.mkdir(path.dirname(outFile), { recursive: true });
+  // The model goes first: the HTML must never name a digest whose file is
+  // missing because the second write failed.
+  if (writeModel) await fs.writeFile(modelFile, modelJson, 'utf8');
   await fs.writeFile(outFile, html, 'utf8');
+  // The first line stays the HTML path (the contract scripts already read);
+  // the digest line carries no path, so stdout leaks nothing new.
   process.stdout.write(`${outFile}\n`);
+  if (writeModel) process.stdout.write(`model sha256 ${modelDigest}\n`);
   process.exit(EXIT.ok);
 }
 

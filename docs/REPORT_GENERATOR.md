@@ -45,16 +45,19 @@ Gate verdicts are **copied**, never recomputed. The report is a view over record
 
 | File | Purpose | Rules |
 |---|---|---|
-| `report.html` | The document a human reads or prints | Single file: inline CSS and inline SVG figures, **no JavaScript**, no external references, no `<script>`, no `http(s)://` |
-| `report.json` | The model the HTML was rendered from | JSON-serialisable, `schemaVersion: 1` (`WORKFLOW_REPORT_SCHEMA_VERSION`) and `kind: "nodechem-studio.workflow-report"`, absolute paths allowed here only (they never reach the HTML) |
+| `report.html` | The document a human reads or prints | Single file: inline CSS and inline SVG figures, **no JavaScript**, no external references, no `<script>`, no `http(s)://`; when a model is written beside it, `<html data-model-sha256="…">` and the header meta line name the model's SHA-256 |
+| `report.json` | The model the HTML was rendered from | JSON-serialisable, `schemaVersion: 1` (`WORKFLOW_REPORT_SCHEMA_VERSION`) and `kind: "nodechem-studio.workflow-report"`, absolute paths allowed here only (they never reach the HTML). A combined report writes one envelope with `kind: "nodechem-studio.project-report"` and one workflow model per flow under `flows[]` |
 
 - Location: the desktop **Save workflow report…** action writes the file the user names (default
-  `<documents>/workflow-<id>.html`) and the model beside it as `<name>.json`. `ncs report <out-dir>`
-  writes `<out-dir>/reports/index.html` unless `--out <file>` names another path; it does not write a
-  JSON model.
+  `<documents>/workflow-<id>.html`) and the model beside it as `<name>.json`, and the HTML names the
+  model's SHA-256. `ncs report <out-dir>` writes `<out-dir>/reports/index.html` and `index.json`
+  beside it unless `--out <file>` names another path, in which case the model is `<file>.json`;
+  `--no-model` writes only the HTML. The digest is the SHA-256 of the exact JSON bytes written, so
+  `sha256sum <name>.json` equals both the printed digest and `data-model-sha256`.
 - A PDF deliverable was dropped by decision; there is no `printToPDF` path in this build.
 - Determinism: same queue + same run records ⇒ byte-identical HTML apart from the generation
-  timestamp, which enters through the model.
+  timestamp, which enters through the model. The digest is computed after `generatedAt` is set, so
+  it changes only when the document does.
 
 ---
 
@@ -80,7 +83,9 @@ Provenance  Block · Run · Input SHA-256 · Output SHA-256
 ### 4.1 Header line
 
 Queue id, queue status, created and finished timestamps, the generation timestamp, and the version
-of the app that wrote the report (`appVersion` in the model). The app **commit** is not printed. A
+of the app that wrote the report (`appVersion` in the model). When a model is written beside the
+HTML, the line also ends with `model sha256 <digest>`, and `<html>` carries the same value as
+`data-model-sha256`. The app **commit** is not printed. A
 fixture (dry-run) count note and an imported-results note follow when either applies. A truncated
 parse is **not** called out by this report yet.
 
@@ -175,7 +180,7 @@ from an `analyse` block whose definition names its inputs.
 
 ## 6. Rendering
 
-- **Pure functions only.** `buildWorkflowReport(queue, records, options) → model`, `workflowReportHtml(model) → string`. No DOM, no `fs` inside the renderer (the module lives in `src/shared`); time enters through `generatedAt` in the model.
+- **Pure functions only.** `buildWorkflowReport(queue, records, options) → model`, `workflowReportHtml(model, { methodsFor, modelDigest }) → string`, `buildProjectReportModel(models, { title, generatedAt }) → document` and `buildCombinedReportHtml(models, { title, generatedAt, modelDigest }) → string`. No DOM, no `fs` inside the renderer (the module lives in `src/shared`); time enters through `generatedAt` in the model, and `serializeReportModel(document)` is the exact JSON text the digest is taken over.
 - **Escaping.** Every interpolation passes through the module's own `escapeHtml()`. Free text from logs (error cause, termination line) is additionally length-capped and stripped of control characters. A block title of `<img src=x onerror=…>` renders as text; a test asserts it.
 - **Style.** The report has its own fixed paper style, independent of app themes — a dark-mode user must not get a dark PDF-style page. One embedded `REPORT_STYLE` sheet: `system-ui` sans at 13 px on white, mono with `font-variant-numeric: tabular-nums` for numbers, hairline table rules, a 1100 px measure. There is no `@page` rule and no print-specific margin box; printing is the browser's own job.
 - **Fonts.** The report uses the system sans/mono stacks so the file stays small and portable; it does not embed the app's Plex faces and never fetches a font.
@@ -210,9 +215,9 @@ graph, not a screenshot of the editor (`Execution graph · N blocks · counts by
 `src/shared/workflowReport.js`:
 
 1. `buildWorkflowReport(queue, records, { generatedAt, appVersion, recordInfo, includeImported, figureLevel, volumes, surfaces, figureBudgetBytes, wavefunction })` reads the queue model and the per-task `run.json`; a task with no readable record is still listed, with its values shown as `not reported`, and the report is produced;
-2. `workflowReportHtml(model)` renders the document, and `buildCombinedReportHtml(models, { title, generatedAt })` stacks one section per flow for a project report;
+2. `workflowReportHtml(model, { modelDigest })` renders the document, `buildProjectReportModel(models, { title, generatedAt })` wraps a combined report's per-flow models, and `buildCombinedReportHtml(models, { title, generatedAt, modelDigest })` stacks one section per flow for a project report;
 3. the figure set comes from `src/shared/report.js` — `figureInputsFor(queue, level)` returns cube volumes for `basic` and meshed isosurfaces for `surfaces` — and the builders live in `src/shared/figures/*`;
-4. the desktop action writes the HTML and, beside it, `JSON.stringify(model, null, 2)`; `ncs report` writes the HTML only.
+4. the desktop action writes the HTML and, beside it, `serializeReportModel(model)`; `ncs report` writes the HTML and, unless `--no-model`, the same serialisation of the per-flow model (or the project-report envelope when several flows are combined). The SHA-256 of those exact bytes is passed back into the renderer as `modelDigest` and printed by the document.
 
 Failure is loud and local: if rendering throws, no partial HTML is written, the queue panel shows the error, and the run records are untouched. A report never mutates run data.
 
@@ -262,6 +267,11 @@ Failure is loud and local: if rendering throws, no partial HTML is written, the 
 
 `test/cliImportedReport.test.js`
 - `ncs report --include-imported` lists an imported result and only puts its number in the energy column when the flag is set.
+
+`test/cliReportModel.test.js`
+- `ncs report` writes the HTML and `<name>.json` beside it; the JSON parses to the model the HTML was rendered from (re-rendering it produces the same bytes), stdout carries the 64-hex digest of the file, and the digest equals `data-model-sha256` and the header line.
+- `--no-model` writes no JSON, prints no digest and leaves the attribute off; `--out <file>.html` puts the model at `<file>.json`.
+- A combined report writes the project-report envelope (`kind: "nodechem-studio.project-report"`, `flows[]`) and its digest is the SHA-256 of those bytes.
 
 `test/docs.test.js` additions
 - `docs/guide/report.md` exists, is linked from the guide index, and every example path resolves.
