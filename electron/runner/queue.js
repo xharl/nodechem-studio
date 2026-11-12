@@ -33,6 +33,7 @@ import {
   MULTIWFN_LICENCE,
   compareQtaimToApp,
   multiwfnAnalysis,
+  multiwfnCitationFor,
   multiwfnMenuScript,
   multiwfnSummary,
   multiwfnVersionRefusal,
@@ -4020,6 +4021,10 @@ export class QueueManager {
     let script = null;
     let input = null;
     let version = '';
+    // Issue #342: the citation follows the banner. Defaults to both papers
+    // (the 2024+ band); a 3.x binary gets the 2012 paper alone once its band is
+    // known. An error before detection keeps the stricter, complete citation.
+    let citation = MULTIWFN_CITATION;
     const startedAt = task.startedAt;
     try {
       if (!definition || !analysis) {
@@ -4057,6 +4062,7 @@ export class QueueManager {
       // names, so a 2026 build runs the 2026 submenu sequence instead of being
       // refused. The refusal above already rejected any version no band claims.
       const band = multiwfnBandFor(version);
+      citation = multiwfnCitationFor(band.id);
       script = multiwfnMenuScript(definition.analysis, definition, { band: band.id });
       const runner = new MultiwfnRunner();
       this.multiwfnRunner = runner;
@@ -4138,7 +4144,7 @@ export class QueueManager {
           program: 'Multiwfn',
           version: raw.version || version,
           executable,
-          citation: MULTIWFN_CITATION,
+          citation,
           licence: MULTIWFN_LICENCE,
           analysis: definition.analysis,
           parameters: { ...definition },
@@ -4161,7 +4167,7 @@ export class QueueManager {
           parameters: { ...definition },
           status: 'computed',
           summary,
-          citation: MULTIWFN_CITATION,
+          citation,
           notComputed: null,
         },
       };
@@ -4172,7 +4178,7 @@ export class QueueManager {
         mode: 'multiwfn',
         status: 'computed',
         summary,
-        citation: MULTIWFN_CITATION,
+        citation,
         provenance: record.provenance,
         multiwfn: result,
         notComputed: null,
@@ -4187,7 +4193,7 @@ export class QueueManager {
         mode: 'multiwfn',
         status: error?.code === 'multiwfn-dry-run' ? 'pending' : 'refused',
         summary: `Multiwfn — ${message}`,
-        citation: MULTIWFN_CITATION,
+        citation,
         notComputed: message,
         ...(script ? { menuScript: script.text, menuVersion: script.version } : {}),
         ...(input ? { input: { ...definition?.input, resolved: input.name, sha256: input.sha256 } } : {}),
@@ -4207,7 +4213,7 @@ export class QueueManager {
           program: 'Multiwfn',
           version: version || null,
           executable: queue.options.multiwfnExecutable || null,
-          citation: MULTIWFN_CITATION,
+          citation,
           licence: MULTIWFN_LICENCE,
           analysis: definition?.analysis || null,
           parameters: definition ? { ...definition } : null,
@@ -4225,7 +4231,7 @@ export class QueueManager {
           parameters: definition ? { ...definition } : null,
           status: error?.code === 'multiwfn-dry-run' ? 'pending' : 'refused',
           summary: `Multiwfn — ${message}`,
-          citation: MULTIWFN_CITATION,
+          citation,
           notComputed: message,
         },
       };
