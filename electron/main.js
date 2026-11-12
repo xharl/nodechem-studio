@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import fsp from 'node:fs/promises';
@@ -22,7 +23,7 @@ import { buildDiagnostics } from '../src/shared/diagnostics.js';
 import { checkForUpdate } from '../src/shared/updateCheck.js';
 import { datasetCsv, datasetJson, runRows } from '../src/shared/datasetExport.js';
 import { BATCH_MAX_LOG_BYTES, summarizeLog } from '../src/shared/logImport.js';
-import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowReport.js';
+import { buildWorkflowReport, serializeReportModel, workflowReportHtml } from '../src/shared/workflowReport.js';
 import { methodsParagraphFor } from '../src/shared/methodsParagraph.js';
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { convertParsed, convertWavefunctionFile } from '../src/shared/converters/index.js';
@@ -1047,7 +1048,13 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic', sender = nul
       surfaces: figures.surfaces,
     });
 
+    // Issue #357: the window writes the model it rendered from, and the HTML
+    // names that model's SHA-256. Serialisation is shared with `ncs report`, so
+    // the two entry points cannot hash different bytes for the same model.
+    const modelJson = serializeReportModel(model);
+    const modelDigest = createHash('sha256').update(modelJson, 'utf8').digest('hex');
     const html = workflowReportHtml(model, {
+      modelDigest,
       methodsFor: (row) => {
         const record = records[row.runId] || records[row.nodeId] || null;
         if (!record) return null;
@@ -1055,9 +1062,9 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic', sender = nul
         return paragraph && paragraph.ok ? paragraph.markdown : null;
       },
     });
-    await fsp.writeFile(result.filePath, html, 'utf8');
     const jsonPath = result.filePath.replace(/\.html?$/i, '') + '.json';
-    await fsp.writeFile(jsonPath, JSON.stringify(model, null, 2), 'utf8');
+    await fsp.writeFile(jsonPath, modelJson, 'utf8');
+    await fsp.writeFile(result.filePath, html, 'utf8');
     return {
       canceled: false,
       path: result.filePath,

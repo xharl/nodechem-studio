@@ -175,7 +175,9 @@ describe('ncs report', () => {
 
     const report = await ncs(['report', out, '--flow', 'barrier'], { timeout: 60000 });
     expect(report.code).toBe(0);
-    expect(report.stdout.trim()).toBe(path.join(out, 'reports', 'index.html'));
+    const lines = report.stdout.trim().split('\n');
+    expect(lines[0]).toBe(path.join(out, 'reports', 'index.html'));
+    expect(lines[1]).toMatch(/^model sha256 [0-9a-f]{64}$/);
     const html = await readFile(path.join(out, 'reports', 'index.html'), 'utf8');
     expect(html).toContain('Records');
     expect(html).toContain('molecule 1');
@@ -226,7 +228,9 @@ describe('ncs report', () => {
     const target = path.join(dir, 'custom-report.html');
     const report = await ncs(['report', out, '--out', target], { timeout: 60000 });
     expect(report.code).toBe(0);
-    expect(report.stdout.trim()).toBe(target);
+    const lines = report.stdout.trim().split('\n');
+    expect(lines[0]).toBe(target);
+    expect(lines[1]).toMatch(/^model sha256 [0-9a-f]{64}$/);
     const html = await readFile(target, 'utf8');
     expect(html.startsWith('<!doctype html>')).toBe(true);
     // One flow in the folder: the per-flow document, not a synthetic combined one.

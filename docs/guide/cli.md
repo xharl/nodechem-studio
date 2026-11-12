@@ -25,7 +25,7 @@ When the package is installed with a `bin` entry, the command is simply `ncs`.
 ncs validate <project.ncs> [--json]
 ncs build-input <project.ncs> --node <id> [--out <file>]
 ncs run <project.ncs> --out <dir> [--dry-run] [--flow <id>] [--record <id>] [--max-parallel N] [--executable <path>] [--crest <path>] [--obabel <path>] [--tautomer <path>] [--tautomer-script <path>] [--multiwfn <path>] [--scorer <path>] [--settings <file>] [--timeout <seconds>] [--json]
-ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>]
+ncs report <out-dir> [--flow <id>] [--include-imported] [--figures basic|surfaces|none] [--out <file>] [--no-model]
 ncs validation <cases.json> [--run] [--executable <python>] [--work <dir>] [--timeout <seconds>] [--out <file>] [--json]
 ncs export <out-dir> [--json] [--schema-version <n>] [--out <file>]
 ncs record import --program <name> --version <v> --method <m> --basis <b> --energy <Eh> (--source <file>|--source-sha256 <hex>) --out <out-dir|file.json> [--id <id>] [--title <text>] [--notes <text>] [--json]
@@ -68,11 +68,16 @@ ncs cube <run-dir|fchk|molden|wfn|wfx> --orbital homo|lumo|n=<i> --out <file.cub
   a later `ncs run` or the app can resume it; the command itself exits 4. The message names the flag,
   the block that was running and — when the project declares one — the value to pass to finish it.
 - `report` rebuilds the HTML report from the newest queue of each flow under `<out-dir>/queues/` and
-  writes `<out-dir>/reports/index.html` unless `--out` names another file. `--flow` restricts it to
-  one flow; without it every flow that has a queue is combined into one document. `--figures
-  basic|surfaces|none` picks the figure set (`basic` is the default; `none` reads no cube at all).
-  `--include-imported` also prints an imported result's number in the energy columns, labelled; an
-  imported record is listed either way, because dropping it would hide the thing it exists to say.
+  writes `<out-dir>/reports/index.html` unless `--out` names another file. The JSON model is written
+  beside it as `<name>.json`, and the HTML prints the model's SHA-256 (`model sha256 <digest>`, also
+  `data-model-sha256` on `<html>`); the digest is the SHA-256 of the exact JSON bytes, so
+  `sha256sum` of the file matches. The command prints the HTML path and then the digest line.
+  `--flow` restricts it to one flow; without it every flow that has a queue is combined into one
+  document and one project-report envelope. `--no-model` writes only the HTML and prints no digest.
+  `--figures basic|surfaces|none` picks the figure set (`basic` is the default; `none` reads no cube
+  at all). `--include-imported` also prints an imported result's number in the energy columns,
+  labelled; an imported record is listed either way, because dropping it would hide the thing it
+  exists to say.
 - `validation` reads a case set that records a method ladder (method, basis, energy in hartree, or
   `null` plus a reason) and prints the per-case spread, the aggregate MAE/RMSE and every
   `not computed` rung. `--run` executes any rung whose energy is `null` with PySCF, in its own
@@ -164,7 +169,7 @@ this table fails the suite, so a new CLI-only capability cannot ship undocumente
 | `ncs validate` | window: **Validate** | Schema errors, warnings and pre-run findings. |
 | `ncs build-input` | window: the input preview | The exact bytes the queue would write for one block. |
 | `ncs run` | window: **Run workflow** / **Run selected block** | Queue the workflow and run it. |
-| `ncs report` | window: **Report…** and the figure set beside it | The HTML report and its JSON model, for the newest queue of each flow. |
+| `ncs report` | window: **Report…** and the figure set beside it | The HTML report and the JSON model beside it, with the model's SHA-256, for the newest queue of each flow. |
 | `ncs validation` | **CLI only** | A recorded method ladder across reference cases: per-case spread, aggregate MAE/RMSE, `not computed` preserved. |
 | `ncs convert` | window: **Export as…** | A finished run as extxyz, xyz, sdf, JCAMP or Molden. |
 | `ncs cube` | window: **Write cube…** on the wavefunction card | One orbital's cube from a checkpoint, without `cubegen`. |

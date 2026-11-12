@@ -37,6 +37,15 @@ import {
 
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
 
+/**
+ * Issue #357: the combined report has its own document kind. It is an envelope
+ * around one workflow model per flow, so `sha256sum` of the JSON written beside
+ * the combined HTML identifies exactly the models that document was rendered
+ * from.
+ */
+export const PROJECT_REPORT_SCHEMA_VERSION = 1;
+export const PROJECT_REPORT_KIND = 'nodechem-studio.project-report';
+
 const MISSING = 'not reported';
 
 /** Hartree → kcal/mol, the same constant the conformer module uses. */
@@ -1312,7 +1321,7 @@ function uncertaintySectionHtml(section, headingTag = 'h2') {
  * The body of one report. `level` is 1 for a stand-alone document and 2 for a
  * flow section inside the combined report, so heading depth stays correct.
  */
-function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
+function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = null } = {}) {
   if (!model || typeof model !== 'object') return '';
   const q = model.queue || {};
   const counts = model.counts || {};
@@ -1571,7 +1580,8 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + `<p class="meta">Queue ${escapeHtml(q.id || MISSING)} · status ${escapeHtml(q.status || MISSING)}`
     + ` · created ${escapeHtml(q.createdAt || MISSING)} · finished ${escapeHtml(q.finishedAt || MISSING)}`
     + ` · generated ${escapeHtml(model.generatedAt || MISSING)}`
-    + ` · NodeChem Studio ${escapeHtml(model.appVersion || MISSING)}</p>`
+    + ` · NodeChem Studio ${escapeHtml(model.appVersion || MISSING)}`
+    + modelDigestText(modelDigest) + '</p>'
     + fixtureNote
     + importedNote
     + figuresHtml(model.figures, rows, sectionHeading)
@@ -2057,19 +2067,62 @@ function analysisHtml(analysis, headingTag = 'h2') {
 }
 
 /**
+ * The exact bytes a report model is written as. The window, the CLI and any
+ * future writer share this function so `sha256sum` of the file and the digest
+ * printed in the HTML cannot disagree about serialisation (issue #357).
+ */
+export function serializeReportModel(model) {
+  return JSON.stringify(model, null, 2);
+}
+
+/**
+ * The combined report's JSON document (issue #357): one envelope around the
+ * per-flow models the combined HTML renders, so a combined report also has a
+ * model a reader can re-render and hash.
+ */
+export function buildProjectReportModel(models, { title = 'Project report', generatedAt = null } = {}) {
+  const list = (Array.isArray(models) ? models : []).filter((model) => model && typeof model === 'object');
+  return {
+    schemaVersion: PROJECT_REPORT_SCHEMA_VERSION,
+    kind: PROJECT_REPORT_KIND,
+    generatedAt: text(generatedAt) || text(list[0]?.generatedAt),
+    title: String(title || 'Project report'),
+    flows: list,
+  };
+}
+
+/** ` data-model-sha256="…"` when the caller wrote a model and knows its digest. */
+function modelDigestAttribute(modelDigest) {
+  const digest = text(modelDigest);
+  return digest ? ` data-model-sha256="${escapeHtml(digest)}"` : '';
+}
+
+/** ` · model sha256 …` for the header meta line, when a model was written. */
+function modelDigestText(modelDigest) {
+  const digest = text(modelDigest);
+  return digest ? ` · model sha256 ${escapeHtml(digest)}` : '';
+}
+
+/**
  * Render the report as a self-contained HTML document.
  *
  * `methodsFor(task)` is optional: when supplied it returns the methods
  * paragraph for that task's run record, which is embedded in a collapsed
  * block. Passing nothing simply omits those blocks.
+ *
+ * `modelDigest` is optional: when the caller writes a JSON model beside the
+ * HTML, it is the SHA-256 of those exact JSON bytes. It is printed in the
+ * header meta line and set as `data-model-sha256` on `<html>`, so the HTML
+ * names the model it came from (issue #357). Omitting it leaves the document
+ * byte-identical to the pre-#357 report.
  */
-export function workflowReportHtml(model, { methodsFor = null } = {}) {
+export function workflowReportHtml(model, { methodsFor = null, modelDigest = null } = {}) {
   if (!model || typeof model !== 'object') return '';
   const q = model.queue || {};
-  return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+  return '<!doctype html>\n<html lang="en"' + modelDigestAttribute(modelDigest) + '><head><meta charset="utf-8">'
     + `<title>Workflow report — ${escapeHtml(q.projectName || q.id || 'queue')}</title>`
     + `<style>${REPORT_CSS}</style></head><body>`
-    + reportContentHtml(model, { methodsFor })
+    + reportContentHtml(model, { methodsFor, modelDigest })
     + `<footer>${REPORT_FOOTER}</footer>`
     + '</body></html>\n';
 }
@@ -2081,8 +2134,12 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
  * records names them in its row, so a reader cannot mistake a green flow
  * verdict for a batch that lost molecules. Each flow is anchored at
  * `#flow-<id>`; the sections are the same bodies the per-flow report uses.
+ *
+ * `modelDigest` is the SHA-256 of the project-report JSON written beside this
+ * document (issue #357); it is set on `<html>` and printed once in the header,
+ * not repeated in every flow section.
  */
-export function buildCombinedReportHtml(models, { title = 'Project report', generatedAt = null } = {}) {
+export function buildCombinedReportHtml(models, { title = 'Project report', generatedAt = null, modelDigest = null } = {}) {
   const list = (Array.isArray(models) ? models : []).filter((model) => model && typeof model === 'object');
   const docTitle = String(title || 'Project report');
   const generated = text(generatedAt) || text(list[0]?.generatedAt) || MISSING;
@@ -2119,12 +2176,12 @@ export function buildCombinedReportHtml(models, { title = 'Project report', gene
       + '</section>';
   }).join('');
 
-  return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+  return '<!doctype html>\n<html lang="en"' + modelDigestAttribute(modelDigest) + '><head><meta charset="utf-8">'
     + `<title>${escapeHtml(docTitle)}</title>`
     + `<style>${REPORT_CSS}</style></head><body>`
     + `<h1>${escapeHtml(docTitle)}</h1>`
     + `<p class="meta">Generated ${escapeHtml(generated)} · ${list.length} flow${list.length === 1 ? '' : 's'}`
-    + ' · NodeChem Studio</p>'
+    + ' · NodeChem Studio' + modelDigestText(modelDigest) + '</p>'
     + '<h2>Index</h2>'
     + '<table><thead><tr><th>Flow</th><th>Queue status</th><th>Verdict</th><th>Records</th>'
     + '<th>Failed or partial records</th></tr></thead><tbody>'

@@ -12,6 +12,14 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Added
 
+- **`ncs report` writes the model and names its SHA-256** — the command now writes `<name>.json`
+  beside `<name>.html` (or `reports/index.json` beside `reports/index.html`), prints
+  `model sha256 <digest>` after the HTML path, and the HTML carries the same digest in
+  `data-model-sha256` and its header line. The window's **Save workflow report…** path writes the
+  same two files from the same model serialisation. A combined report writes a
+  `nodechem-studio.project-report` envelope over the per-flow models. `--no-model` keeps the old
+  one-file behaviour. The digest is the SHA-256 of the exact JSON bytes, so `sha256sum` of the file
+  matches the document (#357).
 - **Launch phase timing** — `app:info` and the diagnostics bundle now report monotonic marks from
   process start to the renderer's first paint (`app-ready`, `settings-read`, `window-create`,
   `queue-hydrated`, `renderer-first-paint`), and the same table is printed once to the terminal.

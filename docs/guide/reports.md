@@ -1,11 +1,12 @@
 # Reports
 
-NodeChem Studio writes **HTML only**. A report is one self-contained file: inline CSS, no scripts,
-no external assets and no network request. It opens in any browser, can be attached to a draft, and
-can be printed by the reader if a PDF is wanted — the app does not ship a renderer. The stylesheet
-carries a print block tuned for A4 (page margin, rows and figures kept whole across a page break,
-repeated table headers, badges kept in colour), so a browser's **Print → Save as PDF** is the
-intended paper path; nothing is hidden from the printed page that the screen shows.
+NodeChem Studio writes an **HTML report** and, beside it, the **JSON model** the HTML was rendered
+from. The HTML is one self-contained file: inline CSS, no scripts, no external assets and no network
+request. It opens in any browser, can be attached to a draft, and can be printed by the reader if a
+PDF is wanted — the app does not ship a renderer. The stylesheet carries a print block tuned for A4
+(page margin, rows and figures kept whole across a page break, repeated table headers, badges kept in
+colour), so a browser's **Print → Save as PDF** is the intended paper path; nothing is hidden from
+the printed page that the screen shows.
 
 There are two reports:
 
@@ -14,6 +15,28 @@ There are two reports:
 
 Both are built from the queue record and the per-run `run.json` files. A value a run did not report
 is printed as `not reported`; nothing is inferred.
+
+## The model and its digest
+
+`ncs report` and the window's **Save workflow report…** action write the model as `<name>.json` next
+to `<name>.html`, and the HTML names that model: `<html data-model-sha256="…">` and the header's
+`model sha256 <digest>` are the SHA-256 of the exact JSON bytes written. A reader can therefore prove
+that the HTML and the JSON belong together without trusting either file's name:
+
+```bash
+sha256sum reports/index.json
+# 3f2c…  reports/index.json  — the same 64 characters the HTML prints
+```
+
+A per-flow model keeps the schema the window writes (`kind: "nodechem-studio.workflow-report"`,
+`schemaVersion: 1`): absolute paths, full digests, argv/route and the parse-coverage windows live
+there, never in the HTML. A combined report writes one envelope
+(`kind: "nodechem-studio.project-report"`, `schemaVersion: 1`) whose `flows[]` holds one such model
+per flow. Re-rendering the JSON with the same `modelDigest` reproduces the HTML byte for byte; the
+digest is computed after `generatedAt` is fixed.
+
+`ncs report --no-model` writes only the HTML, with no digest in the header and no
+`data-model-sha256`; the window always writes both files.
 
 A per-flow report written **by a workflow block** runs before the queue settles, so the queue restamps
 it the moment the verdict exists: the header names the final `status` and the queue's own `finished`
@@ -47,10 +70,11 @@ absent says so: `figure not available: no cube file in the run folder`. The whol
 table-only document of 0.4.0; `basic` and `surfaces` both draw the slab slice when a cube is present,
 and `surfaces` adds the projected isosurface.
 
-The window offers the same three names in the select beside **Report…**. `basic` is the default and
-writes the document the window has always written; `surfaces` also reads the `.cube` files in each
-run folder and meshes them; `none` omits the figure section. The choice is per report and is not
-saved in the project — there is no new settings key, so opening an old project changes nothing.
+The window offers the same three names in the select beside **Report…**. `basic` is the default; the
+save action writes `<name>.html` and `<name>.json` and the HTML names the model's digest. `surfaces`
+also reads the `.cube` files in each run folder and meshes them; `none` omits the figure section. The
+choice is per report and is not saved in the project — there is no new settings key, so opening an
+old project changes nothing.
 
 A large report shows what it is doing in the queue header — `reading run records`, `reading cube
 files`, `meshing surfaces` — with a percentage, and the window's taskbar carries the same fraction.
@@ -107,14 +131,20 @@ so the document outline stays correct.
 ## From the command line
 
 ```bash
-ncs report ./runs --flow barrier            # → ./runs/reports/index.html
-ncs report ./runs --out ./report.html       # explicit destination
+ncs report ./runs --flow barrier            # → ./runs/reports/index.html + ./runs/reports/index.json
+ncs report ./runs --out ./report.html       # → ./report.html + ./report.json
+ncs report ./runs --no-model                # → ./runs/reports/index.html only
 ```
 
 `ncs report` reads the newest `<out-dir>/queues/*/queue.json` (per flow when several flows ran),
-rebuilds the model from the run records those tasks point at, and writes HTML. With one flow it
-writes the per-flow document; with several it writes the combined document. The queue folder is the
-source of truth: no live project is needed.
+rebuilds the model from the run records those tasks point at, and writes the HTML plus its JSON model.
+With one flow it writes the per-flow document and that flow's model; with several it writes the
+combined document and a project-report envelope whose `flows[]` holds every model in the document.
+The queue folder is the source of truth: no live project is needed.
+
+It prints the HTML path (the line scripts already read) and then `model sha256 <digest>`. The digest
+is the SHA-256 of the JSON file, so `sha256sum` of that file and the value in the HTML are the same
+64 characters. `--no-model` omits the second line and the JSON file.
 
 ## What the report can and cannot prove
 
