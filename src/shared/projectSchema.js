@@ -3246,6 +3246,45 @@ export function projectFileView(project) {
   return rest;
 }
 
+/**
+ * The view the renderer serializes for its dirty check, undo history and
+ * crash-safe draft.
+ *
+ * Two things in the in-memory project are not authored state:
+ *
+ * - `nodes`/`edges` are aliases of the active flow (RFC 0001), so serializing
+ *   them writes the whole graph twice — once under `flows[]` and once at the
+ *   top level. `hydrateProject()` rebuilds them, so a snapshot without them is
+ *   complete.
+ * - `parsed` is the parsed run record a finished calculation attaches for the
+ *   card and the viewers. It never enters the `.ncs` file and a frequency
+ *   record alone can be hundreds of kilobytes, so it must not sit inside a
+ *   snapshot taken after every field edit.
+ *
+ * A snapshot therefore stays proportional to what the user actually authored.
+ * `stringifyProject()` keeps using `projectFileView()` and is unchanged.
+ */
+export function projectSnapshotView(project) {
+  if (!isPlainObject(project)) return project;
+  const { nodes, edges, ...rest } = project;
+  // A hydrated project always has flows; a legacy one without them keeps its
+  // graph at the top level, which is then the only copy.
+  if (!Array.isArray(rest.flows)) return { ...rest, nodes, edges };
+  rest.flows = rest.flows.map((flow) => {
+    if (!isPlainObject(flow) || !Array.isArray(flow.nodes)) return flow;
+    const { nodes: flowNodes, ...flowRest } = flow;
+    return { ...flowRest, nodes: flowNodes.map(nodeSnapshotView) };
+  });
+  return rest;
+}
+
+/** A node without its run record; every other field is authored state. */
+function nodeSnapshotView(node) {
+  if (!isPlainObject(node) || !Object.prototype.hasOwnProperty.call(node, 'parsed')) return node;
+  const { parsed, ...rest } = node;
+  return rest;
+}
+
 /** Canonical serialization: validate, normalize, then pretty-print. */
 export function stringifyProject(raw) {
   const result = validateProject(raw);

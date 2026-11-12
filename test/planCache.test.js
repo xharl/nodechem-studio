@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { parseProjectText } from '../src/shared/projectSchema.js';
+import { parseProjectText, projectSnapshotView } from '../src/shared/projectSchema.js';
 import { attachGraphAliases } from '../src/shared/flows.js';
 
 /**
@@ -101,9 +101,14 @@ describe('renderer workflow-plan cache (issue 367)', () => {
   beforeEach(() => {
     const project = exampleProject('opt-freq.ncs');
     app.state.project = project;
-    app.state.savedSnapshot = JSON.stringify(project);
-    app.state.planSnapshot = JSON.stringify(project);
+    // Issue 366: the renderer's snapshot is the alias-free, run-record-free
+    // view, so the seeded plan baseline must be the same view.
+    const snapshot = JSON.stringify(projectSnapshotView(project));
+    app.state.savedSnapshot = snapshot;
+    app.state.planSnapshot = snapshot;
     app.state.projectRevision = 1;
+    app.state.snapshotQueued = false;
+    app.state.history = null;
     app.state.selected = { type: 'project', id: null };
     app.invalidatePlanCache();
     app.planCache.builds = 0;
