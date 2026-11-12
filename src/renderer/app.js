@@ -2710,6 +2710,12 @@ function calcInspector(node) {
     inputField('Min |ν| (cm⁻¹)', 'minMagnitude', gates.minMagnitude ?? '', { type: 'number', min: 0, step: 1 }),
     switchRow('Thermochemistry', 'requires a frequency output', 'thermo', gates.thermo, { gate: true }),
     switchRow('Post-HF final energy', 'requires a final energy record', 'finalEnergy', gates.finalEnergy, { gate: true }),
+    // ADR 0003 §3.6: post-run identity gate. Warn is the default: a heuristic
+    // that can be wrong must not destroy a finished calculation.
+    selectField('Structure integrity', 'integrity', [
+      ['warn', 'Warn on any change'],
+      ['fail', 'Refuse on composition/connectivity change'],
+    ], s.integrity || 'warn', true),
   ].join(''));
 
   // Issue #25: every validity check can be switched off per block. The schema

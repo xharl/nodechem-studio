@@ -35,6 +35,7 @@ export const CHEM_IMPLEMENTED_OPS = Object.freeze([
   'probe',
   'descriptors',
   'standardize',
+  'integrity',
 ]);
 
 /** The sidecar's own atom ceiling, repeated here so this module imports nothing. */

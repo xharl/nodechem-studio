@@ -202,6 +202,36 @@ async function writeBytesAtomic(filePath, bytes) {
  * has it, else the input geometry. Never a guess — a record with no atoms is a
  * refusal the caller names.
  */
+/**
+ * ADR 0003 §3.6: the payload the run manager needs to perceive the final
+ * geometry. The spec is built before the engine starts, so the record cannot be
+ * compared with a geometry that changed underneath it.
+ */
+function integritySpecFor(queue, task, validity = null) {
+  if (task?.type !== 'calculate') return null;
+  if (queue.options?.dryRun) return null;
+  const settings = task.settings && typeof task.settings === 'object' ? task.settings : {};
+  const policy = settings.integrity === 'fail' ? 'fail' : 'warn';
+  // An ONIOM/QM-MM record's parsed geometry is a region, not the molecule.
+  const notApplicable = /\boniom\b/i.test(String(task.route || '')) || settings.oniom === true;
+  const molecule = validity?.molecule && typeof validity.molecule === 'object' ? validity.molecule : {};
+  const atoms = Array.isArray(molecule.coords)
+    ? molecule.coords.map((atom) => ({ element: atom.element, x: atom.x, y: atom.y, z: atom.z }))
+    : [];
+  return {
+    policy,
+    ...(notApplicable ? { notApplicable: true } : {}),
+    molecule: {
+      title: task.title,
+      charge: Number.isInteger(molecule.charge) ? molecule.charge : (Number.isInteger(settings.charge) ? settings.charge : 0),
+      multiplicity: Number.isInteger(molecule.multiplicity) ? molecule.multiplicity : (Number.isInteger(settings.multiplicity) ? settings.multiplicity : 1),
+      atoms,
+    },
+    executable: queue.options?.chemExecutable || '',
+    script: queue.options?.chemScript || '',
+  };
+}
+
 function atomsFromRecord(record) {
   const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
   const candidates = [parsed.finalGeometry, parsed.geometry?.final, parsed.geometry?.initial, parsed.geometry];
@@ -2969,6 +2999,9 @@ export class QueueManager {
         gates: task.gates,
         validity,
         checkpointHandoff,
+        // ADR 0003 §3.6: the integrity gate travels with the run, not with the
+        // queue, so the record's own geometry is what gets compared.
+        ...(integritySpecFor(queue, task, validity) ? { integrity: integritySpecFor(queue, task, validity) } : {}),
         // Issue #30: the conformer this run is built on travels into run.json,
         // so a result can never be read as if it came from the imported geometry.
         ...(task.conformer ? { conformer: task.conformer } : {}),

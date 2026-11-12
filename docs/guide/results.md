@@ -233,6 +233,35 @@ applies to them: charge/multiplicity, geometry sanity, stationary-point frequenc
 convergence, engine/settings, solvation evidence and conformer spread.
 The Gaussian-route checks are reported as *not applicable* for xTB, never as a pass.
 
+## Structure integrity
+
+Did the calculation keep the molecule? A converged run can still return a different structure: an
+atom lost, a bond formed, a proton moved, a centre inverted. The **Structure integrity** setting on
+a calculation block turns on a post-run gate that perceives bonds from the final geometry
+(`rdDetermineBonds`) and compares it with the molecule the block was given. It is three separate
+questions, not one boolean:
+
+| Question | Compared | Status when it differs |
+| --- | --- | --- |
+| Composition | Formula, atom and heavy-atom counts | `composition-changed` |
+| Connectivity | Anonymous connectivity hash | `connectivity-changed` |
+| Tautomer | `HetAtomTautomer` hash | `tautomer-changed` |
+| Configuration | Standard InChIKey | `stereo-changed` |
+
+`match` means all four agree. `inconclusive` is a first-class answer — an open-shell record, a
+multi-fragment geometry, a geometry the sidecar cannot perceive, or no chemistry sidecar configured
+— and is **never** reported as a pass. The record carries `structureIntegrity`; the report prints a
+Structure column and a section naming the before/after formula and the reason.
+
+The default is **warn**: a change is recorded and shown as a validity warning, and the run is not
+refused. A block may select **Refuse on composition/connectivity change**, and only those two
+statuses can block: a lost atom is almost never legitimate, while a proton transfer, a
+tautomerisation or an inverted centre can be the chemistry you asked for. Stereo and tautomer
+changes stay warnings even with refusal on.
+
+The gate needs the chemistry sidecar (RDKit). Without it every record is `inconclusive` with that
+reason; nothing is fabricated and no finished run is failed for the missing tool.
+
 ## ONIOM
 
 A Gaussian ONIOM log is read as a multi-layer result, not as a single SCF energy. The reported

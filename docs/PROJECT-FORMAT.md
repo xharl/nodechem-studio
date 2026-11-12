@@ -129,12 +129,16 @@ Type-specific payloads:
 `jobType`, `engine`, `method`, `basis`, `memory`, `memoryUnit`, `nproc`, `checkpoint`,
 `charge`, `multiplicity`, `dispersion`, `scf`, `grid`, `population`, `verbosity`,
 `matrixElement`, `solvation`, `solvationModel`, `solvent`, `customKeywords`, `ircDirection`,
-`optConvergence`, `forceConstants`, `stableOpt`, `tdStates`, `tdTriplets`, `tdRoot`,
+`optConvergence`, `forceConstants`, `stableOpt`, `integrity`, `tdStates`, `tdTriplets`, `tdRoot`,
 `emission`, `nto`, `ntoTransition`,
 `raman`, `vcd`, `roa`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`, `provider`,
 `recordTransitionDipoles`, `nmrSpinSpin`, `pnoThreshold`, `pyscfActiveSpace`.
+
+`integrity` is `warn` (the default, and absent when never set) or `fail`. It turns on the post-run
+structure-integrity gate: warn records every change; fail refuses only `composition-changed` and
+`connectivity-changed` records. Stereo and tautomer changes remain warnings.
 
 `pnoThreshold` is `"NormalPNO"` or `"TightPNO"` and applies only to an ORCA
 `DLPNO-CCSD(T)` block. It is absent when never set; the ORCA builder writes

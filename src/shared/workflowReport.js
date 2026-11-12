@@ -150,6 +150,18 @@ function taskRow(task, record, { includeImported = false } = {}) {
     elapsedSeconds: num(record?.elapsedSeconds ?? parsed.resources?.elapsedSeconds),
     inputSha256: text(record?.inputSha256),
     outputSha256: text(record?.outputSha256),
+    // ADR 0003 §3.6: what the final geometry is. Absent on every record that
+    // carried no integrity gate, so no other row grows a column.
+    structureIntegrity: record?.structureIntegrity && typeof record.structureIntegrity === 'object'
+      ? {
+        status: text(record.structureIntegrity.status),
+        reason: text(record.structureIntegrity.reason),
+        reasonText: text(record.structureIntegrity.reasonText),
+        policy: text(record.structureIntegrity.policy) || 'warn',
+        beforeFormula: text(record.structureIntegrity.before?.formula),
+        afterFormula: text(record.structureIntegrity.after?.formula),
+      }
+      : null,
     // ADR 0003 §3.1: the versioned descriptor set a chem analyse block wrote.
     // Absent on every other record, so no other row grows a column.
     descriptors: record?.descriptors && typeof record.descriptors === 'object'
@@ -161,6 +173,30 @@ function taskRow(task, record, { includeImported = false } = {}) {
       }
       : null,
   };
+}
+
+/**
+ * ADR 0003 §3.6 — what each calculated geometry turned out to be.
+ *
+ * `inconclusive` prints its reason: a reader must not see a blank cell and
+ * assume the structure matched.
+ */
+function integritySectionHtml(rows, headingTag = 'h2') {
+  const entries = (Array.isArray(rows) ? rows : []).filter((row) => row.structureIntegrity);
+  if (entries.length === 0) return '';
+  const body = entries.map((row) => {
+    const integrity = row.structureIntegrity;
+    return `<tr><td>${escapeHtml(row.label || row.id)}</td>`
+      + `<td>${escapeHtml(integrity.status || MISSING)}</td>`
+      + `<td>${escapeHtml(integrity.beforeFormula || MISSING)}</td>`
+      + `<td>${escapeHtml(integrity.afterFormula || MISSING)}</td>`
+      + `<td>${escapeHtml(integrity.reasonText || integrity.reason || '')}</td></tr>`;
+  }).join('');
+  return `<${headingTag}>Structure integrity</${headingTag}>`
+    + '<p class="sub">Perceived from the final coordinates, not measured: composition, connectivity, '
+    + 'tautomer and configuration are compared separately. `inconclusive` is not a pass.</p>'
+    + '<table class="integrity"><thead><tr><th>Record</th><th>Status</th><th>Before</th><th>After</th><th>Reason</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`;
 }
 
 /**
@@ -1030,12 +1066,13 @@ function taskTableHtml(rows) {
         : escapeHtml(value(row.finalEnergyHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(row.gibbsHartree, 8))}</td>`
       + `<td class="num">${escapeHtml(value(row.imaginaryCount))}</td>`
+      + `<td>${escapeHtml(row.structureIntegrity?.status || '—')}</td>`
       + `<td class="num">${escapeHtml(value(row.elapsedSeconds, 1, ' s'))}</td>`
       + '</tr>';
   }).join('');
   return '<table><thead><tr><th>Block</th><th>Status</th><th>Gates</th><th>Validity</th><th>Engine</th>'
     + '<th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th>'
-    + '<th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>';
+    + '<th>Structure</th><th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>';
 }
 
 /**
@@ -1589,6 +1626,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + reactionBlocks
     + uncertaintySectionHtml(model.uncertainty, sectionHeading)
     + derivedBlocks
+    + integritySectionHtml(rows, sectionHeading)
     + descriptorsSectionHtml(rows, sectionHeading)
     + multiwfnSectionHtml(model.multiwfn, sectionHeading)
     + importedBlocks

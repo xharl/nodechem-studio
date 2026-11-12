@@ -303,7 +303,7 @@ const SETTINGS_KEYS = new Set([
   // default so existing projects serialise unchanged.
   'matrixElement',
   'solvationModel', 'solvent', 'customKeywords', 'ircDirection', 'optConvergence',
-  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'roa', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId',
+  'forceConstants', 'gates', 'disabledChecks', 'tdStates', 'tdTriplets', 'ladder', 'stableOpt', 'raman', 'vcd', 'roa', 'tdRoot', 'orbitals', 'spinSweep', 'referenceNodeId', 'integrity',
   // Issue #146: the vertical-emission block and the two-job NTO chain.
   'emission', 'nto', 'ntoTransition',
   'counterpoise', 'counterpoiseChargeStates',
@@ -1975,6 +1975,12 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     forceConstants: readEnum(c, source.forceConstants, TS_FORCE_CONSTANT_IDS, `${path}.forceConstants`, { legacy, fallback: DEFAULT_TS_FORCE_CONSTANTS }),
     // A wavefunction stability optimisation (`Stable=Opt`) is opt-in.
     stableOpt: readBoolean(c, source.stableOpt, `${path}.stableOpt`, { legacy, fallback: false, optional: true }),
+    // ADR 0003 §3.6: warn by default, refuse only when the block opts in. The
+    // key is absent until a block chooses, so a project that never used the gate
+    // saves byte for byte as it did before.
+    ...(source.integrity === undefined
+      ? {}
+      : { integrity: readEnum(c, source.integrity, ['warn', 'fail'], `${path}.integrity`, { legacy, fallback: 'warn' }) }),
     // Raman activities (#76): a flag on the frequency keyword, off by default so
     // an existing project keeps emitting exactly the route it did before.
     raman: readBoolean(c, source.raman, `${path}.raman`, { legacy, fallback: false, optional: true }),

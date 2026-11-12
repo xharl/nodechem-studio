@@ -23,6 +23,68 @@
     }
   ],
   "$defs": {
+    "structureIntegrity": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "match",
+            "tautomer-changed",
+            "stereo-changed",
+            "connectivity-changed",
+            "composition-changed",
+            "inconclusive",
+            "not-applicable"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasonText": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "type": "string",
+          "enum": [
+            "warn",
+            "fail"
+          ]
+        },
+        "before": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "after": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
+        "comparisons": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "origin": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
     "dp4Result": {
       "type": "object",
       "description": "Issue 165: the object dp4.js returned, as the analyse block recorded it. `available` is required so a record cannot carry an empty comparison; on a refusal it is false with the code and the sentence that names the precondition. The rest is open because the result is a table (candidates, per-nucleus deviations, the fit each nucleus used) whose columns belong to the DP4+ procedure, not to this envelope.",
@@ -314,6 +376,17 @@
             }
           ],
           "description": "Typed-array cache written for a non-dry run. Absent on records that never reached finish()."
+        },
+        "structureIntegrity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/structureIntegrity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 0003 §3.6: what the final geometry actually is. `inconclusive` is a real answer and is never a pass. Absent on records that never reached finish()."
         },
         "wavefunction": {
           "anyOf": [
