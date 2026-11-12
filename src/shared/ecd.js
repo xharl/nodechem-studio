@@ -17,6 +17,8 @@
  * when it is not.
  */
 
+import { toLines } from './lines.js';
+
 const HEADER = /Rotatory\s+Strengths\s*\(R\)\s*in\s*cgs/i;
 const VELOCITY = /R\s*\(\s*velocity\s*\)/i;
 const LENGTH = /R\s*\(\s*length\s*\)/i;
@@ -27,7 +29,7 @@ const ROW = /^\s*(\d+)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)
  *   scaleFactor: string}|null}
  */
 export function parseRotatoryStrengths(text) {
-  const lines = String(text || '').split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const conventions = { velocity: [], length: [] };
   let conventionsSeen = 0;
 

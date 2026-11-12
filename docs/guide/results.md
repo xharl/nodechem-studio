@@ -292,6 +292,36 @@ rather than implied. Where the parser finds no thermochemistry section, the pane
 xTB's free energy already uses mRRHO; the app adds no quasi-harmonic or standard-state correction on
 top of it.
 
+### Frequency scaling
+
+A harmonic frequency is systematically high, and comparing it with an experimental fundamental
+needs a published scale factor. A Gaussian frequency block carries `frequencyScale`:
+
+- `"unscaled"` (the default, and what an absent key means) — the panel prints the numbers the log
+  printed;
+- `"auto"` — look the block's method and basis up in `src/shared/frequencyScaling.js` and apply the
+  cited factor;
+- a number between 0.5 and 1.5 — an explicit factor, recorded as the user's own choice rather than
+  as a table entry.
+
+The factor is a **display and derivation** choice. The parsed record keeps every printed
+wavenumber, ZPE correction and free energy. What moves is the band positions in the Raman and VCD
+panels, the derived ZPE (`raw ZPE correction × factor`) and the harmonic/quasi-RRHO entropy
+recomputed from the scaled wavenumbers. The printed `G` is not re-derived: a scaled ZPE folded into
+a `G` whose translational and rotational terms came from the raw frequencies would mix two
+thermochemistries in one number, so the card prints both and says which is which.
+
+`"auto"` never guesses. If the table has no entry for the method/basis pair, the block stays
+unscaled and the card and report print the warning, naming the pair and the table version. An
+imported record is never scaled, whatever the setting says: another program printed those numbers,
+and the record says so.
+
+The table's entries are hand-checked, not fitted here. Each one names its source — Merrick, Moran
+and Radom, *J. Phys. Chem. A* 2007, 111, 11683–11700, Tables 2 and 4
+(doi:10.1021/jp073974n), or the NIST
+CCCBDB precomputed scale-factor tables (SRD 101, Release 22). The two compilations can differ in
+the third decimal; the entry's source says which number is used.
+
 ## Composite methods
 
 `CBS-4M`, `CBS-QB3`, `CBS-APNO`, `G1`, `G2`, `G3`, `G4` and `G4(MP2)` are **job types**, not method
@@ -492,15 +522,18 @@ was not cross-checked against the log.
 The words are the answer: a closed-shell wavefunction has no spin density, and a
 zero-filled population table would claim a calculation that never happened.
 
-**How the numbers reach `run.json`.** A Psi4 open-shell single point is written
-with `E, wfn = energy('…', return_wfn=True)` and a `fchk(wfn, '…fchk')` line, so
-the checkpoint lives beside the log; the runner reads it, the EPR block is
-computed from it, and the whole block — populations, couplings, method statement,
-caveat and the g-tensor refusal — is carried in `parsed.epr`. It is passed into
-the canonical result whole rather than field by field, because a population
-without its scheme and caveat is a number with its provenance removed. An
-open-shell run with no checkpoint reports **not available** with the reason; it
-does not show empty tables.
+**How the numbers reach `run.json`.** A Psi4 job's call is written to return the
+wavefunction (`E, wfn = energy('…', return_wfn=True)` and the same for `optimize` and
+`frequencies`) and to write `fchk(wfn, '<job>.fchk')`, so the checkpoint lives
+beside the log (issue 343: every job type with a wavefunction writes one). The
+runner reads it, the EPR block is computed from it, and the whole block —
+populations, couplings, method statement, caveat and the g-tensor refusal — is
+carried in `parsed.epr`. It is passed into the canonical result whole rather than
+field by field, because a population without its scheme and caveat is a number
+with its provenance removed. An open-shell run with no checkpoint reports **not
+available** with the reason; it does not show empty tables. A correlated method's
+checkpoint carries its **SCF reference** density, so the EPR block withholds those
+populations by name instead of labelling them with the correlated method.
 
 ## NMR: shieldings, shifts and couplings
 
@@ -823,7 +856,8 @@ Two details in that block are there because the obvious version does not work on
 `print` writes to the process's stdout, which the runner does not keep, so every record goes through
 `psi4.core.print_out`; and `wfn.get_array(name)` does not exist — `wfn.array_variable(name)` does.
 `set tdscf_print` does **not** print the dipole either (tried at level 3). A block that does not opt
-in produces exactly the input it did before, and its log gains no line.
+in writes no `NCS-*` record, so its log gains no line; since issue 343 it still writes the
+`<job>.fchk` checkpoint every Psi4 job with a wavefunction leaves.
 
 **What the card prints**, all units explicit:
 

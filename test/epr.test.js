@@ -377,16 +377,37 @@ describe('the Psi4 builder asks for the checkpoint it needs', () => {
     expect(built.inputText).toContain('set reference uhf');
   });
 
-  it('leaves a closed-shell input byte-identical to a plain energy call', () => {
+  it('writes the checkpoint for a closed-shell single point too (issue 343)', () => {
+    // A closed-shell checkpoint carries no `Spin SCF Density`, so the EPR block
+    // still answers `no unpaired electrons`; the file exists because a Multiwfn
+    // block wired to this run reads it.
     const built = build({}, { multiplicity: 1 });
-    expect(built.inputText).toContain("energy('b3lyp')");
-    expect(built.inputText).not.toContain('fchk(');
+    expect(built.inputText).toContain("E, wfn = energy('b3lyp', return_wfn=True)");
+    expect(built.inputText).toContain("fchk(wfn, 'ch3.fchk')");
   });
 
-  it('does not claim a spin density from an optimisation or a correlated method', () => {
-    expect(build({ jobType: 'Opt' }).inputText).not.toContain('fchk(');
-    // MP2's `return_wfn` wavefunction is the SCF reference, not the MP2 density.
-    expect(build({ method: 'mp2' }).inputText).not.toContain('fchk(');
+  it('writes a checkpoint for every job type, and labels the correlated one', () => {
+    // Issue 343: an optimisation writes the checkpoint at its final geometry.
+    const opt = build({ jobType: 'Opt' });
+    expect(opt.inputText).toContain("E, wfn = optimize('b3lyp', return_wfn=True)");
+    expect(opt.inputText).toContain("fchk(wfn, 'ch3.fchk')");
+    // MP2's `return_wfn` wavefunction is the SCF reference, and the deck says so
+    // rather than letting `<job>.fchk` imply an MP2 density.
+    const mp2 = build({ method: 'mp2' });
+    expect(mp2.inputText).toContain("E, wfn = energy('mp2', return_wfn=True)");
+    expect(mp2.inputText).toContain("fchk(wfn, 'ch3.fchk')");
+    expect(mp2.inputText).toContain('its SCF reference');
+  });
+
+  it('does not label reference spin populations with a correlated method (issue 343)', () => {
+    // The same log with an MP2 input echo; the committed checkpoint is a UB3LYP
+    // one, which is exactly the "reference density" this must not misreport.
+    const mp2Log = LOG.replace("energy('b3lyp', return_wfn=True)", "energy('mp2', return_wfn=True)");
+    const parsed = parsePsi4Output(mp2Log, { fchk: FCHK_TEXT });
+    expect(parsed.epr.status).toBe('unavailable');
+    expect(parsed.epr.reason).toContain('SCF reference density');
+    expect(parsed.epr.populations).toEqual([]);
+    expect(parsed.epr.hyperfine).toEqual([]);
   });
 });
 

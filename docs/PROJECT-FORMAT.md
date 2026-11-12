@@ -134,7 +134,16 @@ Type-specific payloads:
 `raman`, `vcd`, `roa`, `orbitals`, `spinSweep`, `ladder`, `referenceNodeId`, `counterpoise`,
 `counterpoiseChargeStates`, `constraints`, `qst`, `disabledChecks`, `gates`,
 `xtbMethod`, `xtbOptLevel`, `xtbThreads`, `freezeCore`, `timeoutSeconds`, `provider`,
-`recordTransitionDipoles`, `nmrSpinSpin`, `pnoThreshold`, `pyscfActiveSpace`.
+`recordTransitionDipoles`, `nmrSpinSpin`, `pnoThreshold`, `pyscfActiveSpace`,
+`frequencyScale`.
+
+`frequencyScale` is absent (read as `"unscaled"`), `"unscaled"`, `"auto"`, or an
+explicit factor between 0.5 and 1.5 written as a number or a numeric string. It
+applies to the display of a Gaussian frequency job: band positions in the IR,
+Raman and VCD panels, and the derived ZPE. The parsed values stay as printed,
+and an imported record is never scaled. `"auto"` uses a published factor only
+when the table has an entry for the block's method and basis; an unknown pair is
+reported unscaled with a warning.
 
 `integrity` is `warn` (the default, and absent when never set) or `fail`. It turns on the post-run
 structure-integrity gate: warn records every change; fail refuses only `composition-changed` and

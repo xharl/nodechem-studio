@@ -42,7 +42,7 @@ const v1Schema = loadRecordSchema(1);
  * produce. Each one is exercised below; anything else missing from a fixture
  * would mean the schema describes a record the app does not write.
  */
-const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay', 'timeout', 'dp4', 'wavefunction', 'structureIntegrity']);
+const OPTIONAL_TOP_LEVEL = new Set(['conformer', 'record', 'series', 'spectrumOverlay', 'timeout', 'dp4', 'spectrumAssignment', 'wavefunction', 'structureIntegrity']);
 
 describe('run-record schema — publication', () => {
   it('is a draft 2020-12 schema with a version and an id', () => {
@@ -202,6 +202,28 @@ describe('run-record schema — field coverage', () => {
     empty.dp4 = {};
     expect(validateRecord(empty).ok).toBe(false);
     expect(validateRecord(empty).errors.some((error) => error.path.startsWith('/dp4'))).toBe(true);
+  });
+
+  it('validates the spectrum-assignment block a record carries, and refuses an empty one (issue 348)', () => {
+    const record = JSON.parse(JSON.stringify(fixtures[0].record));
+    record.spectrumAssignment = {
+      available: true,
+      quantity: 'vcd',
+      fwhmCm: 12,
+      metric: { id: 'ncs-spectrum-match', version: 1 },
+      candidates: [{ id: 'A', label: 'A', kind: 'conformer-set', memberCount: 2 }],
+      ranking: ['A', 'B'],
+      margin: { combined: 0.21 },
+    };
+    record.provenance.spectrumAssignment = { kind: 'spectrum-assignment', available: true };
+    expect(validateRecord(record).errors).toEqual([]);
+    expect(validateRecord(record, { version: 1 }).errors).toEqual([]);
+    // As with DP4+, `available` is what separates a comparison from an empty
+    // object; the rest of the result is the procedure's own table.
+    const empty = JSON.parse(JSON.stringify(record));
+    empty.spectrumAssignment = {};
+    expect(validateRecord(empty).ok).toBe(false);
+    expect(validateRecord(empty).errors.some((error) => error.path.startsWith('/spectrumAssignment'))).toBe(true);
   });
 
   it('requires every envelope field, and accepts a record without schemaVersion', () => {

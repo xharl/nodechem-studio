@@ -99,6 +99,10 @@ Success at v1:
 Since v0.2 the main process also hosts `xtbRunner` (same contract, different engine), the durable
 queue with conditions, loops and checkpoint staging, and the report/export writers; `bin/ncs.js`
 reuses `buildWorkflowTasks` and `RunManager` so a headless run and a UI run cannot diverge.
+Issue #369 moved the CPU-bound in-app UFF relaxation off that thread: `electron/runner/uffJob.js`
+runs it in a `worker_threads` worker (or in yielding batches when a worker cannot load), reports
+progress, and caches results by input hash, so the main process keeps serving IPC during a long
+conformer search.
 
 - The existing design is HTML/CSS/JS; Chromium gives one rendering target on Windows.
 - Node's `child_process` is the runner, native dialogs are straightforward, and packaging is
@@ -322,6 +326,7 @@ Linux/macOS Gaussian job has been run.
 | Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |
 | Cross-engine geometry hand-off (#326) | **Fixed in the unreleased tree** — `applyGeometryHandoffFor()` rewrites every engine's deck (Gaussian molecule spec, PySCF data line, Psi4 `molecule {…}`, ORCA `* xyz … *`, a fresh `.xyz` for xTB), changing only the atom rows; an upstream run with no parsed geometry, or a deck with no geometry block, is refused by name. Shipped in 0.5.1 as Gaussian/PySCF only | `electron/runner/queue.js`, `electron/runner/geometryHandoff.js` |
 | Bad-path and bad-id messages in the CLI and window (#323–#325) | **Fixed in the unreleased tree** — `ncs validate <dir>` / a missing path prints one `ncs: cannot read …` line and exits 2; `ncs convert --node <unknown>` is refused with the block list and an existing block that carries no structure is refused by name; the window reports the schema error it hit | `bin/ncs.js`, `src/renderer/app.js` |
+| Startup boot order and phase timing (#375) | **Fixed in the unreleased tree** — the window is created and shown before `QueueManager.init()` hydrates `queue.json`; queue IPC calls await hydration so a start cannot race crash recovery; `app:info` and the diagnostics bundle report monotonic marks from process start to first paint; `resultsView` is a dynamic import and the renderer is split into feature chunks, none above 500 kB | `electron/main.js`, `src/renderer/app.js`, `vite.config.js`, `docs/guide/troubleshooting.md` |
 | Live queue status on the canvas | **Shipped** — a block card shows a `running` / `queued` indicator from the live queue task, and every kind of state is derived from the restored queue rather than from its own copy | `src/renderer/app.js` (`runStateOf`), `test/workbenchState.test.js` |
 | macOS package | **Open** — runner supports macOS; there is no build to sign or test | §5 Phase 6 |
 | Code signing | **Open** — no certificate; both installers are unsigned | §5 Phase 6 |

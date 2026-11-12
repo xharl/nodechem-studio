@@ -14,6 +14,9 @@
  * and is not. The panel says which quantity it shows.
  */
 
+import { toLines } from './lines.js';
+import { scaledModeTable } from './frequencyScaling.js';
+
 const RAMAN_ACTIVITIES = /^\s*Raman\s+Activ\S*\s*-{2,}\s*(.*)$/i;
 const DEPOL_PLANE = /^\s*Depol(?:ar)?\.?\s*\(\s*(?:Plane|P)\s*\)\s*-{2,}\s*(.*)$/i;
 const DEPOL_UNPOL = /^\s*Depol(?:ar)?\.?\s*\(\s*(?:Unpol|U)\s*\)\s*-{2,}\s*(.*)$/i;
@@ -28,7 +31,7 @@ const numbers = (text) => (String(text || '').match(NUMBER) || []).map(Number);
  * is distinguishable from a `Freq=Raman` job whose rows came out empty.
  */
 export function parseRamanActivities(text) {
-  const lines = String(text || '').split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const activities = [];
   const depolarizationPlane = [];
   const depolarizationUnpolarized = [];
@@ -82,10 +85,16 @@ export function attachRaman(modes, raman) {
  * Lorentzian, FWHM stated in the returned record. The y axis is the activity
  * (Å⁴/amu), normalised to the strongest peak so that an overlay can be scaled
  * onto the same axis; the normalisation is recorded rather than implied.
+ *
+ * `scale` is a frequency-scaling resolution from `frequencyScaling.js`. When it
+ * applied a factor, each peak keeps its parsed `wavenumberRaw` and carries the
+ * scaled `wavenumber` the curve is built from; the returned `scaling` block
+ * names the factor and its source. The input modes are copied, never mutated.
  */
-export function ramanSpectrum(modes, { fwhmCm = 12, points = 600 } = {}) {
-  const peaks = (Array.isArray(modes) ? modes : [])
-    .filter((mode) => Number.isFinite(mode.wavenumber) && Number.isFinite(mode.ramanActivity) && mode.ramanActivity > 0);
+export function ramanSpectrum(modes, { fwhmCm = 12, points = 600, scale = null } = {}) {
+  const factor = scale?.applied ? Number(scale.factor) : 1;
+  const peaks = scaledModeTable((Array.isArray(modes) ? modes : [])
+    .filter((mode) => Number.isFinite(mode.wavenumber) && Number.isFinite(mode.ramanActivity) && mode.ramanActivity > 0), scale);
   if (peaks.length === 0) return null;
 
   const values = peaks.map((mode) => mode.wavenumber);
@@ -115,11 +124,25 @@ export function ramanSpectrum(modes, { fwhmCm = 12, points = 600 } = {}) {
     quantity: 'Raman activity',
     units: 'Å⁴/amu',
     normalisation: `strongest peak = 1.00 (${strongest.toFixed(4)} Å⁴/amu)`,
+    // Issue #350: null means no scaling decision was passed in; an applied
+    // resolution names the factor and where it came from.
+    scaling: scale
+      ? {
+        mode: scale.mode,
+        factor,
+        applied: factor !== 1,
+        key: scale.key ?? null,
+        source: scale.source ?? null,
+        doi: scale.doi ?? null,
+        tableVersion: scale.tableVersion ?? null,
+      }
+      : null,
     minCm: low,
     maxCm: high,
     peaks: peaks
       .map((mode) => ({
         wavenumber: mode.wavenumber,
+        wavenumberRaw: mode.wavenumberRaw,
         ramanActivity: mode.ramanActivity,
         depolarizationPlane: Number.isFinite(mode.depolarizationPlane) ? mode.depolarizationPlane : null,
       }))

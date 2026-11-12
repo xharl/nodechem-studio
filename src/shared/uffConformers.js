@@ -26,7 +26,17 @@
 import { bondLengthsFromGeometry, BOND_PERCEPTION_FACTOR } from './benchmark.js';
 import { superimpose } from './superpose.js';
 import {
-  optimizeUff, typeAtoms, UFF_ACCURACY_NOTE, UFF_CONVERGENCE, UFF_ELEMENTS, UFF_ENERGY_KIND, UFF_METHOD,
+  isUffCancelled,
+  optimizeUff,
+  optimizeUffAsync,
+  typeAtoms,
+  uffCancelledError,
+  UFF_ACCURACY_NOTE,
+  UFF_CONVERGENCE,
+  UFF_ELEMENTS,
+  UFF_ENERGY_KIND,
+  UFF_METHOD,
+  yieldToEventLoop,
 } from './uff.js';
 import {
   DEFAULT_CONFORMER_SETTINGS,
@@ -320,15 +330,12 @@ export function pruneNearDuplicates(members, threshold = UFF_CONFORMER_DEFAULTS.
 }
 
 /**
- * Run the search. Returns relaxed, deduplicated members plus the facts about
- * how they were produced — or an `error` naming what stopped it.
- *
- * `bonds` is the project's own 1-based `{ a, b, order }` list. When it is
- * absent the connectivity is perceived from the geometry and every bond is
- * treated as single; the result then carries `bondSource: 'perceived'` and a
- * warning, because that typing is not the molecule's real one.
+ * Everything a search needs before the first relaxation: the validated atom
+ * list, the typed bonds, the rotors and the exact trial grid. Split out so the
+ * synchronous and asynchronous searches walk the same grid in the same order —
+ * the only thing that differs is where each trial is minimised.
  */
-export function searchUffConformers({
+function prepareUffSearch({
   atoms,
   bonds = null,
   torsionStepDegrees = UFF_CONFORMER_DEFAULTS.torsionStepDegrees,
@@ -337,8 +344,8 @@ export function searchUffConformers({
   relaxMaxIterations = UFF_CONFORMER_DEFAULTS.relaxMaxIterations,
 } = {}) {
   const list = Array.isArray(atoms) ? atoms : [];
-  if (list.length === 0) return { error: 'A conformer search needs at least one atom; this structure has none.' };
-  if (!finiteCoordinates(list)) return { error: 'The starting structure has a non-finite coordinate, so it cannot be searched.' };
+  if (list.length === 0) return { refusal: { error: 'A conformer search needs at least one atom; this structure has none.' } };
+  if (!finiteCoordinates(list)) return { refusal: { error: 'The starting structure has a non-finite coordinate, so it cannot be searched.' } };
 
   const bondSource = Array.isArray(bonds) && bonds.length > 0 ? 'supplied' : 'perceived';
   const bondList = bondSource === 'supplied' ? normaliseBonds(bonds) : perceiveBonds(list);
@@ -357,44 +364,64 @@ export function searchUffConformers({
   try {
     typing = typeAtoms(list, bondList);
   } catch (error) {
-    return { error: error?.message || String(error), bondSource };
+    return { refusal: { error: error?.message || String(error), bondSource } };
   }
   if (!typing.ok) {
     const refused = typing.refused[0];
     return {
-      error: refused?.message || 'An atom could not be typed by UFF.',
-      refused: typing.refused,
-      bondSource,
+      refusal: {
+        error: refused?.message || 'An atom could not be typed by UFF.',
+        refused: typing.refused,
+        bondSource,
+      },
     };
   }
 
   const { rotors, excluded } = findRotatableBonds(list, bondList);
   const grid = torsionTrials(rotors.length, torsionStepDegrees, maxTrials);
+  return {
+    list,
+    bondList,
+    bondSource,
+    warnings,
+    typing,
+    rotors,
+    excluded,
+    grid,
+    rmsdThreshold,
+    relaxMaxIterations,
+  };
+}
 
-  const relaxed = grid.trials.map((offsets, trialIndex) => {
-    let trialAtoms = list.map((atom) => ({ ...atom }));
-    rotors.forEach((rotor, rotorIndex) => {
-      trialAtoms = rotateTorsionBy(trialAtoms, rotor, offsets[rotorIndex]);
-    });
-    let optimisation;
-    try {
-      optimisation = optimizeUff(
-        { atoms: trialAtoms, bonds: bondList },
-        { types: typing.types, maxIterations: relaxMaxIterations },
-      );
-    } catch (error) {
-      return { trialIndex, offsets, error: error?.message || String(error) };
-    }
-    return {
-      trialIndex,
-      offsets,
-      atoms: optimisation.atoms,
-      energyKcal: optimisation.energyKcal,
-      converged: optimisation.converged,
-      minimisation: optimisation.reason,
-      iterations: optimisation.iterations,
-    };
+/** The geometry one grid trial relaxes from. */
+function trialAtomsFor(prepared, offsets) {
+  let trialAtoms = prepared.list.map((atom) => ({ ...atom }));
+  prepared.rotors.forEach((rotor, rotorIndex) => {
+    trialAtoms = rotateTorsionBy(trialAtoms, rotor, offsets[rotorIndex]);
   });
+  return trialAtoms;
+}
+
+/** The bookkeeping a relaxed trial carries into dedupe and ranking. */
+function trialResult(trialIndex, offsets, optimisation) {
+  return {
+    trialIndex,
+    offsets,
+    atoms: optimisation.atoms,
+    energyKcal: optimisation.energyKcal,
+    converged: optimisation.converged,
+    minimisation: optimisation.reason,
+    iterations: optimisation.iterations,
+  };
+}
+
+/**
+ * Dedupe, rank and describe what the search did. Shared verbatim by the
+ * synchronous search, the yielding search and the worker: the relaxed trials
+ * are the only input, so a result cannot depend on which thread ran them.
+ */
+function finishUffSearch(prepared, relaxed) {
+  const { grid, rotors, excluded, warnings, bondSource, bondList, rmsdThreshold, relaxMaxIterations } = prepared;
   const failed = relaxed.filter((entry) => entry.error);
   if (failed.length === relaxed.length) {
     return { error: failed[0].error, bondSource };
@@ -466,27 +493,147 @@ export function searchUffConformers({
   };
 }
 
+/** One progress event: which trial, which iteration, and the energy then. */
+function searchProgress(prepared, trialIndex, event) {
+  return {
+    phase: 'relax',
+    trial: trialIndex + 1,
+    trials: prepared.grid.trials.length,
+    ...event,
+  };
+}
+
+/** The last word on a trial, so a short one still reports its step count. */
+function trialProgress(prepared, trialIndex, optimisation) {
+  return {
+    phase: 'trial',
+    trial: trialIndex + 1,
+    trials: prepared.grid.trials.length,
+    iteration: optimisation.iterations,
+    energyKcal: optimisation.energyKcal,
+  };
+}
+
 /**
- * The whole in-app route: search, then rank and summarise with the same
- * `rankEnsemble`/`ensembleSummary` the CREST and import routes use.
+ * Run the search. Returns relaxed, deduplicated members plus the facts about
+ * how they were produced — or an `error` naming what stopped it.
  *
- * Members come back with `energyKcal` set and `energyEh: null`, because a UFF
- * energy is not a total electronic energy and the summary must not carry one
- * that could be read as an SCF result.
+ * `bonds` is the project's own 1-based `{ a, b, order }` list. When it is
+ * absent the connectivity is perceived from the geometry and every bond is
+ * treated as single; the result then carries `bondSource: 'perceived'` and a
+ * warning, because that typing is not the molecule's real one.
+ *
+ * `onProgress` sees one event per iteration (`trial`, `trials`, `iteration`,
+ * `energyKcal`); `shouldCancel` is polled before each trial.
  */
-export function generateUffEnsemble({
+export function searchUffConformers({
   atoms,
   bonds = null,
   torsionStepDegrees = UFF_CONFORMER_DEFAULTS.torsionStepDegrees,
   maxTrials = UFF_CONFORMER_DEFAULTS.maxTrials,
   rmsdThreshold = UFF_CONFORMER_DEFAULTS.rmsdThreshold,
-  energyWindowKcal = DEFAULT_CONFORMER_SETTINGS.energyWindowKcal,
-  maxConformers = DEFAULT_CONFORMER_SETTINGS.maxConformers,
-  temperature = DEFAULT_CONFORMER_SETTINGS.temperature,
-  spreadThresholdKcal = DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal,
-  selectedConformerId = '',
+  relaxMaxIterations = UFF_CONFORMER_DEFAULTS.relaxMaxIterations,
+  shouldCancel = null,
+  onProgress = null,
 } = {}) {
-  const found = searchUffConformers({ atoms, bonds, torsionStepDegrees, maxTrials, rmsdThreshold });
+  const prepared = prepareUffSearch({
+    atoms, bonds, torsionStepDegrees, maxTrials, rmsdThreshold, relaxMaxIterations,
+  });
+  if (prepared.refusal) return prepared.refusal;
+  const { grid, bondList, typing } = prepared;
+
+  const relaxed = grid.trials.map((offsets, trialIndex) => {
+    if (typeof shouldCancel === 'function' && shouldCancel()) throw uffCancelledError();
+    const trialAtoms = trialAtomsFor(prepared, offsets);
+    let optimisation;
+    try {
+      optimisation = optimizeUff(
+        { atoms: trialAtoms, bonds: bondList },
+        {
+          types: typing.types,
+          maxIterations: relaxMaxIterations,
+          onIteration: typeof onProgress === 'function'
+            ? (event) => onProgress(searchProgress(prepared, trialIndex, event))
+            : null,
+        },
+      );
+    } catch (error) {
+      if (isUffCancelled(error)) throw error;
+      return { trialIndex, offsets, error: error?.message || String(error) };
+    }
+    if (typeof onProgress === 'function') onProgress(trialProgress(prepared, trialIndex, optimisation));
+    return trialResult(trialIndex, offsets, optimisation);
+  });
+  return finishUffSearch(prepared, relaxed);
+}
+
+/**
+ * `searchUffConformers`, with every trial minimised by `optimizeUffAsync`.
+ *
+ * Used when the search must share the thread it runs on: the async driver
+ * yields every `yieldEvery` iterations, so timers, IPC and cancellation get a
+ * turn. The grid, the relaxer settings and the finishing pass are the same
+ * code as the synchronous search, so its ensemble is byte-identical.
+ */
+export async function searchUffConformersAsync({
+  atoms,
+  bonds = null,
+  torsionStepDegrees = UFF_CONFORMER_DEFAULTS.torsionStepDegrees,
+  maxTrials = UFF_CONFORMER_DEFAULTS.maxTrials,
+  rmsdThreshold = UFF_CONFORMER_DEFAULTS.rmsdThreshold,
+  relaxMaxIterations = UFF_CONFORMER_DEFAULTS.relaxMaxIterations,
+  yieldEvery = UFF_CONVERGENCE.yieldEvery,
+  yieldAfterMs = UFF_CONVERGENCE.yieldAfterMs,
+  shouldCancel = null,
+  onProgress = null,
+} = {}) {
+  const prepared = prepareUffSearch({
+    atoms, bonds, torsionStepDegrees, maxTrials, rmsdThreshold, relaxMaxIterations,
+  });
+  if (prepared.refusal) return prepared.refusal;
+  const { grid, bondList, typing } = prepared;
+
+  const relaxed = [];
+  for (let trialIndex = 0; trialIndex < grid.trials.length; trialIndex += 1) {
+    if (typeof shouldCancel === 'function' && shouldCancel()) throw uffCancelledError();
+    const offsets = grid.trials[trialIndex];
+    const trialAtoms = trialAtomsFor(prepared, offsets);
+    try {
+      const optimisation = await optimizeUffAsync(
+        { atoms: trialAtoms, bonds: bondList },
+        {
+          types: typing.types,
+          maxIterations: relaxMaxIterations,
+          yieldEvery,
+          yieldAfterMs,
+          shouldCancel,
+          onIteration: typeof onProgress === 'function'
+            ? (event) => onProgress(searchProgress(prepared, trialIndex, event))
+            : null,
+        },
+      );
+      relaxed.push(trialResult(trialIndex, offsets, optimisation));
+      if (typeof onProgress === 'function') onProgress(trialProgress(prepared, trialIndex, optimisation));
+    } catch (error) {
+      if (isUffCancelled(error)) throw error;
+      relaxed.push({ trialIndex, offsets, error: error?.message || String(error) });
+    }
+    // A short trial can finish inside one batch, so the per-trial loop yields
+    // too: 200 three-iteration trials must not chain through one macrotask.
+    await yieldToEventLoop();
+  }
+  return finishUffSearch(prepared, relaxed);
+}
+
+/** Rank and summarise a finished search; the shared tail of both generators. */
+function completeUffEnsemble(found, {
+  rmsdThreshold,
+  energyWindowKcal,
+  maxConformers,
+  temperature,
+  spreadThresholdKcal,
+  selectedConformerId,
+}) {
   if (found.error) {
     return { error: found.error, refused: found.refused || [], summary: null, ensembleText: '' };
   }
@@ -557,6 +704,92 @@ export function generateUffEnsemble({
     ensembleText: frames.map((frame) => xyzText(frame.atoms, frame.comment)).join(''),
     energies: frames.map((frame) => frame.energyEh),
   };
+}
+
+/**
+ * The whole in-app route: search, then rank and summarise with the same
+ * `rankEnsemble`/`ensembleSummary` the CREST and import routes use.
+ *
+ * Members come back with `energyKcal` set and `energyEh: null`, because a UFF
+ * energy is not a total electronic energy and the summary must not carry one
+ * that could be read as an SCF result.
+ *
+ * `onProgress`/`shouldCancel` are observation and cancellation hooks, not
+ * search settings: they never enter the ensemble record.
+ */
+export function generateUffEnsemble({
+  atoms,
+  bonds = null,
+  torsionStepDegrees = UFF_CONFORMER_DEFAULTS.torsionStepDegrees,
+  maxTrials = UFF_CONFORMER_DEFAULTS.maxTrials,
+  rmsdThreshold = UFF_CONFORMER_DEFAULTS.rmsdThreshold,
+  relaxMaxIterations = UFF_CONFORMER_DEFAULTS.relaxMaxIterations,
+  energyWindowKcal = DEFAULT_CONFORMER_SETTINGS.energyWindowKcal,
+  maxConformers = DEFAULT_CONFORMER_SETTINGS.maxConformers,
+  temperature = DEFAULT_CONFORMER_SETTINGS.temperature,
+  spreadThresholdKcal = DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal,
+  selectedConformerId = '',
+  onProgress = null,
+  shouldCancel = null,
+} = {}) {
+  const found = searchUffConformers({
+    atoms,
+    bonds,
+    torsionStepDegrees,
+    maxTrials,
+    rmsdThreshold,
+    relaxMaxIterations,
+    onProgress,
+    shouldCancel,
+  });
+  return completeUffEnsemble(found, {
+    rmsdThreshold,
+    energyWindowKcal,
+    maxConformers,
+    temperature,
+    spreadThresholdKcal,
+    selectedConformerId,
+  });
+}
+
+/** `generateUffEnsemble`, with the relaxation yielding to the event loop. */
+export async function generateUffEnsembleAsync({
+  atoms,
+  bonds = null,
+  torsionStepDegrees = UFF_CONFORMER_DEFAULTS.torsionStepDegrees,
+  maxTrials = UFF_CONFORMER_DEFAULTS.maxTrials,
+  rmsdThreshold = UFF_CONFORMER_DEFAULTS.rmsdThreshold,
+  relaxMaxIterations = UFF_CONFORMER_DEFAULTS.relaxMaxIterations,
+  energyWindowKcal = DEFAULT_CONFORMER_SETTINGS.energyWindowKcal,
+  maxConformers = DEFAULT_CONFORMER_SETTINGS.maxConformers,
+  temperature = DEFAULT_CONFORMER_SETTINGS.temperature,
+  spreadThresholdKcal = DEFAULT_CONFORMER_SETTINGS.spreadThresholdKcal,
+  selectedConformerId = '',
+  yieldEvery = UFF_CONVERGENCE.yieldEvery,
+  yieldAfterMs = UFF_CONVERGENCE.yieldAfterMs,
+  onProgress = null,
+  shouldCancel = null,
+} = {}) {
+  const found = await searchUffConformersAsync({
+    atoms,
+    bonds,
+    torsionStepDegrees,
+    maxTrials,
+    rmsdThreshold,
+    relaxMaxIterations,
+    yieldEvery,
+    yieldAfterMs,
+    onProgress,
+    shouldCancel,
+  });
+  return completeUffEnsemble(found, {
+    rmsdThreshold,
+    energyWindowKcal,
+    maxConformers,
+    temperature,
+    spreadThresholdKcal,
+    selectedConformerId,
+  });
 }
 
 /**

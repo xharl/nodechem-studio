@@ -148,7 +148,7 @@ describe('rendered calculation inspector', () => {
       'memory', 'memoryUnit', 'nproc', 'timeoutSeconds', 'checkpoint',
       'routePreset', 'method', 'basis', 'dispersion', 'scf', 'grid', 'population', 'orbitals', 'verbosity', 'matrixElement',
       'tdStates', 'tdTriplets', 'tdRoot', 'ntoTransition', 'nto',
-      'raman', 'vcd', 'roa',
+      'raman', 'vcd', 'roa', 'frequencyScale',
       'solvation', 'solvationModel', 'solvent',
       'charge', 'multiplicity', 'spinSweepEnabled', 'imaginary', 'minMagnitude', 'integrity',
       'checkpointFrom', 'customKeywords',
@@ -167,7 +167,7 @@ describe('rendered calculation inspector', () => {
     try {
       const html = renderFor('xtb');
       // The input file is named from the node id, which is `ts-freq`.
-      expect(html).toContain('xtb ts-freq.xyz --gfn 2 --hess --alpb water');
+      expect(html).toContain('xtb ts-freq.xyz --gfn 2 --hess --molden --alpb water');
       expect(html).toContain('value="ALPB" selected');
       expect(html).toContain('value="Water" selected');
       expect(html).not.toContain('PCM');

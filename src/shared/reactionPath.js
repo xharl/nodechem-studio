@@ -24,6 +24,7 @@
  */
 
 import { HARTREE_TO_KCAL_PER_MOL } from './runCompare.js';
+import { toLines, toText } from './lines.js';
 import { PK_UNIT_KCAL_PER_MOL } from './thermochemistry.js';
 
 const NUMBER = /-?\d+\.\d+/g;
@@ -42,7 +43,8 @@ function numbersIn(line) {
  * null rather than pretending the relative number is absolute.
  */
 export function parseIrcSummary(source) {
-  const lines = String(source ?? '').split(/\r\n|\n|\r/);
+  const lines = toLines(source);
+  const text = toText(source);
   const start = lines.findIndex((line) => /Summary of reaction path following/i.test(line));
   if (start === -1) return null;
 
@@ -72,7 +74,7 @@ export function parseIrcSummary(source) {
   if (points.length === 0) return null;
 
   const total = (label) => {
-    const match = new RegExp(`${label}:\\s*(\\d+)`, 'i').exec(String(source));
+    const match = new RegExp(`${label}:\\s*(\\d+)`, 'i').exec(text);
     return match ? Number(match[1]) : null;
   };
 
@@ -94,8 +96,8 @@ export function parseIrcSummary(source) {
  * with the SCF energy in the last column.
  */
 export function parseScanSummary(source) {
-  const text = String(source ?? '');
-  const lines = text.split(/\r\n|\n|\r/);
+  const lines = toLines(source);
+  const text = toText(source);
   const relaxedStart = lines.findIndex((line) => /Summary of Optimized Potential Surface Scan/i.test(line));
   if (relaxedStart !== -1) return parseRelaxedScan(lines, relaxedStart, text);
   const unrelaxedStart = lines.findIndex((line) => /Summary of the potential surface scan:/i.test(line));

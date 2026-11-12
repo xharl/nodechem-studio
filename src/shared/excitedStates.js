@@ -44,6 +44,8 @@
  * - No number is derived. Energies and wavelengths are the printed values.
  */
 
+import { toLines, toText } from './lines.js';
+
 /** A printed excited-state row, 4 decimal eV and 2 decimal nm as Gaussian writes them. */
 const EXCITED_STATE = /^\s*Excited State\s+(\d+):\s+(\S+?)\s+([0-9.]+)\s+eV\s+([0-9.]+)\s+nm\s+f=([0-9.]+)(?:\s+<S\*\*2>=(-?[0-9.]+))?/;
 const TRANSITION_LINE = /^\s*(\d+)\s*->\s*(\d+)\s+(-?[0-9.]+)\s*$/;
@@ -180,8 +182,8 @@ function finalTableOf(tables) {
  * }}
  */
 export function parseExcitedStateOptimization(text, { root = null, truncated = false } = {}) {
-  const source = String(text ?? '');
-  const lines = source.split(/\r\n|\n|\r/);
+  const lines = toLines(text);
+  const source = toText(text);
   const partial = truncated === true || (source.trim() !== '' && !PROLOGUE.test(source));
   if (!/Excited State/.test(source)) {
     // No TD record at all: this report does not apply. Returning the same shape

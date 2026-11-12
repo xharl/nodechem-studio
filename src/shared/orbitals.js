@@ -25,6 +25,8 @@
  * panel says so, because the two disagree by several tenths of an eV.
  */
 
+import { toLines } from './lines.js';
+
 /** CODATA 2018 hartree, in eV. */
 export const HARTREE_TO_EV = 27.211386245988;
 
@@ -39,7 +41,7 @@ const NUMBER = /-?\d+\.\d+/g;
  * @returns {Array<{alpha: {occupied: number[], virtual: number[]}, beta: {occupied: number[], virtual: number[]} | null, line: number}>}
  */
 export function parseOrbitalBlocks(text) {
-  const lines = String(text ?? '').split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const blocks = [];
   let current = null;
 

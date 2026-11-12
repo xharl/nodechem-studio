@@ -12,13 +12,98 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Added
 
+- **Boltzmann-averaged VCD/IR/Raman assignment and candidate ranking** — a candidate's
+  conformers are now averaged with the populations the ensemble stored (never recomputed), and
+  candidates — tautomer, stereoisomer and conformer sets alike — are ranked against one measured
+  trace instead of being merged. `src/shared/spectrumAssignment.js` returns both broadened curves,
+  band positions, cosine similarity, a band-wise positional score, FWHM, band tolerance and the
+  measured scale factor under the versioned metric `ncs-spectrum-match/1`; a member without
+  strengths is refused by name, and a candidate set is never averaged across molecules. The result
+  is recorded as `spectrumAssignment`, with populations, FWHM, scale factors and the metric
+  definition in `provenance.spectrumAssignment`, and the results card and workflow report render it
+  through one panel function (#348).
+
+- **Harmonic frequency scaling with a sourced table** — a Gaussian frequency block now carries
+  `frequencyScale`: `unscaled` (the default, and what an absent key means), `auto`, or an explicit
+  factor between 0.5 and 1.5. `auto` looks the block's method and basis up in
+  `src/shared/frequencyScaling.js`, a versioned hand-checked table whose entries cite Merrick, Moran
+  and Radom, *J. Phys. Chem. A* 2007, 111, 11683–11700, or the NIST CCCBDB SRD 101 Release 22
+  precomputed tables. The factor moves only what is derived for display: Raman and VCD band
+  positions, the derived ZPE (`raw × factor`) and the harmonic/quasi-RRHO entropy baseline. Parsed
+  wavenumbers, the printed ZPE correction, the printed `G` and every intensity stay as the program
+  printed them; an imported record is never scaled, and an unknown pair is offered unscaled with a
+  warning naming the pair and table version rather than a guessed factor. The decision, factor,
+  table version and source are written to `run.json` provenance and printed in the result cards and
+  workflow report beside the raw value (#350).
+
+- **Workflow reports list the artifacts the workflow wrote** — `report.html` now has an *Artifacts
+  written* section built from the queue's `<artifactRoot>/manifest.json`: one row per file with its
+  kind, queue-relative path, byte count and 16-character SHA-256, plus the manifest's own digest and
+  size. A file the manifest names but the folder no longer holds is marked `missing on disk`; a queue
+  with no readable manifest says `not recorded` instead of showing an empty table, and a manifest
+  entry whose path is absolute or leaves the artifacts folder is not printed. The builder stays
+  pure: `loadArtifactsManifest()` in `src/shared/report.js` reads the file and `buildWorkflowReport()`
+  receives it as `artifacts` (#354).
+- **`ncs report` writes the model and names its SHA-256** — the command now writes `<name>.json`
+  beside `<name>.html` (or `reports/index.json` beside `reports/index.html`), prints
+  `model sha256 <digest>` after the HTML path, and the HTML carries the same digest in
+  `data-model-sha256` and its header line. The window's **Save workflow report…** path writes the
+  same two files from the same model serialisation. A combined report writes a
+  `nodechem-studio.project-report` envelope over the per-flow models. `--no-model` keeps the old
+  one-file behaviour. The digest is the SHA-256 of the exact JSON bytes, so `sha256sum` of the file
+  matches the document (#357).
+- **Launch phase timing** — `app:info` and the diagnostics bundle now report monotonic marks from
+  process start to the renderer's first paint (`app-ready`, `settings-read`, `window-create`,
+  `queue-hydrated`, `renderer-first-paint`), and the same table is printed once to the terminal.
+  A slow launch is measured instead of guessed (#375).
 - **`ncs run --scorer <path>`** — the ML scorer sidecar the run console already had is reachable
   headlessly, for `rankBy` on a generate block, a `provider` on calculate and an `aimnet2` relax on
   prepare. It falls back to Settings → Tools like the other sidecars, and a block that needs it
   without a path now fails with a message that names the flag (#309).
+- **Engines write the wavefunction a Multiwfn block reads** — a Psi4 deck now appends
+  `fchk(wfn, '<job>.fchk')` after the call of every job type that has a wavefunction (`SP`, `Opt`,
+  `Freq`, `Opt Freq`, `TD-DFT`), and an xTB argv carries `--molden`, which leaves `molden.input` in
+  the run folder. The run-folder scan accepts that full name — never a bare `.input`, so an
+  unrelated `notes.input` is not read — and its refusal now names the formats and the engines that
+  produce them. The guide states where each engine's file comes from, that SAPT0 writes none (a dimer
+  has no single wavefunction), that GFN-FF gets no `--molden` (no orbitals), that a correlated Psi4
+  job's checkpoint is its SCF reference density, and that an ORCA `.gbw` is not readable by Multiwfn
+  (#343).
+
+### Changed
+
+- **The type scale no longer bottoms out at 11 px** — `xs` moves 11 → 12 px and `sm` 12 → 13 px, so
+  every label, hint, table cell and queue row that used `--text-size-xs` moves up together. Queue
+  rows, results tables (including the table header, which had inherited the 22 px display tier) and
+  the inspector body sit on `sm`; no stylesheet text is left at 11 px. On the canvas the route line is
+  clamped to two lines instead of one ellipsis, and the node card grows to 150 px so the second line
+  clears the result row. Ports keep their 11 px dot but gain a 19 px pointer target. The run-console
+  actions stack into two rows so the larger labels no longer paint over **Stop**. The topbar and
+  canvas HUD still fit 1440×900, 1100×700 and 390×844 with `scrollWidth == clientWidth` (#360).
+- **Inspector edits serialize the authored project once** — the dirty check, undo step and
+  crash-safe draft now share one snapshot of the project without the in-memory `nodes`/`edges`
+  aliases or the parsed run records attached to calculation blocks. Editing a block beside a large
+  frequency job no longer rewrites tens of megabytes per field, and the undo history is capped by
+  bytes (32 MB) as well as 100 steps. Ensemble typing still commits after the 150 ms pause (#366).
+- **Workflow reports read in a pool, cache cube parses and show progress** — the per-task
+  `run.json` reads no longer run one after another, a parsed cube volume is reused across reports
+  under `(path, mtimeMs, size)`, and the queue header plus the window's taskbar show `reading run
+  records`, `reading cube files` and `meshing surfaces` while a large report builds. The save dialog
+  is chosen before any read, so cancelling it does no work. The HTML is unchanged for the same
+  inputs apart from `generatedAt`, and `--figures none` still opens no cube (#372).
 
 ### Fixed
 
+- **The Multiwfn citation now matches the binary that ran** — every 2024-and-later Multiwfn banner
+  requires *both* the 2012 and the 2024 papers to be cited in the main text; the card and
+  `run.json:provenance.citation` named only the 2012 paper while the same record reported a 2026
+  version. The citation is now version-dependent: both papers for the `2024+` band, the 2012 paper
+  alone for the retired 3.8 band, with the vendor's "both papers must be cited" note on the card
+  (#342).
+- The window no longer waits for queue history: `QueueManager.init()` runs while the shell is being
+  created and every queue IPC call awaits it, so a start cannot race the crash-recovery pass. The
+  parsed-results surface is a dynamic import and the renderer is emitted as feature chunks, none
+  above the 500 kB build gate (#375).
 - A Multiwfn child killed by a signal is a failed run, not a parse failure: the queue tested
   `Number(raw.exitCode) !== 0`, and `Number(null)` is `0`, so a crashed binary was read as a successful
   run whose output the parser then blamed. The signal is the verdict, and the message says `killed by

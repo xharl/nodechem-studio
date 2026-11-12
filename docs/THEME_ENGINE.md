@@ -86,7 +86,7 @@ Three rules make the thing hold:
 | Elevation (3) | `--shadow-raised`, `--shadow-panel`, `--shadow-popover` | card, panel, modal |
 | Grid + motion (4) | `--canvas-grid-image`, `--canvas-grid-size`, `--motion-fast`, `--motion-ease` | canvas texture; transitions |
 
-**Type size is fixed, not themeable.** The six `--text-size-*` names (`xs` 11, `sm` 12, `md` 13,
+**Type size is fixed, not themeable.** The six `--text-size-*` names (`xs` 12, `sm` 13, `md` 13,
 `lg` 15, `xl` 18, `2xl` 22 px) are declared in every theme file with identical values, so
 `styles.css` has one source for sizes, but they sit outside the 45-name contract and no theme may
 change them — `test/theme.test.js` asserts the values are the same in all three. That is how the
@@ -333,7 +333,7 @@ Manual matrix before merge: each theme × {canvas, inspector, palette open, moda
 | PR | Contents | Acceptance |
 |---|---|---|
 | **1** | Contract, `themes/*.css`, boot script, alias block, `styles.css` mechanical rename | `current` pixel-identical (≤0.1 % diff); tests 1, 2, 5, 6 green; no component touched |
-| **2** | Components: state/kind split, pills, node rail, type scale, 11 px floor | tests 3, 4 green; `graphite` and `paper` screenshots approved; `current` still within diff budget |
+| **2** | Components: state/kind split, pills, node rail, type scale, 12 px floor | tests 3, 4 green; `graphite` and `paper` screenshots approved; `current` still within diff budget |
 | **3** | Settings → Appearance, persistence, `theme:set` IPC, `nativeTheme`, window background | switch without reload; no flash on cold start in all three themes; window controls legible in `paper` |
 | **4** | Fonts, licence, `docs/guide/appearance.md`, regenerated docs screenshots per theme | licence test green; `docs.test.js` green; README screenshot no longer a raw window capture |
 

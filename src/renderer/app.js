@@ -21,7 +21,7 @@ import {
   draftIsRestorable,
   normalizeDraft,
 } from '../shared/draft.js';
-import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, MATRIX_ELEMENT_OPTIONS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, MATRIX_ELEMENT_OPTIONS, defaultGates, defaultSettings, projectSnapshotView, validateProject } from '../shared/projectSchema.js';
 import { applyQueueToProject, nextAction } from '../shared/queueReconcile.js';
 import { clampFloatingRect, readFloatingRect } from '../shared/floatingWindow.js';
 import {
@@ -52,6 +52,7 @@ import { dp4RowsFromSources, dp4Summary, evaluateDp4 } from '../shared/dp4Workfl
 import {
   MULTIWFN_ANALYSES,
   MULTIWFN_CITATION,
+  MULTIWFN_CITATION_NOTE,
   MULTIWFN_LICENCE,
   MULTIWFN_MENU_VERSION,
   multiwfnAnalysis,
@@ -125,6 +126,11 @@ import {
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
 import { PREPARE_KINDS, prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
 import { EXPLICIT_SOLVENTS } from '../shared/explicitSolvation.js';
+import {
+  describeFrequencyScale,
+  normaliseFrequencyScaleSetting,
+  resolveFrequencyScale,
+} from '../shared/frequencyScaling.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
 import { SPIN_SWEEP_MAX, multiplicitiesFor, spinSweepFor } from '../shared/spinSweep.js';
@@ -178,7 +184,9 @@ import { exportRunFormatAction } from './runConverter.js';
 import { exportDeckAction } from './deckExport.js';
 import { provenanceSummary, syncVerifyButton, verifyRunInput } from './provenance.js';
 import { mountThermochemistryView } from './thermochemistryView.js';
-import { installResultsView } from './resultsView.js';
+// Issue 375: `resultsView` (the parsed-result cards, and with them the
+// wavefunction viewport and the workflow-report helpers) is the heaviest
+// renderer module. It is imported after the shell paints, not with it.
 import { IMPORTED_BADGE_TEXT, importedSummary, isImportedRecord } from '../shared/importedRecord.js';
 import { mountStructureViewer } from './structureViewer.js';
 import { formatPreflightReport, preflightFailureMessage, preflightRefusalToast, preflightRefusals } from './preflightReport.js';
@@ -199,6 +207,8 @@ import {
   runEngineLabel,
 } from './engineCopy.js';
 import { executableSeed } from './runExecutable.js';
+import { createFrameCoalescer, createQueueEventCoalescer, queueGraphSignature } from './eventCoalescer.js';
+import { createRunOutputBuffer } from './runOutputBuffer.js';
 import {
   companionPlaceholderFor,
   companionSeed,
@@ -209,6 +219,55 @@ const desktop = window.desktop || null;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
 let appVersion = APP_VERSION;
 
+/* ── Startup timing (issue 375) ─────────────────────────────────────
+ * The main process owns the clock. This module reports where the renderer had
+ * got to when its first frame was committed; `timeOrigin` is the epoch of this
+ * navigation, so main can place it on the same timeline as `app.whenReady`.
+ */
+const RENDERER_SCRIPT_AT = typeof performance !== 'undefined' ? performance.now() : 0;
+let rendererDomReadyAt = null;
+let latestRunRecord = null;
+let resultsViewPromise = null;
+
+function reportStartupTiming(firstPaintMs) {
+  if (!desktop?.reportStartup) return;
+  try {
+    desktop.reportStartup({
+      phase: 'renderer',
+      timeOrigin: performance.timeOrigin,
+      scriptMs: RENDERER_SCRIPT_AT,
+      domReadyMs: rendererDomReadyAt,
+      firstPaintMs,
+    });
+  } catch {
+    // Timing is diagnostics; failing to report it must not affect startup.
+  }
+}
+
+/**
+ * Install the results surface once it is needed. Returns the same promise for
+ * every caller, so a run finishing while the module is still in flight cannot
+ * install it twice.
+ */
+function loadResultsView() {
+  if (resultsViewPromise) return resultsViewPromise;
+  resultsViewPromise = import('./resultsView.js')
+    .then(({ installResultsView }) => {
+      const view = installResultsView({ desktop });
+      // A run that completed before the module arrived has already emitted its
+      // `done` event; replay the latest one so the console is not blank.
+      if (latestRunRecord) view?.show(latestRunRecord);
+      return view;
+    })
+    .catch((error) => {
+      // The shell is usable without the results cards; keep the reason visible
+      // in the renderer console instead of failing startup.
+      console.error('[results] Could not load the results view:', error?.message || error);
+      return null;
+    });
+  return resultsViewPromise;
+}
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -217,10 +276,13 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[char]));
 
+/** A value safe inside a quoted attribute selector: `[data-x="…"]`. */
+const attrValue = (value) => String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
 const W = 216;
-// Cards carry a result line now (energy / SAPT / ensemble), so the height has
-// room for it between the route and the footer.
-const H = 132;
+// Cards carry a route line and a result line. Issue 360 raised the route to two
+// lines, so the card grew to 150 px to keep the second line above the result.
+const H = 150;
 const STAGE_W = 1080;
 const STAGE_H = 580;
 const LOOP_LANE = 548;
@@ -384,6 +446,16 @@ hydrateProject(project);
 // project behaving exactly like a v1 one.
 if (!Array.isArray(project.datasets)) project.datasets = [];
 
+/* ── Run log buffering (issue 374) ──────────────────────────
+ * The log is one bounded buffer flushed once per frame; `state.run.output`
+ * below reads through to it so the text a caller sees is the text in the
+ * console, without a 60 kB string copy per output chunk.
+ */
+
+const MAX_RUN_OUTPUT_NODES = 64;
+const runOutputLog = createRunOutputBuffer();
+const runOutputFlush = createFrameCoalescer(() => flushRunOutput());
+
 const state = {
   project,
   selected: { type: 'project', id: null },
@@ -424,11 +496,28 @@ const state = {
   draftTimer: null,
   dirty: null,
   history: null,
+  // Issue 367: the plan cache's inputs. `planSnapshot` is the last slim
+  // snapshot `refreshDirty` saw and `projectRevision` counts changes to it; a
+  // repaint that changes nothing does not move the revision, so the plan built
+  // once survives every inspector/console render.
+  planSnapshot: null,
+  projectRevision: 0,
+  // Issue 366: dirty checks from the same edit are coalesced into one
+  // serialization. `snapshotQueued` marks work already scheduled for the end of
+  // this task; `snapshotCount` is an observability counter the tests read.
+  snapshotQueued: false,
+  snapshotCount: 0,
+  // Issue 366: parsed run records are derived and live outside the snapshot, so
+  // undo restores them by node id instead of carrying them in every step.
+  runRecords: new Map(),
   run: {
     id: null,
     status: 'idle',
     dir: null,
-    output: '',
+    // Issue 374: reads through to the bounded log buffer; assigning resets it,
+    // which is what the run-start paths below rely on.
+    get output() { return runOutputLog.text; },
+    set output(value) { runOutputLog.reset(value); },
     gates: [],
     validity: [],
     // Issue 256: after a run the hint line reports the outcome rather than the
@@ -460,11 +549,155 @@ let nodeSequence = 0;
 
 /* ── Domain helpers ───────────────────────────────────────── */
 
-const nodeById = (id) => state.project.nodes.find((node) => node.id === id) || null;
+/* ── Graph index (issue 370) ────────────────────────────────
+ * `nodeById` used to be a linear scan, and `renderEdges` called it twice per
+ * edge: one redraw was O(nodes × edges), and a drag repeated it per mousemove.
+ * The index answers a lookup in constant time and holds the adjacency the
+ * incident-edge drag path needs.
+ *
+ * It is rebuilt only when the graph's structure changes. A different nodes or
+ * edges array — a flow switch, a project load, an undo — is detected by
+ * identity; an in-place push/splice calls `invalidateGraphIndex()`. A length
+ * mismatch is also caught, so a mutation site that forgets to invalidate
+ * degrades to a rebuild instead of serving a stale map.
+ */
+const graphIndex = {
+  nodes: null,
+  edges: null,
+  nodeCount: 0,
+  edgeCount: 0,
+  byId: new Map(),
+  incomingById: new Map(),
+  outgoingById: new Map(),
+  builds: 0,
+};
+
+function invalidateGraphIndex() {
+  graphIndex.nodes = null;
+  graphIndex.edges = null;
+  // Issue 367: a structural graph change invalidates the plan too — the same
+  // arrays the index just dropped feed `buildWorkflowPlan`.
+  invalidatePlanCache();
+}
+
+function buildGraphIndex() {
+  const nodes = Array.isArray(state.project?.nodes) ? state.project.nodes : [];
+  const edges = Array.isArray(state.project?.edges) ? state.project.edges : [];
+  const byId = new Map();
+  for (const node of nodes) {
+    if (node && node.id) byId.set(node.id, node);
+  }
+  const incomingById = new Map();
+  const outgoingById = new Map();
+  for (const edge of edges) {
+    if (!edge) continue;
+    if (!incomingById.has(edge.to)) incomingById.set(edge.to, []);
+    incomingById.get(edge.to).push(edge);
+    if (!outgoingById.has(edge.from)) outgoingById.set(edge.from, []);
+    outgoingById.get(edge.from).push(edge);
+  }
+  graphIndex.nodes = nodes;
+  graphIndex.edges = edges;
+  graphIndex.nodeCount = nodes.length;
+  graphIndex.edgeCount = edges.length;
+  graphIndex.byId = byId;
+  graphIndex.incomingById = incomingById;
+  graphIndex.outgoingById = outgoingById;
+  graphIndex.builds += 1;
+  return graphIndex;
+}
+
+function graphIndexFor() {
+  const nodes = state.project?.nodes;
+  const edges = state.project?.edges;
+  if (graphIndex.nodes !== nodes || graphIndex.edges !== edges
+    || graphIndex.nodeCount !== (nodes?.length ?? 0)
+    || graphIndex.edgeCount !== (edges?.length ?? 0)) {
+    return buildGraphIndex();
+  }
+  return graphIndex;
+}
+
+const nodeById = (id) => graphIndexFor().byId.get(id) || null;
+
+/* ── Workflow plan cache (issue 367) ─────────────────────────
+ * `buildWorkflowPlan` is the expensive read of a project: 274 ms on the issue's
+ * 800-node graph. The inspector, the run console's tool seeding, the cost
+ * estimate and preflight all built it again on every paint. One plan per
+ * unchanged project is enough — nothing they read differs between them.
+ *
+ * The cache key is the structural revision (moved by `refreshDirty` only when
+ * the serialized project changed) plus the fields the plan actually reads: the
+ * project object, the active flow, and the nodes/edges arrays with their
+ * lengths. A flow switch, a project load or an undo replaces those arrays and
+ * misses the cache even if the revision did not move; `invalidatePlanCache()`
+ * covers the paths that edit the graph in place.
+ */
+const planCache = {
+  project: null,
+  flowId: null,
+  nodes: null,
+  edges: null,
+  nodeCount: 0,
+  edgeCount: 0,
+  revision: -1,
+  plan: null,
+  error: null,
+  builds: 0,
+};
+
+function invalidatePlanCache() {
+  planCache.revision = -1;
+}
+
+/** The one plan every renderer read shares, rebuilt only when the project moves. */
+function workflowPlan() {
+  const project = state.project;
+  if (!project) throw new Error('No project is open.');
+  // Issue 366: an edit may have queued its dirty check; answer it now so the
+  // plan is built from (and cached for) the edit that is on screen, not the
+  // previous one. The queued microtask then finds nothing left to do.
+  if (state.snapshotQueued) flushDirtyCheck();
+  const nodes = project.nodes;
+  const edges = project.edges;
+  const flowId = project.activeFlowId ?? null;
+  const nodeCount = Array.isArray(nodes) ? nodes.length : 0;
+  const edgeCount = Array.isArray(edges) ? edges.length : 0;
+  if (planCache.project === project
+    && planCache.flowId === flowId
+    && planCache.nodes === nodes
+    && planCache.edges === edges
+    && planCache.nodeCount === nodeCount
+    && planCache.edgeCount === edgeCount
+    && planCache.revision === state.projectRevision) {
+    if (planCache.error) throw planCache.error;
+    return planCache.plan;
+  }
+  planCache.builds += 1;
+  planCache.project = project;
+  planCache.flowId = flowId;
+  planCache.nodes = nodes;
+  planCache.edges = edges;
+  planCache.nodeCount = nodeCount;
+  planCache.edgeCount = edgeCount;
+  planCache.revision = state.projectRevision;
+  try {
+    planCache.plan = shared.buildWorkflowPlan(project);
+    planCache.error = null;
+  } catch (error) {
+    // An unbuildable plan is a value the callers report, not a reason to try
+    // again on every paint: the next project change clears it.
+    planCache.plan = null;
+    planCache.error = error;
+    throw error;
+  }
+  return planCache.plan;
+}
+
 const edgeId = (edge) => `${edge.from}->${edge.to}:${edge.type}${edge.branch ? `:${edge.branch}` : ''}`;
 const edgeById = (id) => state.project.edges.find((edge) => edgeId(edge) === id) || null;
-const incoming = (id) => state.project.edges.filter((edge) => edge.to === id);
-const outgoing = (id) => state.project.edges.filter((edge) => edge.from === id);
+const incoming = (id) => graphIndexFor().incomingById.get(id) || [];
+const outgoing = (id) => graphIndexFor().outgoingById.get(id) || [];
 const statusFor = (node) => STATUS[node.state] || STATUS.blocked;
 function kindForJob(jobType) {
   if (isCompositeJobType(jobType)) return 'Composite';
@@ -1205,34 +1438,75 @@ function edgeLabel(edge) {
   return null;
 }
 
+/**
+ * The SVG body of one edge: the line, its hit target and its label.
+ *
+ * Issue 370: each edge is wrapped in its own `<g data-edge-group>` by
+ * `renderEdges`, so a drag can repaint one edge's group instead of the whole
+ * layer. The `data-edge-id` attributes stay where the click delegation and the
+ * selected-state CSS already look for them.
+ */
+function edgeMarkup(edge) {
+  const id = edgeId(edge);
+  const path = edgePath(edge);
+  if (!path) return '';
+  const selected = state.selected.type === 'edge' && state.selected.id === id;
+  const label = edgeLabel(edge);
+  const from = nodeById(edge.from);
+  const to = nodeById(edge.to);
+  let labelHtml = '';
+  if (label && from && to) {
+    const a = anchorFor(from, edgeFromSide(edge));
+    const b = anchorFor(to, edgeToSide(edge));
+    const lx = edge.type === 'loop' ? (a.x + b.x) / 2 : (a.x + b.x) / 2;
+    const ly = edge.type === 'loop' ? LOOP_LANE : (a.y + b.y) / 2;
+    labelHtml = `<g class="edge-label ${label.cls}${selected ? ' selected' : ''}" data-edge-id="${esc(id)}" transform="translate(${lx},${ly})">
+      <rect x="${-label.width / 2}" y="-8" width="${label.width}" height="16" rx="5"/>
+      <text>${esc(label.text)}</text>
+    </g>`;
+  }
+  return `
+      <path class="edge-line ${edgeClass(edge)}${selected ? ' selected' : ''}" d="${path}"></path>
+      <path class="edge-hit" d="${path}" data-edge-id="${esc(id)}"></path>
+      ${labelHtml}`;
+}
+
 function renderEdges() {
   const layer = edgesEl();
   if (!layer) return;
   layer.innerHTML = state.project.edges.map((edge) => {
-    const id = edgeId(edge);
-    const path = edgePath(edge);
-    if (!path) return '';
-    const selected = state.selected.type === 'edge' && state.selected.id === id;
-    const label = edgeLabel(edge);
-    const from = nodeById(edge.from);
-    const to = nodeById(edge.to);
-    let labelHtml = '';
-    if (label && from && to) {
-      const a = anchorFor(from, edgeFromSide(edge));
-      const b = anchorFor(to, edgeToSide(edge));
-      const lx = edge.type === 'loop' ? (a.x + b.x) / 2 : (a.x + b.x) / 2;
-      const ly = edge.type === 'loop' ? LOOP_LANE : (a.y + b.y) / 2;
-      labelHtml = `<g class="edge-label ${label.cls}${selected ? ' selected' : ''}" data-edge-id="${esc(id)}" transform="translate(${lx},${ly})">
-        <rect x="${-label.width / 2}" y="-8" width="${label.width}" height="16" rx="5"/>
-        <text>${esc(label.text)}</text>
-      </g>`;
-    }
-    return `
-      <path class="edge-line ${edgeClass(edge)}${selected ? ' selected' : ''}" d="${path}"></path>
-      <path class="edge-hit" d="${path}" data-edge-id="${esc(id)}"></path>
-      ${labelHtml}`;
+    const body = edgeMarkup(edge);
+    if (!body) return '';
+    return `<g class="edge" data-edge-group="${esc(edgeId(edge))}">${body}</g>`;
   }).join('');
   renderPreview();
+}
+
+/** Repaint one edge in place. False when the layer has no group for it. */
+function renderEdgeElement(edge) {
+  const group = document.querySelector(`[data-edge-group="${attrValue(edgeId(edge))}"]`);
+  if (!group) return false;
+  const body = edgeMarkup(edge);
+  if (!body) {
+    group.remove?.();
+    return true;
+  }
+  group.innerHTML = body;
+  return true;
+}
+
+/**
+ * Issue 370: while a block is dragged, only the edges that touch it change
+ * shape. Returns how many were repainted, or -1 when a group is missing — the
+ * caller then falls back to a full render rather than leaving a stale edge.
+ */
+function renderIncidentEdges(nodeId) {
+  const index = graphIndexFor();
+  const edges = [...(index.incomingById.get(nodeId) || []), ...(index.outgoingById.get(nodeId) || [])];
+  for (const edge of edges) {
+    if (!renderEdgeElement(edge)) return -1;
+  }
+  return edges.length;
 }
 
 function renderPreview() {
@@ -1317,6 +1591,7 @@ function switchFlow(id) {
   if (!flowById(state.project, wanted)) return;
   state.project.activeFlowId = wanted;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   state.renamingFlowId = null;
   state.confirmDeleteFlowId = null;
@@ -1336,6 +1611,7 @@ function addFlow() {
   flows.push({ id, title, nodes: [], edges: [] });
   state.project.activeFlowId = id;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   state.renamingFlowId = null;
   state.confirmDeleteFlowId = null;
@@ -1358,6 +1634,7 @@ function duplicateActiveFlow() {
   state.project.flows.splice(index + 1, 0, copy);
   state.project.activeFlowId = id;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   state.renamingFlowId = null;
   state.confirmDeleteFlowId = null;
@@ -1421,6 +1698,7 @@ function confirmDeleteFlow() {
   state.project.activeFlowId = fallback.id;
   state.confirmDeleteFlowId = null;
   attachGraphAliases(state.project);
+  invalidatePlanCache();
   state.selected = { type: 'project', id: null };
   renderGraph();
   renderInspector();
@@ -1432,6 +1710,11 @@ function cancelDeleteFlow() {
   renderFlowTabs();
 }
 
+/**
+ * The structural path: every card, every edge, the tabs and the counters.
+ * Called when the graph itself changed (a block or flow added/removed, a queue
+ * state applied, a project loaded). A field edit takes `updateNodeCard`.
+ */
 function renderGraph() {
   const container = nodesEl();
   if (!container) return;
@@ -1442,6 +1725,35 @@ function renderGraph() {
   refreshDirty();
 }
 
+/**
+ * Issue 370: a committed edit on one block repaints that block's card and
+ * nothing else. Sixty-five `renderGraph()` calls rebuilt every card and every
+ * edge for a route change that touched one block.
+ *
+ * `edges: true` is for the few field writers that retype an existing edge
+ * (`checkpointFrom`, a loop target, a branch), where the card is not the only
+ * thing on screen that changed.
+ *
+ * Falls back to the full render when the card is not in the DOM, so an edit can
+ * never leave a stale card behind (a card can be missing mid-transition).
+ */
+function updateNodeCard(id, { edges = false } = {}) {
+  const node = nodeById(id);
+  const el = node ? document.querySelector(`.node[data-node-id="${attrValue(id)}"]`) : null;
+  if (!node || !el || typeof el.outerHTML !== 'string') {
+    renderGraph();
+    return false;
+  }
+  el.outerHTML = renderNodeCard(node);
+  if (edges) renderEdges();
+  // The tab strip and the counters describe states this edit can change
+  // (`ready` → `passed` is a queue's business, `passed` → `ready` is an edit's).
+  renderFlowTabs();
+  updateCounts();
+  refreshDirty();
+  return true;
+}
+
 function updateSavePill(dirty) {
   const pill = $('#save-pill');
   if (!pill) return;
@@ -1449,10 +1761,31 @@ function updateSavePill(dirty) {
   pill.innerHTML = `<i class="dot"></i> ${dirty ? 'unsaved changes' : 'saved locally'}`;
 }
 
-function refreshDirty() {
-  const dirty = state.savedSnapshot === null || JSON.stringify(state.project) !== state.savedSnapshot;
+/**
+ * Issue 366: the one serialization an edit pays for.
+ *
+ * The view drops the `nodes`/`edges` aliases (the graph is already inside
+ * `flows[]`) and the parsed run records, which are derived and never part of
+ * the project file. What remains is proportional to the authored project, so
+ * editing a block beside a 495 KB frequency record no longer rewrites 20 MB.
+ */
+function serializeProjectSnapshot() {
+  state.snapshotCount += 1;
+  return JSON.stringify(projectSnapshotView(state.project));
+}
+
+function applyProjectSnapshot(snapshot) {
+  // Issue 367: this is the funnel every mutation already passes through, and
+  // `renderInspector` calls it on every paint. Move the plan revision only when
+  // the serialized project actually changed, so a repaint or a selection change
+  // keeps the plan built for the last edit.
+  if (snapshot !== state.planSnapshot) {
+    state.planSnapshot = snapshot;
+    state.projectRevision += 1;
+  }
+  const dirty = state.savedSnapshot === null || snapshot !== state.savedSnapshot;
   updateSavePill(dirty);
-  syncEditHistory();
+  syncEditHistory(snapshot);
   if (dirty !== state.dirty) {
     state.dirty = dirty;
     desktop?.setDirty?.(dirty);
@@ -1463,15 +1796,39 @@ function refreshDirty() {
   if (dirty) scheduleDraftSave();
 }
 
+/**
+ * Serialize now. An edit handler usually reaches `refreshDirty` twice — once
+ * from `updateNodeCard`, once from the `renderInspector` that follows — and a
+ * paint may too. The first call schedules this for the end of the task, so both
+ * see one snapshot and one history step. Code that needs the answer inside the
+ * task (`workflowPlan`, save, the close guard) calls this directly.
+ */
+function flushDirtyCheck() {
+  state.snapshotQueued = false;
+  if (!state.project) return;
+  applyProjectSnapshot(serializeProjectSnapshot());
+}
+
+function refreshDirty() {
+  if (state.snapshotQueued) return;
+  state.snapshotQueued = true;
+  queueMicrotask(() => {
+    // A synchronous flush (a plan build, a save) may have answered already.
+    if (!state.snapshotQueued) return;
+    flushDirtyCheck();
+  });
+}
+
 /* ── Undo / redo ──────────────────────────────────────────── */
 
 /**
- * One JSON snapshot per committed edit. `refreshDirty` is the funnel every
+ * One JSON snapshot per committed edit. `flushDirtyCheck` is the funnel every
  * mutation already passes through, so recording here cannot miss an edit — and
- * a render that changes nothing produces no step.
+ * a render that changes nothing produces no step. Callers pass the snapshot
+ * they already computed; there is deliberately no default, so this function
+ * cannot quietly add a second serialization.
  */
-function syncEditHistory() {
-  const snapshot = JSON.stringify(state.project);
+function syncEditHistory(snapshot) {
   if (!state.history) {
     state.history = createHistory(snapshot);
   } else {
@@ -1480,7 +1837,7 @@ function syncEditHistory() {
 }
 
 function resetEditHistory() {
-  state.history = createHistory(JSON.stringify(state.project));
+  state.history = createHistory(serializeProjectSnapshot());
 }
 
 function applyHistorySnapshot(snapshot) {
@@ -1494,6 +1851,12 @@ function applyHistorySnapshot(snapshot) {
   // A snapshot is plain JSON: `nodes`/`edges` are a second copy, so point
   // them back at the active flow's arrays before anything reads them.
   hydrateProject(state.project);
+  // Run records are derived and stay out of the snapshot; put back the ones
+  // this session read, or undo would blank a block's cards and viewers.
+  for (const node of state.project.nodes) {
+    const parsed = state.runRecords.get(node.id);
+    if (parsed) node.parsed = parsed;
+  }
   state.selected = { type: 'project', id: null };
   state.connecting = null;
   state.keyboardConnect = null;
@@ -1531,12 +1894,16 @@ function redoEdit() {
 
 function markProjectSaved(filePath) {
   state.projectPath = filePath;
-  state.savedSnapshot = JSON.stringify(state.project);
-  state.draftBaseline = state.savedSnapshot;
+  // The saved baseline is the same view the dirty check uses, computed once:
+  // the queued check from the save's own paint must not serialize a second time.
+  const snapshot = serializeProjectSnapshot();
+  state.savedSnapshot = snapshot;
+  state.draftBaseline = snapshot;
+  state.snapshotQueued = false;
   // The draft bar offers to replace what is on screen; once another project
   // becomes current that offer is meaningless, so it goes away with it.
   dismissDraftBar();
-  refreshDirty();
+  applyProjectSnapshot(snapshot);
 }
 
 /* ── Crash-safe draft ─────────────────────────────────────── */
@@ -1579,12 +1946,14 @@ function writeDraft() {
   if (!storage || !state.dirty) return;
   let payload;
   try {
-    if (JSON.stringify(state.project) === state.draftBaseline) return;
+    if (serializeProjectSnapshot() === state.draftBaseline) return;
     payload = JSON.stringify({
       version: DRAFT_VERSION,
       updatedAt: Date.now(),
       filePath: state.projectPath || null,
-      project: state.project,
+      // Same view as the dirty check: a draft is the authored project, not the
+      // parsed run records attached to it.
+      project: projectSnapshotView(state.project),
     });
   } catch {
     clearDraft();
@@ -1670,7 +2039,9 @@ function offerDraftRestore() {
   }
   // Same project as the one just loaded: nothing was lost, so say nothing —
   // and drop the copy so it cannot resurface later against a different file.
-  if (!draftIsRestorable(draft, state.project)) {
+  // Same project, same view: the draft stores the authored project without the
+  // aliases or parsed run records, so compare it with the same snapshot view.
+  if (!draftIsRestorable(draft, projectSnapshotView(state.project))) {
     clearDraft();
     return;
   }
@@ -1688,6 +2059,7 @@ function restoreDraft(draft) {
     return;
   }
   state.project = parsed.project;
+  state.runRecords.clear();
   state.selected = { type: 'project', id: null };
   state.projectPath = draft.filePath || null;
   state.history = null;
@@ -2702,6 +3074,42 @@ function calcInspector(node) {
       + '</span></div>',
   ].join(''));
 
+  // Issue 350: harmonic frequency scaling. It is a presentation/derived
+  // choice — the parsed record keeps the printed numbers — so the control only
+  // appears on a Gaussian frequency job, the only place a table entry can be
+  // looked up.
+  const frequencyScaleSetting = s.frequencyScale ?? 'unscaled';
+  const frequencyScaleResolution = resolveFrequencyScale({
+    setting: frequencyScaleSetting,
+    // `routeValues` defaults an empty pair to B3LYP/6-31G(d); mirror that here
+    // so the inspector's hint matches what the run will record.
+    method: s.method || 'B3LYP',
+    basis: s.basis || '6-31G(d)',
+  });
+  const frequencyScaleGroup = group(
+    'Frequency scaling',
+    frequencyScaleResolution.applied
+      ? `×${Number(frequencyScaleResolution.factor).toFixed(4)}`
+      : (frequencyScaleResolution.mode === 'unknown' ? 'no factor — unscaled' : 'unscaled'),
+    true,
+    [
+      inputField('Scale factor', 'frequencyScale', frequencyScaleSetting, { full: true }),
+      '<div class="field full"><span class="inspector-note">'
+        + '<code>unscaled</code> (default), <code>auto</code>, or an explicit factor between 0.5 and 1.5. '
+        + 'The factor moves only the displayed band positions, the derived ZPE and the quasi-RRHO entropy; '
+        + 'the stored record keeps the numbers Gaussian printed. '
+        + (frequencyScaleResolution.applied
+          ? `Now: ${esc(describeFrequencyScale(frequencyScaleResolution))}.`
+          : (frequencyScaleResolution.mode === 'unknown'
+            ? `No published factor for ${esc(s.method || 'B3LYP')}/${esc(s.basis || '6-31G(d)')} `
+              + `in table ${esc(frequencyScaleResolution.tableVersion)}; the block stays unscaled and says so.`
+            : (frequencyScaleResolution.mode === 'invalid'
+              ? 'Not a valid setting: use unscaled, auto, or a factor between 0.5 and 1.5. The project cannot be saved until it is fixed.'
+              : 'The spectrum and ZPE are shown as printed.')))
+        + '</span></div>',
+    ].join(''),
+  );
+
   const gates = s.gates;
   const gatesGroup = group('Gates', `${[gates.thermo, gates.finalEnergy, gates.imaginary !== null, gates.scf].filter(Boolean).length} active`, true, [
     switchRow('Normal termination', 'always required', 'termination', true, { gate: true, disabled: true }),
@@ -2789,6 +3197,7 @@ function calcInspector(node) {
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : ramanGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : vcdGroup}
     ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob ? '' : roaGroup}
+    ${isXtb || isPsi4 || isPyscf || isOrca || compositeJob || !frequencyJob ? '' : frequencyScaleGroup}
     ${isXtb ? xtbSolvationGroup : isPsi4 ? '' : isPyscf ? pyscfSolvationGroup : compositeJob ? '' : isOrca ? orcaSolvationGroup : gaussianSolvationGroup}
     ${moleculeGroup}
     ${spinGroup}
@@ -3075,7 +3484,11 @@ function multiwfnInspectorBody(definition, upstream, node) {
       + '<div class="inspector-note">The menu script is chosen from the installed release band '
       + '(<code>2024+</code> or <code>3.8</code>). ELF/LOL write a cube; QTAIM integrates basins and '
       + 'critical points; ESP reports surface statistics; RDG–NCI reports sign(λ₂)ρ / RDG points.</div></div>',
-    `<div class="field full"><label>Wavefunction from an upstream block</label><select class="select" data-multiwfn-input="nodeId" aria-label="Upstream block">${sourceOptions}</select></div>`,
+    `<div class="field full"><label>Wavefunction from an upstream block</label><select class="select" data-multiwfn-input="nodeId" aria-label="Upstream block">${sourceOptions}</select>`
+      + '<div class="inspector-note">Psi4 and xTB runs write the file this reads: '
+      + '<code>&lt;job&gt;.fchk</code> for Psi4 and <code>molden.input</code> for xTB. A Gaussian '
+      + 'run needs <code>formchk -3</code> on its .chk first, and an ORCA .gbw is not readable — '
+      + 'supply a wavefunction with the path below instead.</div></div>',
     `<div class="field full"><label>…or a project-relative path</label><input class="input" data-multiwfn-input="path" value="${esc(input.path || '')}" placeholder="wavefunctions/water.fchk" aria-label="Wavefunction path" spellcheck="false" autocomplete="off">`
       + '<div class="inspector-note">Exactly one source: an upstream block, a run id, or a path. '
       + 'A path is relative to the project folder and may not contain “..”.</div></div>',
@@ -3083,7 +3496,7 @@ function multiwfnInspectorBody(definition, upstream, node) {
     parameterFields,
     `<div class="field full"><label>Menu script</label><div id="compute-preview-slot">${computePreviewHtml(node)}</div></div>`,
     `<div class="full"><div class="inspector-note"><strong>Licence.</strong> ${esc(MULTIWFN_LICENCE)} `
-      + `<strong>Cite:</strong> ${esc(MULTIWFN_CITATION)}. A missing binary, an unsupported version or a missing `
+      + `<strong>Cite:</strong> ${esc(MULTIWFN_CITATION)}. ${esc(MULTIWFN_CITATION_NOTE)} A missing binary, an unsupported version or a missing `
       + 'density matrix fails by name; it is never reported as unknown.</div></div>',
   ].join(''));
 }
@@ -4783,6 +5196,7 @@ function addBlock(type) {
     });
   }
   state.project.nodes.push(node);
+  invalidateGraphIndex();
   state.selected = { type: 'node', id: node.id };
   state.inspectorHidden = false;
   togglePalette(false);
@@ -5034,6 +5448,15 @@ function updateNodeField(node, key, value) {
     else delete node.settings.matrixElement;
     return;
   }
+  // Issue 350: `frequencyScale` is a small vocabulary plus a number, not a
+  // free string. A complete value is stored canonically; an incomplete one is
+  // kept as typed so the next keystroke is not discarded, and the schema
+  // reports it at save time instead of this field silently reverting.
+  if (key === 'frequencyScale') {
+    const text = String(value ?? '').trim();
+    node.settings.frequencyScale = normaliseFrequencyScaleSetting(text) ?? text;
+    return;
+  }
   if (key in node.settings) {
     if (key === 'solvation') {
       node.settings.solvation = Boolean(value);
@@ -5256,6 +5679,7 @@ function duplicateNode(id) {
   copy.state = 'ready';
   if (copy.type === 'calculate') copy.settings.checkpoint = `${copy.id.replace(/-/g, '_')}.chk`;
   state.project.nodes.push(copy);
+  invalidateGraphIndex();
   state.selected = { type: 'node', id: copy.id };
   renderGraph();
   renderInspector();
@@ -5348,6 +5772,7 @@ function addConnection(fromId, toId, port) {
     fromPort: port,
     toPort: type === 'loop' ? 'bottomIn' : type === 'branch' ? 'left' : port === 'bottom' ? 'top' : 'left',
   });
+  invalidateGraphIndex();
   const id = edgeId(state.project.edges[state.project.edges.length - 1]);
   state.selected = { type: 'edge', id };
   renderGraph();
@@ -5450,7 +5875,7 @@ function startNodeDrag(nodeEl, event) {
 function updateNodeDrag(event) {
   if (!state.drag) return;
   const node = nodeById(state.drag.id);
-  const el = document.querySelector(`.node[data-node-id="${state.drag.id}"]`);
+  const el = document.querySelector(`.node[data-node-id="${attrValue(state.drag.id)}"]`);
   if (!node || !el) return;
   const dx = (event.clientX - state.drag.startX) / state.zoom;
   const dy = (event.clientY - state.drag.startY) / state.zoom;
@@ -5459,19 +5884,27 @@ function updateNodeDrag(event) {
   node.y = clamp(Math.round(state.drag.y + dy), 0, STAGE_H - H);
   el.style.left = `${node.x}px`;
   el.style.top = `${node.y}px`;
-  renderEdges();
+  // Issue 370: a mousemove moved one card, so only the edges that touch it
+  // change shape. A full rebuild of every edge belongs to the drag's end.
+  if (renderIncidentEdges(node.id) < 0) renderEdges();
 }
 
 function endNodeDrag() {
   if (!state.drag) return;
   const moved = state.drag.moved === true;
-  const el = document.querySelector(`.node[data-node-id="${state.drag.id}"]`);
+  const el = document.querySelector(`.node[data-node-id="${attrValue(state.drag.id)}"]`);
   el?.classList.remove('is-dragging');
   state.drag = null;
-  // Dragging writes node.x/node.y but no other handler re-evaluates the dirty
-  // state, so without this a moved graph would stay "saved": no draft, and the
-  // close guard would let it go without asking.
-  if (moved) refreshDirty();
+  if (moved) {
+    // The incident updates kept the edges honest during the drag; one full pass
+    // at the end settles the ones whose side flipped at the last pixel and the
+    // selection state the drag started with.
+    renderEdges();
+    // Dragging writes node.x/node.y but no other handler re-evaluates the dirty
+    // state, so without this a moved graph would stay "saved": no draft, and the
+    // close guard would let it go without asking.
+    refreshDirty();
+  }
 }
 
 function startPan(event) {
@@ -6569,7 +7002,7 @@ function buildInputForNode(node) {
 /** The engine ids and companion tools the active flow will launch (issue 361). */
 function planNeedsForConsole() {
   try {
-    const tasks = shared.buildWorkflowPlan(state.project).tasks;
+    const tasks = workflowPlan().tasks;
     return {
       engines: shared.calcEnginesIn(tasks),
       tools: shared.planToolNeeds(tasks),
@@ -6997,7 +7430,7 @@ function updateCostEstimate() {
   el.classList.remove('is-warn');
   let plan = null;
   try {
-    plan = shared.buildWorkflowPlan(state.project);
+    plan = workflowPlan();
   } catch (error) {
     el.textContent = `No estimate: ${error.message}`;
     return;
@@ -7398,13 +7831,86 @@ function setStatusMessage(text) {
   if (el) el.textContent = text;
 }
 
+/**
+ * Append text to the run log (issue 374).
+ *
+ * The chunk goes into a per-frame buffer; the console is painted by
+ * `flushRunOutput()` on the next animation frame (or the 50 ms fallback), so a
+ * burst of output costs one DOM append instead of one 60 kB rewrite per chunk.
+ */
 function appendRunOutput(text) {
   if (!text) return;
-  state.run.output = `${state.run.output}${text}`.slice(-60000);
+  runOutputLog.append(text);
+  runOutputFlush.push(true);
+}
+
+/**
+ * Remove `count` characters from the oldest text nodes of the log.
+ *
+ * The element is a `<pre>` of plain text nodes, so trimming is a change to the
+ * first node's `data` rather than a rebuild of the whole string.
+ */
+function dropRunOutputHead(el, count) {
+  let remaining = count;
+  while (remaining > 0 && el.firstChild) {
+    const node = el.firstChild;
+    if (node.nodeType !== 3) {
+      el.removeChild(node);
+      continue;
+    }
+    if (node.data.length <= remaining) {
+      remaining -= node.data.length;
+      el.removeChild(node);
+    } else {
+      node.data = node.data.slice(remaining);
+      remaining = 0;
+    }
+  }
+}
+
+/** Keep the text-node pool bounded without dropping any retained character. */
+function mergeRunOutputNodes(el) {
+  while (el.childNodes.length > MAX_RUN_OUTPUT_NODES) {
+    const first = el.firstChild;
+    const second = first?.nextSibling;
+    if (!first || !second || first.nodeType !== 3 || second.nodeType !== 3) break;
+    first.data += second.data;
+    el.removeChild(second);
+  }
+}
+
+/**
+ * Paint the log's pending chunks in one DOM write (issue 374).
+ *
+ * `runOutputLog.flush()` commits the text and says how many leading characters
+ * fell off the 60 kB limit; those are removed from the DOM before the new node
+ * is appended, and the scroll position is set once.
+ */
+function flushRunOutput() {
+  if (typeof document === 'undefined') return;
   const el = $('#run-output');
+  const wasEmpty = runOutputLog.retainedLength === 0;
+  const { append, dropped } = runOutputLog.flush();
   if (!el) return;
-  el.textContent = state.run.output || 'Waiting for output…';
+  if (dropped > 0) dropRunOutputHead(el, dropped);
+  if (!append) {
+    if (dropped > 0) el.scrollTop = el.scrollHeight;
+    return;
+  }
+  // The placeholder ("Select a calculation block…", "Waiting for output…") is
+  // not part of the log, so the first real chunk replaces it.
+  if (wasEmpty) el.textContent = '';
+  el.appendChild(document.createTextNode(append));
+  mergeRunOutputNodes(el);
   el.scrollTop = el.scrollHeight;
+}
+
+/** Start a fresh log; the element shows `text`, or the waiting placeholder. */
+function resetRunOutput(text = '') {
+  const value = runOutputLog.reset(text);
+  const el = $('#run-output');
+  if (el) el.textContent = value || 'Waiting for output…';
+  return value;
 }
 
 function renderRunGates(gates = [], validity = null) {
@@ -7793,7 +8299,7 @@ async function preflightRun({ quiet = false } = {}) {
   let enginesInUse = [];
   let engineBlocks = {};
   try {
-    const plan = shared.buildWorkflowPlan(state.project);
+    const plan = workflowPlan();
     enginesInUse = shared.calcEnginesIn(plan.tasks);
     // Issue 316: a failing engine row should name the block that needs it, not
     // only the engine.
@@ -7838,7 +8344,7 @@ async function preflightRun({ quiet = false } = {}) {
   if (!config.dryRun) {
     let needsCrest = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       // A fanned-out member task carries a stored ensemble, so it does not need
       // the CREST binary (#80).
       needsCrest = tasks.some((task) => task.type === 'generate'
@@ -7865,7 +8371,7 @@ async function preflightRun({ quiet = false } = {}) {
     }
     let needsObabel = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       needsObabel = tasks.some((task) => task.type === 'generate'
         && task.generate?.generator === 'obabel'
         && !task.generate?.member);
@@ -7890,7 +8396,7 @@ async function preflightRun({ quiet = false } = {}) {
     }
     let needsScorer = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       needsScorer = tasks.some((task) => (task.type === 'generate' && task.generate?.rankBy)
         || (task.type === 'calculate' && task.scorer)
         || (task.type === 'prepare' && task.prepare?.converter === 'aimnet2'));
@@ -7917,7 +8423,7 @@ async function preflightRun({ quiet = false } = {}) {
     // a hard refusal rather than a slower fallback.
     let needsTautomer = false;
     try {
-      const tasks = shared.buildWorkflowPlan(state.project).tasks;
+      const tasks = workflowPlan().tasks;
       needsTautomer = tasks.some((task) => task.type === 'generate'
         && task.generate?.produces === 'tautomers'
         && !task.generate?.member);
@@ -8049,14 +8555,13 @@ async function startSelectedRun() {
     return;
   }
 
-  state.run.output = '';
+  resetRunOutput('Starting local runner…\n');
   state.run.gates = [];
   state.run.nodeId = node.id;
   state.run.id = null;
   state.run.dir = null;
   state.run.ignoreEvents = false;
   syncVerifyButton($('#verify-run'), null);
-  $('#run-output').textContent = 'Starting local runner…\n';
   $('#run-gates').innerHTML = '';
   mountThermochemistryView($('#run-thermo'), null);
   $('#run-title').textContent = node.title;
@@ -8142,14 +8647,13 @@ async function startSelectedConformerRun(node) {
     return;
   }
 
-  state.run.output = '';
+  resetRunOutput('Starting conformer search…\n');
   state.run.gates = [];
   state.run.nodeId = node.id;
   state.run.id = null;
   state.run.dir = null;
   state.run.ignoreEvents = false;
   syncVerifyButton($('#verify-run'), null);
-  $('#run-output').textContent = 'Starting conformer search…\n';
   $('#run-gates').innerHTML = '';
   mountThermochemistryView($('#run-thermo'), null);
   $('#run-title').textContent = node.title;
@@ -8209,10 +8713,20 @@ function handleRunEvent(event) {
     appendRunOutput(event.text);
   } else if (event.type === 'done') {
     const record = event.record;
+    // Issue 375: the results surface loads just after first paint. Remember
+    // the latest completed record so a run that finished before the module
+    // arrived is replayed when it installs.
+    latestRunRecord = record;
     state.run.id = record.id || state.run.id;
     setRunState(record.status, record.status);
     renderRunGates(record.gates?.gates || [], record.gates?.validity || null);
-    mountThermochemistryView($('#run-thermo'), record.parsed, { engine: record.engine });
+    mountThermochemistryView($('#run-thermo'), record.parsed, {
+      engine: record.engine,
+      // Issue 350: the run recorded the setting it was launched with; the
+      // panel applies the same one, never a later project edit.
+      settings: { frequencyScale: record.provenance?.frequencyScale?.setting ?? 'unscaled' },
+      frequencyScaleResolution: record.provenance?.frequencyScale ?? null,
+    });
     attachParsedRun(record, state.run.nodeId);
     autoRunPane('results');
     $('#cancel-run')?.setAttribute('disabled', '');
@@ -8322,6 +8836,10 @@ function applyQueue(queue, { paintHeader = true } = {}) {
     return;
   }
   if (state.lastForeignQueue?.id === queue.id) state.lastForeignQueue = null;
+  // Issue 374: the canvas only needs a rebuild when a block state or a task's
+  // live status changes. Capture the previous signature before the snapshot is
+  // replaced; progress ticks and output chunks leave it identical.
+  const previousGraph = state.queue?.id === (queue.id || null) ? queueGraphSignature(state.queue) : null;
   state.queue = {
     id: queue.id || null,
     status: queue.status || 'idle',
@@ -8350,9 +8868,12 @@ function applyQueue(queue, { paintHeader = true } = {}) {
     setRunState(header.status, header.label);
   }
   // Live cards: the running block gets its progress rail, a finished one its
-  // numbers. Cheap enough at canvas scale and it keeps the workbench honest
-  // while a queue drains.
-  renderGraph();
+  // numbers. Issue 374: `syncNodeStatesFromQueue` only reports a block that
+  // became decided, while a card also follows task status and the flow tab
+  // follows the queue status — compare that smaller signature so a burst of
+  // progress ticks does not rebuild the canvas, but the live rail still moves.
+  const graphChanged = reconciled || previousGraph !== queueGraphSignature(queue);
+  if (graphChanged) renderGraph();
   // ...and the Next Action is computed from those states, so it follows them.
   if (reconciled) renderInspector();
   renderRunLast();
@@ -8665,7 +9186,7 @@ async function startWorkflowUnlocked() {
   try {
     // The plan expands method-ladder blocks into one task per rung and rewires
     // the edges so a downstream block waits for every rung.
-    const plan = shared.buildWorkflowPlan(state.project);
+    const plan = workflowPlan();
     tasks = plan.tasks;
     edges = plan.edges;
   } catch (error) {
@@ -8692,7 +9213,7 @@ async function startWorkflowUnlocked() {
   }
   clearRunRefusal();
 
-  state.run.output = '';
+  resetRunOutput();
   state.run.ignoreEvents = false;
   appendRunOutput(`Queued workflow · ${tasks.filter((task) => task.executable).length} calculation block(s)\n`);
   $('#run-gates').innerHTML = '';
@@ -8733,6 +9254,30 @@ async function startWorkflowUnlocked() {
     appendRunOutput(`Queue error: ${error.message}\n`);
     toast(`Could not queue workflow: ${error.message}`);
   }
+}
+
+/**
+ * What a report build is doing, in the queue header.
+ *
+ * The save dialog is chosen first; main then streams `reading run records`,
+ * `reading cube files` and `meshing surfaces` with a fraction. `done` hides the
+ * line before the toast reports the result.
+ */
+function handleReportProgress(payload) {
+  const el = $('#report-progress');
+  if (!el) return;
+  const phase = String(payload?.phase || '');
+  if (!phase || phase === 'done' || phase === 'idle') {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  const fraction = Number(payload?.fraction);
+  const percent = Number.isFinite(fraction)
+    ? ` ${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`
+    : '';
+  el.hidden = false;
+  el.textContent = `${payload.label || phase}${percent}`;
 }
 
 /**
@@ -8793,14 +9338,25 @@ function attachParsedRun(record, nodeId) {
   const node = nodeById(nodeId);
   if (!node || node.type !== 'calculate') return;
   node.parsed = record.parsed;
+  state.runRecords.set(node.id, record.parsed);
+  // A run record is not in the project snapshot, so the revision cannot see
+  // this change; the plan reads it for downstream energies, so drop the cache.
+  invalidatePlanCache();
   // The card carries the result now, so it has to be redrawn when one arrives.
   renderGraph();
   if (state.selected.type === 'node' && state.selected.id === node.id) renderInspector();
 }
 
 async function attachQueueParsed(queue) {
-  if (!desktop?.listRuns || !queue?.tasks?.length) return;
-  const runs = await desktop.listRuns();
+  // Issue 371: ask for the records of the runs this queue names, not every
+  // run on disk, and only the full records (not the summary list) can carry
+  // `parsed`.
+  if (!desktop?.getRunRecords || !queue?.tasks?.length) return;
+  const ids = [...new Set(queue.tasks
+    .map((task) => task?.runId)
+    .filter((runId) => typeof runId === 'string' && runId !== ''))];
+  if (ids.length === 0) return;
+  const runs = await desktop.getRunRecords(ids);
   if (!Array.isArray(runs)) return;
   const byId = new Map(runs.map((run) => [run?.id, run]));
   let changed = false;
@@ -8810,9 +9366,11 @@ async function attachQueueParsed(queue) {
     const node = nodeById(task.nodeId);
     if (!record?.parsed || !node || node.type !== 'calculate') continue;
     node.parsed = record.parsed;
+    state.runRecords.set(node.id, record.parsed);
     changed = true;
   }
   if (changed) {
+    invalidatePlanCache();
     renderGraph();
     if (state.selected.type === 'node') renderInspector();
   }
@@ -8883,6 +9441,69 @@ function scheduleAttachParsed(queue) {
   }, 400);
 }
 
+/**
+ * Apply one coalesced batch of queue events (issue 374).
+ *
+ * `batch.queue` is already the newest snapshot in the frame, and
+ * `batch.started` / `batch.done` say whether that frame contained the one-shot
+ * events. Running every side effect against that single state means the console
+ * never paints an intermediate queue and then immediately corrects it.
+ */
+function applyQueueEventBatch(batch) {
+  const queue = batch?.queue;
+  if (!queue) return;
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  applyQueue(queue);
+  attachQueueEnsembles(queue);
+  if (batch.started) {
+    state.runPanePinned = false;
+    setRunPane('queue');
+    const queuedEngine = tasks.find((task) => task.engine)?.engine
+      || state.project?.defaults?.engine;
+    const records = groupTasksByRecord(tasks);
+    const recordCopy = records.hasRecords ? ` · ${countLabel(records.total, 'record')}` : '';
+    setStatusMessage(`Workflow running · ${countLabel(tasks.length, 'block')}${recordCopy} · ${runEngineLabel(queuedEngine, { dryRun: queue.options?.dryRun })}`);
+  }
+  if (!batch.done) {
+    scheduleAttachParsed(queue);
+    return;
+  }
+  const verdict = queue.status;
+  autoRunPane('results');
+  // Issue 256: "Workflow failed" without the reason is not an outcome. The
+  // line names the first failed block and the same text goes to the hint.
+  const failure = ['failed', 'needs-review', 'partial', 'timed out'].includes(String(verdict))
+    ? queueFailure(queue)
+    : null;
+  if (failure) {
+    appendRunOutput(`\nWorkflow ${verdict} — ${failureDetail(failure)}\n`);
+    setRunHint(failureHint(failure, verdict), {
+      warn: true,
+      action: failure.action,
+    });
+    setStatusMessage(`Workflow ${verdict} · ${failure.block || 'queue'}: ${failure.reason}`);
+    toast(`Workflow ${verdict} · ${failure.block || 'see the queue'}`);
+  } else {
+    appendRunOutput(`\nWorkflow ${verdict}${queue.reason ? ` — ${queue.reason}` : ''}\n`);
+    setRunHint(`Workflow ${verdict}${queue.reason ? ` — ${queue.reason}` : ''}.`);
+    setStatusMessage(`Workflow ${verdict}${queue.reason ? ` · ${queue.reason}` : ''}`);
+    toast(`Workflow ${verdict}.`);
+  }
+  attachQueueParsed(queue).catch(() => {});
+  refreshHistory();
+  // The last line of a run is in the log before the event returns, not on a
+  // frame that a hidden or minimised window may never produce.
+  runOutputFlush.flushNow();
+}
+
+/** Queue events waiting for the next frame; see handleQueueEvent. */
+const queueEvents = createQueueEventCoalescer(applyQueueEventBatch);
+
+/** Apply any queue event waiting for a frame (tests and teardown). */
+function flushQueueEvents() {
+  return queueEvents.flushNow();
+}
+
 function handleQueueEvent(event) {
   if (!event) return;
   if (event.type === 'queue-output') {
@@ -8899,43 +9520,11 @@ function handleQueueEvent(event) {
     noteForeignQueue(event.queue);
     return;
   }
-  applyQueue(event.queue);
-  attachQueueEnsembles(event.queue);
-  if (event.type === 'queue-started') {
-    state.runPanePinned = false;
-    setRunPane('queue');
-    const queuedEngine = event.queue.tasks.find((task) => task.engine)?.engine
-      || state.project?.defaults?.engine;
-    const records = groupTasksByRecord(event.queue.tasks);
-    const recordCopy = records.hasRecords ? ` · ${countLabel(records.total, 'record')}` : '';
-    setStatusMessage(`Workflow running · ${countLabel(event.queue.tasks.length, 'block')}${recordCopy} · ${runEngineLabel(queuedEngine, { dryRun: event.queue.options?.dryRun })}`);
-  }
-  if (event.type !== 'queue-done') scheduleAttachParsed(event.queue);
-  if (event.type === 'queue-done') {
-    const verdict = event.queue.status;
-    autoRunPane('results');
-    // Issue 256: "Workflow failed" without the reason is not an outcome. The
-    // line names the first failed block and the same text goes to the hint.
-    const failure = ['failed', 'needs-review', 'partial', 'timed out'].includes(String(verdict))
-      ? queueFailure(event.queue)
-      : null;
-    if (failure) {
-      appendRunOutput(`\nWorkflow ${verdict} — ${failureDetail(failure)}\n`);
-      setRunHint(failureHint(failure, verdict), {
-        warn: true,
-        action: failure.action,
-      });
-      setStatusMessage(`Workflow ${verdict} · ${failure.block || 'queue'}: ${failure.reason}`);
-      toast(`Workflow ${verdict} · ${failure.block || 'see the queue'}`);
-    } else {
-      appendRunOutput(`\nWorkflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
-      setRunHint(`Workflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}.`);
-      setStatusMessage(`Workflow ${verdict}${event.queue.reason ? ` · ${event.queue.reason}` : ''}`);
-      toast(`Workflow ${verdict}.`);
-    }
-    attachQueueParsed(event.queue).catch(() => {});
-    refreshHistory();
-  }
+  queueEvents.push(event);
+  // Issue 374: start and finish are the events whose side effects a user waits
+  // on, so they are flushed now. Any intermediate event already pending joins
+  // the same batch; nothing is skipped, only painted once.
+  if (event.type === 'queue-started' || event.type === 'queue-done') queueEvents.flushNow();
 }
 
 /**
@@ -9018,6 +9607,9 @@ function historyRows(runs, queues, { limit = 6 } = {}) {
 
 function historyRowHtml(row) {
   const { run } = row;
+  // Issue 371: the row is built from the `runs:list` summary, which carries
+  // the gate verdict directly instead of the full `gates` object.
+  const verdict = run.verdict ?? run.gates?.overall ?? null;
   // Issue 131: an imported record in the runs folder is listed, but its row
   // says where the number came from instead of adopting the run's status/engine
   // meta. Issue 255: a queue-produced run also names its project and start.
@@ -9027,7 +9619,7 @@ function historyRowHtml(row) {
       row.projectName,
       row.date,
       run.status,
-      run.gates?.overall ? `gates ${run.gates.overall}` : '',
+      verdict ? `gates ${verdict}` : '',
       run.dryRun ? 'dry' : engineOrDefault(run.engine).label,
     ].filter(Boolean).join(' · ');
   // Issue 154: the same keyboard contract as the queue rows.
@@ -9118,6 +9710,7 @@ function applyOpenedProject(result) {
   // a title or an outcome hint from the one that was on screen.
   const previousQueue = resetRunConsoleForProjectSwap();
   state.project = result.project;
+  state.runRecords.clear();
   hydrateProject(state.project);
   // Issue 160: the queue may already be restored — it is read at start up, before
   // any project file exists — so the verdicts are applied here, where the blocks
@@ -9233,7 +9826,7 @@ function hasUnsavedChanges() {
   // "Unsaved" means different from what the session loaded, not "has no file":
   // the seeded demo would otherwise warn about changes nobody made.
   const baseline = state.savedSnapshot ?? state.draftBaseline ?? null;
-  return baseline === null || JSON.stringify(state.project) !== baseline;
+  return baseline === null || serializeProjectSnapshot() !== baseline;
 }
 
 /**
@@ -9596,6 +10189,7 @@ function applyTemplateProject(templateId) {
   closeDrawer();
   const previousQueue = resetRunConsoleForProjectSwap();
   state.project = project;
+  state.runRecords.clear();
   state.selected = { type: 'project', id: null };
   state.connecting = null;
   state.keyboardConnect = null;
@@ -10172,6 +10766,7 @@ function closeProject() {
   requestProjectReplacement(() => {
     const previousQueue = resetRunConsoleForProjectSwap();
     state.project = blankProject();
+    state.runRecords.clear();
     // Issue 252: closing a project creates a new blank one, so it adopts the
     // machine's project defaults just like a template does.
     applySettingsProjectDefaults(state.project);
@@ -10312,6 +10907,9 @@ async function exportMenuGroups() {
 
   let runs = [];
   if (desktop?.listRuns) {
+    // Issue 371: the count comes from the summary projection, so opening the
+    // menu performs no `run.json` record reads. The export itself re-reads the
+    // full records in the main process.
     try { runs = (await desktop.listRuns()) || []; } catch { runs = []; }
   }
   if (Array.isArray(runs) && runs.length > 0) {
@@ -10669,6 +11267,9 @@ function onDocumentChange(event) {
     return;
   }
   if (target.dataset.ensembleField) {
+    // Issue 370: a keystroke waits for the pause; the commit is immediate and
+    // carries whatever the last keystroke wrote.
+    flushEnsembleEdit(target.dataset.ensembleField);
     applyEnsembleInputField(target);
     return;
   }
@@ -10678,7 +11279,7 @@ function onDocumentChange(event) {
     if (!node || node.type !== 'input') return;
     if (!node.input) node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
     node.input[target.dataset.inputField] = target.value;
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10687,7 +11288,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !node.input?.series) return;
     updateSeriesField(node, target.dataset.seriesField, target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10696,7 +11297,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !node.input?.complex) return;
     updateComplexMember(node, Number(target.dataset.complexMember), target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10706,7 +11307,7 @@ function onDocumentChange(event) {
     if (!node || node.type !== 'input' || !node.input?.complex) return;
     updateComplexField(node, target.dataset.complexField,
       target.type === 'checkbox' ? null : target.value, target.checked);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10715,7 +11316,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
     updateDerivativeField(node, Number(target.dataset.derivativeEdit), target.dataset.derivativeField, target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10724,7 +11325,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
     updateDerivativeField(node, null, 'parent', target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10760,13 +11361,15 @@ function onDocumentChange(event) {
     const value = target.type === 'checkbox' ? target.checked : target.value;
     if (key === 'title') {
       node.title = String(value).trim() || node.title;
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
     if (node.type !== 'calculate') return;
     updateNodeField(node, key, value);
-    renderGraph();
+    // `checkpointFrom` retypes the incoming edges, so their colour and `chk`
+    // label change with the card.
+    updateNodeCard(node.id, { edges: key === 'checkpointFrom' });
     renderInspector();
     return;
   }
@@ -10775,7 +11378,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'calculate') return;
     updateGate(node, target.dataset.nodeGate, target.checked);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10794,7 +11397,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'calculate') return;
     updateSpinSweepState(node, Number(target.dataset.spinState), target.checked);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10857,8 +11460,7 @@ function onDocumentChange(event) {
     } else {
       delete node.analyse.mode;
     }
-    refreshDirty();
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10900,8 +11502,7 @@ function onDocumentChange(event) {
       for (const param of ['grid', 'isovalue']) {
         if (!analysis?.parameters?.[param]) delete definition[param];
       }
-      refreshDirty();
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
@@ -10945,8 +11546,7 @@ function onDocumentChange(event) {
       // from the previous level would name a table this level does not carry.
       const entry = dp4Levels().find((item) => item.id === definition.level && item.solvation === definition.solvation);
       if (definition.solvation === 'gas' || !(entry?.solvents || []).includes(definition.solvent)) definition.solvent = '';
-      refreshDirty();
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
@@ -10959,7 +11559,7 @@ function onDocumentChange(event) {
     // The solvent list depends on the level, so a level change redraws; the
     // other fields only move the preview.
     if (key === 'solvent' || key === 'variant') {
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
@@ -11000,7 +11600,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'condition') return;
     node.condition[target.dataset.conditionField] = target.value;
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -11016,11 +11616,16 @@ function onDocumentChange(event) {
       if (!target.value) {
         if (edge) setFlowGraph(state.project, { edges: state.project.edges.filter((item) => item !== edge) });
       } else if (edge) { edge.to = target.value; edge.toPort = 'bottomIn'; }
-      else state.project.edges.push({ from: node.id, to: target.value, type: 'loop', fromPort: 'bottom', toPort: 'bottomIn' });
+      else {
+        state.project.edges.push({ from: node.id, to: target.value, type: 'loop', fromPort: 'bottom', toPort: 'bottomIn' });
+      }
+      // Retargeting or adding a loop edge moves it in the adjacency, even when
+      // the edge array itself is the same one.
+      invalidateGraphIndex();
     }
     const loopEdge = state.project.edges.find((item) => item.from === node.id && item.type === 'loop');
     if (loopEdge && key === 'maxAttempts') loopEdge.maxAttempts = node.loop.maxAttempts;
-    renderGraph();
+    updateNodeCard(node.id, { edges: true });
     renderInspector();
     return;
   }
@@ -11043,7 +11648,9 @@ function onDocumentChange(event) {
       if (wouldCreateCycle(node.id, target.value)) { toast('That branch would create an ordinary cycle.'); return; }
       state.project.edges.push({ from: node.id, to: target.value, type: 'branch', branch, fromPort: branch, toPort: 'left' });
     }
-    renderGraph();
+    // A retargeted branch edge is a different incident edge for both ends.
+    invalidateGraphIndex();
+    updateNodeCard(node.id, { edges: true });
     renderInspector();
     return;
   }
@@ -11073,7 +11680,7 @@ function onDocumentChange(event) {
     } else {
       node.output[key] = target.value;
     }
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -11082,7 +11689,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'note') return;
     node.note[target.dataset.noteField] = target.value;
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -11152,9 +11759,73 @@ function applyPrepareField(target) {
   } else {
     return;
   }
-  refreshDirty();
-  renderGraph();
+  updateNodeCard(node.id);
   renderInspector();
+}
+
+/* ── Ensemble input: debounced typing, immediate commit (issue 370) ──
+ * The `input` event used to write the node and re-render the graph *and* the
+ * inspector on every keystroke — which replaced the very input being typed in.
+ * Typing now writes after a 150 ms pause and repaints only the block's card;
+ * `change` still commits at once, because that is the event that means "done".
+ */
+const ENSEMBLE_EDIT_DEBOUNCE_MS = 150;
+const ensembleEdit = { timer: null, pending: null };
+
+/** The node and field a typing event refers to, or null when it is not one. */
+function parseEnsembleEdit(target) {
+  const key = target?.dataset?.ensembleField;
+  if (!key || state.selected.type !== 'node') return null;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return null;
+  return { nodeId: node.id, key, value: target.value };
+}
+
+/** One writer for the fields `input` owns; false for a key it does not. */
+function writeEnsembleField(node, key, value) {
+  const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
+  if (originField) {
+    node.input.origin = { ...(node.input.origin || {}), [originField]: String(value || '') };
+    return true;
+  }
+  if (key === 'path' || key === 'format' || key === 'energyUnit' || key === 'energyMethod') {
+    node.input[key] = String(value || '');
+    return true;
+  }
+  return false;
+}
+
+function scheduleEnsembleEdit(target) {
+  const edit = parseEnsembleEdit(target);
+  if (!edit) return;
+  ensembleEdit.pending = edit;
+  if (ensembleEdit.timer) clearTimeout(ensembleEdit.timer);
+  ensembleEdit.timer = setTimeout(flushEnsembleEdit, ENSEMBLE_EDIT_DEBOUNCE_MS);
+}
+
+/**
+ * Apply the pending keystroke now: the timer, or the `change` that commits the
+ * field. `skipKey` is the field the commit itself is about to write, so a
+ * commit does not repaint the same card twice.
+ */
+function flushEnsembleEdit(skipKey = null) {
+  if (ensembleEdit.timer) {
+    clearTimeout(ensembleEdit.timer);
+    ensembleEdit.timer = null;
+  }
+  const pending = ensembleEdit.pending;
+  ensembleEdit.pending = null;
+  if (!pending) return false;
+  if (skipKey && pending.key === skipKey) return false;
+  const node = nodeById(pending.nodeId);
+  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return false;
+  if (!writeEnsembleField(node, pending.key, pending.value)) return false;
+  // Any change to what the file is voids the record read from the old one.
+  node.output = null;
+  node.state = 'ready';
+  // No inspector re-render: the user is still typing in it.
+  updateNodeCard(node.id);
+  return true;
 }
 
 /**
@@ -11163,23 +11834,13 @@ function applyPrepareField(target) {
  * branch like the conformer block's origin.
  */
 function applyEnsembleInputField(target) {
-  if (state.selected.type !== 'node') return;
-  const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return;
-  const key = target.dataset.ensembleField;
-  const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
-  if (originField) {
-    node.input.origin = { ...(node.input.origin || {}), [originField]: String(target.value || '') };
-  } else if (key === 'path' || key === 'format' || key === 'energyUnit' || key === 'energyMethod') {
-    node.input[key] = String(target.value || '');
-  } else {
-    return;
-  }
-  // Any change to what the file is voids the record read from the old one.
+  const edit = parseEnsembleEdit(target);
+  if (!edit) return;
+  const node = nodeById(edit.nodeId);
+  if (!writeEnsembleField(node, edit.key, edit.value)) return;
   node.output = null;
   node.state = 'ready';
-  refreshDirty();
-  renderGraph();
+  updateNodeCard(node.id);
   renderInspector();
 }
 
@@ -11260,8 +11921,7 @@ function applyConformerField(target) {
       node.state = 'ready';
     }
   }
-  refreshDirty();
-  renderGraph();
+  updateNodeCard(node.id);
   renderInspector();
 }
 
@@ -11276,7 +11936,9 @@ function onDocumentInput(event) {
     return;
   }
   if (target.dataset.ensembleField) {
-    applyEnsembleInputField(target);
+    // Issue 370: typing repaints the block's card after a pause, never the
+    // inspector the caret is in.
+    scheduleEnsembleEdit(target);
     return;
   }
   if (target.dataset.conformerField) {
@@ -11589,41 +12251,71 @@ function wireEvents() {
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
 export {
+  addBlock,
+  addConnection,
+  applyEnsembleInputField,
   applyQueue,
+  appendRunOutput,
+  attachQueueParsed,
   calcInspector,
   costCardText,
+  endNodeDrag,
+  exportMenuGroups,
   failureDetail,
   failureHint,
+  flushDirtyCheck,
+  flushEnsembleEdit,
+  flushQueueEvents,
+  flushRunOutput,
   formatCostDuration,
   formatRunStart,
+  graphIndex,
   handleQueueEvent,
+  hasUnsavedChanges,
   historyRowHtml,
   historyRows,
   inputInspector,
+  invalidateGraphIndex,
+  invalidatePlanCache,
+  nodeById,
   nodeDetail,
   nodeFoot,
+  onDocumentChange,
+  onDocumentInput,
+  planCache,
   prepareInspector,
   queueBelongsToProject,
   queueFailure,
   queueRowHtml,
   readRunConfig,
+  removeNode,
+  renderEdgeElement,
+  renderEdges,
   renderFlowTabs,
+  renderGraph,
+  renderIncidentEdges,
+  renderInspector,
   renderRecordSummary,
   resetRunHeader,
   resultFacts,
   runExecutables,
   runHeaderFor,
   runStateOf,
+  serializeProjectSnapshot,
   setRunHint,
   clearRunHint,
   simpleInspector,
   spinMultiplicitiesForNode,
   spinSweepLabel,
   spinTaskMeta,
+  startNodeDrag,
   state,
   syncNodeStatesFromQueue,
   reconcileNodesWithQueue,
   taskFailure,
+  undoEdit,
+  updateNodeCard,
+  updateNodeDrag,
   updateNodeField,
   updateRunConsoleCopy,
   updateSpinSweepState,
@@ -11648,6 +12340,7 @@ async function loadAppInfo() {
 }
 
 async function init() {
+  rendererDomReadyAt = typeof performance !== 'undefined' ? performance.now() : null;
   loadAppInfo();
   // Issue 252: Settings are loaded before the console is seeded, so a fresh
   // profile with machine paths configured needs nothing typed in the console.
@@ -11655,7 +12348,7 @@ async function init() {
   applySettingsProjectDefaults(state.project);
   // Remember the project exactly as loaded: until it changes, there is nothing
   // worth drafting, and a fresh session must not overwrite a recoverable draft.
-  state.draftBaseline = JSON.stringify(state.project);
+  state.draftBaseline = serializeProjectSnapshot();
   if (window.innerWidth <= 820) state.inspectorHidden = true;
   readRunConfig();
   updateRunConsoleCopy();
@@ -11663,6 +12356,7 @@ async function init() {
   syncRunnerInputs();
   if (desktop?.onRunEvent) desktop.onRunEvent(handleRunEvent);
   if (desktop?.onQueueEvent) desktop.onQueueEvent(handleQueueEvent);
+  if (desktop?.onReportProgress) desktop.onReportProgress(handleReportProgress);
   if (desktop?.onOpenProjectPath) desktop.onOpenProjectPath((filePath) => { openProjectPath(filePath); });
   const kbdHint = $('#kbd-hint');
   if (kbdHint) {
@@ -11675,8 +12369,19 @@ async function init() {
   renderGraph();
   renderInspector();
   renderQueue();
+  // Issue 375: the graph and the 5-flow canvas are painted by the three calls
+  // above. The frame callback is the first one after those DOM writes, so it is
+  // the moment the launch timing reports. The results surface — the largest
+  // module in the bundle — starts loading at that frame, not before it.
+  const afterFirstFrame = (frameTime) => {
+    reportStartupTiming(Number.isFinite(frameTime) ? frameTime : performance.now());
+    loadResultsView();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(afterFirstFrame);
+  else afterFirstFrame(performance.now());
   // Issue 160: the project first, then its queue. The other order left the
-  // restored verdicts with nowhere to land.
+  // restored verdicts with nowhere to land. `queue:list` in main waits for the
+  // deferred hydration (issue 375), so this chain still sees the full queue store.
   openStartupProject()
     .then(() => restoreQueue())
     .then(() => reconcileNodesWithQueue())
@@ -11684,7 +12389,6 @@ async function init() {
   refreshHistory();
   setZoom(state.zoom);
   wireEvents();
-  installResultsView({ desktop });
   installCloseGuard();
   installThemeSwitcher();
 }

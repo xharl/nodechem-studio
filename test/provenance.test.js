@@ -460,14 +460,14 @@ describe('xTB provenance manifest', () => {
     expect(done.record.engine).toBe('xtb');
 
     const runJson = await readRunJson(response.runDir);
-    expect(runJson.argv).toEqual(['r-opt.xyz', '--gfn', '1', '--opt', 'normal']);
+    expect(runJson.argv).toEqual(['r-opt.xyz', '--gfn', '1', '--opt', 'normal', '--molden']);
     expect(runJson.provenance.jobType).toBe('Opt');
     expect(runJson.provenance.method).toMatchObject({
       hamiltonian: 'gfn1',
       optLevel: 'normal',
       dispersion: 'D3(BJ) (built in)',
       solvation: null,
-      argv: ['r-opt.xyz', '--gfn', '1', '--opt', 'normal'],
+      argv: ['r-opt.xyz', '--gfn', '1', '--opt', 'normal', '--molden'],
     });
 
     // The regression: the method record must not claim the node's Gaussian

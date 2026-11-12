@@ -12,17 +12,40 @@
  *
  * `last` is the snapshot currently on screen. A caller records after a mutation
  * and applies what `undoStep`/`redoStep` return.
+ *
+ * Retention is bounded by both entry count and bytes. A count-only cap lets a
+ * handful of large snapshots hold gigabytes; the byte cap drops the oldest
+ * steps first, so the recent work — the part a person actually undoes — stays.
  */
 
 export const DEFAULT_HISTORY_LIMIT = 100;
+// 32 MB of UTF-16 code units, which is a close lower bound on the JSON's byte
+// size and cheap to measure (string.length is O(1)).
+export const DEFAULT_HISTORY_MAX_BYTES = 32 * 1024 * 1024;
 
-export function createHistory(snapshot = null, { limit = DEFAULT_HISTORY_LIMIT } = {}) {
+export function createHistory(snapshot = null, {
+  limit = DEFAULT_HISTORY_LIMIT,
+  maxBytes = DEFAULT_HISTORY_MAX_BYTES,
+} = {}) {
   return Object.freeze({
     undoStack: Object.freeze([]),
     redoStack: Object.freeze([]),
     last: typeof snapshot === 'string' ? snapshot : null,
     limit: Math.max(1, Math.floor(Number(limit) || DEFAULT_HISTORY_LIMIT)),
+    maxBytes: Math.max(1, Math.floor(Number(maxBytes) || DEFAULT_HISTORY_MAX_BYTES)),
   });
+}
+
+/** Drop the oldest steps until the stack fits the entry and byte caps. */
+function trimUndoStack(stack, limit, maxBytes, lastSize) {
+  let start = Math.max(0, stack.length - limit);
+  let total = lastSize;
+  for (let index = start; index < stack.length; index += 1) total += stack[index].length;
+  while (start < stack.length && total > maxBytes) {
+    total -= stack[start].length;
+    start += 1;
+  }
+  return start > 0 ? stack.slice(start) : stack;
 }
 
 /**
@@ -35,11 +58,13 @@ export function recordSnapshot(history, snapshot) {
     return { ...history, last: snapshot };
   }
   if (snapshot === history.last) return history;
-  const undoStack = [...history.undoStack, history.last];
-  const trimmed = undoStack.length > history.limit
-    ? undoStack.slice(undoStack.length - history.limit)
-    : undoStack;
-  return { ...history, undoStack: trimmed, redoStack: [], last: snapshot };
+  const undoStack = trimUndoStack(
+    [...history.undoStack, history.last],
+    history.limit,
+    history.maxBytes,
+    snapshot.length,
+  );
+  return { ...history, undoStack, redoStack: [], last: snapshot };
 }
 
 /** The snapshot to restore, or `null` when there is nothing to undo. */

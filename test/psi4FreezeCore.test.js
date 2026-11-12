@@ -50,7 +50,7 @@ describe('freeze_core in the Psi4 input', () => {
     expect(built.route).toBe('psi4 MP2/cc-pVQZ (frozen core)');
     // The keyword belongs with the other SCF-level settings, before the call.
     expect(built.inputText.indexOf('set freeze_core true'))
-      .toBeLessThan(built.inputText.indexOf("energy('mp2')"));
+      .toBeLessThan(built.inputText.indexOf("E, wfn = energy('mp2', return_wfn=True)"));
   });
 
   it('writes set freeze_core false for an explicitly all-electron run', () => {

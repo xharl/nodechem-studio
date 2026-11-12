@@ -1,8 +1,10 @@
 /**
  * UFF — the Universal Force Field (issue 144), as a pure engine: atom typing,
  * energies in kcal/mol, analytic gradients in kcal/mol/Å, and a guarded
- * minimiser. No UI, no worker, no schema keys, no CREST replacement: this file
- * is the force field and nothing else.
+ * minimiser. No UI, no child process of its own, no schema keys, no CREST
+ * replacement: this file is the force field and nothing else. (Issue #369 added
+ * an async driver and a per-iteration hook so a caller can run the same
+ * arithmetic in a worker; neither changes a line of the force field itself.)
  *
  * What this is
  * ------------
@@ -1358,21 +1360,59 @@ export const UFF_CONVERGENCE = Object.freeze({
   /** No atom moves further than this in one step, Å. */
   maxStepAngstrom: 0.2,
   memory: 8,
+  /**
+   * Iterations the async driver runs before it yields to the event loop. A
+   * batch, not a convergence setting: the arithmetic is unchanged either way.
+   */
+  yieldEvery: 25,
+  /**
+   * Wall-clock bound on the same batch, ms. One iteration is ~1 ms on water and
+   * ~5 ms on a 48-atom chain, so an iteration count alone does not bound how
+   * long a large molecule keeps the thread. Still scheduling, not chemistry.
+   */
+  yieldAfterMs: 16,
 });
 
+/** `error.code` on the error `optimizeUffAsync` throws when stopped. */
+export const UFF_CANCELLED_CODE = 'uff-cancelled';
+
+/** The one cancellation error the async driver and the worker both throw. */
+export function uffCancelledError(message = 'The UFF relaxation was cancelled.') {
+  const error = new Error(message);
+  error.code = UFF_CANCELLED_CODE;
+  return error;
+}
+
+/** `true` for the error `optimizeUffAsync` throws when its caller cancels it. */
+export function isUffCancelled(error) {
+  return error?.code === UFF_CANCELLED_CODE;
+}
+
 /**
- * Minimise the UFF energy. L-BFGS with an Armijo backtracking line search, a
- * per-step displacement cap, and an explicit statement of what happened:
- *
- *   converged: true   every gradient component below `forceToleranceKcalPerAngstrom`
- *   converged: false  the iteration cap was hit, or the line search could not
- *                     find a lower energy — the last state is returned with
- *                     `reason` naming which, never as a "minimum"
- *
- * The returned `energyKcal` is the energy of the returned `coords`, so a caller
- * that reports it is reporting something that was actually evaluated.
+ * One macrotask turn, in Node and in a browser. `setImmediate` is the cheaper
+ * yield where it exists; `setTimeout(0)` is the portable one. Shared modules
+ * are bundled into the renderer, which has no `setImmediate`.
  */
-export function optimizeUff(molecule, {
+export function yieldToEventLoop() {
+  return new Promise((resolve) => {
+    if (typeof setImmediate === 'function') setImmediate(resolve);
+    else setTimeout(resolve, 0);
+  });
+}
+
+/**
+ * One minimisation as a state machine: `step()` performs at most one L-BFGS
+ * iteration and `result()` freezes the current state into the same object
+ * `optimizeUff` has always returned.
+ *
+ * The drivers exist so a long relaxation can be moved off the thread it was
+ * started on without duplicating a line of the force field: `optimizeUff` runs
+ * `step()` in a plain loop, `optimizeUffAsync` awaits between batches, and a
+ * worker checks its cancel flag inside the per-iteration hook. Every driver
+ * performs the same operations in the same order, so the result is identical
+ * whichever one ran it.
+ */
+export function createUffOptimizer(molecule, {
   types: suppliedTypes = null,
   includeVanDerWaals = true,
   forceToleranceKcalPerAngstrom = UFF_CONVERGENCE.forceToleranceKcalPerAngstrom,
@@ -1393,15 +1433,21 @@ export function optimizeUff(molecule, {
   const history = [];
   let iterations = 0;
   let reason = 'max-force-below-tolerance';
+  // Negation of the original loop condition, exactly: a NaN gradient stops the
+  // minimiser the way it always did rather than entering a step it cannot take.
+  let done = !(maxAbs(state.gradient) > forceToleranceKcalPerAngstrom);
 
   const evaluate = (candidate) => evaluateAtoms(
     atoms, bonds, types, candidate, { includeVanDerWaals, withGradient: true },
   );
 
-  while (maxAbs(state.gradient) > forceToleranceKcalPerAngstrom) {
+  /** Run one iteration; returns false when the minimiser had already stopped. */
+  function step() {
+    if (done) return false;
     if (iterations >= maxIterations) {
       reason = 'iteration-cap';
-      break;
+      done = true;
+      return false;
     }
     const direction = searchDirection(state.gradient, history);
     // A rigid translation has zero gradient and therefore zero force; remove
@@ -1421,24 +1467,26 @@ export function optimizeUff(molecule, {
     const directionalDerivative = dot(state.gradient, direction);
     if (!(directionalDerivative < 0)) {
       reason = 'not-a-descent-direction';
-      break;
+      done = true;
+      return false;
     }
-    let step = 1;
+    let stepSize = 1;
     let candidate = null;
     let candidateState = null;
     for (let attempt = 0; attempt < 40; attempt += 1) {
-      candidate = Float64Array.from(positions, (value, index) => value + step * direction[index]);
+      candidate = Float64Array.from(positions, (value, index) => value + stepSize * direction[index]);
       const evaluated = evaluate(candidate);
       if (Number.isFinite(evaluated.totalKcal)
-        && evaluated.totalKcal <= state.totalKcal + 1e-4 * step * directionalDerivative) {
+        && evaluated.totalKcal <= state.totalKcal + 1e-4 * stepSize * directionalDerivative) {
         candidateState = evaluated;
         break;
       }
-      step *= 0.5;
+      stepSize *= 0.5;
     }
     if (!candidateState) {
       reason = 'line-search-failed';
-      break;
+      done = true;
+      return false;
     }
     const s = Float64Array.from({ length: positionCount }, (_, index) => candidate[index] - positions[index]);
     const y = Float64Array.from({ length: positionCount }, (_, index) => candidateState.gradient[index] - state.gradient[index]);
@@ -1450,41 +1498,155 @@ export function optimizeUff(molecule, {
     positions = candidate;
     state = candidateState;
     iterations += 1;
+    if (!(maxAbs(state.gradient) > forceToleranceKcalPerAngstrom)) done = true;
+    return true;
   }
 
-  const converged = maxAbs(state.gradient) <= forceToleranceKcalPerAngstrom;
-  if (converged) reason = 'max-force-below-tolerance';
-  const resultAtoms = atoms.map((atom, index) => ({
-    ...(molecule.atoms[index] ?? {}),
-    element: atom.element,
-    x: positions[3 * index],
-    y: positions[3 * index + 1],
-    z: positions[3 * index + 2],
-  }));
+  /** What happened after `steps` iterations, in the same shape as always. */
+  function result() {
+    const converged = maxAbs(state.gradient) <= forceToleranceKcalPerAngstrom;
+    if (converged) reason = 'max-force-below-tolerance';
+    const resultAtoms = atoms.map((atom, index) => ({
+      ...(molecule.atoms[index] ?? {}),
+      element: atom.element,
+      x: positions[3 * index],
+      y: positions[3 * index + 1],
+      z: positions[3 * index + 2],
+    }));
+
+    return {
+      coords: positions,
+      atoms: resultAtoms,
+      energyKcal: state.totalKcal,
+      initialEnergyKcal,
+      termsKcal: state.termsKcal,
+      termCounts: state.counts,
+      warnings: state.warnings,
+      iterations,
+      converged,
+      reason,
+      gradientNormKcalPerAngstrom: maxAbs(state.gradient),
+      initialGradientNormKcalPerAngstrom: initialMaxForce,
+      rmsGradientKcalPerAngstrom: rms(state.gradient),
+      forceToleranceKcalPerAngstrom,
+      maxIterations,
+      units: UFF_UNITS,
+      method: UFF_METHOD,
+      provenance: UFF_PROVENANCE,
+      energyKind: UFF_ENERGY_KIND,
+      comparableWithQuantumChemistry: false,
+      accuracyNote: UFF_ACCURACY_NOTE,
+    };
+  }
 
   return {
-    coords: positions,
-    atoms: resultAtoms,
-    energyKcal: state.totalKcal,
-    initialEnergyKcal,
-    termsKcal: state.termsKcal,
-    termCounts: state.counts,
-    warnings: state.warnings,
-    iterations,
-    converged,
-    reason,
-    gradientNormKcalPerAngstrom: maxAbs(state.gradient),
-    initialGradientNormKcalPerAngstrom: initialMaxForce,
-    rmsGradientKcalPerAngstrom: rms(state.gradient),
+    step,
+    result,
+    get iterations() { return iterations; },
+    get done() { return done; },
+    get energyKcal() { return state.totalKcal; },
+    get maxForceKcalPerAngstrom() { return maxAbs(state.gradient); },
+  };
+}
+
+/** One entry handed to an `onIteration` hook, after that iteration ran. */
+function iterationEvent(optimizer) {
+  return {
+    iteration: optimizer.iterations,
+    energyKcal: optimizer.energyKcal,
+    maxForceKcalPerAngstrom: optimizer.maxForceKcalPerAngstrom,
+  };
+}
+
+/**
+ * Minimise the UFF energy. L-BFGS with an Armijo backtracking line search, a
+ * per-step displacement cap, and an explicit statement of what happened:
+ *
+ *   converged: true   every gradient component below `forceToleranceKcalPerAngstrom`
+ *   converged: false  the iteration cap was hit, or the line search could not
+ *                     find a lower energy — the last state is returned with
+ *                     `reason` naming which, never as a "minimum"
+ *
+ * The returned `energyKcal` is the energy of the returned `coords`, so a caller
+ * that reports it is reporting something that was actually evaluated.
+ *
+ * `onIteration` is a synchronous observation hook, called after each completed
+ * iteration. It cannot change the arithmetic; throwing from it stops the
+ * minimisation and propagates (the worker uses that to honour a cancellation).
+ */
+export function optimizeUff(molecule, {
+  types: suppliedTypes = null,
+  includeVanDerWaals = true,
+  forceToleranceKcalPerAngstrom = UFF_CONVERGENCE.forceToleranceKcalPerAngstrom,
+  maxIterations = UFF_CONVERGENCE.maxIterations,
+  maxStepAngstrom = UFF_CONVERGENCE.maxStepAngstrom,
+  memory = UFF_CONVERGENCE.memory,
+  onIteration = null,
+} = {}) {
+  const optimizer = createUffOptimizer(molecule, {
+    types: suppliedTypes,
+    includeVanDerWaals,
     forceToleranceKcalPerAngstrom,
     maxIterations,
-    units: UFF_UNITS,
-    method: UFF_METHOD,
-    provenance: UFF_PROVENANCE,
-    energyKind: UFF_ENERGY_KIND,
-    comparableWithQuantumChemistry: false,
-    accuracyNote: UFF_ACCURACY_NOTE,
-  };
+    maxStepAngstrom,
+    memory,
+  });
+  while (optimizer.step()) {
+    if (typeof onIteration === 'function') onIteration(iterationEvent(optimizer));
+  }
+  return optimizer.result();
+}
+
+/**
+ * `optimizeUff`, driven asynchronously so the calling thread stays responsive.
+ *
+ * Every `yieldEvery` completed iterations — or every `yieldAfterMs` of wall
+ * time, whichever comes first — the driver awaits a `setImmediate`, which lets
+ * the event loop run timers and IPC. The time bound matters because one
+ * iteration costs very different amounts on a 4-atom and a 48-atom structure;
+ * a fixed iteration count alone can still block a large molecule for over a
+ * tenth of a second. The arithmetic is the same statements in the same order as
+ * `optimizeUff`, so the result is identical; only the scheduling differs.
+ * `shouldCancel` is checked before each iteration, and cancellation throws
+ * `UFF_CANCELLED_CODE` rather than returning a half-relaxed structure as if it
+ * were a result.
+ */
+export async function optimizeUffAsync(molecule, {
+  types: suppliedTypes = null,
+  includeVanDerWaals = true,
+  forceToleranceKcalPerAngstrom = UFF_CONVERGENCE.forceToleranceKcalPerAngstrom,
+  maxIterations = UFF_CONVERGENCE.maxIterations,
+  maxStepAngstrom = UFF_CONVERGENCE.maxStepAngstrom,
+  memory = UFF_CONVERGENCE.memory,
+  yieldEvery = UFF_CONVERGENCE.yieldEvery,
+  yieldAfterMs = UFF_CONVERGENCE.yieldAfterMs,
+  shouldCancel = null,
+  onIteration = null,
+} = {}) {
+  const optimizer = createUffOptimizer(molecule, {
+    types: suppliedTypes,
+    includeVanDerWaals,
+    forceToleranceKcalPerAngstrom,
+    maxIterations,
+    maxStepAngstrom,
+    memory,
+  });
+  const batch = Number.isInteger(yieldEvery) && yieldEvery > 0 ? yieldEvery : UFF_CONVERGENCE.yieldEvery;
+  const batchMs = Number.isFinite(yieldAfterMs) && yieldAfterMs > 0 ? yieldAfterMs : UFF_CONVERGENCE.yieldAfterMs;
+  let sinceYield = 0;
+  let batchStarted = Date.now();
+  while (!optimizer.done) {
+    if (typeof shouldCancel === 'function' && shouldCancel()) throw uffCancelledError();
+    if (!optimizer.step()) break;
+    if (typeof onIteration === 'function') onIteration(iterationEvent(optimizer));
+    sinceYield += 1;
+    if (sinceYield >= batch || Date.now() - batchStarted >= batchMs) {
+      sinceYield = 0;
+      await yieldToEventLoop();
+      batchStarted = Date.now();
+    }
+  }
+  return optimizer.result();
 }
 
 function dot(a, b) {

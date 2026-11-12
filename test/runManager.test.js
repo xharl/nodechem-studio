@@ -115,6 +115,49 @@ describe('RunManager dry-run path', () => {
     expect(runJson.parsed.bytes.windows.map((window) => window.name)).toEqual(['fixture']);
   });
 
+  it('records the resolved frequency scale, its factor and its source', async () => {
+    const { manager, events } = await makeManager();
+    const response = await manager.start({
+      title: 'Scaled frequency',
+      inputText: '%Chk=scaled.chk\n#p B3LYP/6-31G(d) Freq\n\nScaled\n\n0 1\nO 0 0 0\n',
+      inputName: 'scaled.gjf',
+      outputName: 'scaled.out',
+      dryRun: true,
+      settings: { jobType: 'Freq', method: 'B3LYP', basis: '6-31G(d)', frequencyScale: 'auto' },
+      gates: {},
+    });
+    const done = await waitForDone(events);
+    const recorded = done.record.provenance.frequencyScale;
+    expect(recorded).toMatchObject({
+      mode: 'auto',
+      setting: 'auto',
+      factor: 0.9613,
+      applied: true,
+      key: 'b3lyp/6-31g(d)',
+      tableVersion: '1.0.0',
+    });
+    expect(recorded.source).toContain('Merrick');
+    expect(recorded.doi).toBe('10.1021/jp073974n');
+    const runJson = JSON.parse(await fsp.readFile(path.join(response.runDir, 'run.json'), 'utf8'));
+    expect(runJson.provenance.frequencyScale).toEqual(recorded);
+  });
+
+  it('keeps the old run-record shape for a non-frequency block with no factor', async () => {
+    const { manager, events } = await makeManager();
+    const response = await manager.start({
+      title: 'Plain single point',
+      inputText: '%Chk=sp.chk\n#p B3LYP/6-31G(d) SP\n\nSP\n\n0 1\nO 0 0 0\n',
+      inputName: 'sp.gjf',
+      outputName: 'sp.out',
+      dryRun: true,
+      settings: { jobType: 'SP', method: 'B3LYP', basis: '6-31G(d)' },
+      gates: {},
+    });
+    await waitForDone(events);
+    const runJson = JSON.parse(await fsp.readFile(path.join(response.runDir, 'run.json'), 'utf8'));
+    expect(runJson.provenance.frequencyScale).toBeUndefined();
+  });
+
   it('reports validity findings next to the gates without changing the gate verdict', async () => {
     const { manager, events, root } = await makeManager();
     const response = await manager.start({

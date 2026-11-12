@@ -1,8 +1,12 @@
 # Reports
 
-NodeChem Studio writes **HTML only**. A report is one self-contained file: inline CSS, no scripts,
-no external assets and no network request. It opens in any browser, can be attached to a draft, and
-can be printed by the reader if a PDF is wanted — the app does not ship a renderer.
+NodeChem Studio writes an **HTML report** and, beside it, the **JSON model** the HTML was rendered
+from. The HTML is one self-contained file: inline CSS, no scripts, no external assets and no network
+request. It opens in any browser, can be attached to a draft, and can be printed by the reader if a
+PDF is wanted — the app does not ship a renderer. The stylesheet carries a print block tuned for A4
+(page margin, rows and figures kept whole across a page break, repeated table headers, badges kept in
+colour), so a browser's **Print → Save as PDF** is the intended paper path; nothing is hidden from
+the printed page that the screen shows.
 
 There are two reports:
 
@@ -11,6 +15,28 @@ There are two reports:
 
 Both are built from the queue record and the per-run `run.json` files. A value a run did not report
 is printed as `not reported`; nothing is inferred.
+
+## The model and its digest
+
+`ncs report` and the window's **Save workflow report…** action write the model as `<name>.json` next
+to `<name>.html`, and the HTML names that model: `<html data-model-sha256="…">` and the header's
+`model sha256 <digest>` are the SHA-256 of the exact JSON bytes written. A reader can therefore prove
+that the HTML and the JSON belong together without trusting either file's name:
+
+```bash
+sha256sum reports/index.json
+# 3f2c…  reports/index.json  — the same 64 characters the HTML prints
+```
+
+A per-flow model keeps the schema the window writes (`kind: "nodechem-studio.workflow-report"`,
+`schemaVersion: 1`): absolute paths, full digests, argv/route and the parse-coverage windows live
+there, never in the HTML. A combined report writes one envelope
+(`kind: "nodechem-studio.project-report"`, `schemaVersion: 1`) whose `flows[]` holds one such model
+per flow. Re-rendering the JSON with the same `modelDigest` reproduces the HTML byte for byte; the
+digest is computed after `generatedAt` is fixed.
+
+`ncs report --no-model` writes only the HTML, with no digest in the header and no
+`data-model-sha256`; the window always writes both files.
 
 A per-flow report written **by a workflow block** runs before the queue settles, so the queue restamps
 it the moment the verdict exists: the header names the final `status` and the queue's own `finished`
@@ -44,17 +70,26 @@ absent says so: `figure not available: no cube file in the run folder`. The whol
 table-only document of 0.4.0; `basic` and `surfaces` both draw the slab slice when a cube is present,
 and `surfaces` adds the projected isosurface.
 
-The window offers the same three names in the select beside **Report…**. `basic` is the default and
-writes the document the window has always written; `surfaces` also reads the `.cube` files in each
-run folder and meshes them; `none` omits the figure section. The choice is per report and is not
-saved in the project — there is no new settings key, so opening an old project changes nothing.
+The window offers the same three names in the select beside **Report…**. `basic` is the default; the
+save action writes `<name>.html` and `<name>.json` and the HTML names the model's digest. `surfaces`
+also reads the `.cube` files in each run folder and meshes them; `none` omits the figure section. The
+choice is per report and is not saved in the project — there is no new settings key, so opening an
+old project changes nothing.
+
+A large report shows what it is doing in the queue header — `reading run records`, `reading cube
+files`, `meshing surfaces` — with a percentage, and the window's taskbar carries the same fraction.
+The save dialog is chosen first, so cancelling it reads nothing. A cube file that has not changed
+since the last report (same path, modification time and size) is reused instead of parsed again;
+`none` never opens a cube.
 
 ## The per-flow report
 
 A flow that iterates over a dataset groups its tasks by record. The report has:
 
 1. **Outcome** — task counts, the gate verdict, the task failures, and the names of any records
-   that need attention.
+   that need attention. When a block ran more than once, a second line states how many tasks were
+   retried and how many extra attempts were recorded — a green verdict reached on the third attempt
+   is not the same claim as a first-try pass.
 2. **Records** — one row per dataset record: status, gates, final energy, ΔE against the first
    completed record, and the method/basis pairs used. ΔE is recomputed from the reported energies
    in kcal mol⁻¹; a record with no energy leaves the cell as `not reported`.
@@ -78,9 +113,22 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    the ladder's headroom against its tolerance, the population a conformer would need to dominate,
    or the rate ratio the barrier error cannot resolve.
 6. **Derived quantities, Multiwfn analyses and imported results**, then **Methods**, then
-   **Provenance** — run ids and the input/output SHA-256 prefixes.
+   **Artifacts written** — one row per file the workflow's output blocks recorded in
+   `<artifactRoot>/manifest.json`: the queue-relative path, kind, flow, byte count and a 16-character
+   SHA-256 prefix, with the manifest's own digest and size in the section line. A file the manifest
+   names but the folder no longer holds is printed as `missing on disk`; a queue with no readable
+   manifest says `not recorded` instead of showing an empty table — then **Provenance** — run ids and
+   the input/output SHA-256 prefixes.
 
 A v1 project (no dataset) is unchanged: one table of blocks, no record sections.
+
+Every task table has an **Attempts** column. A first-try run prints `1`. A block the queue retried
+prints its attempt count, linked to a collapsible list of attempts under the table: attempt number,
+status, gate verdict, run id and finish time, taken from the queue's own `history[]` (the last 20
+attempts are kept). The final row is the attempt the table itself reports, so `failed, failed,
+passed` is three rows and not one green cell. A count the queue recorded without a history prints
+`history not recorded` rather than inventing a list. The same capped history is in `report.json`,
+so the HTML's list can be checked against the model.
 
 ## The combined report
 
@@ -98,14 +146,20 @@ so the document outline stays correct.
 ## From the command line
 
 ```bash
-ncs report ./runs --flow barrier            # → ./runs/reports/index.html
-ncs report ./runs --out ./report.html       # explicit destination
+ncs report ./runs --flow barrier            # → ./runs/reports/index.html + ./runs/reports/index.json
+ncs report ./runs --out ./report.html       # → ./report.html + ./report.json
+ncs report ./runs --no-model                # → ./runs/reports/index.html only
 ```
 
 `ncs report` reads the newest `<out-dir>/queues/*/queue.json` (per flow when several flows ran),
-rebuilds the model from the run records those tasks point at, and writes HTML. With one flow it
-writes the per-flow document; with several it writes the combined document. The queue folder is the
-source of truth: no live project is needed.
+rebuilds the model from the run records those tasks point at, and writes the HTML plus its JSON model.
+With one flow it writes the per-flow document and that flow's model; with several it writes the
+combined document and a project-report envelope whose `flows[]` holds every model in the document.
+The queue folder is the source of truth: no live project is needed.
+
+It prints the HTML path (the line scripts already read) and then `model sha256 <digest>`. The digest
+is the SHA-256 of the JSON file, so `sha256sum` of that file and the value in the HTML are the same
+64 characters. `--no-model` omits the second line and the JSON file.
 
 ## What the report can and cannot prove
 

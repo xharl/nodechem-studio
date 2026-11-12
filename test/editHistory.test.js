@@ -81,6 +81,23 @@ describe('edit history', () => {
     expect(history.last).toBe('v10');
   });
 
+  it('bounds retention by bytes, dropping the oldest steps first', () => {
+    const megabyte = 'x'.repeat(1024 * 1024);
+    const cap = 3 * 1024 * 1024;
+    let history = createHistory(`v0${megabyte}`, { limit: 100, maxBytes: cap });
+    for (let index = 1; index <= 6; index += 1) {
+      history = recordSnapshot(history, `v${index}${megabyte}`);
+    }
+
+    const total = history.last.length
+      + history.undoStack.reduce((sum, snapshot) => sum + snapshot.length, 0);
+    expect(total).toBeLessThanOrEqual(cap);
+    // The recent steps survive; the oldest ones are the ones dropped.
+    expect(history.undoStack.at(-1)).toBe(`v5${megabyte}`);
+    expect(history.undoStack).not.toContain(`v0${megabyte}`);
+    expect(history.maxBytes).toBe(cap);
+  });
+
   it('ignores non-string snapshots', () => {
     const history = createHistory('one');
     expect(recordSnapshot(history, null)).toBe(history);

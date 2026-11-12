@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
   getInfo: () => ipcRenderer.invoke('app:info'),
+  // Issue #375: one fire-and-forget mark for the first painted frame. It is
+  // diagnostics only; main ignores it if the sender is not the window.
+  reportStartup: (mark) => ipcRenderer.send('app:startup-mark', mark),
   // Presence of each engine binary on PATH, for the status bar.
   engineStatus: () => ipcRenderer.invoke('engines:status'),
   // Issue #252: machine/app settings stored outside every project.
@@ -54,6 +57,8 @@ contextBridge.exposeInMainWorld('desktop', {
   runTask: (payload) => ipcRenderer.invoke('gaussian:run', payload),
   cancelRun: (runId) => ipcRenderer.invoke('gaussian:cancel', runId),
   listRuns: () => ipcRenderer.invoke('runs:list'),
+  // Issue #371: full records for exactly the ids a consumer asks for.
+  getRunRecords: (ids) => ipcRenderer.invoke('runs:records', ids),
   saveText: (payload) => ipcRenderer.invoke('text:save', payload),
   verifyRun: (runId) => ipcRenderer.invoke('runs:verify', runId),
   exportRunBundle: (runId) => ipcRenderer.invoke('runs:export-bundle', runId),
@@ -67,6 +72,13 @@ contextBridge.exposeInMainWorld('desktop', {
   listQueues: () => ipcRenderer.invoke('queue:list'),
   getQueue: (queueId) => ipcRenderer.invoke('queue:get', queueId),
   exportWorkflowReport: (queueId, figureLevel) => ipcRenderer.invoke('queue:report', queueId, figureLevel),
+  // Progress for a report build: main sends phase/done/total/fraction while the
+  // report is assembled, then `phase: 'done'`.
+  onReportProgress: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('queue:report-progress', handler);
+    return () => ipcRenderer.removeListener('queue:report-progress', handler);
+  },
   importLogDirectory: () => ipcRenderer.invoke('logs:import-directory'),
   onRunEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);

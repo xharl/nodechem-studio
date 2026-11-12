@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -167,6 +168,29 @@ describe('ncs report', () => {
     expect(html).not.toMatch(/<script/i);
   }, 120000);
 
+  it('lists the artifacts the run wrote, read from the out-dir manifest (#354)', async () => {
+    const { dir, file } = await writeProject();
+    const out = path.join(dir, 'artifacts-listed');
+    expect((await ncs(['run', file, '--out', out, '--dry-run'], { timeout: 120000 })).code).toBe(0);
+    const report = await ncs(['report', out, '--flow', 'barrier', '--figures=none'], { timeout: 60000 });
+    expect(report.code).toBe(0);
+
+    const html = await readFile(path.join(out, 'reports', 'index.html'), 'utf8');
+    expect(html).toContain('Artifacts written');
+    expect(html).toContain('reports/barrier-m1.html');
+    expect(html).toContain('reports/barrier-m2.html');
+    // The row's byte count is the file the run actually wrote…
+    const one = await readFile(path.join(out, 'reports', 'barrier-m1.html'));
+    expect(html).toContain(`<td class="num">${one.length}</td>`);
+    // …and the section names the manifest's own digest, so the index is
+    // verifiable with `sha256sum <out>/manifest.json`.
+    const manifestBytes = await readFile(path.join(out, 'manifest.json'));
+    const digest = createHash('sha256').update(manifestBytes).digest('hex');
+    expect(html).toContain(digest.slice(0, 16));
+    // The absolute output folder never reaches the document.
+    expect(html).not.toContain(out);
+  }, 120000);
+
   it('rebuilds the HTML report from the newest queue, by default into reports/index.html', async () => {
     const { dir, file } = await writeProject();
     const out = path.join(dir, 'reported');
@@ -175,7 +199,9 @@ describe('ncs report', () => {
 
     const report = await ncs(['report', out, '--flow', 'barrier'], { timeout: 60000 });
     expect(report.code).toBe(0);
-    expect(report.stdout.trim()).toBe(path.join(out, 'reports', 'index.html'));
+    const lines = report.stdout.trim().split('\n');
+    expect(lines[0]).toBe(path.join(out, 'reports', 'index.html'));
+    expect(lines[1]).toMatch(/^model sha256 [0-9a-f]{64}$/);
     const html = await readFile(path.join(out, 'reports', 'index.html'), 'utf8');
     expect(html).toContain('Records');
     expect(html).toContain('molecule 1');
@@ -226,7 +252,9 @@ describe('ncs report', () => {
     const target = path.join(dir, 'custom-report.html');
     const report = await ncs(['report', out, '--out', target], { timeout: 60000 });
     expect(report.code).toBe(0);
-    expect(report.stdout.trim()).toBe(target);
+    const lines = report.stdout.trim().split('\n');
+    expect(lines[0]).toBe(target);
+    expect(lines[1]).toMatch(/^model sha256 [0-9a-f]{64}$/);
     const html = await readFile(target, 'utf8');
     expect(html.startsWith('<!doctype html>')).toBe(true);
     // One flow in the folder: the per-flow document, not a synthetic combined one.

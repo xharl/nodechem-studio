@@ -1,0 +1,2318 @@
+{
+  "tasks": [
+    {
+      "nodeId": "apn-opt",
+      "type": "calculate",
+      "title": "Ground-state optimisation (B3LYP/6-311++G(d,p))",
+      "kind": "Opt",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "apn-opt.gjf"
+      ],
+      "route": "",
+      "inputName": "apn-opt.gjf",
+      "outputName": "apn-opt.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=apn_opt.chk\n#p B3LYP/6-311++G(d,p) Opt=Tight Integral=UltraFine\n\nGround-state optimisation (B3LYP/6-311++G(d,p))\n\n0 1\nN      1.349900    -1.685000     0.000100\nN      0.037900    -3.651700     0.000500\nN     -3.369500    -2.679000    -0.000700\nC     -0.967300    -0.113400     0.000600\nC      1.404900    -0.334100     0.000700\nC     -2.139800     0.734400     0.000400\nC      0.289200     0.487500     0.000900\nC     -1.060800    -1.503100     0.000000\nC      2.737200     0.222100     0.000200\nC      0.115300    -2.235600    -0.000400\nC     -2.704600     1.143200    -1.207800\nC     -2.705800     1.142700     1.208200\nC      3.384100     0.492300     1.208000\nC      3.383800     0.491300    -1.208100\nC     -3.835100     1.960200    -1.208300\nC     -3.836400     1.959600     1.207700\nC      4.671400     1.029300     1.207700\nC      4.671200     1.028200    -1.208300\nC     -4.401000     2.368400    -0.000600\nC      5.314900     1.297200    -0.000400\nC     -2.339500    -2.154300    -0.000400\nH      0.393500     1.569500     0.001100\nH     -2.276200     0.834000    -2.158400\nH     -2.278400     0.833000     2.159100\nH      2.896900     0.288800     2.158800\nH      2.896400     0.287000    -2.158700\nH     -4.275000     2.278400    -2.148900\nH     -4.277300     2.277500     2.148000\nH      5.172800     1.238700     2.148000\nH      5.172600     1.236800    -2.148900\nH     -5.281300     3.004400    -0.001000\nH      6.317300     1.715200    -0.000700\nH     -0.379500    -4.040200     0.841700\nH     -0.382200    -4.041200    -0.838900\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "Opt",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_opt.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 0,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "Tight",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": true,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "Opt",
+          "method": "B3LYP",
+          "basis": "6-311++G(d,p)",
+          "dispersion": "",
+          "tdStates": 0,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "N",
+              "x": 1.3499,
+              "y": -1.685,
+              "z": 0.0001
+            },
+            {
+              "element": "N",
+              "x": 0.0379,
+              "y": -3.6517,
+              "z": 0.0005
+            },
+            {
+              "element": "N",
+              "x": -3.3695,
+              "y": -2.679,
+              "z": -0.0007
+            },
+            {
+              "element": "C",
+              "x": -0.9673,
+              "y": -0.1134,
+              "z": 0.0006
+            },
+            {
+              "element": "C",
+              "x": 1.4049,
+              "y": -0.3341,
+              "z": 0.0007
+            },
+            {
+              "element": "C",
+              "x": -2.1398,
+              "y": 0.7344,
+              "z": 0.0004
+            },
+            {
+              "element": "C",
+              "x": 0.2892,
+              "y": 0.4875,
+              "z": 0.0009
+            },
+            {
+              "element": "C",
+              "x": -1.0608,
+              "y": -1.5031,
+              "z": 0
+            },
+            {
+              "element": "C",
+              "x": 2.7372,
+              "y": 0.2221,
+              "z": 0.0002
+            },
+            {
+              "element": "C",
+              "x": 0.1153,
+              "y": -2.2356,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.7046,
+              "y": 1.1432,
+              "z": -1.2078
+            },
+            {
+              "element": "C",
+              "x": -2.7058,
+              "y": 1.1427,
+              "z": 1.2082
+            },
+            {
+              "element": "C",
+              "x": 3.3841,
+              "y": 0.4923,
+              "z": 1.208
+            },
+            {
+              "element": "C",
+              "x": 3.3838,
+              "y": 0.4913,
+              "z": -1.2081
+            },
+            {
+              "element": "C",
+              "x": -3.8351,
+              "y": 1.9602,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -3.8364,
+              "y": 1.9596,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6714,
+              "y": 1.0293,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6712,
+              "y": 1.0282,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -4.401,
+              "y": 2.3684,
+              "z": -0.0006
+            },
+            {
+              "element": "C",
+              "x": 5.3149,
+              "y": 1.2972,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.3395,
+              "y": -2.1543,
+              "z": -0.0004
+            },
+            {
+              "element": "H",
+              "x": 0.3935,
+              "y": 1.5695,
+              "z": 0.0011
+            },
+            {
+              "element": "H",
+              "x": -2.2762,
+              "y": 0.834,
+              "z": -2.1584
+            },
+            {
+              "element": "H",
+              "x": -2.2784,
+              "y": 0.833,
+              "z": 2.1591
+            },
+            {
+              "element": "H",
+              "x": 2.8969,
+              "y": 0.2888,
+              "z": 2.1588
+            },
+            {
+              "element": "H",
+              "x": 2.8964,
+              "y": 0.287,
+              "z": -2.1587
+            },
+            {
+              "element": "H",
+              "x": -4.275,
+              "y": 2.2784,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -4.2773,
+              "y": 2.2775,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1728,
+              "y": 1.2387,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1726,
+              "y": 1.2368,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -5.2813,
+              "y": 3.0044,
+              "z": -0.001
+            },
+            {
+              "element": "H",
+              "x": 6.3173,
+              "y": 1.7152,
+              "z": -0.0007
+            },
+            {
+              "element": "H",
+              "x": -0.3795,
+              "y": -4.0402,
+              "z": 0.8417
+            },
+            {
+              "element": "H",
+              "x": -0.3822,
+              "y": -4.0412,
+              "z": -0.8389
+            }
+          ]
+        },
+        "upstream": null,
+        "conformer": null
+      },
+      "checkpointName": "apn_opt.chk",
+      "checkpointFrom": null,
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "apn-freq",
+      "type": "calculate",
+      "title": "Frequency: prove a minimum",
+      "kind": "Freq",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "apn-freq.gjf"
+      ],
+      "route": "",
+      "inputName": "apn-freq.gjf",
+      "outputName": "apn-freq.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=apn_freq.chk\n%OldChk=apn_opt.chk\n#p B3LYP/6-311++G(d,p) Freq Geom=Check Guess=Read\n\nFrequency: prove a minimum\n\n0 1\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "Freq",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_freq.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": false,
+        "solvationModel": "PCM",
+        "solvent": "Water",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 0,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": 0,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": 0,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": true,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "Freq",
+          "method": "B3LYP",
+          "basis": "6-311++G(d,p)",
+          "dispersion": "",
+          "tdStates": 0,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "N",
+              "x": 1.3499,
+              "y": -1.685,
+              "z": 0.0001
+            },
+            {
+              "element": "N",
+              "x": 0.0379,
+              "y": -3.6517,
+              "z": 0.0005
+            },
+            {
+              "element": "N",
+              "x": -3.3695,
+              "y": -2.679,
+              "z": -0.0007
+            },
+            {
+              "element": "C",
+              "x": -0.9673,
+              "y": -0.1134,
+              "z": 0.0006
+            },
+            {
+              "element": "C",
+              "x": 1.4049,
+              "y": -0.3341,
+              "z": 0.0007
+            },
+            {
+              "element": "C",
+              "x": -2.1398,
+              "y": 0.7344,
+              "z": 0.0004
+            },
+            {
+              "element": "C",
+              "x": 0.2892,
+              "y": 0.4875,
+              "z": 0.0009
+            },
+            {
+              "element": "C",
+              "x": -1.0608,
+              "y": -1.5031,
+              "z": 0
+            },
+            {
+              "element": "C",
+              "x": 2.7372,
+              "y": 0.2221,
+              "z": 0.0002
+            },
+            {
+              "element": "C",
+              "x": 0.1153,
+              "y": -2.2356,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.7046,
+              "y": 1.1432,
+              "z": -1.2078
+            },
+            {
+              "element": "C",
+              "x": -2.7058,
+              "y": 1.1427,
+              "z": 1.2082
+            },
+            {
+              "element": "C",
+              "x": 3.3841,
+              "y": 0.4923,
+              "z": 1.208
+            },
+            {
+              "element": "C",
+              "x": 3.3838,
+              "y": 0.4913,
+              "z": -1.2081
+            },
+            {
+              "element": "C",
+              "x": -3.8351,
+              "y": 1.9602,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -3.8364,
+              "y": 1.9596,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6714,
+              "y": 1.0293,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6712,
+              "y": 1.0282,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -4.401,
+              "y": 2.3684,
+              "z": -0.0006
+            },
+            {
+              "element": "C",
+              "x": 5.3149,
+              "y": 1.2972,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.3395,
+              "y": -2.1543,
+              "z": -0.0004
+            },
+            {
+              "element": "H",
+              "x": 0.3935,
+              "y": 1.5695,
+              "z": 0.0011
+            },
+            {
+              "element": "H",
+              "x": -2.2762,
+              "y": 0.834,
+              "z": -2.1584
+            },
+            {
+              "element": "H",
+              "x": -2.2784,
+              "y": 0.833,
+              "z": 2.1591
+            },
+            {
+              "element": "H",
+              "x": 2.8969,
+              "y": 0.2888,
+              "z": 2.1588
+            },
+            {
+              "element": "H",
+              "x": 2.8964,
+              "y": 0.287,
+              "z": -2.1587
+            },
+            {
+              "element": "H",
+              "x": -4.275,
+              "y": 2.2784,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -4.2773,
+              "y": 2.2775,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1728,
+              "y": 1.2387,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1726,
+              "y": 1.2368,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -5.2813,
+              "y": 3.0044,
+              "z": -0.001
+            },
+            {
+              "element": "H",
+              "x": 6.3173,
+              "y": 1.7152,
+              "z": -0.0007
+            },
+            {
+              "element": "H",
+              "x": -0.3795,
+              "y": -4.0402,
+              "z": 0.8417
+            },
+            {
+              "element": "H",
+              "x": -0.3822,
+              "y": -4.0412,
+              "z": -0.8389
+            }
+          ]
+        },
+        "upstream": {
+          "id": "apn-opt",
+          "title": "Ground-state optimisation (B3LYP/6-311++G(d,p))",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Opt",
+            "method": "B3LYP",
+            "basis": "6-311++G(d,p)",
+            "dispersion": "",
+            "tdStates": 0,
+            "tdRoot": 0
+          },
+          "parsed": null
+        },
+        "conformer": null
+      },
+      "checkpointName": "apn_freq.chk",
+      "checkpointFrom": {
+        "nodeId": "apn-opt",
+        "checkpoint": "apn_opt.chk"
+      },
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "apn-td-toluene",
+      "type": "calculate",
+      "title": "TD-DFT, 5 singlet states, PCM Toluene",
+      "kind": "SP",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "apn-td-toluene.gjf"
+      ],
+      "route": "",
+      "inputName": "apn-td-toluene.gjf",
+      "outputName": "apn-td-toluene.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=apn_td_toluene.chk\n%OldChk=apn_freq.chk\n#p B3LYP/6-311++G(d,p) SP TD=(NStates=5) SCRF=(PCM,Solvent=Toluene) Geom=Check Guess=Read\n\nTD-DFT, 5 singlet states, PCM Toluene\n\n0 1\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_toluene.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "Toluene",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "SP",
+          "method": "B3LYP",
+          "basis": "6-311++G(d,p)",
+          "dispersion": "",
+          "tdStates": 5,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "N",
+              "x": 1.3499,
+              "y": -1.685,
+              "z": 0.0001
+            },
+            {
+              "element": "N",
+              "x": 0.0379,
+              "y": -3.6517,
+              "z": 0.0005
+            },
+            {
+              "element": "N",
+              "x": -3.3695,
+              "y": -2.679,
+              "z": -0.0007
+            },
+            {
+              "element": "C",
+              "x": -0.9673,
+              "y": -0.1134,
+              "z": 0.0006
+            },
+            {
+              "element": "C",
+              "x": 1.4049,
+              "y": -0.3341,
+              "z": 0.0007
+            },
+            {
+              "element": "C",
+              "x": -2.1398,
+              "y": 0.7344,
+              "z": 0.0004
+            },
+            {
+              "element": "C",
+              "x": 0.2892,
+              "y": 0.4875,
+              "z": 0.0009
+            },
+            {
+              "element": "C",
+              "x": -1.0608,
+              "y": -1.5031,
+              "z": 0
+            },
+            {
+              "element": "C",
+              "x": 2.7372,
+              "y": 0.2221,
+              "z": 0.0002
+            },
+            {
+              "element": "C",
+              "x": 0.1153,
+              "y": -2.2356,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.7046,
+              "y": 1.1432,
+              "z": -1.2078
+            },
+            {
+              "element": "C",
+              "x": -2.7058,
+              "y": 1.1427,
+              "z": 1.2082
+            },
+            {
+              "element": "C",
+              "x": 3.3841,
+              "y": 0.4923,
+              "z": 1.208
+            },
+            {
+              "element": "C",
+              "x": 3.3838,
+              "y": 0.4913,
+              "z": -1.2081
+            },
+            {
+              "element": "C",
+              "x": -3.8351,
+              "y": 1.9602,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -3.8364,
+              "y": 1.9596,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6714,
+              "y": 1.0293,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6712,
+              "y": 1.0282,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -4.401,
+              "y": 2.3684,
+              "z": -0.0006
+            },
+            {
+              "element": "C",
+              "x": 5.3149,
+              "y": 1.2972,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.3395,
+              "y": -2.1543,
+              "z": -0.0004
+            },
+            {
+              "element": "H",
+              "x": 0.3935,
+              "y": 1.5695,
+              "z": 0.0011
+            },
+            {
+              "element": "H",
+              "x": -2.2762,
+              "y": 0.834,
+              "z": -2.1584
+            },
+            {
+              "element": "H",
+              "x": -2.2784,
+              "y": 0.833,
+              "z": 2.1591
+            },
+            {
+              "element": "H",
+              "x": 2.8969,
+              "y": 0.2888,
+              "z": 2.1588
+            },
+            {
+              "element": "H",
+              "x": 2.8964,
+              "y": 0.287,
+              "z": -2.1587
+            },
+            {
+              "element": "H",
+              "x": -4.275,
+              "y": 2.2784,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -4.2773,
+              "y": 2.2775,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1728,
+              "y": 1.2387,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1726,
+              "y": 1.2368,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -5.2813,
+              "y": 3.0044,
+              "z": -0.001
+            },
+            {
+              "element": "H",
+              "x": 6.3173,
+              "y": 1.7152,
+              "z": -0.0007
+            },
+            {
+              "element": "H",
+              "x": -0.3795,
+              "y": -4.0402,
+              "z": 0.8417
+            },
+            {
+              "element": "H",
+              "x": -0.3822,
+              "y": -4.0412,
+              "z": -0.8389
+            }
+          ]
+        },
+        "upstream": {
+          "id": "apn-freq",
+          "title": "Frequency: prove a minimum",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Freq",
+            "method": "B3LYP",
+            "basis": "6-311++G(d,p)",
+            "dispersion": "",
+            "tdStates": 0,
+            "tdRoot": 0
+          },
+          "parsed": null
+        },
+        "conformer": null
+      },
+      "checkpointName": "apn_td_toluene.chk",
+      "checkpointFrom": {
+        "nodeId": "apn-freq",
+        "checkpoint": "apn_freq.chk"
+      },
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "apn-td-thf",
+      "type": "calculate",
+      "title": "TD-DFT, 5 singlet states, PCM THF",
+      "kind": "SP",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "apn-td-thf.gjf"
+      ],
+      "route": "",
+      "inputName": "apn-td-thf.gjf",
+      "outputName": "apn-td-thf.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=apn_td_thf.chk\n%OldChk=apn_freq.chk\n#p B3LYP/6-311++G(d,p) SP TD=(NStates=5) SCRF=(PCM,Solvent=THF) Geom=Check Guess=Read\n\nTD-DFT, 5 singlet states, PCM THF\n\n0 1\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_thf.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "THF",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "SP",
+          "method": "B3LYP",
+          "basis": "6-311++G(d,p)",
+          "dispersion": "",
+          "tdStates": 5,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "N",
+              "x": 1.3499,
+              "y": -1.685,
+              "z": 0.0001
+            },
+            {
+              "element": "N",
+              "x": 0.0379,
+              "y": -3.6517,
+              "z": 0.0005
+            },
+            {
+              "element": "N",
+              "x": -3.3695,
+              "y": -2.679,
+              "z": -0.0007
+            },
+            {
+              "element": "C",
+              "x": -0.9673,
+              "y": -0.1134,
+              "z": 0.0006
+            },
+            {
+              "element": "C",
+              "x": 1.4049,
+              "y": -0.3341,
+              "z": 0.0007
+            },
+            {
+              "element": "C",
+              "x": -2.1398,
+              "y": 0.7344,
+              "z": 0.0004
+            },
+            {
+              "element": "C",
+              "x": 0.2892,
+              "y": 0.4875,
+              "z": 0.0009
+            },
+            {
+              "element": "C",
+              "x": -1.0608,
+              "y": -1.5031,
+              "z": 0
+            },
+            {
+              "element": "C",
+              "x": 2.7372,
+              "y": 0.2221,
+              "z": 0.0002
+            },
+            {
+              "element": "C",
+              "x": 0.1153,
+              "y": -2.2356,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.7046,
+              "y": 1.1432,
+              "z": -1.2078
+            },
+            {
+              "element": "C",
+              "x": -2.7058,
+              "y": 1.1427,
+              "z": 1.2082
+            },
+            {
+              "element": "C",
+              "x": 3.3841,
+              "y": 0.4923,
+              "z": 1.208
+            },
+            {
+              "element": "C",
+              "x": 3.3838,
+              "y": 0.4913,
+              "z": -1.2081
+            },
+            {
+              "element": "C",
+              "x": -3.8351,
+              "y": 1.9602,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -3.8364,
+              "y": 1.9596,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6714,
+              "y": 1.0293,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6712,
+              "y": 1.0282,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -4.401,
+              "y": 2.3684,
+              "z": -0.0006
+            },
+            {
+              "element": "C",
+              "x": 5.3149,
+              "y": 1.2972,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.3395,
+              "y": -2.1543,
+              "z": -0.0004
+            },
+            {
+              "element": "H",
+              "x": 0.3935,
+              "y": 1.5695,
+              "z": 0.0011
+            },
+            {
+              "element": "H",
+              "x": -2.2762,
+              "y": 0.834,
+              "z": -2.1584
+            },
+            {
+              "element": "H",
+              "x": -2.2784,
+              "y": 0.833,
+              "z": 2.1591
+            },
+            {
+              "element": "H",
+              "x": 2.8969,
+              "y": 0.2888,
+              "z": 2.1588
+            },
+            {
+              "element": "H",
+              "x": 2.8964,
+              "y": 0.287,
+              "z": -2.1587
+            },
+            {
+              "element": "H",
+              "x": -4.275,
+              "y": 2.2784,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -4.2773,
+              "y": 2.2775,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1728,
+              "y": 1.2387,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1726,
+              "y": 1.2368,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -5.2813,
+              "y": 3.0044,
+              "z": -0.001
+            },
+            {
+              "element": "H",
+              "x": 6.3173,
+              "y": 1.7152,
+              "z": -0.0007
+            },
+            {
+              "element": "H",
+              "x": -0.3795,
+              "y": -4.0402,
+              "z": 0.8417
+            },
+            {
+              "element": "H",
+              "x": -0.3822,
+              "y": -4.0412,
+              "z": -0.8389
+            }
+          ]
+        },
+        "upstream": {
+          "id": "apn-freq",
+          "title": "Frequency: prove a minimum",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Freq",
+            "method": "B3LYP",
+            "basis": "6-311++G(d,p)",
+            "dispersion": "",
+            "tdStates": 0,
+            "tdRoot": 0
+          },
+          "parsed": null
+        },
+        "conformer": null
+      },
+      "checkpointName": "apn_td_thf.chk",
+      "checkpointFrom": {
+        "nodeId": "apn-freq",
+        "checkpoint": "apn_freq.chk"
+      },
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "apn-td-dcm",
+      "type": "calculate",
+      "title": "TD-DFT, 5 singlet states, PCM DCM",
+      "kind": "SP",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "apn-td-dcm.gjf"
+      ],
+      "route": "",
+      "inputName": "apn-td-dcm.gjf",
+      "outputName": "apn-td-dcm.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=apn_td_dcm.chk\n%OldChk=apn_freq.chk\n#p B3LYP/6-311++G(d,p) SP TD=(NStates=5) SCRF=(PCM,Solvent=Dichloromethane) Geom=Check Guess=Read\n\nTD-DFT, 5 singlet states, PCM DCM\n\n0 1\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_dcm.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "Dichloromethane",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "SP",
+          "method": "B3LYP",
+          "basis": "6-311++G(d,p)",
+          "dispersion": "",
+          "tdStates": 5,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "N",
+              "x": 1.3499,
+              "y": -1.685,
+              "z": 0.0001
+            },
+            {
+              "element": "N",
+              "x": 0.0379,
+              "y": -3.6517,
+              "z": 0.0005
+            },
+            {
+              "element": "N",
+              "x": -3.3695,
+              "y": -2.679,
+              "z": -0.0007
+            },
+            {
+              "element": "C",
+              "x": -0.9673,
+              "y": -0.1134,
+              "z": 0.0006
+            },
+            {
+              "element": "C",
+              "x": 1.4049,
+              "y": -0.3341,
+              "z": 0.0007
+            },
+            {
+              "element": "C",
+              "x": -2.1398,
+              "y": 0.7344,
+              "z": 0.0004
+            },
+            {
+              "element": "C",
+              "x": 0.2892,
+              "y": 0.4875,
+              "z": 0.0009
+            },
+            {
+              "element": "C",
+              "x": -1.0608,
+              "y": -1.5031,
+              "z": 0
+            },
+            {
+              "element": "C",
+              "x": 2.7372,
+              "y": 0.2221,
+              "z": 0.0002
+            },
+            {
+              "element": "C",
+              "x": 0.1153,
+              "y": -2.2356,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.7046,
+              "y": 1.1432,
+              "z": -1.2078
+            },
+            {
+              "element": "C",
+              "x": -2.7058,
+              "y": 1.1427,
+              "z": 1.2082
+            },
+            {
+              "element": "C",
+              "x": 3.3841,
+              "y": 0.4923,
+              "z": 1.208
+            },
+            {
+              "element": "C",
+              "x": 3.3838,
+              "y": 0.4913,
+              "z": -1.2081
+            },
+            {
+              "element": "C",
+              "x": -3.8351,
+              "y": 1.9602,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -3.8364,
+              "y": 1.9596,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6714,
+              "y": 1.0293,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6712,
+              "y": 1.0282,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -4.401,
+              "y": 2.3684,
+              "z": -0.0006
+            },
+            {
+              "element": "C",
+              "x": 5.3149,
+              "y": 1.2972,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.3395,
+              "y": -2.1543,
+              "z": -0.0004
+            },
+            {
+              "element": "H",
+              "x": 0.3935,
+              "y": 1.5695,
+              "z": 0.0011
+            },
+            {
+              "element": "H",
+              "x": -2.2762,
+              "y": 0.834,
+              "z": -2.1584
+            },
+            {
+              "element": "H",
+              "x": -2.2784,
+              "y": 0.833,
+              "z": 2.1591
+            },
+            {
+              "element": "H",
+              "x": 2.8969,
+              "y": 0.2888,
+              "z": 2.1588
+            },
+            {
+              "element": "H",
+              "x": 2.8964,
+              "y": 0.287,
+              "z": -2.1587
+            },
+            {
+              "element": "H",
+              "x": -4.275,
+              "y": 2.2784,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -4.2773,
+              "y": 2.2775,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1728,
+              "y": 1.2387,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1726,
+              "y": 1.2368,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -5.2813,
+              "y": 3.0044,
+              "z": -0.001
+            },
+            {
+              "element": "H",
+              "x": 6.3173,
+              "y": 1.7152,
+              "z": -0.0007
+            },
+            {
+              "element": "H",
+              "x": -0.3795,
+              "y": -4.0402,
+              "z": 0.8417
+            },
+            {
+              "element": "H",
+              "x": -0.3822,
+              "y": -4.0412,
+              "z": -0.8389
+            }
+          ]
+        },
+        "upstream": {
+          "id": "apn-freq",
+          "title": "Frequency: prove a minimum",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Freq",
+            "method": "B3LYP",
+            "basis": "6-311++G(d,p)",
+            "dispersion": "",
+            "tdStates": 0,
+            "tdRoot": 0
+          },
+          "parsed": null
+        },
+        "conformer": null
+      },
+      "checkpointName": "apn_td_dcm.chk",
+      "checkpointFrom": {
+        "nodeId": "apn-freq",
+        "checkpoint": "apn_freq.chk"
+      },
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "apn-td-dmso",
+      "type": "calculate",
+      "title": "TD-DFT, 5 singlet states, PCM DMSO",
+      "kind": "SP",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "apn-td-dmso.gjf"
+      ],
+      "route": "",
+      "inputName": "apn-td-dmso.gjf",
+      "outputName": "apn-td-dmso.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=apn_td_dmso.chk\n%OldChk=apn_freq.chk\n#p B3LYP/6-311++G(d,p) SP TD=(NStates=5) SCRF=(PCM,Solvent=DMSO) Geom=Check Guess=Read\n\nTD-DFT, 5 singlet states, PCM DMSO\n\n0 1\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_dmso.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "DMSO",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": false,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "SP",
+          "method": "B3LYP",
+          "basis": "6-311++G(d,p)",
+          "dispersion": "",
+          "tdStates": 5,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "N",
+              "x": 1.3499,
+              "y": -1.685,
+              "z": 0.0001
+            },
+            {
+              "element": "N",
+              "x": 0.0379,
+              "y": -3.6517,
+              "z": 0.0005
+            },
+            {
+              "element": "N",
+              "x": -3.3695,
+              "y": -2.679,
+              "z": -0.0007
+            },
+            {
+              "element": "C",
+              "x": -0.9673,
+              "y": -0.1134,
+              "z": 0.0006
+            },
+            {
+              "element": "C",
+              "x": 1.4049,
+              "y": -0.3341,
+              "z": 0.0007
+            },
+            {
+              "element": "C",
+              "x": -2.1398,
+              "y": 0.7344,
+              "z": 0.0004
+            },
+            {
+              "element": "C",
+              "x": 0.2892,
+              "y": 0.4875,
+              "z": 0.0009
+            },
+            {
+              "element": "C",
+              "x": -1.0608,
+              "y": -1.5031,
+              "z": 0
+            },
+            {
+              "element": "C",
+              "x": 2.7372,
+              "y": 0.2221,
+              "z": 0.0002
+            },
+            {
+              "element": "C",
+              "x": 0.1153,
+              "y": -2.2356,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.7046,
+              "y": 1.1432,
+              "z": -1.2078
+            },
+            {
+              "element": "C",
+              "x": -2.7058,
+              "y": 1.1427,
+              "z": 1.2082
+            },
+            {
+              "element": "C",
+              "x": 3.3841,
+              "y": 0.4923,
+              "z": 1.208
+            },
+            {
+              "element": "C",
+              "x": 3.3838,
+              "y": 0.4913,
+              "z": -1.2081
+            },
+            {
+              "element": "C",
+              "x": -3.8351,
+              "y": 1.9602,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -3.8364,
+              "y": 1.9596,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6714,
+              "y": 1.0293,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6712,
+              "y": 1.0282,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -4.401,
+              "y": 2.3684,
+              "z": -0.0006
+            },
+            {
+              "element": "C",
+              "x": 5.3149,
+              "y": 1.2972,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.3395,
+              "y": -2.1543,
+              "z": -0.0004
+            },
+            {
+              "element": "H",
+              "x": 0.3935,
+              "y": 1.5695,
+              "z": 0.0011
+            },
+            {
+              "element": "H",
+              "x": -2.2762,
+              "y": 0.834,
+              "z": -2.1584
+            },
+            {
+              "element": "H",
+              "x": -2.2784,
+              "y": 0.833,
+              "z": 2.1591
+            },
+            {
+              "element": "H",
+              "x": 2.8969,
+              "y": 0.2888,
+              "z": 2.1588
+            },
+            {
+              "element": "H",
+              "x": 2.8964,
+              "y": 0.287,
+              "z": -2.1587
+            },
+            {
+              "element": "H",
+              "x": -4.275,
+              "y": 2.2784,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -4.2773,
+              "y": 2.2775,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1728,
+              "y": 1.2387,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1726,
+              "y": 1.2368,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -5.2813,
+              "y": 3.0044,
+              "z": -0.001
+            },
+            {
+              "element": "H",
+              "x": 6.3173,
+              "y": 1.7152,
+              "z": -0.0007
+            },
+            {
+              "element": "H",
+              "x": -0.3795,
+              "y": -4.0402,
+              "z": 0.8417
+            },
+            {
+              "element": "H",
+              "x": -0.3822,
+              "y": -4.0412,
+              "z": -0.8389
+            }
+          ]
+        },
+        "upstream": {
+          "id": "apn-freq",
+          "title": "Frequency: prove a minimum",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Freq",
+            "method": "B3LYP",
+            "basis": "6-311++G(d,p)",
+            "dispersion": "",
+            "tdStates": 0,
+            "tdRoot": 0
+          },
+          "parsed": null
+        },
+        "conformer": null
+      },
+      "checkpointName": "apn_td_dmso.chk",
+      "checkpointFrom": {
+        "nodeId": "apn-freq",
+        "checkpoint": "apn_freq.chk"
+      },
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "apn-td-meoh",
+      "type": "calculate",
+      "title": "TD-DFT, 5 singlet states, PCM Methanol",
+      "kind": "SP",
+      "executable": true,
+      "engine": "gaussian",
+      "argv": [
+        "apn-td-meoh.gjf"
+      ],
+      "route": "",
+      "inputName": "apn-td-meoh.gjf",
+      "outputName": "apn-td-meoh.out",
+      "inputText": "%Mem=4GB\n%NProcShared=4\n%Chk=apn_td_meoh.chk\n%OldChk=apn_freq.chk\n#p B3LYP/6-311++G(d,p) SP Pop=Full TD=(NStates=5) SCRF=(PCM,Solvent=Methanol) Geom=Check Guess=Read\n\nTD-DFT, 5 singlet states, PCM Methanol\n\n0 1\n\n",
+      "settings": {
+        "engine": "",
+        "jobType": "SP",
+        "method": "B3LYP",
+        "basis": "6-311++G(d,p)",
+        "memory": "4",
+        "memoryUnit": "GB",
+        "nproc": 4,
+        "checkpoint": "apn_td_meoh.chk",
+        "charge": 0,
+        "multiplicity": 1,
+        "dispersion": "",
+        "scf": "",
+        "grid": "",
+        "population": "",
+        "verbosity": "",
+        "solvation": true,
+        "solvationModel": "PCM",
+        "solvent": "Methanol",
+        "customKeywords": "",
+        "ircDirection": "forward",
+        "tdStates": 5,
+        "tdTriplets": "",
+        "xtbMethod": "gfn2",
+        "xtbOptLevel": "normal",
+        "xtbThreads": "",
+        "optConvergence": "",
+        "forceConstants": "CalcFC",
+        "stableOpt": false,
+        "raman": false,
+        "vcd": false,
+        "roa": false,
+        "orbitals": true,
+        "tdRoot": 0,
+        "emission": false,
+        "nto": false,
+        "ntoTransition": 0,
+        "spinSweep": null,
+        "counterpoise": 0,
+        "counterpoiseChargeStates": [],
+        "constraints": [],
+        "qst": null,
+        "referenceNodeId": "",
+        "gates": {
+          "termination": true,
+          "scf": true,
+          "imaginary": null,
+          "minMagnitude": 50,
+          "thermo": false,
+          "finalEnergy": true
+        },
+        "ladder": null,
+        "disabledChecks": []
+      },
+      "gates": {
+        "expectedImaginary": null,
+        "minMagnitude": 50,
+        "requireOptimization": false,
+        "requireFrequency": false,
+        "requireThermochemistry": false,
+        "requireFinalEnergy": true
+      },
+      "validity": {
+        "settings": {
+          "jobType": "SP",
+          "method": "B3LYP",
+          "basis": "6-311++G(d,p)",
+          "dispersion": "",
+          "tdStates": 5,
+          "tdTriplets": "",
+          "tdRoot": 0,
+          "emission": false,
+          "nto": false,
+          "ntoTransition": 0,
+          "disabledChecks": []
+        },
+        "molecule": {
+          "charge": 0,
+          "multiplicity": 1,
+          "coords": [
+            {
+              "element": "N",
+              "x": 1.3499,
+              "y": -1.685,
+              "z": 0.0001
+            },
+            {
+              "element": "N",
+              "x": 0.0379,
+              "y": -3.6517,
+              "z": 0.0005
+            },
+            {
+              "element": "N",
+              "x": -3.3695,
+              "y": -2.679,
+              "z": -0.0007
+            },
+            {
+              "element": "C",
+              "x": -0.9673,
+              "y": -0.1134,
+              "z": 0.0006
+            },
+            {
+              "element": "C",
+              "x": 1.4049,
+              "y": -0.3341,
+              "z": 0.0007
+            },
+            {
+              "element": "C",
+              "x": -2.1398,
+              "y": 0.7344,
+              "z": 0.0004
+            },
+            {
+              "element": "C",
+              "x": 0.2892,
+              "y": 0.4875,
+              "z": 0.0009
+            },
+            {
+              "element": "C",
+              "x": -1.0608,
+              "y": -1.5031,
+              "z": 0
+            },
+            {
+              "element": "C",
+              "x": 2.7372,
+              "y": 0.2221,
+              "z": 0.0002
+            },
+            {
+              "element": "C",
+              "x": 0.1153,
+              "y": -2.2356,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.7046,
+              "y": 1.1432,
+              "z": -1.2078
+            },
+            {
+              "element": "C",
+              "x": -2.7058,
+              "y": 1.1427,
+              "z": 1.2082
+            },
+            {
+              "element": "C",
+              "x": 3.3841,
+              "y": 0.4923,
+              "z": 1.208
+            },
+            {
+              "element": "C",
+              "x": 3.3838,
+              "y": 0.4913,
+              "z": -1.2081
+            },
+            {
+              "element": "C",
+              "x": -3.8351,
+              "y": 1.9602,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -3.8364,
+              "y": 1.9596,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6714,
+              "y": 1.0293,
+              "z": 1.2077
+            },
+            {
+              "element": "C",
+              "x": 4.6712,
+              "y": 1.0282,
+              "z": -1.2083
+            },
+            {
+              "element": "C",
+              "x": -4.401,
+              "y": 2.3684,
+              "z": -0.0006
+            },
+            {
+              "element": "C",
+              "x": 5.3149,
+              "y": 1.2972,
+              "z": -0.0004
+            },
+            {
+              "element": "C",
+              "x": -2.3395,
+              "y": -2.1543,
+              "z": -0.0004
+            },
+            {
+              "element": "H",
+              "x": 0.3935,
+              "y": 1.5695,
+              "z": 0.0011
+            },
+            {
+              "element": "H",
+              "x": -2.2762,
+              "y": 0.834,
+              "z": -2.1584
+            },
+            {
+              "element": "H",
+              "x": -2.2784,
+              "y": 0.833,
+              "z": 2.1591
+            },
+            {
+              "element": "H",
+              "x": 2.8969,
+              "y": 0.2888,
+              "z": 2.1588
+            },
+            {
+              "element": "H",
+              "x": 2.8964,
+              "y": 0.287,
+              "z": -2.1587
+            },
+            {
+              "element": "H",
+              "x": -4.275,
+              "y": 2.2784,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -4.2773,
+              "y": 2.2775,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1728,
+              "y": 1.2387,
+              "z": 2.148
+            },
+            {
+              "element": "H",
+              "x": 5.1726,
+              "y": 1.2368,
+              "z": -2.1489
+            },
+            {
+              "element": "H",
+              "x": -5.2813,
+              "y": 3.0044,
+              "z": -0.001
+            },
+            {
+              "element": "H",
+              "x": 6.3173,
+              "y": 1.7152,
+              "z": -0.0007
+            },
+            {
+              "element": "H",
+              "x": -0.3795,
+              "y": -4.0402,
+              "z": 0.8417
+            },
+            {
+              "element": "H",
+              "x": -0.3822,
+              "y": -4.0412,
+              "z": -0.8389
+            }
+          ]
+        },
+        "upstream": {
+          "id": "apn-freq",
+          "title": "Frequency: prove a minimum",
+          "state": "ready",
+          "output": null,
+          "settings": {
+            "jobType": "Freq",
+            "method": "B3LYP",
+            "basis": "6-311++G(d,p)",
+            "dispersion": "",
+            "tdStates": 0,
+            "tdRoot": 0
+          },
+          "parsed": null
+        },
+        "conformer": null
+      },
+      "checkpointName": "apn_td_meoh.chk",
+      "checkpointFrom": {
+        "nodeId": "apn-freq",
+        "checkpoint": "apn_freq.chk"
+      },
+      "emission": null,
+      "flowId": "main"
+    },
+    {
+      "nodeId": "apn-note",
+      "type": "note",
+      "title": "Source and limits of this reproduction",
+      "kind": "Note",
+      "executable": false,
+      "flowId": "main",
+      "condition": null,
+      "loop": null,
+      "merge": null
+    }
+  ],
+  "edges": [
+    {
+      "from": "apn-opt",
+      "to": "apn-freq",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-toluene",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-thf",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-dcm",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-dmso",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    },
+    {
+      "from": "apn-freq",
+      "to": "apn-td-meoh",
+      "type": "checkpoint",
+      "fromPort": "bottom",
+      "toPort": "top"
+    }
+  ],
+  "flowId": "main"
+}

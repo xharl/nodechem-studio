@@ -26,8 +26,8 @@ exists.
 
 Colour, font family, radius and shadow — the `--surface-*`, `--border-*`, `--text-*`, `--action*`,
 `--focus-ring`, `--state-*`, `--kind-*`, `--font-*`, `--radius-*` and `--shadow-*` tokens. **Not
-type size**: one fixed scale (11 / 12 / 13 / 15 / 18 / 22 px) applies to every theme, so a theme
-cannot shrink text below the 11 px floor that `test/theme.test.js` enforces.
+**Not type size**: one fixed scale (12 / 13 / 13 / 15 / 18 / 22 px) applies to every theme, so a theme
+cannot shrink text below the 12 px floor that `test/theme.test.js` enforces.
 
 Outcome and block type are separate tokens. A block's left rail and status dot take
 `--state-*` (passed, review, ready, blocked, idle); its icon and eyebrow take

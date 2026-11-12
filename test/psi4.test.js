@@ -67,7 +67,9 @@ describe('Psi4 input builder', () => {
     expect(built.inputText).toContain('O  0.000000  0.000000  0.117300');
     expect(built.inputText).toContain('set basis def2-svp');
     expect(built.inputText).toContain('set reference rhf');
-    expect(built.inputText).toContain("energy('b3lyp')");
+    expect(built.inputText).toContain("E, wfn = energy('b3lyp', return_wfn=True)");
+    // Issue 343: the checkpoint a Multiwfn block reads is written by the job.
+    expect(built.inputText).toContain("fchk(wfn, 'sp.fchk')");
   });
 
   it('rewrites the planner\'s .gjf name and keeps the name strict', () => {
@@ -80,12 +82,20 @@ describe('Psi4 input builder', () => {
 
   it('writes the job the settings ask for', () => {
     const opt = buildPsi4Input({ settings: settings({ jobType: 'Opt' }), molecule: molecule() });
-    expect(opt.inputText).toContain("optimize('b3lyp')");
+    expect(opt.inputText).toContain("E, wfn = optimize('b3lyp', return_wfn=True)");
+    expect(opt.inputText).toContain("fchk(wfn, 'task.fchk')");
     const freq = buildPsi4Input({ settings: settings({ jobType: 'Freq' }), molecule: molecule() });
-    expect(freq.inputText).toContain("frequencies('b3lyp')");
+    expect(freq.inputText).toContain("E, wfn = frequencies('b3lyp', return_wfn=True)");
+    expect(freq.inputText).toContain("fchk(wfn, 'task.fchk')");
     const both = buildPsi4Input({ settings: settings({ jobType: 'Opt Freq' }), molecule: molecule() });
-    expect(both.inputText).toContain("optimize('b3lyp')");
-    expect(both.inputText.indexOf("optimize('b3lyp')")).toBeLessThan(both.inputText.indexOf("frequencies('b3lyp')"));
+    expect(both.inputText).toContain("E, wfn = optimize('b3lyp', return_wfn=True)");
+    expect(both.inputText.indexOf("E, wfn = optimize('b3lyp', return_wfn=True)"))
+      .toBeLessThan(both.inputText.indexOf("E, wfn = frequencies('b3lyp', return_wfn=True)"));
+    // One checkpoint, written from the wavefunction the Hessian returned: the
+    // geometry and density belong together at the optimised structure.
+    expect(both.inputText.match(/fchk\(wfn, /g)).toHaveLength(1);
+    expect(both.inputText.indexOf("fchk(wfn, 'task.fchk')"))
+      .toBeGreaterThan(both.inputText.indexOf("E, wfn = frequencies('b3lyp', return_wfn=True)"));
   });
 
   it('maps the app\'s basis keys to the names Psi4 reads', () => {

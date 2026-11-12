@@ -17,8 +17,10 @@
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
 import { DESCRIPTORS, DESCRIPTOR_SET_ID } from '../shared/chemDescriptors.js';
 import { dp4PanelHtml } from '../shared/workflowReport.js';
+import { assignmentPanelHtml } from '../shared/spectrumAssignment.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
+import { runFlagsFor } from '../shared/runFlags.js';
 import { broadenedSpectrum, spectrumPolyline } from '../shared/spectrum.js';
 import { ircGate, pathBarrier, profileSvg, profilePoints, scanExtremum, scanSurfaceSvg } from '../shared/reactionPath.js';
 import {
@@ -33,6 +35,12 @@ import { elementForNucleus, nmrSpectrum } from '../shared/nmr.js';
 import { SHIPPED_REFERENCES, levelLabel, lookupReference, shiftFor } from '../shared/nmrReferences.js';
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
 import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
+import {
+  describeFrequencyScale,
+  methodBasisFromRoute,
+  resolveFrequencyScale,
+  scaleZeroPoint,
+} from '../shared/frequencyScaling.js';
 import { ROA_UNITS, roaSpectrum } from '../shared/roa.js';
 import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
 import { scaleToSpectrum } from '../shared/overlay.js';
@@ -199,28 +207,6 @@ function engineOf(record, parsed) {
 }
 
 /* ── Fixture and truncation flags ───────────────────────────── */
-
-/**
- * A fixture record and a truncated parse are both facts about the run, not
- * presentation choices. Derive them from every field that can carry the fact
- * so an older or partially written record cannot silently look complete.
- */
-function flagsFor(record) {
-  const provenance = isObject(record?.provenance) ? record.provenance : {};
-  const bytes = isObject(record?.outputBytes) ? record.outputBytes : null;
-  const parsed = isObject(record?.parsed) ? record.parsed : {};
-  const size = finite(bytes?.size);
-  const bytesRead = finite(bytes?.bytesRead);
-  const fixture = record?.dryRun === true || provenance.kind === 'fixture';
-  // The parser's own `truncated` flag is authoritative: a windowed read covers
-  // the file without reading every byte, so `bytesRead < size` alone is not
-  // evidence of a partial parse.
-  const truncated = record?.truncated === true
-    || parsed.complete === false
-    || bytes?.truncated === true
-    || (bytes?.truncated !== false && size !== null && bytesRead !== null && bytesRead < size);
-  return { fixture, truncated, bytes };
-}
 
 function caveatHtml(flags, subject) {
   const notes = [];
@@ -671,7 +657,34 @@ function ensembleTableHtml(rows, { temperatureK = 298.15, selected = [] } = {}) 
     + 'nothing checks that assumption for you.</p>';
 }
 
-function thermochemistryCard(parsed, flags) {
+/**
+ * The block's frequency-scale resolution for a results card (issue 350).
+ * `options.settings` is the queued task's settings; a record opened without
+ * them reads as `unscaled`, which is the schema default.
+ */
+function frequencyScaleFor(parsed, options) {
+  // A run.json records the decision it ran with. That is authoritative for a
+  // reopened record; the block settings are the fallback for a task that has
+  // not written its record yet.
+  const recorded = isObject(options?.frequencyScaleResolution) ? options.frequencyScaleResolution : null;
+  if (recorded) {
+    return {
+      ...recorded,
+      factor: Number.isFinite(recorded.factor) ? recorded.factor : 1,
+      applied: recorded.applied === true,
+      warnings: Array.isArray(recorded.warnings) ? recorded.warnings : [],
+    };
+  }
+  const settings = isObject(options?.settings) ? options.settings : {};
+  const pair = methodBasisFromRoute(parsed?.route);
+  return resolveFrequencyScale({
+    setting: settings.frequencyScale ?? 'unscaled',
+    method: pair.method,
+    basis: pair.basis,
+  });
+}
+
+function thermochemistryCard(parsed, flags, options = {}) {
   const thermo = isObject(parsed?.thermochemistry) ? parsed.thermochemistry : {};
   // Gaussian writes `zeroPointEnergyHartree`; the canonical engine-neutral
   // shape uses `zpeHartree`. Read both, but never derive one from the SCF
@@ -683,13 +696,32 @@ function thermochemistryCard(parsed, flags) {
   const temperature = finite(thermo.temperatureK);
   const pressure = finite(thermo.pressureAtm);
   const treatment = text(thermo.entropyTreatment);
+  // Issue 350: the printed ZPE correction is the derived value's baseline.
+  // The absolute `E + ZPE` and `G` stay the log's numbers; only this line and
+  // the entropy-derived corrections move with the factor.
+  const frequencyScale = frequencyScaleFor(parsed, options);
+  const zpe = scaleZeroPoint(thermo.zeroPointCorrectionHartree, frequencyScale);
   const rows = [
     fieldValue('E + ZPE', hartreeText(eZpe) ?? missingHtml(), 'thermo-ezpe'),
     fieldValue('H (enthalpy)', hartreeText(thermo.enthalpyHartree) ?? missingHtml(), 'thermo-h'),
     fieldValue('G (free energy)', hartreeText(thermo.freeEnergyHartree) ?? missingHtml(), 'thermo-g'),
     fieldValue('Entropy', entropy === null ? missingHtml() : `${entropy.toFixed(3)} cal mol⁻¹ K⁻¹`, 'thermo-entropy'),
   ];
+  if (zpe.rawHartree !== null) {
+    const textValue = zpe.applied
+      ? `${zpe.rawHartree.toFixed(6)} → ${zpe.scaledHartree.toFixed(6)} Eh · ${esc(describeFrequencyScale(frequencyScale))}`
+      : `${zpe.rawHartree.toFixed(6)} Eh · ${esc(describeFrequencyScale(frequencyScale))}`;
+    rows.push(fieldValue('ZPE correction', textValue, 'thermo-zpe'));
+  }
   if (treatment) rows.push(fieldValue('Entropy treatment', esc(treatment), 'thermo-entropy-treatment'));
+  const scalingNote = frequencyScale.applied
+    ? `<p class="results-note" data-field="thermo-scale-note">ZPE and the quasi-RRHO entropy are derived from frequencies `
+      + `scaled ${esc(describeFrequencyScale(frequencyScale))} (table ${esc(frequencyScale.tableVersion)}). `
+      + 'The printed G is Gaussian&#39;s harmonic value; it is not re-derived.</p>'
+    : '';
+  const scalingWarning = frequencyScale.warnings.length
+    ? `<p class="results-note is-warn" data-field="thermo-scale-warning">${frequencyScale.warnings.map(esc).join('<br>')}</p>`
+    : '';
   const conditions = [
     temperature === null ? null : `${temperature.toFixed(2)} K`,
     pressure === null ? null : `${pressure.toFixed(5)} atm`,
@@ -716,6 +748,8 @@ function thermochemistryCard(parsed, flags) {
     : '';
   return card('Thermochemistry', kv(rows)
     + (conditions ? `<p class="results-note" data-field="thermo-conditions">${esc(conditions)}</p>` : '')
+    + scalingNote
+    + scalingWarning
     + workbench
     + caveatHtml(flags, 'Thermochemistry'), workbench ? 'is-wide' : '');
 }
@@ -2008,15 +2042,43 @@ function dp4Card(record, flags) {
 }
 
 /**
+ * Spectrum assignment (issue 348).
+ *
+ * `record.spectrumAssignment` is the object `rankCandidates()` returned. The
+ * card does not recompute a cosine, a band score or a population: it prints the
+ * same panel the report prints, from the same result object, so the two
+ * surfaces cannot disagree. A record without the block renders nothing.
+ */
+function spectrumAssignmentBody(record, { compact = true } = {}) {
+  const result = isObject(record?.spectrumAssignment) ? record.spectrumAssignment : null;
+  if (!result) return '';
+  return assignmentPanelHtml(result, { tableClass: 'results-table', compact });
+}
+
+export function spectrumAssignmentCardHtml(record, { compact = true } = {}) {
+  const body = spectrumAssignmentBody(record, { compact });
+  return body ? card('Spectrum assignment', body, 'is-wide') : '';
+}
+
+function spectrumAssignmentCard(record, flags) {
+  const body = spectrumAssignmentBody(record);
+  if (!body) return '';
+  return card('Spectrum assignment', body + caveatHtml(flags, 'This assignment'), 'is-wide');
+}
+
+/**
  * Raman (#76). The y axis is the printed activity in Å⁴/amu, not a scattering
  * cross-section: converting to one needs the excitation wavelength and a
  * Boltzmann population factor that the log does not carry.
  */
-function ramanCard(parsed, flags) {
+function ramanCard(parsed, flags, options = {}) {
   const modes = parsed?.raman;
   if (!Array.isArray(modes) || modes.length === 0) return '';
   const withActivity = modes.filter((mode) => Number.isFinite(mode.ramanActivity));
   if (withActivity.length === 0) return '';
+  // Issue 350: the factor is a display choice; the modes keep the printed
+  // wavenumbers and the section prints both columns when one is applied.
+  const frequencyScale = frequencyScaleFor(parsed, options);
   const body = '<p class="results-note">Per-mode Raman scattering activities as printed by Gaussian '
     + `(Å⁴/amu), with the depolarisation ratio for plane- and unpolarised incident light. `
     + 'The curve below is the <em>activity</em> broadened with a Lorentzian of the stated FWHM: it is not a '
@@ -2025,14 +2087,14 @@ function ramanCard(parsed, flags) {
     + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-raman-fwhm value="12"></label>'
     + '<label>Measured trace <input type="file" accept=".csv,.txt,.jdx,.dx,text/csv,text/plain" data-raman-overlay></label>'
     + '</div>'
-    + `<div data-field="raman-figure">${ramanSectionHtml(modes, { fwhmCm: 12 })}</div>`
+    + `<div data-field="raman-figure">${ramanSectionHtml(modes, { fwhmCm: 12, scale: frequencyScale })}</div>`
     + caveatHtml(flags, 'These activities');
   return card('Raman', body, 'is-wide');
 }
 
 /** The figure and the per-mode table, recomputed when a control changes. */
-export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '', overlayNote = '' } = {}) {
-  const spectrum = ramanSpectrum(modes, { fwhmCm });
+export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '', overlayNote = '', scale = null } = {}) {
+  const spectrum = ramanSpectrum(modes, { fwhmCm, scale });
   if (!spectrum) return '<p class="results-missing">No Raman activity was printed, so there is nothing to plot.</p>';
   const scaled = measured ? scaleToSpectrum(measured, { peakIntensity: 1 }) : null;
   // The measured trace is passed in data units and clipped by the figure: the
@@ -2050,6 +2112,7 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
     + (drawn ? drawn.svg : '')
     + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(modes.length)} modes · `
     + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
+    + (scale ? ` · frequencies ${esc(describeFrequencyScale(scale))}` : '')
     + (scaled ? ` · measured series “${esc(overlayName || 'imported')}” scaled by ×${esc(scaled.scale.toPrecision(4))} to match the strongest simulated peak` : '')
     + (overlayNote ? `<br>${esc(overlayNote)}` : '')
     + '</figcaption>'
@@ -2058,11 +2121,14 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
   const rows = spectrum.peaks.map((peak, index) => '<tr>'
     + `<td>${esc(index + 1)}</td>`
     + `<td>${esc(peak.wavenumber.toFixed(4))}</td>`
+    + (scale?.applied ? `<td>${esc(peak.wavenumberRaw.toFixed(4))}</td>` : '')
     + `<td>${esc(peak.ramanActivity.toFixed(4))}</td>`
     + `<td>${peak.depolarizationPlane === null ? MISSING_TEXT : esc(peak.depolarizationPlane.toFixed(4))}</td>`
     + '</tr>').join('');
   const table = '<table class="results-table" data-field="raman-modes">'
-    + '<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th><th>Activity / Å⁴ amu⁻¹</th><th>Depolarisation (plane)</th></tr></thead>'
+    + '<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th>'
+    + (scale?.applied ? '<th>Raw / cm⁻¹</th>' : '')
+    + '<th>Activity / Å⁴ amu⁻¹</th><th>Depolarisation (plane)</th></tr></thead>'
     + `<tbody>${rows}</tbody></table>`;
   return figure + table;
 }
@@ -2078,12 +2144,13 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
  * instead of choosing one; the unit and the E–M angle are printed so a reader
  * can identify the convention from the numbers.
  */
-function vcdCard(parsed, flags) {
+function vcdCard(parsed, flags, options = {}) {
   const modes = parsed?.vcd;
   if (!Array.isArray(modes) || modes.length === 0) return '';
   const withStrength = modes.filter((mode) => Number.isFinite(mode.rotationalStrength));
   if (withStrength.length === 0) return '';
   const representation = parsed?.vcdTable?.representation ?? null;
+  const frequencyScale = frequencyScaleFor(parsed, options);
   const body = '<p class="results-note">Per-mode vibrational circular dichroism as printed by Gaussian: '
     + 'rotational strength <em>R</em>, dipole strength and the E–M angle between the electric and magnetic '
     + `dipole transition moments. R is <strong>signed</strong> (${esc(VCD_UNITS)}), and the curve below is `
@@ -2095,32 +2162,37 @@ function vcdCard(parsed, flags) {
     + '<div class="nmr-controls">'
     + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-vcd-fwhm value="12"></label>'
     + '</div>'
-    + `<div data-field="vcd-figure">${vcdSectionHtml(modes, { fwhmCm: 12 })}</div>`
+    + `<div data-field="vcd-figure">${vcdSectionHtml(modes, { fwhmCm: 12, scale: frequencyScale })}</div>`
     + caveatHtml(flags, 'These rotational strengths');
   return card('VCD', body, 'is-wide');
 }
 
 /** The signed figure and the per-mode table, recomputed when the FWHM changes. */
-export function vcdSectionHtml(modes, { fwhmCm = 12 } = {}) {
-  const spectrum = vcdSpectrum(modes, { fwhmCm });
+export function vcdSectionHtml(modes, { fwhmCm = 12, scale = null } = {}) {
+  const spectrum = vcdSpectrum(modes, { fwhmCm, scale });
   if (!spectrum) return '<p class="results-missing">No rotational strengths were printed, so there is nothing to plot.</p>';
   const drawn = fromVcd(spectrum);
   const figure = '<figure class="results-spectrum" data-field="vcd-spectrum">'
     + (drawn ? drawn.svg : '')
     + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(spectrum.counts.total)} modes `
     + `(${esc(spectrum.counts.positive)} positive, ${esc(spectrum.counts.negative)} negative) · `
-    + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}</figcaption>`
+    + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
+    + (scale ? ` · frequencies ${esc(describeFrequencyScale(scale))}` : '')
+    + '</figcaption>'
     + '</figure>';
 
   const rows = spectrum.peaks.map((peak, index) => '<tr>'
     + `<td>${esc(index + 1)}</td>`
     + `<td>${esc(peak.wavenumber.toFixed(4))}</td>`
+    + (scale?.applied ? `<td>${esc(peak.wavenumberRaw.toFixed(4))}</td>` : '')
     + `<td>${esc(peak.rotationalStrength.toFixed(4))}</td>`
     + `<td>${peak.dipoleStrength === null ? MISSING_TEXT : esc(peak.dipoleStrength.toFixed(4))}</td>`
     + `<td>${peak.emAngle === null ? MISSING_TEXT : esc(peak.emAngle.toFixed(4))}</td>`
     + '</tr>').join('');
   const table = '<table class="results-table" data-field="vcd-modes">'
-    + `<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th><th>R / ${esc(VCD_UNITS)}</th>`
+    + `<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th>`
+    + (scale?.applied ? '<th>Raw / cm⁻¹</th>' : '')
+    + `<th>R / ${esc(VCD_UNITS)}</th>`
     + `<th>Dip. strength / ${esc(VCD_DIPOLE_UNITS)}</th><th>E–M angle / °</th></tr></thead>`
     + `<tbody>${rows}</tbody></table>`;
   return figure + table;
@@ -2842,7 +2914,7 @@ export function resultsPanelHtml(record, options = {}) {
   if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4, record.multiwfn, record.provenance, record.similarity);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
-  const flags = flagsFor(record);
+  const flags = runFlagsFor(record);
   const status = statusOf(record);
   const imported = importedSummary(record);
   const engineId = engineOf(record, parsed);
@@ -2851,6 +2923,16 @@ export function resultsPanelHtml(record, options = {}) {
   // that already carries them. Nothing here is guessed from the log.
   const task = isObject(record.task) ? record.task : {};
   const jobSettings = isObject(options.settings) ? options.settings : (isObject(task.settings) ? task.settings : {});
+  // Issue 350: a finished run recorded the factor it used; that decision is
+  // what the cards print, even if the block's setting was changed afterwards.
+  const recordedFrequencyScale = isObject(record.provenance?.frequencyScale)
+    ? record.provenance.frequencyScale : null;
+  const scaleOptions = recordedFrequencyScale
+    ? { ...options, frequencyScaleResolution: recordedFrequencyScale }
+    : options;
+  // The cards need the resolved block settings even when `options.settings` was
+  // empty and the settings came from the queued task.
+  const cardOptions = { ...scaleOptions, settings: jobSettings };
   const emission = isObject(options.emission) ? options.emission
     : (isObject(task.emission) ? task.emission : (isObject(record.emission) ? record.emission : null));
   const nto = isObject(options.nto) ? options.nto : (isObject(task.nto) ? task.nto : (isObject(record.nto) ? record.nto : null));
@@ -2914,7 +2996,7 @@ export function resultsPanelHtml(record, options = {}) {
       spinSweepCard(options.spinSweep, options.spinStates),
       saptCard(parsed, flags),
       solvationCard(parsed, flags),
-      thermochemistryCard(parsed, flags),
+      thermochemistryCard(parsed, flags, cardOptions),
       methodsCard(record),
       frequenciesCard(parsed, flags),
       excitedStatesCard(parsed, flags, record, spectrumOverlay, spectrumOverlayNote),
@@ -2927,12 +3009,13 @@ export function resultsPanelHtml(record, options = {}) {
       solutionEnergeticsCard(record, parsed, flags, options),
       trajectoryCard(parsed, flags),
       nmrCard(parsed, flags, record),
-      ramanCard(parsed, flags),
-      vcdCard(parsed, flags),
+      ramanCard(parsed, flags, cardOptions),
+      vcdCard(parsed, flags, cardOptions),
       roaCard(parsed, flags),
       ecdCard(parsed, flags),
       chargesCard(parsed, flags),
       dp4Card(record, flags),
+      spectrumAssignmentCard(record, flags),
       eprCard(parsed, flags),
       sensitivityCard(record),
       t1Card(parsed, flags),
@@ -2959,8 +3042,15 @@ export function resultsPanelHtml(record, options = {}) {
 /* ── Console wiring ────────────────────────────────────────── */
 
 async function findRun(desktop, runId) {
-  if (!runId || !desktop?.listRuns) return null;
+  if (!runId) return null;
   try {
+    // Issue 371: ask for exactly this run; `runs:list` is now a summary.
+    if (desktop?.getRunRecords) {
+      const records = await desktop.getRunRecords([runId]);
+      return Array.isArray(records) ? records.find((run) => run?.id === runId) || null : null;
+    }
+    // Compatibility with a preload that predates `runs:records`.
+    if (!desktop?.listRuns) return null;
     const runs = await desktop.listRuns();
     return Array.isArray(runs) ? runs.find((run) => run?.id === runId) || null : null;
   } catch {
@@ -2978,7 +3068,7 @@ function isQueueRunning(doc) {
  * The module subscribes to the same run/queue events as `app.js`; a finished
  * run updates the panel without `app.js` having to pass records around.
  * Clicking a row in "Recent runs" or the workflow queue loads that run's
- * `run.json` through `desktop.listRuns()` and renders it.
+ * `run.json` through `desktop.getRunRecords([id])` and renders it.
  */
 /**
  * ADR 0003 §3.7: one 2D figure for the results panel.
@@ -3264,10 +3354,16 @@ export function installResultsView({
   };
   const mountThermoEnsemble = async () => {
     const picker = container.querySelector('[data-field="thermo-ensemble-picker"]');
-    if (!picker || !desktop?.listRuns) return;
+    if (!picker || !desktop?.listRuns || !desktop?.getRunRecords) return;
     let runs = [];
     try {
-      runs = await desktop.listRuns();
+      // Issue 371: list summaries, then read only the records they name; the
+      // free energy lives in each record's `parsed` block.
+      const summaries = await desktop.listRuns();
+      const ids = (Array.isArray(summaries) ? summaries : [])
+        .map((run) => run?.id)
+        .filter((id) => typeof id === 'string' && id !== '');
+      runs = ids.length ? await desktop.getRunRecords(ids) : [];
     } catch {
       return;
     }
@@ -3393,6 +3489,8 @@ export function installResultsView({
     if (!runId) return;
     let runs = [];
     try {
+      // Issue 371: the comparison bar only needs id/title/status, which the
+      // summary carries; the chosen run's full record is read on selection.
       runs = await desktop.listRuns();
     } catch {
       return;
@@ -3589,7 +3687,7 @@ const RESULTS_VIEW_CSS = `
   min-height: 0; overflow-y: auto; padding: 12px 14px 14px;
   background: color-mix(in srgb, var(--surface-panel) 72%, transparent);
 }
-.results-panel { display: flex; flex-direction: column; gap: 10px; font-size: var(--text-size-xs); color: var(--text-primary); }
+.results-panel { display: flex; flex-direction: column; gap: 10px; font-size: var(--text-size-sm); color: var(--text-primary); }
 .results-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .results-head-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .results-title { font-size: var(--text-size-md); font-weight: 650; letter-spacing: -.01em; line-height: 1.3; overflow-wrap: anywhere; }
@@ -3610,7 +3708,7 @@ const RESULTS_VIEW_CSS = `
 .results-banners { display: flex; flex-direction: column; gap: 6px; }
 .results-banner {
   margin: 0; padding: 7px 9px; border: 1px solid var(--border-subtle); border-radius: 8px;
-  font-size: var(--text-size-xs); line-height: 1.45;
+  font-size: var(--text-size-sm); line-height: 1.45;
 }
 .results-banner.is-fixture { color: var(--tone-yellow-1); background: var(--tone-orange-5a); border-color: var(--tone-orange-12a); }
 .results-banner.is-truncated { color: var(--tone-red-16); background: var(--tone-red-5a); border-color: var(--tone-red-12a); }
@@ -3624,7 +3722,7 @@ const RESULTS_VIEW_CSS = `
 .results-card.is-error { border-color: color-mix(in srgb, var(--state-review) 30%, var(--border-subtle)); }
 .results-methods-text {
   margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
-  color: var(--text-primary); font: var(--text-size-xs)/1.5 var(--font-mono);
+  color: var(--text-primary); font: var(--text-size-sm)/1.5 var(--font-mono);
 }
 .results-card-title {
   margin-bottom: 6px; color: var(--text-secondary); font-size: var(--text-size-xs); font-weight: 700;
@@ -3632,14 +3730,14 @@ const RESULTS_VIEW_CSS = `
 }
 .results-kv { display: grid; grid-template-columns: minmax(92px, 40%) minmax(0, 1fr); gap: 3px 9px; }
 .results-kv-wide { grid-template-columns: minmax(86px, 18%) minmax(0, 1fr); }
-.results-kv dt { color: var(--text-secondary); font-size: var(--text-size-xs); }
-.results-kv dd { margin: 0; min-width: 0; font: var(--text-size-xs)/1.45 var(--font-mono); overflow-wrap: anywhere; }
+.results-kv dt { color: var(--text-secondary); font-size: var(--text-size-sm); }
+.results-kv dd { margin: 0; min-width: 0; font: var(--text-size-sm)/1.45 var(--font-mono); overflow-wrap: anywhere; }
 .results-kv dd code { font: inherit; }
-.results-missing { color: var(--text-tertiary); font: italic var(--text-size-xs)/1.45 var(--font-ui); }
+.results-missing { color: var(--text-tertiary); font: italic var(--text-size-sm)/1.45 var(--font-ui); }
 .results-route {
   display: block; margin-top: 7px; padding: 6px 7px; border: 1px solid var(--border-subtle);
   border-radius: 6px; background: var(--tone-blue-5); color: var(--tone-blue-126);
-  font: var(--text-size-xs)/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
+  font: var(--text-size-sm)/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .results-chip, .results-gate {
   display: inline-block; padding: 2px 6px; border: 1px solid var(--border-subtle);
@@ -3649,18 +3747,18 @@ const RESULTS_VIEW_CSS = `
 .results-chip.is-status-failed, .results-gate.is-fail { color: var(--state-review); border-color: color-mix(in srgb, var(--state-review) 40%, var(--border-subtle)); }
 .results-chip.is-status-needs-review, .results-chip.is-status-running,
 .results-chip.is-status-unknown, .results-gate.is-unknown { color: var(--kind-condition); border-color: color-mix(in srgb, var(--kind-condition) 40%, var(--border-subtle)); }
-.results-note { margin: 6px 0 0; color: var(--text-tertiary); font-size: var(--text-size-xs); line-height: 1.45; }
+.results-note { margin: 6px 0 0; color: var(--text-tertiary); font-size: var(--text-size-sm); line-height: 1.45; }
 .results-note.is-warn { color: var(--state-review); }
 .results-kinetics-line { font-family: var(--font-mono); color: var(--text-primary); }
 .results-big { margin: 2px 0 0; font: var(--text-size-lg)/1.35 var(--font-mono); color: var(--text-primary); }
 .results-modes { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px; }
-.results-mode { font: var(--text-size-xs)/1.35 var(--font-mono); color: var(--text-primary); }
+.results-mode { font: var(--text-size-sm)/1.35 var(--font-mono); color: var(--text-primary); }
 .results-mode.is-imaginary { color: var(--state-review); }
-.results-unit { color: var(--text-tertiary); font-size: var(--text-size-xs); }
-.results-table { width: 100%; border-collapse: collapse; margin-top: 4px; font: var(--text-size-xs)/1.5 var(--font-mono); }
+.results-unit { color: var(--text-tertiary); font-size: var(--text-size-sm); }
+.results-table { width: 100%; border-collapse: collapse; margin-top: 4px; font: var(--text-size-sm)/1.5 var(--font-mono); }
 .results-table th {
   padding: 3px 4px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary);
-  font: 600 var(--text-size-2xl)/1.4 var(--font-ui); text-align: left; letter-spacing: .03em;
+  font: 600 var(--text-size-sm)/1.4 var(--font-ui); text-align: left; letter-spacing: .03em;
 }
 .results-table td { padding: 2px 4px; border-bottom: 1px solid var(--tone-blue-69a); vertical-align: top; overflow-wrap: anywhere; }
 .results-table td.results-source { color: var(--text-tertiary); }
@@ -3669,20 +3767,20 @@ const RESULTS_VIEW_CSS = `
 .results-table tr.spin-lowest td { font-weight: 600; }
 .results-gate-table td { font-family: var(--font-ui); }
 .results-gate-table td:nth-child(2) { width: 64px; }
-.results-gate-table td:nth-child(3) { color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--text-size-xs); }
+.results-gate-table td:nth-child(3) { color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--text-size-sm); }
 .results-gates-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
 .results-gate-optional { color: var(--text-tertiary); font: var(--text-size-xs)/1.3 var(--font-ui); text-transform: uppercase; letter-spacing: .05em; }
-.results-caveat { margin: 7px 0 0; color: var(--kind-condition); font-size: var(--text-size-xs); line-height: 1.45; }
+.results-caveat { margin: 7px 0 0; color: var(--kind-condition); font-size: var(--text-size-sm); line-height: 1.45; }
 .results-charge-block + .results-charge-block { margin-top: 8px; }
 .results-charge-title {
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
-  color: var(--text-primary); font-size: var(--text-size-xs); font-weight: 600;
+  color: var(--text-primary); font-size: var(--text-size-sm); font-weight: 600;
 }
-.results-charge-title span { color: var(--text-tertiary); font-size: var(--text-size-xs); font-weight: 400; }
+.results-charge-title span { color: var(--text-tertiary); font-size: var(--text-size-sm); font-weight: 400; }
 .results-charge-table th:first-child, .results-charge-table td:first-child { width: 42px; }
 .results-pre {
   margin: 7px 0 0; padding: 7px; max-height: 110px; overflow: auto; border-radius: 6px;
-  background: var(--tone-blue-5); color: var(--tone-blue-126); font: var(--text-size-xs)/1.5 var(--font-mono); white-space: pre-wrap;
+  background: var(--tone-blue-5); color: var(--tone-blue-126); font: var(--text-size-sm)/1.5 var(--font-mono); white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -3693,10 +3791,10 @@ const RESULTS_VIEW_CSS = `
 }
 .results-diagnosis[data-severity="fatal"] { border-color: var(--tone-red-3a); }
 .results-diagnosis-title {
-  margin: 0 0 4px; font-size: var(--text-size-xs); font-weight: 650; letter-spacing: .01em;
+  margin: 0 0 4px; font-size: var(--text-size-sm); font-weight: 650; letter-spacing: .01em;
 }
-.results-diagnosis-cause { margin: 0 0 5px; color: var(--text-secondary); font-size: var(--text-size-xs); line-height: 1.5; }
-.results-diagnosis-action { margin: 0; font-size: var(--text-size-xs); line-height: 1.5; }
+.results-diagnosis-cause { margin: 0 0 5px; color: var(--text-secondary); font-size: var(--text-size-sm); line-height: 1.5; }
+.results-diagnosis-action { margin: 0; font-size: var(--text-size-sm); line-height: 1.5; }
 .results-diagnosis-action strong { color: var(--text-primary); font-weight: 650; }
 
 .results-compare-bar {
@@ -3719,21 +3817,21 @@ const RESULTS_VIEW_CSS = `
   display: flex; flex-direction: column; gap: 2px; padding: 7px 9px;
   background: var(--tone-neutral-11a);
 }
-.results-compare-title { font-size: var(--text-size-xs); font-weight: 650; }
-.results-compare-summary { color: var(--text-secondary); font-size: var(--text-size-xs); }
+.results-compare-title { font-size: var(--text-size-sm); font-weight: 650; }
+.results-compare-summary { color: var(--text-secondary); font-size: var(--text-size-sm); }
 .results-compare-note {
   margin: 0; padding: 5px 9px; font-size: var(--text-size-xs); color: var(--tone-orange-18);
   background: var(--tone-orange-17a);
 }
-.results-compare-table { width: 100%; border-collapse: collapse; font-size: var(--text-size-xs); }
+.results-compare-table { width: 100%; border-collapse: collapse; font-size: var(--text-size-sm); }
 .results-compare-table th, .results-compare-table td {
   padding: 4px 9px; text-align: right; border-top: 1px solid var(--border-subtle);
 }
 .results-compare-table thead th { color: var(--text-tertiary); font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
 .results-compare-table tbody th { text-align: left; font-weight: 500; color: var(--text-secondary); }
 .results-compare-table tr.is-changed td { color: var(--tone-orange-18); }
-.results-compare-row-note { display: block; color: var(--text-tertiary); font-size: var(--text-size-xs); }
-.results-compare-foot { margin: 0; padding: 5px 9px 7px; color: var(--text-tertiary); font-size: var(--text-size-xs); }
+.results-compare-row-note { display: block; color: var(--text-tertiary); font-size: var(--text-size-sm); }
+.results-compare-foot { margin: 0; padding: 5px 9px 7px; color: var(--text-tertiary); font-size: var(--text-size-sm); }
 
 .results-spectrum { margin: 8px 0 2px; }
 .results-spectrum svg { width: 100%; max-width: 420px; height: auto; display: block; }

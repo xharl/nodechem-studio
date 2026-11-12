@@ -45,16 +45,19 @@ Gate verdicts are **copied**, never recomputed. The report is a view over record
 
 | File | Purpose | Rules |
 |---|---|---|
-| `report.html` | The document a human reads or prints | Single file: inline CSS and inline SVG figures, **no JavaScript**, no external references, no `<script>`, no `http(s)://` |
-| `report.json` | The model the HTML was rendered from | JSON-serialisable, `schemaVersion: 1` (`WORKFLOW_REPORT_SCHEMA_VERSION`) and `kind: "nodechem-studio.workflow-report"`, absolute paths allowed here only (they never reach the HTML) |
+| `report.html` | The document a human reads or prints | Single file: inline CSS and inline SVG figures, **no JavaScript**, no external references, no `<script>`, no `http(s)://`; when a model is written beside it, `<html data-model-sha256="…">` and the header meta line name the model's SHA-256 |
+| `report.json` | The model the HTML was rendered from | JSON-serialisable, `schemaVersion: 1` (`WORKFLOW_REPORT_SCHEMA_VERSION`) and `kind: "nodechem-studio.workflow-report"`, absolute paths allowed here only (they never reach the HTML). A combined report writes one envelope with `kind: "nodechem-studio.project-report"` and one workflow model per flow under `flows[]`. A task row whose log was read through a window carries `partial: {bytesRead, size, windows}`; `partials` counts those rows and `recordCount` is the denominator behind the header caveat |
 
 - Location: the desktop **Save workflow report…** action writes the file the user names (default
-  `<documents>/workflow-<id>.html`) and the model beside it as `<name>.json`. `ncs report <out-dir>`
-  writes `<out-dir>/reports/index.html` unless `--out <file>` names another path; it does not write a
-  JSON model.
+  `<documents>/workflow-<id>.html`) and the model beside it as `<name>.json`, and the HTML names the
+  model's SHA-256. `ncs report <out-dir>` writes `<out-dir>/reports/index.html` and `index.json`
+  beside it unless `--out <file>` names another path, in which case the model is `<file>.json`;
+  `--no-model` writes only the HTML. The digest is the SHA-256 of the exact JSON bytes written, so
+  `sha256sum <name>.json` equals both the printed digest and `data-model-sha256`.
 - A PDF deliverable was dropped by decision; there is no `printToPDF` path in this build.
 - Determinism: same queue + same run records ⇒ byte-identical HTML apart from the generation
-  timestamp, which enters through the model.
+  timestamp, which enters through the model. The digest is computed after `generatedAt` is set, so
+  it changes only when the document does.
 
 ---
 
@@ -67,36 +70,58 @@ appear only when the queue carries that kind of result.
 Workflow report — Diels–Alder TS verification
 Queue q-… · status completed · created … · finished … · generated … · NodeChem Studio 0.5.1
 [3 tasks ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.]
+[1 of 4 records was read from a window of the log; values may be missing or stale. Partial: Block A (200000 of 5000000 bytes).]
 [Figures — only at the requested level]
 [Method ladder / conformer ensemble / spin sweep / DP4 / EPR / NMR / reaction energetics /
  uncertainty / derived quantity / Multiwfn / imported results — only when present]
 Outcome     7 task(s): 6 passed, 1 failed, 0 skipped, 0 cancelled, 0 not run.
             Gate verdict: passed.
-What ran    Block · Status · Gates · Validity · Engine · Level · E / Eh · G / Eh · Imag. · Elapsed
+What ran    Block · Status · Attempts · Gates · Validity · Engine · Level · E / Eh · G / Eh · Imag. · Elapsed
 Methods     one collapsible paragraph per block, only when the caller supplies them
+Artifacts   File · Kind · Flow · Bytes · SHA-256 · On disk — one row per manifest entry
 Provenance  Block · Run · Input SHA-256 · Output SHA-256
 ```
 
 ### 4.1 Header line
 
 Queue id, queue status, created and finished timestamps, the generation timestamp, and the version
-of the app that wrote the report (`appVersion` in the model). The app **commit** is not printed. A
-fixture (dry-run) count note and an imported-results note follow when either applies. A truncated
-parse is **not** called out by this report yet.
+of the app that wrote the report (`appVersion` in the model). When a model is written beside the
+HTML, the line also ends with `model sha256 <digest>`, and `<html>` carries the same value as
+`data-model-sha256`. The app **commit** is not printed. A
+fixture (dry-run) count note and an imported-results note follow when either applies. When any task
+row's log was read through a window, a partial-parse note follows as well: how many records were read
+from a window out of how many records had one, the warning that values may be missing or stale, and
+the title and byte window of each affected row (for example `head + tail`). A report built only from
+complete records prints no such note.
 
 ### 4.2 Outcome
 
 One paragraph: the task total and how many passed / failed / skipped / cancelled / never ran, then
-`Gate verdict: <verdict>`. A list of failed tasks follows, then a note naming records that failed or
-were only partly computed. The verdict is assembled from the queue's task gate verdicts; the report
-does not re-evaluate a gate.
+`Gate verdict: <verdict>`. When any task ran more than once, a second paragraph states how many
+task(s) needed more than one attempt and how many extra attempts were recorded, and whether the
+queue's attempt history covers all of them. A list of failed tasks follows, then a note naming
+records that failed or were only partly computed. The verdict is assembled from the queue's task
+gate verdicts; the report does not re-evaluate a gate.
 
 ### 4.3 What ran
 
-One row per task: **Block · Status · Gates · Validity · Engine · Level · E / Eh · G / Eh ·
-Imag. · Elapsed**. The block cell carries a `FIXTURE` label for a dry run, the
+One row per task: **Block · Status · Attempts · Gates · Validity · Engine · Level · E / Eh · G / Eh ·
+Imag. · Elapsed**. The block cell carries a `FIXTURE` label for a dry run, a `PARTIAL` badge when the
+record was read through a window of its log, the
 `imported, not run here` badge for an imported result, and the member id for a fanned-out run. A
 value the run did not produce is printed `not reported` — never blank, never zero.
+
+The **Attempts** cell prints `1` for a first-try run. A block that ran more than once prints the
+count and links to an attempt list under the table: a `<details>` block, one row per attempt, with
+the attempt number, the status, the gate verdict, the run id and the finish time the queue recorded.
+The earlier attempts come from `task.history[]` (written on every retry reset, capped at the queue's
+20 entries); the last row is the attempt the table above reports. `report.json` carries the same
+capped `history` per task, so the list can be checked against the model.
+
+Absence of evidence stays visible: a task whose count came from `attempts` but which carries no
+`history` prints `history not recorded` and gets no list, and a v1 `queue.json` with no `history`
+field prints `1` for a single attempt. The report never invents a retry, and never lets a retried
+pass look like a first-try pass.
 
 For a record-scoped queue (a dataset, series, derivative or complex block upstream) the section
 becomes a per-record comparison table followed by one section per record, in plan order, each with
@@ -113,8 +138,30 @@ imported results. Each prints its own parameters and, when it cannot compare, th
 
 One row per task with a run: block, run id, and a 16-character prefix of the input and output
 SHA-256. The full digests, executable paths, argv/route and parse-coverage windows stay in
-`report.json`. There is no separate artifacts section, and output file names and sizes are not
-printed in the HTML.
+`report.json`.
+
+### 4.6 Artifacts written
+
+The files the workflow's output blocks wrote, read from `<artifactRoot>/manifest.json` — the
+manifest `appendArtifactEntry()` maintains (#354). One row per manifest entry: **File · Kind ·
+Flow · Bytes · SHA-256 · On disk**. The File cell is the queue-relative path (`artifacts/reports/
+barrier.html` in the app, `reports/barrier.html` for `ncs run --out`), never an absolute one; the
+digest is a 16-character prefix and the full value stays in `report.json`. The section's summary
+line carries the manifest's own SHA-256 and byte size, the file count, the recorded total and the
+newest `generatedAt`, so the index is checkable as well as its entries.
+
+| Manifest state | Printed |
+|---|---|
+| entries present | one row per file; `missing on disk` in a row whose file is no longer in the folder |
+| manifest readable but empty | `The manifest exists but records no files.` |
+| no manifest, or not JSON, or not a list | `Artifacts: not recorded — <reason>`; the section is kept and says the report makes no claim about what was written |
+| an entry whose path is absolute or leaves the artifact root | not printed; the count of skipped entries is stated, the names are not |
+
+`buildWorkflowReport()` never reads the manifest itself: `loadArtifactsManifest(queueDir,
+{ artifactsRoot })` in `src/shared/report.js` reads it and `stat`s every entry, and the result is
+passed in as `artifacts`. Omitting the option leaves the section out entirely — the byte-identical
+document older callers produce. A report written *by* a workflow output block does not carry the
+section: the manifest is appended after the block's artifact is written.
 
 ---
 
@@ -175,9 +222,9 @@ from an `analyse` block whose definition names its inputs.
 
 ## 6. Rendering
 
-- **Pure functions only.** `buildWorkflowReport(queue, records, options) → model`, `workflowReportHtml(model) → string`. No DOM, no `fs` inside the renderer (the module lives in `src/shared`); time enters through `generatedAt` in the model.
+- **Pure functions only.** `buildWorkflowReport(queue, records, options) → model`, `workflowReportHtml(model, { methodsFor, modelDigest }) → string`, `buildProjectReportModel(models, { title, generatedAt }) → document` and `buildCombinedReportHtml(models, { title, generatedAt, modelDigest }) → string`. No DOM, no `fs` inside the renderer (the module lives in `src/shared`); time enters through `generatedAt` in the model, and `serializeReportModel(document)` is the exact JSON text the digest is taken over.
 - **Escaping.** Every interpolation passes through the module's own `escapeHtml()`. Free text from logs (error cause, termination line) is additionally length-capped and stripped of control characters. A block title of `<img src=x onerror=…>` renders as text; a test asserts it.
-- **Style.** The report has its own fixed paper style, independent of app themes — a dark-mode user must not get a dark PDF-style page. One embedded `REPORT_STYLE` sheet: `system-ui` sans at 13 px on white, mono with `font-variant-numeric: tabular-nums` for numbers, hairline table rules, a 1100 px measure. There is no `@page` rule and no print-specific margin box; printing is the browser's own job.
+- **Style.** The report has its own fixed paper style, independent of app themes — a dark-mode user must not get a dark PDF-style page. One embedded screen sheet, `REPORT_STYLE`: `system-ui` sans at 13 px on white, mono with `font-variant-numeric: tabular-nums` for numbers, hairline table rules, a 1100 px measure. A second sheet, `REPORT_PRINT_STYLE`, is appended verbatim after it and applies only on paper (#356): `@page { size: A4; margin: 16mm }`; a body that drops the 1100 px measure and its margins for the sheet width; `break-inside: avoid` on rows, figures, warnings and `pre`, and `break-after: avoid` on headings; repeated column headers on a table that spans pages (`display: table-header-group`); and `print-color-adjust: exact` on the fixture/imported badges, the warning stripe and the pass/fail colours, which a browser would otherwise print as bare text. The print sheet adds no content and hides none — no rule in it is `display: none` — so the printed document is the screen document. There is still no `printToPDF` path and no margin box.
 - **Fonts.** The report uses the system sans/mono stacks so the file stays small and portable; it does not embed the app's Plex faces and never fetches a font.
 - **Figures, not charts.** The figures in §4.8 are inline SVG built from the record — the flow graph included. There is no charting library and no canvas.
 
@@ -209,10 +256,10 @@ graph, not a screenshot of the editor (`Execution graph · N blocks · counts by
 
 `src/shared/workflowReport.js`:
 
-1. `buildWorkflowReport(queue, records, { generatedAt, appVersion, recordInfo, includeImported, figureLevel, volumes, surfaces, figureBudgetBytes, wavefunction })` reads the queue model and the per-task `run.json`; a task with no readable record is still listed, with its values shown as `not reported`, and the report is produced;
-2. `workflowReportHtml(model)` renders the document, and `buildCombinedReportHtml(models, { title, generatedAt })` stacks one section per flow for a project report;
+1. `buildWorkflowReport(queue, records, { generatedAt, appVersion, recordInfo, includeImported, figureLevel, volumes, surfaces, figureBudgetBytes, wavefunction, artifacts })` reads the queue model, the per-task `run.json` and the pre-read artifacts manifest; a task with no readable record is still listed, with its values shown as `not reported`, and the report is produced;
+2. `workflowReportHtml(model, { modelDigest })` renders the document, `buildProjectReportModel(models, { title, generatedAt })` wraps a combined report's per-flow models, and `buildCombinedReportHtml(models, { title, generatedAt, modelDigest })` stacks one section per flow for a project report;
 3. the figure set comes from `src/shared/report.js` — `figureInputsFor(queue, level)` returns cube volumes for `basic` and meshed isosurfaces for `surfaces` — and the builders live in `src/shared/figures/*`;
-4. the desktop action writes the HTML and, beside it, `JSON.stringify(model, null, 2)`; `ncs report` writes the HTML only.
+4. the desktop action writes the HTML and, beside it, `serializeReportModel(model)`; `ncs report` writes the HTML and, unless `--no-model`, the same serialisation of the per-flow model (or the project-report envelope when several flows are combined). The SHA-256 of those exact bytes is passed back into the renderer as `modelDigest` and printed by the document.
 
 Failure is loud and local: if rendering throws, no partial HTML is written, the queue panel shows the error, and the run records are untouched. A report never mutates run data.
 
@@ -227,7 +274,7 @@ Failure is loud and local: if rendering throws, no partial HTML is written, the 
 5. Derived values obey §5 or are omitted with a reason.
 6. No JavaScript, no external URL, no `<script>`, no `javascript:` href in the output.
 7. Deterministic: same inputs + frozen clock ⇒ identical bytes.
-8. No absolute user paths in HTML; they exist only in `report.json`.
+8. No absolute user paths in HTML; they exist only in `report.json`. A manifest entry's path is printed relative to the queue folder, and one that cannot be shown to stay inside the artifact root is not printed at all.
 
 ---
 
@@ -260,8 +307,19 @@ Failure is loud and local: if rendering throws, no partial HTML is written, the 
 - The 5 MB budget drops figures in build order and names them, and `--figures none` switches them off.
 - The generated bytes are script-free, network-free (no `href`/`src` other than `#`) and deterministic.
 
+`test/reportArtifacts.test.js`
+- A three-entry manifest renders three rows, each with its kind, queue-relative path, byte count and hash prefix; the section prints the manifest's own digest, size and total.
+- A queue with no manifest (or an unreadable one) prints `not recorded`, not an empty table; a manifest entry whose file was deleted prints `missing on disk` and does not abort the build.
+- A manifest path that is absolute or climbs out of the artifact root is not printed; only the count of refused entries is stated.
+- The generated bytes stay script-free and network-free, carry no absolute path, and are byte-identical for the same inputs.
+
 `test/cliImportedReport.test.js`
 - `ncs report --include-imported` lists an imported result and only puts its number in the energy column when the flag is set.
+
+`test/cliReportModel.test.js`
+- `ncs report` writes the HTML and `<name>.json` beside it; the JSON parses to the model the HTML was rendered from (re-rendering it produces the same bytes), stdout carries the 64-hex digest of the file, and the digest equals `data-model-sha256` and the header line.
+- `--no-model` writes no JSON, prints no digest and leaves the attribute off; `--out <file>.html` puts the model at `<file>.json`.
+- A combined report writes the project-report envelope (`kind: "nodechem-studio.project-report"`, `flows[]`) and its digest is the SHA-256 of those bytes.
 
 `test/docs.test.js` additions
 - `docs/guide/report.md` exists, is linked from the guide index, and every example path resolves.

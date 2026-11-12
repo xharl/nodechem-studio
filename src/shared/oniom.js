@@ -22,6 +22,8 @@
  * that the link is the `/H 9` side rather than rebuilding the topology.
  */
 
+import { toLines } from './lines.js';
+
 const NUMBER = /-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g;
 
 const numbers = (text) => (String(text || '').match(NUMBER) || []).map(Number);
@@ -91,8 +93,7 @@ function parseDipole(lines, index) {
  * text actually carries ONIOM evidence; a non-ONIOM log is not zero-filled.
  */
 export function parseOniom(text) {
-  const source = String(text || '');
-  const lines = source.split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   let route = null;
   for (const line of lines) {
     if (/^\s*#/.test(line) && /oniom\s*\(/i.test(line)) {

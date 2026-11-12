@@ -16,7 +16,9 @@ import { cbsExtrapolate } from './cbs.js';
 import { boltzmannWeightedObservables, formatPopulation } from './conformers.js';
 import { tautomerSpread } from './tautomers.js';
 import { dp4Verdict } from './dp4.js';
+import { assignmentPanelHtml } from './spectrumAssignment.js';
 import { IMPORTED_BADGE_TEXT, importedSummary } from './importedRecord.js';
+import { outputWindow, runFlagsFor } from './runFlags.js';
 import { contentHash } from './figures/primitives.js';
 import { flowGraphFigure } from './figures/dag.js';
 import { taskFigures } from './figures/report.js';
@@ -38,6 +40,15 @@ import {
 } from './uncertainty.js';
 
 export const WORKFLOW_REPORT_SCHEMA_VERSION = 1;
+
+/**
+ * Issue #357: the combined report has its own document kind. It is an envelope
+ * around one workflow model per flow, so `sha256sum` of the JSON written beside
+ * the combined HTML identifies exactly the models that document was rendered
+ * from.
+ */
+export const PROJECT_REPORT_SCHEMA_VERSION = 1;
+export const PROJECT_REPORT_KIND = 'nodechem-studio.project-report';
 
 const MISSING = 'not reported';
 
@@ -69,14 +80,152 @@ function shortHash(value) {
   return raw === null ? null : raw.slice(0, 16) + (raw.length > 16 ? '…' : '');
 }
 
+/**
+ * The queue keeps the last 20 retry resets (`electron/runner/queue.js`
+ * `resetSubtree`). The report keeps the same bound: a queue.json written by a
+ * newer build, or hand-edited, must not be able to grow the document without
+ * limit — and an attempt that was dropped is said to be dropped.
+ */
+const ATTEMPT_HISTORY_LIMIT = 20;
+
+/** A status that means the task's current attempt actually reached an outcome. */
+const ATTEMPT_STATUSES = new Set(['completed', 'passed', 'failed', 'needs-review', 'timed out', 'interrupted']);
+
+/**
+ * Issue #355: the queue appends `{ runId, status, gateVerdict, finishedAt }` to
+ * `task.history` each time a loop retry resets the block, so those entries are
+ * *earlier* attempts; the attempt in the task row is the last one.
+ *
+ * `null` means the queue record has no `history` field at all (a v1 queue.json)
+ * — absence of history is not evidence that nothing was retried. An empty array
+ * means the queue recorded the field and had no retry, which is evidence.
+ * Values are copied, never shared with the queue, and only the four recorded
+ * fields are carried: no paths and nothing the queue did not write.
+ */
+function taskHistory(task) {
+  if (!Array.isArray(task.history)) return { entries: null, truncated: false };
+  const truncated = task.history.length > ATTEMPT_HISTORY_LIMIT;
+  const kept = truncated ? task.history.slice(-ATTEMPT_HISTORY_LIMIT) : task.history;
+  return {
+    entries: kept.map((entry) => ({
+      runId: text(entry?.runId),
+      status: text(entry?.status),
+      gateVerdict: text(entry?.gateVerdict),
+      finishedAt: text(entry?.finishedAt),
+    })),
+    truncated,
+  };
+}
+
+/**
+ * Issue #350: the frequency-scale decision each run recorded.
+ *
+ * A row exists for a frequency run that carries `provenance.frequencyScale`, or
+ * for a non-frequency block that explicitly applied a factor, or (when imported
+ * records are included) an imported record with a printed ZPE. A plain
+ * non-frequency Gaussian block adds nothing: there is no spectrum to print and
+ * no ZPE to derive. The derived ZPE is `raw × factor`, computed here from the
+ * record's own numbers, never re-parsed from the log.
+ */
+function frequencyScalingModel(tasks, recordMap, includeImported = false) {
+  if (!Array.isArray(tasks)) return null;
+  const entries = [];
+  for (const task of tasks.slice(0, 500)) {
+    const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+    if (!record) continue;
+    const imported = importedSummary(record);
+    const resolution = record?.provenance?.frequencyScale && typeof record.provenance.frequencyScale === 'object'
+      ? record.provenance.frequencyScale : null;
+    const zpeRaw = num(record?.parsed?.thermochemistry?.zeroPointCorrectionHartree);
+    const jobType = text(record?.provenance?.jobType);
+    const title = text(record.title) || text(task.title) || text(task.nodeId);
+    const method = record?.provenance?.method && typeof record.provenance.method === 'object'
+      ? record.provenance.method : {};
+    if (imported) {
+      // An imported result is never scaled, and the row says why. It is listed
+      // only when the report is already including imported records, and only
+      // when it carries a ZPE; otherwise the imported-results section already
+      // names it and there is no second number to print.
+      if (!includeImported || zpeRaw === null) continue;
+      entries.push({
+        nodeId: text(task.nodeId),
+        title,
+        level: [imported.method, imported.basis].filter(Boolean).join('/') || null,
+        mode: 'imported',
+        factor: null,
+        applied: false,
+        tableVersion: null,
+        key: null,
+        source: null,
+        doi: null,
+        zpeRawHartree: zpeRaw,
+        zpeScaledHartree: zpeRaw,
+        note: 'imported — kept as its producer printed it, never scaled',
+        warnings: [],
+      });
+      continue;
+    }
+    if (!resolution) continue;
+    const factor = num(resolution.factor);
+    const applied = resolution.applied === true && factor !== null && factor !== 1;
+    // A non-frequency block has no spectrum or ZPE; only its applied/refused
+    // decision is worth a report row.
+    if (!/Freq/i.test(jobType ?? '') && !applied) continue;
+    entries.push({
+      nodeId: text(task.nodeId),
+      title,
+      level: [text(method.functional) || text(method.hamiltonian), text(method.basis)].filter(Boolean).join('/') || null,
+      mode: text(resolution.mode) || 'unknown',
+      factor,
+      applied,
+      tableVersion: text(resolution.tableVersion),
+      key: text(resolution.key),
+      source: text(resolution.source),
+      doi: text(resolution.doi),
+      zpeRawHartree: zpeRaw,
+      zpeScaledHartree: zpeRaw !== null && applied && factor !== null ? zpeRaw * factor : zpeRaw,
+      note: null,
+      warnings: Array.isArray(resolution.warnings) ? resolution.warnings.slice(0, 4).map(String) : [],
+    });
+  }
+  if (entries.length === 0) return null;
+  return {
+    tableVersion: entries.map((entry) => entry.tableVersion).find(Boolean) || null,
+    entries,
+    applied: entries.filter((entry) => entry.applied).length,
+    unscaled: entries.filter((entry) => !entry.applied
+      && entry.mode !== 'unknown' && entry.mode !== 'imported').length,
+    unknown: entries.filter((entry) => entry.mode === 'unknown').length,
+    imported: entries.filter((entry) => entry.mode === 'imported').length,
+    // `includeImported` is part of the model for the same reason it is on the
+    // task rows: a reader can see whether an imported number was allowed in.
+    includeImported: Boolean(includeImported),
+  };
+}
+
 function taskRow(task, record, { includeImported = false } = {}) {
   const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
   const method = record?.provenance?.method && typeof record.provenance.method === 'object'
     ? record.provenance.method : {};
+  // Issue #353: the same rule the results surface uses. A record read through a
+  // window is not a complete parse, even though it still reports values.
+  const flags = runFlagsFor(record);
   // Issue #131: a number another program computed is a different kind of
   // record. It is carried as its own labelled row; its energy only enters the
   // energy columns when the caller asked for it, and never unlabelled.
   const imported = importedSummary(record);
+  // Issue #355: how many times the block ran, and the queue's own record of the
+  // earlier attempts. The counter is incremented at every run start, so it also
+  // covers a resume; `history` holds only the attempts a retry reset recorded.
+  // The number the report prints is the larger of the two — never a lower count
+  // than the queue itself recorded.
+  const status = text(task.status) || 'unknown';
+  const history = taskHistory(task);
+  const attempts = Number.isInteger(task.attempts) ? task.attempts : null;
+  const historyAttempts = history.entries === null
+    ? 0
+    : history.entries.length + (ATTEMPT_STATUSES.has(status) ? 1 : 0);
+  const attemptCount = Math.max(attempts ?? 0, historyAttempts);
   return {
     nodeId: text(task.nodeId),
     title: text(task.title) || text(task.nodeId) || 'Untitled block',
@@ -88,8 +237,15 @@ function taskRow(task, record, { includeImported = false } = {}) {
     recordLabel: text(task.record?.label),
     recordCharge: Number.isInteger(task.record?.charge) ? task.record.charge : null,
     recordMultiplicity: Number.isInteger(task.record?.multiplicity) ? task.record.multiplicity : null,
-    status: text(task.status) || 'unknown',
-    attempts: Number.isInteger(task.attempts) ? task.attempts : null,
+    status,
+    attempts,
+    // The retry record, when the queue wrote one: one entry per earlier attempt,
+    // copied. `null` is "not recorded", never "zero retries".
+    history: history.entries,
+    historyTruncated: history.truncated,
+    // The number of attempts this row's evidence supports. `0` means the queue
+    // recorded nothing to count, and the report prints `not reported`.
+    attemptCount,
     gates: text(task.gateVerdict ?? record?.gates?.overall),
     validity: text(record?.gates?.validity?.overall ?? record?.validity?.overall),
     runId: text(task.runId),
@@ -98,6 +254,11 @@ function taskRow(task, record, { includeImported = false } = {}) {
     finishedAt: text(task.finishedAt),
     error: text(task.error),
     dryRun: record?.dryRun === true,
+    // Issue #353: a partial parse keeps its byte window in the model, so the
+    // caveat the HTML prints can be checked against report.json. The key is
+    // omitted entirely for a complete read, keeping a complete run's model (and
+    // its digest) byte-identical to the report written before this flag existed.
+    ...(flags.truncated ? { partial: outputWindow(flags.bytes) } : {}),
     // An imported result keeps its own summary instead of being flattened into
     // the run fields: program, version, method, basis, energy and source hash.
     imported: imported ? { ...imported, included: includeImported } : null,
@@ -670,19 +831,27 @@ export function buildWorkflowReport(queue, records = {}, {
   // ADR 0003 §3.7: SVGs already validated by the caller (main or the CLI). The
   // report never draws chemistry; it only embeds what was validated.
   structures = null,
+  artifacts = null,
 } = {}) {
   const source = queue && typeof queue === 'object' ? queue : {};
   const tasks = Array.isArray(source.tasks) ? source.tasks : [];
   const recordMap = records && typeof records === 'object' ? records : {};
-  const rows = tasks.slice(0, 500).map((task) => {
+  const resolvedRows = tasks.slice(0, 500).map((task) => {
     const byRun = task?.runId ? recordMap[task.runId] : null;
     const byNode = task?.nodeId ? recordMap[task.nodeId] : null;
-    return taskRow(task || {}, byRun || byNode || null, { includeImported });
+    return { task: task || {}, record: byRun || byNode || null };
   });
+  const rows = resolvedRows.map(({ task, record }) => taskRow(task, record, { includeImported }));
+  // Issue #353: the summary sentence counts the rows that actually had a record
+  // to read, not every row in the queue (a note block has no log at all).
+  const recordCount = resolvedRows.filter(({ record }) => record !== null).length;
+  const partials = rows.filter((row) => row.partial).length;
   // Issue #96: the ladder verdict carries only energies, so the report looks
   // up the row and the run record by node id to recover the level of theory
   // and the SCF energy the correlation extrapolation needs.
   const rowByNodeId = new Map(rows.map((row) => [row.nodeId, row]));
+  // Issue #350: the frequency-scale decisions, from the records themselves.
+  const frequencyScaling = frequencyScalingModel(tasks, recordMap, includeImported);
   const recordByNodeId = new Map();
   for (const task of tasks) {
     const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
@@ -707,6 +876,20 @@ export function buildWorkflowReport(queue, records = {}, {
     ? 'unknown'
     : gated.some((row) => row.gates === 'fail') ? 'fail'
       : gated.length < rows.length ? 'partial' : 'pass';
+
+  // Issue #355: the retry count a reader needs before trusting a green verdict.
+  // A task counts as retried when the queue's own attempt counter or its history
+  // shows more than one attempt; `extraAttempts` is how many attempts happened
+  // after the first. A report cannot be read as "stable on the first try" when
+  // this is non-zero.
+  const retriedRows = rows.filter((row) => row.attemptCount > 1);
+  const retries = {
+    tasks: retriedRows.length,
+    extraAttempts: retriedRows.reduce((sum, row) => sum + (row.attemptCount - 1), 0),
+    // Of the retried tasks, how many carry the queue's attempt history. A
+    // retried task without one is counted but cannot be itemised.
+    withHistory: retriedRows.filter((row) => Array.isArray(row.history) && row.history.length > 0).length,
+  };
 
   // Issue #80: fanned-out branches are one row per member. Group them by the
   // conformer block and compare final energies at the level they were run at —
@@ -950,6 +1133,11 @@ export function buildWorkflowReport(queue, records = {}, {
         : null,
     }));
   const uncertainty = buildUncertaintySection({ ladders, conformers, reactions: reactionModels });
+  // Issue #354: the manifest is read by the caller and handed in, so the builder
+  // stays pure. Absent (null) means "not asked", and the key is left out of the
+  // model entirely; `{ recorded: false }` is a queue with no manifest, which the
+  // document prints as `not recorded`.
+  const artifactSection = artifactsModel(artifacts);
 
   return {
     schemaVersion: WORKFLOW_REPORT_SCHEMA_VERSION,
@@ -970,11 +1158,18 @@ export function buildWorkflowReport(queue, records = {}, {
     },
     counts,
     verdict,
+    // Issue #355: how many tasks ran more than once and how many extra attempts
+    // that took. Kept beside the counts so a reader of report.json sees the same
+    // retry statement the Outcome paragraph makes.
+    retries,
     tasks: rows,
     figures,
     // ADR 0003 §3.7: validated 2D depictions, already bound to a block id.
     structures: structureFigures,
     figureLevel,
+    // Issue #354: the files the workflow's output blocks recorded, with the
+    // manifest's own digest. Omitted when the caller did not ask for it.
+    ...(artifactSection ? { artifacts: artifactSection } : {}),
     // Issue 59: the wavefunction analysis, present only when the caller supplied
     // a parsed checkpoint. `null` means "no checkpoint was attached", which is
     // the normal case — a run.json carries no density.
@@ -991,6 +1186,10 @@ export function buildWorkflowReport(queue, records = {}, {
       title: row.title,
       ...row.imported,
     })),
+    // Issue #350: what each frequency run applied, with the raw and derived
+    // ZPE. Absent from every report whose records predate the setting, so the
+    // document is byte-identical for a queue that never used it.
+    ...(frequencyScaling ? { frequencyScaling } : {}),
     // Issue 168: one entry per run that recorded an EPR block — spin
     // populations, Fermi-contact couplings, and the g-tensor refusal. Read from
     // `run.json`'s `parsed.epr`, so the report prints the numbers the run
@@ -1030,6 +1229,21 @@ export function buildWorkflowReport(queue, records = {}, {
       const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
       const block = (record && typeof record.dp4 === 'object' ? record.dp4 : null)
         || (task && typeof task.dp4 === 'object' ? task.dp4 : null);
+      if (!block) return null;
+      return {
+        nodeId: text(task?.nodeId),
+        title: text(record?.title) || text(task?.title) || text(task?.nodeId),
+        result: block,
+      };
+    }).filter(Boolean),
+    // Issue #348: one entry per run that recorded a spectrum assignment. The
+    // Boltzmann average, the comparison and the ranking were computed by
+    // `spectrumAssignment.js`; the report prints that result, it does not
+    // rescore it.
+    assignment: tasks.map((task) => {
+      const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+      const block = (record && typeof record.spectrumAssignment === 'object' ? record.spectrumAssignment : null)
+        || (task && typeof task.spectrumAssignment === 'object' ? task.spectrumAssignment : null);
       if (!block) return null;
       return {
         nodeId: text(task?.nodeId),
@@ -1118,6 +1332,10 @@ export function buildWorkflowReport(queue, records = {}, {
     // measured keeps a row with the reason; nothing is averaged or borrowed.
     uncertainty,
     fixtures: rows.filter((row) => row.dryRun).length,
+    // Issue #353: the count and denominator behind the header caveat. They are
+    // present only when a partial row exists; a complete report keeps the exact
+    // model it had before this flag existed.
+    ...(partials > 0 ? { partials, recordCount } : {}),
   };
 }
 
@@ -1127,15 +1345,120 @@ function value(value, digits = null, unit = '') {
   return String(value);
 }
 
+/** The byte window behind a partial row, as a sentence fragment (#353). */
+function windowCoverage(partial) {
+  const bytesRead = num(partial?.bytesRead);
+  const size = num(partial?.size);
+  const windows = Array.isArray(partial?.windows)
+    ? partial.windows.filter((name) => typeof name === 'string' && name.trim() !== '')
+    : [];
+  const range = bytesRead !== null && size !== null
+    ? `${bytesRead} of ${size} bytes`
+    : bytesRead !== null ? `${bytesRead} bytes read` : 'byte window not recorded';
+  return windows.length > 0 ? `${range} (${windows.join(' + ')})` : range;
+}
+
 /** Anchor ids are built from user text, so keep only characters HTML accepts in an id. */
 function anchorId(value) {
   return String(value || 'flow').replace(/[^A-Za-z0-9._:-]+/g, '-');
+}
+
+/** The anchor for a task's attempt history; record-qualified when there is one. */
+function attemptAnchorId(row) {
+  const key = row.recordId ? `${row.recordId}-${row.nodeId || 'task'}` : (row.nodeId || 'task');
+  return `attempts-${anchorId(key)}`;
+}
+
+/**
+ * The Attempts cell. `1` is printed plainly; a retried block links to the
+ * attempt list under the table. A count the queue recorded without a history is
+ * shown with that reason, so a reader never follows a link to a list the queue
+ * did not write.
+ */
+function attemptCellHtml(row) {
+  const count = Number.isInteger(row.attemptCount) ? row.attemptCount : 0;
+  if (count <= 0) return escapeHtml(MISSING);
+  if (count === 1) return escapeHtml(String(count));
+  if (!Array.isArray(row.history) || row.history.length === 0) {
+    return `${escapeHtml(String(count))} <span class="sub">history not recorded</span>`;
+  }
+  return `<a href="#${escapeHtml(attemptAnchorId(row))}">${escapeHtml(String(count))}</a> `
+    + '<span class="sub">see history</span>';
+}
+
+/**
+ * Issue #355: the attempts a retried block took, in the queue's own vocabulary
+ * (status, gate verdict, run id, finish time). The earlier attempts come from
+ * `task.history`, written when a retry reset the block; the last row is the
+ * attempt the task table above reports. Nothing is recomputed and a value the
+ * queue did not record is printed `not reported`.
+ */
+function attemptHistoryHtml(row) {
+  const history = Array.isArray(row.history) ? row.history : null;
+  if (!history || history.length === 0 || row.attemptCount <= 1) return '';
+  const entries = history.map((entry, index) => ({
+    number: index + 1,
+    status: entry.status,
+    gates: entry.gateVerdict,
+    runId: entry.runId,
+    finishedAt: entry.finishedAt,
+  }));
+  // The current attempt is the row above, and only when its status says it
+  // reached an outcome. A block reset and never re-run keeps its recorded
+  // attempts and gains no invented final row.
+  const currentShown = ATTEMPT_STATUSES.has(row.status) && row.attemptCount > entries.length;
+  if (currentShown) {
+    entries.push({
+      number: row.attemptCount,
+      status: row.status,
+      gates: row.gates,
+      runId: row.runId,
+      finishedAt: row.finishedAt,
+    });
+  }
+  const body = entries.map((entry) => {
+    const gates = entry.gates === null || entry.gates === undefined ? MISSING : entry.gates;
+    const gateClass = gates === 'pass' || gates === 'fail' ? gates : 'unknown';
+    return `<tr data-attempt="${escapeHtml(String(entry.number))}">`
+      + `<td class="num">${escapeHtml(String(entry.number))}</td>`
+      + `<td>${escapeHtml(entry.status ?? MISSING)}</td>`
+      + `<td class="gates-${gateClass}">${escapeHtml(gates)}</td>`
+      + `<td class="mono">${escapeHtml(entry.runId ?? MISSING)}</td>`
+      + `<td class="mono">${escapeHtml(entry.finishedAt ?? MISSING)}</td>`
+      + '</tr>';
+  }).join('');
+  // The counter can exceed what history holds (a resume counts every run start),
+  // and history itself is capped. Say both instead of implying the list is whole.
+  const missing = row.attemptCount - entries.length;
+  const notes = [
+    currentShown ? `Attempt ${row.attemptCount} is the run in the table above.` : null,
+    row.historyTruncated
+      ? `The queue keeps the last ${ATTEMPT_HISTORY_LIMIT} attempts; earlier attempts are not in this report.`
+      : null,
+    missing > 0
+      ? `The queue counted ${missing} more attempt(s) than its history holds.`
+      : null,
+  ].filter(Boolean);
+  return `<details class="attempts" id="${escapeHtml(attemptAnchorId(row))}" data-attempts-for="${escapeHtml(row.nodeId || 'task')}">`
+    + `<summary>${escapeHtml(String(row.attemptCount))} attempts</summary>`
+    + '<table><thead><tr><th class="num">Attempt</th><th>Status</th><th>Gates</th><th>Run</th>'
+    + '<th>Finished</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`
+    + (notes.length > 0 ? `<p class="meta">${escapeHtml(notes.join(' '))}</p>` : '')
+    + '</details>';
 }
 
 /** The per-task table, used once for a v1 queue and once per record in a family. */
 function taskTableHtml(rows) {
   const tableRows = rows.map((row) => {
     const fixture = row.dryRun ? ' <span class="fixture">FIXTURE</span>' : '';
+    // Issue #353: a row read through a window gets its own word. The inline
+    // colour keeps the screen sheet's frozen bytes intact; the word itself is
+    // what carries the meaning on paper.
+    const partial = row.partial
+      ? ' <span class="partial" data-field="partial-badge"'
+        + ' style="background:#fde8e8;color:#b42318;border:1px solid #f3c4c1;border-radius:3px;padding:0 4px;font-size:10px;font-weight:600;white-space:nowrap">PARTIAL</span>'
+      : '';
     const gates = row.gates === null ? MISSING : row.gates;
     const gateClass = gates === 'pass' || gates === 'fail' ? gates : 'unknown';
     const level = row.jobType || row.type || '';
@@ -1144,12 +1467,14 @@ function taskTableHtml(rows) {
       ? ` <span class="mono">· member ${escapeHtml(row.conformer.memberId)}${row.conformer.protomer ? ` (${escapeHtml(row.conformer.protomer)})` : ''}</span>`
       : '';
     return '<tr data-node="' + escapeHtml(row.nodeId || '') + '" data-status="' + escapeHtml(row.status) + '"'
+      + (row.partial ? ' data-partial="true"' : '')
       + (row.imported ? ' data-kind="imported"' : '') + '>'
-      + `<td><strong>${escapeHtml(row.title)}</strong>${member}${fixture}`
+      + `<td><strong>${escapeHtml(row.title)}</strong>${member}${fixture}${partial}`
       + `${row.imported ? ` <span class="imported" data-field="imported-badge">${escapeHtml(row.imported.badge)}</span>` : ''}`
       + `<div class="sub">`
       + `${escapeHtml(level)}${escapeHtml(kindSuffix)}</div></td>`
       + `<td>${escapeHtml(row.status)}</td>`
+      + `<td data-field="attempts">${attemptCellHtml(row)}</td>`
       + `<td class="gates-${gateClass}">${escapeHtml(gates)}</td>`
       + `<td>${escapeHtml(row.validity === null ? MISSING : row.validity)}</td>`
       + `<td>${escapeHtml(row.engine === null ? MISSING : row.engine)}</td>`
@@ -1165,9 +1490,10 @@ function taskTableHtml(rows) {
       + `<td class="num">${escapeHtml(value(row.elapsedSeconds, 1, ' s'))}</td>`
       + '</tr>';
   }).join('');
-  return '<table><thead><tr><th>Block</th><th>Status</th><th>Gates</th><th>Validity</th><th>Engine</th>'
+  return '<table><thead><tr><th>Block</th><th>Status</th><th>Attempts</th><th>Gates</th><th>Validity</th><th>Engine</th>'
     + '<th>Level</th><th class="num">E / Eh</th><th class="num">G / Eh</th><th class="num">Imag.</th>'
-    + '<th>Structure</th><th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>';
+    + '<th>Structure</th><th class="num">Elapsed</th></tr></thead><tbody>' + tableRows + '</tbody></table>'
+    + rows.map(attemptHistoryHtml).join('');
 }
 
 /**
@@ -1224,7 +1550,14 @@ function recordSectionHtml(record, rows, flowAnchor, headingTag) {
     + taskTableHtml(rows);
 }
 
-const REPORT_STYLE = 'body{font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;margin:32px auto;max-width:1100px;padding:0 20px;color:#16181d;background:#fff}'
+/**
+ * The screen sheet.
+ *
+ * Issue #356 kept this constant byte-for-byte: printing is a second medium, not
+ * a reason to re-tune the page a reader sees in the browser. Any change here is
+ * a screen change and belongs in its own task, with its own before/after.
+ */
+export const REPORT_STYLE = 'body{font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;margin:32px auto;max-width:1100px;padding:0 20px;color:#16181d;background:#fff}'
   + 'h1{font-size:22px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 8px;border-bottom:1px solid #e3e6eb;padding-bottom:4px}'
   + 'h3{font-size:14px;margin:26px 0 8px;border-bottom:1px solid #e3e6eb;padding-bottom:4px}'
   + 'h4{font-size:13px;margin:20px 0 6px;color:#2b3038}'
@@ -1245,6 +1578,44 @@ const REPORT_STYLE = 'body{font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-s
   + 'details{margin:6px 0}summary{cursor:pointer;font-size:12px}'
   + '.flow-section{margin-top:36px;border-top:2px solid #e3e6eb;padding-top:8px}'
   + 'footer{margin-top:32px;color:#6b7480;font-size:11px;border-top:1px solid #e3e6eb;padding-top:8px}';
+
+/**
+ * The print sheet (issue #356), appended after `REPORT_STYLE` and applied only
+ * on paper. Printing is the only way this document reaches paper — there is no
+ * `printToPDF` path — so the medium gets rules instead of the browser's guesses.
+ *
+ *   - `@page` gives A4 a 16 mm margin, and `body` drops the 1100 px screen
+ *     measure so the right-hand table columns fit the sheet rather than being
+ *     clipped or scaled down to unreadable text.
+ *   - Rows, figures, warnings, `pre` and `details` are kept whole across a page
+ *     break, and a heading is never left alone at the foot of one.
+ *   - `display:table-header-group` repeats a table's column headers when the
+ *     table does span pages, so a continued table still says what it holds.
+ *   - `print-color-adjust: exact` is set on exactly the elements whose fill
+ *     carries meaning: the FIXTURE and imported badges, the warning stripe, the
+ *     pass/fail text colours, the header fill and `pre`. Browsers drop
+ *     backgrounds by default, and a badge without its fill is a different word.
+ *   - The screen-only affordances are neutralised (pointer cursor on a summary,
+ *     underlined in-page anchors). No rule hides content: a printed report must
+ *     not drop a row a screen reader can see.
+ */
+export const REPORT_PRINT_STYLE = '@page{size:A4;margin:16mm}'
+  + '@media print{'
+  + 'body{margin:0;max-width:none;padding:0;font-size:10.5px}'
+  + 'h1{font-size:18px}h2{font-size:13px}h3{font-size:12px}h4{font-size:11.5px}'
+  + 'h1,h2,h3,h4{break-after:avoid}'
+  + 'table{font-size:9.5px}th,td{padding:4px 6px}thead{display:table-header-group}'
+  + 'tr,.fig,.warn,pre,details{break-inside:avoid}'
+  + '.fig{margin:10px 0 14px}.fig svg,.fig figcaption{max-width:100%}'
+  + 'a{color:inherit;text-decoration:none}summary{cursor:default}'
+  + 'th,.fixture,.imported,.warn,.gates-pass,.gates-fail,.warn-text,.ok,.failures,pre'
+  + '{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+  + 'footer{border-top:1px solid #d7dbe2}'
+  + '.flow-section{break-before:page}'
+  + '}';
+
+/** Screen sheet then print sheet; the emitted `<style>` is exactly this string. */
+const REPORT_CSS = REPORT_STYLE + REPORT_PRINT_STYLE;
 
 const REPORT_FOOTER = 'Generated by NodeChem Studio from the queue record and the per-run run.json files. '
   + 'A value a run did not report is shown as “not reported”; nothing is inferred. '
@@ -1439,10 +1810,135 @@ function uncertaintySectionHtml(section, headingTag = 'h2') {
 }
 
 /**
+ * Issue #354: the artifacts a workflow wrote, as the model carries them.
+ *
+ * The caller reads `<artifactRoot>/manifest.json` (`loadArtifactsManifest()` in
+ * `report.js`) and passes the result in; this function only keeps the fields
+ * the document prints and re-derives the totals, so `buildWorkflowReport()`
+ * stays pure and a hand-built model cannot inject a row the loader would not
+ * have produced. `null` means the report was not asked about artifacts at all,
+ * and the section is absent — a queue that has no manifest is a different case
+ * and arrives as `{ recorded: false }`, which the document prints.
+ */
+function artifactsModel(input) {
+  if (!input || typeof input !== 'object') return null;
+  const entries = (Array.isArray(input.entries) ? input.entries : [])
+    .filter((entry) => entry && typeof entry === 'object' && text(entry.path))
+    .map((entry) => {
+      const size = Number(entry.bytes);
+      return {
+        path: text(entry.path),
+        kind: text(entry.kind),
+        flowId: text(entry.flowId),
+        bytes: Number.isFinite(size) && size >= 0 ? Math.trunc(size) : null,
+        sha256: text(entry.sha256),
+        generatedAt: text(entry.generatedAt),
+        // A row is never dropped for a missing file: the manifest named it and
+        // the folder no longer holds it, which is what the reader came for.
+        missingOnDisk: entry.missingOnDisk === true,
+      };
+    });
+  const sizes = entries.map((entry) => entry.bytes).filter((size) => size !== null);
+  const manifestBytes = input.manifestBytes === null || input.manifestBytes === undefined
+    ? null : Number(input.manifestBytes);
+  return {
+    recorded: input.recorded === true,
+    reason: text(input.reason),
+    source: text(input.source),
+    outsideQueue: input.outsideQueue === true,
+    manifestSha256: text(input.manifestSha256),
+    manifestBytes: Number.isFinite(manifestBytes) ? Math.trunc(manifestBytes) : null,
+    generatedAt: text(input.generatedAt),
+    entries,
+    count: entries.length,
+    totalBytes: sizes.length === 0 ? null : sizes.reduce((sum, size) => sum + size, 0),
+    missingOnDisk: entries.filter((entry) => entry.missingOnDisk).length,
+    skipped: Number.isInteger(input.skipped) && input.skipped > 0 ? input.skipped : 0,
+  };
+}
+
+/**
+ * The Artifacts written section (issue #354).
+ *
+ * One row per file the workflow's output blocks recorded: the queue-relative
+ * path (never an absolute one), the kind, the flow, the byte count the manifest
+ * states and a 16-character SHA-256 prefix. The section's own line carries the
+ * manifest's digest and size, so the index is verifiable too, and an entry
+ * whose file is gone prints `missing on disk` rather than disappearing.
+ *
+ * A missing or unreadable manifest prints `not recorded` with its reason: an
+ * empty table would read as "this workflow wrote nothing", which is not what an
+ * absent manifest proves.
+ */
+function artifactsHtml(section, headingTag = 'h2') {
+  if (!section) return '';
+  const heading = `<${headingTag} data-field="artifacts-heading">Artifacts written</${headingTag}>`;
+  const source = section.source || 'manifest.json';
+  if (!section.recorded) {
+    return heading
+      + `<p class="warn" data-field="artifacts-not-recorded">Artifacts: <strong>not recorded</strong> — `
+      + `${escapeHtml(section.reason || `no ${source} was found for this queue`)}. `
+      + 'The report does not claim the workflow wrote no file; it only says no manifest was read.</p>';
+  }
+
+  const summary = [
+    `${section.count} file${section.count === 1 ? '' : 's'}`,
+    Number.isFinite(section.totalBytes) ? `${section.totalBytes} B recorded` : null,
+    section.manifestSha256
+      ? `index ${source} sha256 ${shortHash(section.manifestSha256)}` +
+        (Number.isFinite(section.manifestBytes) ? ` (${section.manifestBytes} B)` : '')
+      : `index ${source}`,
+    section.generatedAt ? `last write ${section.generatedAt}` : null,
+  ].filter(Boolean).join(' · ');
+
+  const notes = [];
+  if (section.outsideQueue) {
+    notes.push('The artifacts folder is outside the queue folder, so these paths are relative to it.');
+  }
+  if (section.skipped > 0) {
+    notes.push(`${section.skipped} manifest entr${section.skipped === 1 ? 'y was' : 'ies were'} not printed: `
+      + 'the recorded path is absolute or leaves the artifacts folder, and this report prints only paths it can prove stay inside it.');
+  }
+  if (section.missingOnDisk > 0) {
+    notes.push(`${section.missingOnDisk} recorded file${section.missingOnDisk === 1 ? ' is' : 's are'} missing on disk. `
+      + 'The row stays, because the manifest named the file; the report does not claim it exists.');
+  }
+
+  if (section.count === 0) {
+    return heading
+      + `<p class="meta" data-field="artifacts-summary">${escapeHtml(summary)}.</p>`
+      + '<p class="warn" data-field="artifacts-empty">The manifest exists but records no files.</p>'
+      + (notes.length ? `<p class="meta">${notes.map(escapeHtml).join(' ')}</p>` : '');
+  }
+
+  const showFlow = section.entries.some((entry) => entry.flowId);
+  const body = section.entries.map((entry) => '<tr data-field="artifact"'
+    + ` data-kind="${escapeHtml(entry.kind || '')}"`
+    + (entry.missingOnDisk ? ' data-missing="true"' : '') + '>'
+    + `<td class="mono">${escapeHtml(entry.path)}</td>`
+    + `<td>${escapeHtml(entry.kind === null ? MISSING : entry.kind)}</td>`
+    + (showFlow ? `<td>${escapeHtml(entry.flowId === null ? MISSING : entry.flowId)}</td>` : '')
+    + `<td class="num">${entry.bytes === null ? escapeHtml(MISSING) : String(entry.bytes)}</td>`
+    + `<td class="mono">${escapeHtml(shortHash(entry.sha256) ?? MISSING)}</td>`
+    + `<td>${entry.missingOnDisk
+      ? '<span class="warn-text">missing on disk</span>'
+      : 'present'}</td>`
+    + '</tr>').join('');
+
+  return heading
+    + `<p class="meta" data-field="artifacts-summary">${escapeHtml(summary)}.</p>`
+    + '<table data-field="artifacts"><thead><tr><th>File</th><th>Kind</th>'
+    + (showFlow ? '<th>Flow</th>' : '')
+    + '<th class="num">Bytes</th><th>SHA-256</th><th>On disk</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`
+    + (notes.length ? `<p class="meta" data-field="artifacts-notes">${notes.map(escapeHtml).join(' ')}</p>` : '');
+}
+
+/**
  * The body of one report. `level` is 1 for a stand-alone document and 2 for a
  * flow section inside the combined report, so heading depth stays correct.
  */
-function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
+function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = null } = {}) {
   if (!model || typeof model !== 'object') return '';
   const q = model.queue || {};
   const counts = model.counts || {};
@@ -1460,6 +1956,25 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
       + `${escapeHtml(row.gates === null ? MISSING : row.gates)}`
       + (row.error ? `; ${escapeHtml(row.error)}` : '') + '</li>'
     )).join('') + '</ul>';
+
+  // Issue #355: the Outcome paragraph makes the retry statement a reader needs:
+  // a green verdict on a block that ran three times is not the same claim as a
+  // first-try pass, and the report must not let the two look alike.
+  const retryTotals = model.retries && typeof model.retries === 'object' ? model.retries : {};
+  const retriedTasks = Number.isInteger(retryTotals.tasks) ? retryTotals.tasks : 0;
+  const extraAttempts = Number.isInteger(retryTotals.extraAttempts) ? retryTotals.extraAttempts : 0;
+  const itemised = Number.isInteger(retryTotals.withHistory) ? retryTotals.withHistory : 0;
+  const retrySummary = retriedTasks === 0
+    ? ''
+    : `<p data-field="retries"><strong>${retriedTasks}</strong> task(s) needed more than one attempt `
+      + `(${extraAttempts} extra attempt${extraAttempts === 1 ? '' : 's'} recorded)`
+      + `${retriedTasks > itemised
+        ? `; the queue recorded no attempt history for ${retriedTasks - itemised} of them`
+        : ''}. `
+      + (retriedTasks === itemised
+        ? 'The Attempts column links to each recorded attempt.'
+        : 'Where the queue recorded an attempt history, the Attempts column links to it.')
+      + '</p>';
 
   const failedRecords = records.filter((record) => record.status === 'failed' || record.status === 'partial');
   const failedRecordNote = failedRecords.length === 0
@@ -1624,6 +2139,21 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
 
+  // Issue #353: a windowed read is not a complete parse. The note names how
+  // many records came from a window and which rows they are, with the byte
+  // window when the record has one, so the numbers below cannot be mistaken
+  // for a full-file parse.
+  const partialRows = rows.filter((row) => row.partial);
+  const partialCount = Number.isInteger(model.partials) ? model.partials : partialRows.length;
+  const recordTotal = Number.isInteger(model.recordCount) ? model.recordCount : rows.length;
+  const partialNote = partialCount > 0
+    ? `<p class="warn" data-field="partial-note">${partialCount} of ${recordTotal} `
+      + `record${recordTotal === 1 ? '' : 's'} ${partialCount === 1 ? 'was' : 'were'} read from a window of the log; `
+      + 'values may be missing or stale. Partial: '
+      + partialRows.map((row) => `<strong>${escapeHtml(row.title)}</strong> — ${escapeHtml(windowCoverage(row.partial))}`).join(', ')
+      + '.</p>'
+    : '';
+
   // Issue 175: derived quantities have their own section — never an energy
   // column. Each block names its expression, the upstream values it read, and
   // the methods sentence that says what kind of number this is.
@@ -1701,8 +2231,10 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + `<p class="meta">Queue ${escapeHtml(q.id || MISSING)} · status ${escapeHtml(q.status || MISSING)}`
     + ` · created ${escapeHtml(q.createdAt || MISSING)} · finished ${escapeHtml(q.finishedAt || MISSING)}`
     + ` · generated ${escapeHtml(model.generatedAt || MISSING)}`
-    + ` · NodeChem Studio ${escapeHtml(model.appVersion || MISSING)}</p>`
+    + ` · NodeChem Studio ${escapeHtml(model.appVersion || MISSING)}`
+    + modelDigestText(modelDigest) + '</p>'
     + fixtureNote
+    + partialNote
     + importedNote
     + figuresHtml(model.figures, rows, sectionHeading)
     + analysisHtml(model.analysis, sectionHeading)
@@ -1710,6 +2242,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + `<p>${counts.total || 0} task(s): ${counts.passed || 0} passed, ${counts.failed || 0} failed, `
     + `${counts.skipped || 0} skipped, ${counts.cancelled || 0} cancelled, ${counts.notRun || 0} not run. `
     + `Gate verdict: <strong>${escapeHtml(model.verdict || 'unknown')}</strong>.</p>`
+    + retrySummary
     + failureList
     + failedRecordNote
     + whatRan
@@ -1717,7 +2250,9 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + conformerBlocks
     + spinBlocks
     + dp4SectionHtml(model.dp4, sectionHeading)
+    + spectrumAssignmentSectionHtml(model.assignment, sectionHeading)
     + eprSectionHtml(model.epr, sectionHeading)
+    + frequencyScalingSectionHtml(model.frequencyScaling, sectionHeading)
     + nmrSectionHtml(model.nmr, sectionHeading)
     + reactionBlocks
     + uncertaintySectionHtml(model.uncertainty, sectionHeading)
@@ -1729,6 +2264,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + multiwfnSectionHtml(model.multiwfn, sectionHeading)
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')
+    + artifactsHtml(model.artifacts, sectionHeading)
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'
     + '<tbody>' + provenanceRows + '</tbody></table>';
@@ -2092,6 +2628,76 @@ export function dp4SectionHtml(entries, headingTag = 'h2') {
 }
 
 /**
+ * The spectrum-assignment section (issue #348): one subsection per run that
+ * carries `record.spectrumAssignment`, rendered by the same
+ * `assignmentPanelHtml()` the results card uses. The report therefore prints
+ * the card's numbers verbatim — cosine, band score, combined score, margin,
+ * scale factor and populations — rather than recomputing them.
+ */
+export function spectrumAssignmentSectionHtml(entries, headingTag = 'h2') {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const blocks = entries.map((entry) => assignmentPanelHtml(entry.result ?? entry.assignment, {
+    heading: entry.title || entry.nodeId || MISSING,
+  })).join('');
+  return `<${headingTag}>Spectrum assignment</${headingTag}>`
+    + '<p class="note">Each candidate is Boltzmann-averaged from its own conformers, using the populations the '
+    + 'ensemble stored. Candidates — tautomers, stereoisomers and conformer sets alike — are ranked against the '
+    + 'measured trace and never merged: a tautomer is a different molecule, so it cannot share a population or a '
+    + 'curve with another candidate.</p>'
+    + blocks;
+}
+
+/**
+ * The frequency-scaling section (issue #350): one row per run that made a
+ * scaling decision, with the factor, the raw ZPE and the derived ZPE.
+ *
+ * The two ZPE columns are the point of the table. A scaled ZPE without the raw
+ * one looks like a calculation; the pair makes it a derivation. The source cell
+ * carries the citation for the factor, and an unknown pair prints the warning
+ * that says no factor was guessed.
+ */
+export function frequencyScalingSectionHtml(section, headingTag = 'h2') {
+  if (!section || !Array.isArray(section.entries) || section.entries.length === 0) return '';
+  const entries = section.entries;
+  const rows = entries.map((entry) => {
+    const factorText = entry.applied
+      ? `×${Number(entry.factor).toFixed(4)}`
+      : entry.mode === 'unknown' ? 'unscaled (no entry)' : entry.mode === 'imported' ? 'not applied' : 'unscaled';
+    const sourceText = entry.applied
+      ? `${entry.source || 'source not recorded'}${entry.doi ? ` · doi:${entry.doi}` : ''}`
+      : entry.note || (entry.mode === 'unknown'
+        ? (entry.warnings[0] || `no published factor for ${entry.key || 'this pair'}`)
+        : 'as printed');
+    return '<tr data-field="frequency-scale" data-node="' + escapeHtml(entry.nodeId || '') + '">'
+      + `<td>${escapeHtml(entry.title || entry.nodeId || MISSING)}</td>`
+      + `<td>${escapeHtml(entry.level || MISSING)}</td>`
+      + `<td>${escapeHtml(factorText)}</td>`
+      + `<td class="num">${escapeHtml(value(entry.zpeRawHartree, 6))}</td>`
+      + `<td class="num">${escapeHtml(value(entry.zpeScaledHartree, 6))}</td>`
+      + `<td>${escapeHtml(sourceText)}</td>`
+      + '</tr>';
+  }).join('');
+  const warnings = entries.flatMap((entry) => (Array.isArray(entry.warnings) ? entry.warnings : []))
+    .filter(Boolean)
+    .map((warning) => `<li>${escapeHtml(warning)}</li>`)
+    .join('');
+  const tableVersion = section.tableVersion ? ` Table version ${escapeHtml(section.tableVersion)}.` : '';
+  return `<${headingTag}>Frequency scaling</${headingTag}>`
+    + `<p>${escapeHtml(String(entries.length))} frequency run(s): `
+    + `<strong>${escapeHtml(String(section.applied || 0))}</strong> scaled, `
+    + `${escapeHtml(String(section.unscaled || 0))} unscaled, `
+    + `${escapeHtml(String(section.unknown || 0))} with no published table entry`
+    + (section.imported ? `, ${escapeHtml(String(section.imported))} imported (kept unscaled)` : '')
+    + '. '
+    + 'The factor moves the displayed band positions, the derived ZPE and the quasi-RRHO entropy; '
+    + `the parsed record keeps the numbers the program printed.${tableVersion}</p>`
+    + '<table><thead><tr><th>Block</th><th>Level</th><th>Factor</th>'
+    + '<th class="num">ZPE raw / Eh</th><th class="num">ZPE scaled / Eh</th><th>Factor source</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>'
+    + (warnings ? `<ul class="warn">${warnings}</ul>` : '');
+}
+
+/**
  * The EPR section (issue 168): per-run spin populations and Fermi-contact
  * couplings, in the units the numbers are in, with the level of theory and the
  * density-only caveat printed beside them. A closed-shell run prints the words
@@ -2191,19 +2797,62 @@ function analysisHtml(analysis, headingTag = 'h2') {
 }
 
 /**
+ * The exact bytes a report model is written as. The window, the CLI and any
+ * future writer share this function so `sha256sum` of the file and the digest
+ * printed in the HTML cannot disagree about serialisation (issue #357).
+ */
+export function serializeReportModel(model) {
+  return JSON.stringify(model, null, 2);
+}
+
+/**
+ * The combined report's JSON document (issue #357): one envelope around the
+ * per-flow models the combined HTML renders, so a combined report also has a
+ * model a reader can re-render and hash.
+ */
+export function buildProjectReportModel(models, { title = 'Project report', generatedAt = null } = {}) {
+  const list = (Array.isArray(models) ? models : []).filter((model) => model && typeof model === 'object');
+  return {
+    schemaVersion: PROJECT_REPORT_SCHEMA_VERSION,
+    kind: PROJECT_REPORT_KIND,
+    generatedAt: text(generatedAt) || text(list[0]?.generatedAt),
+    title: String(title || 'Project report'),
+    flows: list,
+  };
+}
+
+/** ` data-model-sha256="…"` when the caller wrote a model and knows its digest. */
+function modelDigestAttribute(modelDigest) {
+  const digest = text(modelDigest);
+  return digest ? ` data-model-sha256="${escapeHtml(digest)}"` : '';
+}
+
+/** ` · model sha256 …` for the header meta line, when a model was written. */
+function modelDigestText(modelDigest) {
+  const digest = text(modelDigest);
+  return digest ? ` · model sha256 ${escapeHtml(digest)}` : '';
+}
+
+/**
  * Render the report as a self-contained HTML document.
  *
  * `methodsFor(task)` is optional: when supplied it returns the methods
  * paragraph for that task's run record, which is embedded in a collapsed
  * block. Passing nothing simply omits those blocks.
+ *
+ * `modelDigest` is optional: when the caller writes a JSON model beside the
+ * HTML, it is the SHA-256 of those exact JSON bytes. It is printed in the
+ * header meta line and set as `data-model-sha256` on `<html>`, so the HTML
+ * names the model it came from (issue #357). Omitting it leaves the document
+ * byte-identical to the pre-#357 report.
  */
-export function workflowReportHtml(model, { methodsFor = null } = {}) {
+export function workflowReportHtml(model, { methodsFor = null, modelDigest = null } = {}) {
   if (!model || typeof model !== 'object') return '';
   const q = model.queue || {};
-  return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+  return '<!doctype html>\n<html lang="en"' + modelDigestAttribute(modelDigest) + '><head><meta charset="utf-8">'
     + `<title>Workflow report — ${escapeHtml(q.projectName || q.id || 'queue')}</title>`
-    + `<style>${REPORT_STYLE}</style></head><body>`
-    + reportContentHtml(model, { methodsFor })
+    + `<style>${REPORT_CSS}</style></head><body>`
+    + reportContentHtml(model, { methodsFor, modelDigest })
     + `<footer>${REPORT_FOOTER}</footer>`
     + '</body></html>\n';
 }
@@ -2215,8 +2864,12 @@ export function workflowReportHtml(model, { methodsFor = null } = {}) {
  * records names them in its row, so a reader cannot mistake a green flow
  * verdict for a batch that lost molecules. Each flow is anchored at
  * `#flow-<id>`; the sections are the same bodies the per-flow report uses.
+ *
+ * `modelDigest` is the SHA-256 of the project-report JSON written beside this
+ * document (issue #357); it is set on `<html>` and printed once in the header,
+ * not repeated in every flow section.
  */
-export function buildCombinedReportHtml(models, { title = 'Project report', generatedAt = null } = {}) {
+export function buildCombinedReportHtml(models, { title = 'Project report', generatedAt = null, modelDigest = null } = {}) {
   const list = (Array.isArray(models) ? models : []).filter((model) => model && typeof model === 'object');
   const docTitle = String(title || 'Project report');
   const generated = text(generatedAt) || text(list[0]?.generatedAt) || MISSING;
@@ -2253,12 +2906,12 @@ export function buildCombinedReportHtml(models, { title = 'Project report', gene
       + '</section>';
   }).join('');
 
-  return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+  return '<!doctype html>\n<html lang="en"' + modelDigestAttribute(modelDigest) + '><head><meta charset="utf-8">'
     + `<title>${escapeHtml(docTitle)}</title>`
-    + `<style>${REPORT_STYLE}</style></head><body>`
+    + `<style>${REPORT_CSS}</style></head><body>`
     + `<h1>${escapeHtml(docTitle)}</h1>`
     + `<p class="meta">Generated ${escapeHtml(generated)} · ${list.length} flow${list.length === 1 ? '' : 's'}`
-    + ' · NodeChem Studio</p>'
+    + ' · NodeChem Studio' + modelDigestText(modelDigest) + '</p>'
     + '<h2>Index</h2>'
     + '<table><thead><tr><th>Flow</th><th>Queue status</th><th>Verdict</th><th>Records</th>'
     + '<th>Failed or partial records</th></tr></thead><tbody>'
