@@ -77,7 +77,7 @@ import { parseWfx } from '../src/shared/wfx.js';
 import { CCLIB_SCRIPT_RELATIVE, cclibOutputName, parseCclibSummary } from '../src/shared/cclib.js';
 import { PyscfRunner } from '../electron/runner/pyscfRunner.js';
 import { buildPyscfInput, parsePyscfOutput } from '../src/shared/engines/pyscf.js';
-import { FIGURE_LEVELS } from '../src/shared/report.js';
+import { FIGURE_LEVELS, loadArtifactsManifest } from '../src/shared/report.js';
 import { loadReportInputs } from '../src/shared/reportInputs.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
@@ -605,12 +605,16 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
   }
 
   const queues = [];
+  const queueDirs = new Map();
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     try {
       // eslint-disable-next-line no-await-in-loop
       const queue = JSON.parse(await fs.readFile(path.join(queuesDir, entry.name, 'queue.json'), 'utf8'));
-      if (queue?.id) queues.push(queue);
+      if (queue?.id) {
+        queues.push(queue);
+        queueDirs.set(queue.id, path.join(queuesDir, entry.name));
+      }
     } catch {
       // An unreadable queue is skipped; a later one may still be reportable.
     }
@@ -633,6 +637,18 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
   for (const [flowId, queue] of selected) {
     // eslint-disable-next-line no-await-in-loop
     const inputs = await loadReportInputs(queue, figures, { nodeIdPolicy: 'first' });
+    // Issue #354: the queue's output blocks append to `<artifactRoot>/manifest.json`
+    // — `artifacts/` inside the queue folder in the app, the `--out` folder for
+    // `ncs run` — and the report prints what it records. A folder produced by the
+    // app has no out-dir manifest, so the queue's own manifest is the fallback.
+    const queueDir = queueDirs.get(queue.id) || path.join(queuesDir, queue.id);
+    // eslint-disable-next-line no-await-in-loop
+    let artifacts = await loadArtifactsManifest(queueDir, { artifactsRoot: outDir });
+    if (!artifacts.recorded) {
+      // eslint-disable-next-line no-await-in-loop
+      const local = await loadArtifactsManifest(queueDir);
+      if (local.recorded) artifacts = local;
+    }
     models.push(buildWorkflowReport({ ...queue, flowId }, inputs.records, {
       generatedAt,
       appVersion: 'cli',
@@ -641,6 +657,7 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
       figureLevel: inputs.figures.level,
       volumes: inputs.figures.volumes,
       surfaces: inputs.figures.surfaces,
+      artifacts,
     }));
   }
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -165,6 +166,29 @@ describe('ncs report', () => {
     const html = await readFile(path.join(out, 'plain.html'), 'utf8');
     expect(html).not.toContain('<figure');
     expect(html).not.toMatch(/<script/i);
+  }, 120000);
+
+  it('lists the artifacts the run wrote, read from the out-dir manifest (#354)', async () => {
+    const { dir, file } = await writeProject();
+    const out = path.join(dir, 'artifacts-listed');
+    expect((await ncs(['run', file, '--out', out, '--dry-run'], { timeout: 120000 })).code).toBe(0);
+    const report = await ncs(['report', out, '--flow', 'barrier', '--figures=none'], { timeout: 60000 });
+    expect(report.code).toBe(0);
+
+    const html = await readFile(path.join(out, 'reports', 'index.html'), 'utf8');
+    expect(html).toContain('Artifacts written');
+    expect(html).toContain('reports/barrier-m1.html');
+    expect(html).toContain('reports/barrier-m2.html');
+    // The row's byte count is the file the run actually wrote…
+    const one = await readFile(path.join(out, 'reports', 'barrier-m1.html'));
+    expect(html).toContain(`<td class="num">${one.length}</td>`);
+    // …and the section names the manifest's own digest, so the index is
+    // verifiable with `sha256sum <out>/manifest.json`.
+    const manifestBytes = await readFile(path.join(out, 'manifest.json'));
+    const digest = createHash('sha256').update(manifestBytes).digest('hex');
+    expect(html).toContain(digest.slice(0, 16));
+    // The absolute output folder never reaches the document.
+    expect(html).not.toContain(out);
   }, 120000);
 
   it('rebuilds the HTML report from the newest queue, by default into reports/index.html', async () => {

@@ -12,6 +12,14 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Added
 
+- **Workflow reports list the artifacts the workflow wrote** — `report.html` now has an *Artifacts
+  written* section built from the queue's `<artifactRoot>/manifest.json`: one row per file with its
+  kind, queue-relative path, byte count and 16-character SHA-256, plus the manifest's own digest and
+  size. A file the manifest names but the folder no longer holds is marked `missing on disk`; a queue
+  with no readable manifest says `not recorded` instead of showing an empty table, and a manifest
+  entry whose path is absolute or leaves the artifacts folder is not printed. The builder stays
+  pure: `loadArtifactsManifest()` in `src/shared/report.js` reads the file and `buildWorkflowReport()`
+  receives it as `artifacts` (#354).
 - **`ncs report` writes the model and names its SHA-256** — the command now writes `<name>.json`
   beside `<name>.html` (or `reports/index.json` beside `reports/index.html`), prints
   `model sha256 <digest>` after the HTML path, and the HTML carries the same digest in

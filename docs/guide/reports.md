@@ -111,7 +111,12 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    the ladder's headroom against its tolerance, the population a conformer would need to dominate,
    or the rate ratio the barrier error cannot resolve.
 6. **Derived quantities, Multiwfn analyses and imported results**, then **Methods**, then
-   **Provenance** — run ids and the input/output SHA-256 prefixes.
+   **Artifacts written** — one row per file the workflow's output blocks recorded in
+   `<artifactRoot>/manifest.json`: the queue-relative path, kind, flow, byte count and a 16-character
+   SHA-256 prefix, with the manifest's own digest and size in the section line. A file the manifest
+   names but the folder no longer holds is printed as `missing on disk`; a queue with no readable
+   manifest says `not recorded` instead of showing an empty table — then **Provenance** — run ids and
+   the input/output SHA-256 prefixes.
 
 A v1 project (no dataset) is unchanged: one table of blocks, no record sections.
 

@@ -27,7 +27,7 @@ import { buildWorkflowReport, serializeReportModel, workflowReportHtml } from '.
 import { methodsParagraphFor } from '../src/shared/methodsParagraph.js';
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { convertParsed, convertWavefunctionFile } from '../src/shared/converters/index.js';
-import { normaliseFigureLevel } from '../src/shared/report.js';
+import { loadArtifactsManifest, normaliseFigureLevel } from '../src/shared/report.js';
 import { loadReportInputs } from '../src/shared/reportInputs.js';
 import {
   PROJECT_EXTENSIONS,
@@ -1040,12 +1040,20 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic', sender = nul
       onProgress: progress.onProgress,
     });
 
+    // Issue #354: the queue's output blocks append to
+    // `<artifactsRoot>/manifest.json`; the report reads it here and prints what
+    // it records, so the files the workflow wrote are visible in the document.
+    const artifacts = await loadArtifactsManifest(queueManager.queueDir(queue.id), {
+      artifactsRoot: queueManager.artifactsRoot || null,
+    });
+
     const model = buildWorkflowReport(queue, records, {
       generatedAt: new Date().toISOString(),
       appVersion: currentAppInfo().version,
       figureLevel: figures.level,
       volumes: figures.volumes,
       surfaces: figures.surfaces,
+      artifacts,
     });
 
     // Issue #357: the window writes the model it rendered from, and the HTML
