@@ -17,6 +17,7 @@ import { boltzmannWeightedObservables, formatPopulation } from './conformers.js'
 import { tautomerSpread } from './tautomers.js';
 import { dp4Verdict } from './dp4.js';
 import { IMPORTED_BADGE_TEXT, importedSummary } from './importedRecord.js';
+import { outputWindow, runFlagsFor } from './runFlags.js';
 import { contentHash } from './figures/primitives.js';
 import { flowGraphFigure } from './figures/dag.js';
 import { taskFigures } from './figures/report.js';
@@ -80,6 +81,9 @@ function taskRow(task, record, { includeImported = false } = {}) {
   const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
   const method = record?.provenance?.method && typeof record.provenance.method === 'object'
     ? record.provenance.method : {};
+  // Issue #353: the same rule the results surface uses. A record read through a
+  // window is not a complete parse, even though it still reports values.
+  const flags = runFlagsFor(record);
   // Issue #131: a number another program computed is a different kind of
   // record. It is carried as its own labelled row; its energy only enters the
   // energy columns when the caller asked for it, and never unlabelled.
@@ -105,6 +109,11 @@ function taskRow(task, record, { includeImported = false } = {}) {
     finishedAt: text(task.finishedAt),
     error: text(task.error),
     dryRun: record?.dryRun === true,
+    // Issue #353: a partial parse keeps its byte window in the model, so the
+    // caveat the HTML prints can be checked against report.json. The key is
+    // omitted entirely for a complete read, keeping a complete run's model (and
+    // its digest) byte-identical to the report written before this flag existed.
+    ...(flags.truncated ? { partial: outputWindow(flags.bytes) } : {}),
     // An imported result keeps its own summary instead of being flattened into
     // the run fields: program, version, method, basis, energy and source hash.
     imported: imported ? { ...imported, included: includeImported } : null,
@@ -527,11 +536,16 @@ export function buildWorkflowReport(queue, records = {}, {
   const source = queue && typeof queue === 'object' ? queue : {};
   const tasks = Array.isArray(source.tasks) ? source.tasks : [];
   const recordMap = records && typeof records === 'object' ? records : {};
-  const rows = tasks.slice(0, 500).map((task) => {
+  const resolvedRows = tasks.slice(0, 500).map((task) => {
     const byRun = task?.runId ? recordMap[task.runId] : null;
     const byNode = task?.nodeId ? recordMap[task.nodeId] : null;
-    return taskRow(task || {}, byRun || byNode || null, { includeImported });
+    return { task: task || {}, record: byRun || byNode || null };
   });
+  const rows = resolvedRows.map(({ task, record }) => taskRow(task, record, { includeImported }));
+  // Issue #353: the summary sentence counts the rows that actually had a record
+  // to read, not every row in the queue (a note block has no log at all).
+  const recordCount = resolvedRows.filter(({ record }) => record !== null).length;
+  const partials = rows.filter((row) => row.partial).length;
   // Issue #96: the ladder verdict carries only energies, so the report looks
   // up the row and the run record by node id to recover the level of theory
   // and the SCF energy the correlation extrapolation needs.
@@ -954,6 +968,10 @@ export function buildWorkflowReport(queue, records = {}, {
     // measured keeps a row with the reason; nothing is averaged or borrowed.
     uncertainty,
     fixtures: rows.filter((row) => row.dryRun).length,
+    // Issue #353: the count and denominator behind the header caveat. They are
+    // present only when a partial row exists; a complete report keeps the exact
+    // model it had before this flag existed.
+    ...(partials > 0 ? { partials, recordCount } : {}),
   };
 }
 
@@ -961,6 +979,19 @@ function value(value, digits = null, unit = '') {
   if (value === null || value === undefined) return MISSING;
   if (typeof value === 'number' && digits !== null) return value.toFixed(digits) + unit;
   return String(value);
+}
+
+/** The byte window behind a partial row, as a sentence fragment (#353). */
+function windowCoverage(partial) {
+  const bytesRead = num(partial?.bytesRead);
+  const size = num(partial?.size);
+  const windows = Array.isArray(partial?.windows)
+    ? partial.windows.filter((name) => typeof name === 'string' && name.trim() !== '')
+    : [];
+  const range = bytesRead !== null && size !== null
+    ? `${bytesRead} of ${size} bytes`
+    : bytesRead !== null ? `${bytesRead} bytes read` : 'byte window not recorded';
+  return windows.length > 0 ? `${range} (${windows.join(' + ')})` : range;
 }
 
 /** Anchor ids are built from user text, so keep only characters HTML accepts in an id. */
@@ -972,6 +1003,13 @@ function anchorId(value) {
 function taskTableHtml(rows) {
   const tableRows = rows.map((row) => {
     const fixture = row.dryRun ? ' <span class="fixture">FIXTURE</span>' : '';
+    // Issue #353: a row read through a window gets its own word. The inline
+    // colour keeps the screen sheet's frozen bytes intact; the word itself is
+    // what carries the meaning on paper.
+    const partial = row.partial
+      ? ' <span class="partial" data-field="partial-badge"'
+        + ' style="background:#fde8e8;color:#b42318;border:1px solid #f3c4c1;border-radius:3px;padding:0 4px;font-size:10px;font-weight:600;white-space:nowrap">PARTIAL</span>'
+      : '';
     const gates = row.gates === null ? MISSING : row.gates;
     const gateClass = gates === 'pass' || gates === 'fail' ? gates : 'unknown';
     const level = row.jobType || row.type || '';
@@ -980,8 +1018,9 @@ function taskTableHtml(rows) {
       ? ` <span class="mono">· member ${escapeHtml(row.conformer.memberId)}${row.conformer.protomer ? ` (${escapeHtml(row.conformer.protomer)})` : ''}</span>`
       : '';
     return '<tr data-node="' + escapeHtml(row.nodeId || '') + '" data-status="' + escapeHtml(row.status) + '"'
+      + (row.partial ? ' data-partial="true"' : '')
       + (row.imported ? ' data-kind="imported"' : '') + '>'
-      + `<td><strong>${escapeHtml(row.title)}</strong>${member}${fixture}`
+      + `<td><strong>${escapeHtml(row.title)}</strong>${member}${fixture}${partial}`
       + `${row.imported ? ` <span class="imported" data-field="imported-badge">${escapeHtml(row.imported.badge)}</span>` : ''}`
       + `<div class="sub">`
       + `${escapeHtml(level)}${escapeHtml(kindSuffix)}</div></td>`
@@ -1503,6 +1542,21 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
     ? `<p class="warn">${model.fixtures} task${model.fixtures === 1 ? '' : 's'} ran as a labelled fixture (dry run). Fixture numbers are test data, not calculations.</p>`
     : '';
 
+  // Issue #353: a windowed read is not a complete parse. The note names how
+  // many records came from a window and which rows they are, with the byte
+  // window when the record has one, so the numbers below cannot be mistaken
+  // for a full-file parse.
+  const partialRows = rows.filter((row) => row.partial);
+  const partialCount = Number.isInteger(model.partials) ? model.partials : partialRows.length;
+  const recordTotal = Number.isInteger(model.recordCount) ? model.recordCount : rows.length;
+  const partialNote = partialCount > 0
+    ? `<p class="warn" data-field="partial-note">${partialCount} of ${recordTotal} `
+      + `record${recordTotal === 1 ? '' : 's'} ${partialCount === 1 ? 'was' : 'were'} read from a window of the log; `
+      + 'values may be missing or stale. Partial: '
+      + partialRows.map((row) => `<strong>${escapeHtml(row.title)}</strong> — ${escapeHtml(windowCoverage(row.partial))}`).join(', ')
+      + '.</p>'
+    : '';
+
   // Issue 175: derived quantities have their own section — never an energy
   // column. Each block names its expression, the upstream values it read, and
   // the methods sentence that says what kind of number this is.
@@ -1583,6 +1637,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
     + ` · NodeChem Studio ${escapeHtml(model.appVersion || MISSING)}`
     + modelDigestText(modelDigest) + '</p>'
     + fixtureNote
+    + partialNote
     + importedNote
     + figuresHtml(model.figures, rows, sectionHeading)
     + analysisHtml(model.analysis, sectionHeading)
