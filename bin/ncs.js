@@ -71,7 +71,8 @@ import { parseWfx } from '../src/shared/wfx.js';
 import { CCLIB_SCRIPT_RELATIVE, cclibOutputName, parseCclibSummary } from '../src/shared/cclib.js';
 import { PyscfRunner } from '../electron/runner/pyscfRunner.js';
 import { buildPyscfInput, parsePyscfOutput } from '../src/shared/engines/pyscf.js';
-import { FIGURE_LEVELS, cubeVolumesFor, surfacesFor } from '../src/shared/report.js';
+import { FIGURE_LEVELS } from '../src/shared/report.js';
+import { loadReportInputs } from '../src/shared/reportInputs.js';
 import { RunManager } from '../electron/runner/runManager.js';
 import { QueueManager } from '../electron/runner/queue.js';
 import { readSettingsFile } from '../electron/settingsStore.js';
@@ -570,23 +571,6 @@ function queueRecordInfo(queue) {
   return [...info.values()];
 }
 
-/** Read every `run.json` a queue points at, keyed by run id and node id. */
-async function queueRunRecords(queue) {
-  const records = {};
-  for (const task of Array.isArray(queue?.tasks) ? queue.tasks : []) {
-    if (!task.runDir) continue;
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const record = JSON.parse(await fs.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
-      if (task.runId) records[task.runId] = record;
-      if (task.nodeId && !records[task.nodeId]) records[task.nodeId] = record;
-    } catch {
-      // A run folder without run.json is reported as a failure, not guessed.
-    }
-  }
-  return records;
-}
-
 /**
  * `ncs report` — rebuild the HTML report from the last queue on disk.
  *
@@ -641,20 +625,15 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
   const models = [];
   for (const [flowId, queue] of selected) {
     // eslint-disable-next-line no-await-in-loop
-    const records = await queueRunRecords(queue);
-    // A slice figure needs a volume. With --figures=surfaces the cube files the
-    // block read are parsed from the run folder; without one the figure says so.
-    // eslint-disable-next-line no-await-in-loop
-    const volumes = figures === 'none' ? null : await cubeVolumesFor(queue);
-    const surfaces = figures === 'surfaces' ? await surfacesFor(volumes) : null;
-    models.push(buildWorkflowReport({ ...queue, flowId }, records, {
+    const inputs = await loadReportInputs(queue, figures, { nodeIdPolicy: 'first' });
+    models.push(buildWorkflowReport({ ...queue, flowId }, inputs.records, {
       generatedAt,
       appVersion: 'cli',
       recordInfo: queueRecordInfo(queue),
       includeImported,
-      figureLevel: figures,
-      volumes,
-      surfaces,
+      figureLevel: inputs.figures.level,
+      volumes: inputs.figures.volumes,
+      surfaces: inputs.figures.surfaces,
     }));
   }
 
