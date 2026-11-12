@@ -280,6 +280,82 @@ describe('composite method output and gates', () => {
     expect(gate.result).toBe('unknown');
     expect(evaluateGates(parsed, {}).overall).toBe('unknown');
   });
+
+  /*
+   * Issue #373: the `(0 K)` matcher is a module constant and the three term
+   * matchers are memoised per method, so a longer summary must not compile more
+   * RegExp objects. Counting constructions is the observable form of "reused":
+   * a matcher rebuilt per line makes the repeated block cost more than the
+   * single one, which is exactly the regression this pins.
+   */
+  it('compiles no RegExp per summary line', () => {
+    const summary = [
+      ' CBS-QB3 (0 K)=        -39.069832 CBS-QB3 Energy=           -39.066969',
+      ' CBS-QB3 Enthalpy=     -39.066025 CBS-QB3 Free Energy=      -39.088192',
+    ];
+    const single = synthetic([...summary, ' Normal termination of Gaussian 16']);
+    const repeated = synthetic([
+      ...Array.from({ length: 40 }, () => summary).flat(),
+      ' Normal termination of Gaussian 16',
+    ]);
+
+    const countRegExpConstructions = (text) => {
+      const RealRegExp = RegExp;
+      let constructions = 0;
+      class CountingRegExp extends RealRegExp {
+        constructor(...args) {
+          super(...args);
+          constructions += 1;
+        }
+      }
+      globalThis.RegExp = CountingRegExp;
+      try {
+        parseGaussianOutput(text);
+      } finally {
+        globalThis.RegExp = RealRegExp;
+      }
+      return constructions;
+    };
+
+    // Warm the per-method matcher cache so the two counts compare like with like.
+    countRegExpConstructions(single);
+    expect(countRegExpConstructions(repeated)).toBe(countRegExpConstructions(single));
+
+    const one = parseGaussianOutput(single).composite;
+    const many = parseGaussianOutput(repeated).composite;
+    expect(many).toEqual({ ...one, line: one.line + 39 * summary.length });
+  });
+
+  /*
+   * A G2 job prints G1 lines before its own. The memo is keyed by method id, so
+   * the last block wins with G2's labels; a single shared entry would read G2's
+   * terms with G1's label and leave them null.
+   */
+  it('keeps the terms of a G1-then-G2 summary separate', () => {
+    // Warm the memo with G1 alone: a cache keyed by anything but the method id
+    // would answer G2's summary with G1's labels and lose its terms.
+    parseGaussianOutput(synthetic([
+      ' #p G1',
+      ' G1(0 K)=   -76.300000000 G1 Energy=   -76.297000000',
+      ' G1 Enthalpy=   -76.296000000 G1 Free Energy=   -76.318000000',
+      ' Normal termination of Gaussian 16',
+    ]));
+    const g2 = parseGaussianOutput(synthetic([
+      ' #p G2',
+      ' G1(0 K)=   -76.300000000 G1 Energy=   -76.297000000',
+      ' G1 Enthalpy=   -76.296000000 G1 Free Energy=   -76.318000000',
+      ' G2(0 K)=   -76.410000000 G2 Energy=   -76.407000000',
+      ' G2 Enthalpy=   -76.406000000 G2 Free Energy=   -76.428000000',
+      ' Normal termination of Gaussian 16',
+    ])).composite;
+    expect(g2).toMatchObject({
+      method: 'G2',
+      zeroPointEnergyHartree: -76.41,
+      thermalEnergyHartree: -76.407,
+      enthalpyHartree: -76.406,
+      freeEnergyHartree: -76.428,
+    });
+  });
 });
 
 /* Issue #77: counterpoise block parsing and BSSE. */

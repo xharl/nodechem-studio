@@ -687,6 +687,38 @@ function labelPattern(method) {
 }
 
 /**
+ * The `(0 K)` headline line of a composite summary. The shape is the same for
+ * every method, so it is compiled once (issue #373): it used to be rebuilt for
+ * every line of the block.
+ */
+const COMPOSITE_ZERO_K = new RegExp(
+  String.raw`^\s*([A-Za-z][A-Za-z0-9()\- ]*?)\s*\(0 K\)\s*=\s*(${NUMBER})`,
+  'i',
+);
+
+/**
+ * The three thermochemistry matchers for a composite method, keyed by
+ * `method.id`. A method's labels are fixed, so the matchers are built once and
+ * reused for every line of every summary rather than recompiled per matched
+ * line. Keying on the id (not a single shared entry) keeps G2's terms from
+ * being read with G1's labels in the G1-then-G2 block a G2 job prints.
+ */
+const COMPOSITE_TERM_PATTERNS = new Map();
+
+function compositeTermPatterns(method) {
+  let patterns = COMPOSITE_TERM_PATTERNS.get(method.id);
+  if (patterns) return patterns;
+  const labels = labelPattern(method);
+  patterns = Object.freeze({
+    energy: new RegExp(String.raw`(?:${labels})\s*Energy\s*=\s*(${NUMBER})`, 'i'),
+    enthalpy: new RegExp(String.raw`(?:${labels})\s*Enthalpy\s*=\s*(${NUMBER})`, 'i'),
+    freeEnergy: new RegExp(String.raw`(?:${labels})\s*Free Energy\s*=\s*(${NUMBER})`, 'i'),
+  });
+  COMPOSITE_TERM_PATTERNS.set(method.id, patterns);
+  return patterns;
+}
+
+/**
  * The method-specific summary Gaussian prints after all composite links, e.g.
  *
  *   CBS-QB3 (0 K)=        -39.069832 CBS-QB3 Energy=           -39.066969
@@ -697,33 +729,45 @@ function labelPattern(method) {
  * `Free Energy` are the thermochemically corrected terms and stay separate.
  */
 function parseCompositeSummary(lines, offset) {
-  const joined = lines.join('\n');
-  let record = null;
+  let zeroPoint = null;
+  let method = null;
+  let lineIndex = -1;
   for (let index = 0; index < lines.length; index += 1) {
-    const zero = lines[index].match(new RegExp(
-      String.raw`^\s*([A-Za-z][A-Za-z0-9()\- ]*?)\s*\(0 K\)\s*=\s*(${NUMBER})`,
-      'i',
-    ));
-    if (!zero) continue;
-    const method = compositeMethodFor(zero[1]);
-    if (!method) continue;
-    const labels = labelPattern(method);
-    const energy = joined.match(new RegExp(String.raw`(?:${labels})\s*Energy\s*=\s*(${NUMBER})`, 'i'));
-    const enthalpy = joined.match(new RegExp(String.raw`(?:${labels})\s*Enthalpy\s*=\s*(${NUMBER})`, 'i'));
-    const freeEnergy = joined.match(new RegExp(String.raw`(?:${labels})\s*Free Energy\s*=\s*(${NUMBER})`, 'i'));
-    record = {
-      found: true,
-      method: method.id,
-      keyword: method.keyword,
-      label: zero[1].trim(),
-      line: offset + index + 1,
-      zeroPointEnergyHartree: toNumber(zero[2]),
-      thermalEnergyHartree: energy ? toNumber(energy[1]) : null,
-      enthalpyHartree: enthalpy ? toNumber(enthalpy[1]) : null,
-      freeEnergyHartree: freeEnergy ? toNumber(freeEnergy[1]) : null,
-    };
+    const match = COMPOSITE_ZERO_K.exec(lines[index]);
+    if (!match) continue;
+    const candidate = compositeMethodFor(match[1]);
+    if (!candidate) continue;
+    zeroPoint = match;
+    method = candidate;
+    lineIndex = index;
   }
-  return record;
+  if (!method) return null;
+
+  // One pass for all three labels; each term keeps its first occurrence in the
+  // block, which is what the old full-text `match` calls returned. Scanning
+  // lines instead of the joined text also avoids building the joined string.
+  const patterns = compositeTermPatterns(method);
+  let energy = null;
+  let enthalpy = null;
+  let freeEnergy = null;
+  for (const line of lines) {
+    if (energy === null) energy = line.match(patterns.energy)?.[1] ?? null;
+    if (enthalpy === null) enthalpy = line.match(patterns.enthalpy)?.[1] ?? null;
+    if (freeEnergy === null) freeEnergy = line.match(patterns.freeEnergy)?.[1] ?? null;
+    if (energy !== null && enthalpy !== null && freeEnergy !== null) break;
+  }
+
+  return {
+    found: true,
+    method: method.id,
+    keyword: method.keyword,
+    label: zeroPoint[1].trim(),
+    line: offset + lineIndex + 1,
+    zeroPointEnergyHartree: toNumber(zeroPoint[2]),
+    thermalEnergyHartree: energy === null ? null : toNumber(energy),
+    enthalpyHartree: enthalpy === null ? null : toNumber(enthalpy),
+    freeEnergyHartree: freeEnergy === null ? null : toNumber(freeEnergy),
+  };
 }
 
 function emptyComposite(expected = null) {
