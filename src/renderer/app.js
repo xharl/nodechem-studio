@@ -199,6 +199,8 @@ import {
   runEngineLabel,
 } from './engineCopy.js';
 import { executableSeed } from './runExecutable.js';
+import { createFrameCoalescer, createQueueEventCoalescer, queueGraphSignature } from './eventCoalescer.js';
+import { createRunOutputBuffer } from './runOutputBuffer.js';
 import {
   companionPlaceholderFor,
   companionSeed,
@@ -384,6 +386,16 @@ hydrateProject(project);
 // project behaving exactly like a v1 one.
 if (!Array.isArray(project.datasets)) project.datasets = [];
 
+/* ── Run log buffering (issue 374) ──────────────────────────
+ * The log is one bounded buffer flushed once per frame; `state.run.output`
+ * below reads through to it so the text a caller sees is the text in the
+ * console, without a 60 kB string copy per output chunk.
+ */
+
+const MAX_RUN_OUTPUT_NODES = 64;
+const runOutputLog = createRunOutputBuffer();
+const runOutputFlush = createFrameCoalescer(() => flushRunOutput());
+
 const state = {
   project,
   selected: { type: 'project', id: null },
@@ -428,7 +440,10 @@ const state = {
     id: null,
     status: 'idle',
     dir: null,
-    output: '',
+    // Issue 374: reads through to the bounded log buffer; assigning resets it,
+    // which is what the run-start paths below rely on.
+    get output() { return runOutputLog.text; },
+    set output(value) { runOutputLog.reset(value); },
     gates: [],
     validity: [],
     // Issue 256: after a run the hint line reports the outcome rather than the
@@ -7286,13 +7301,86 @@ function setStatusMessage(text) {
   if (el) el.textContent = text;
 }
 
+/**
+ * Append text to the run log (issue 374).
+ *
+ * The chunk goes into a per-frame buffer; the console is painted by
+ * `flushRunOutput()` on the next animation frame (or the 50 ms fallback), so a
+ * burst of output costs one DOM append instead of one 60 kB rewrite per chunk.
+ */
 function appendRunOutput(text) {
   if (!text) return;
-  state.run.output = `${state.run.output}${text}`.slice(-60000);
+  runOutputLog.append(text);
+  runOutputFlush.push(true);
+}
+
+/**
+ * Remove `count` characters from the oldest text nodes of the log.
+ *
+ * The element is a `<pre>` of plain text nodes, so trimming is a change to the
+ * first node's `data` rather than a rebuild of the whole string.
+ */
+function dropRunOutputHead(el, count) {
+  let remaining = count;
+  while (remaining > 0 && el.firstChild) {
+    const node = el.firstChild;
+    if (node.nodeType !== 3) {
+      el.removeChild(node);
+      continue;
+    }
+    if (node.data.length <= remaining) {
+      remaining -= node.data.length;
+      el.removeChild(node);
+    } else {
+      node.data = node.data.slice(remaining);
+      remaining = 0;
+    }
+  }
+}
+
+/** Keep the text-node pool bounded without dropping any retained character. */
+function mergeRunOutputNodes(el) {
+  while (el.childNodes.length > MAX_RUN_OUTPUT_NODES) {
+    const first = el.firstChild;
+    const second = first?.nextSibling;
+    if (!first || !second || first.nodeType !== 3 || second.nodeType !== 3) break;
+    first.data += second.data;
+    el.removeChild(second);
+  }
+}
+
+/**
+ * Paint the log's pending chunks in one DOM write (issue 374).
+ *
+ * `runOutputLog.flush()` commits the text and says how many leading characters
+ * fell off the 60 kB limit; those are removed from the DOM before the new node
+ * is appended, and the scroll position is set once.
+ */
+function flushRunOutput() {
+  if (typeof document === 'undefined') return;
   const el = $('#run-output');
+  const wasEmpty = runOutputLog.retainedLength === 0;
+  const { append, dropped } = runOutputLog.flush();
   if (!el) return;
-  el.textContent = state.run.output || 'Waiting for output…';
+  if (dropped > 0) dropRunOutputHead(el, dropped);
+  if (!append) {
+    if (dropped > 0) el.scrollTop = el.scrollHeight;
+    return;
+  }
+  // The placeholder ("Select a calculation block…", "Waiting for output…") is
+  // not part of the log, so the first real chunk replaces it.
+  if (wasEmpty) el.textContent = '';
+  el.appendChild(document.createTextNode(append));
+  mergeRunOutputNodes(el);
   el.scrollTop = el.scrollHeight;
+}
+
+/** Start a fresh log; the element shows `text`, or the waiting placeholder. */
+function resetRunOutput(text = '') {
+  const value = runOutputLog.reset(text);
+  const el = $('#run-output');
+  if (el) el.textContent = value || 'Waiting for output…';
+  return value;
 }
 
 function renderRunGates(gates = [], validity = null) {
@@ -7905,14 +7993,13 @@ async function startSelectedRun() {
     return;
   }
 
-  state.run.output = '';
+  resetRunOutput('Starting local runner…\n');
   state.run.gates = [];
   state.run.nodeId = node.id;
   state.run.id = null;
   state.run.dir = null;
   state.run.ignoreEvents = false;
   syncVerifyButton($('#verify-run'), null);
-  $('#run-output').textContent = 'Starting local runner…\n';
   $('#run-gates').innerHTML = '';
   mountThermochemistryView($('#run-thermo'), null);
   $('#run-title').textContent = node.title;
@@ -7998,14 +8085,13 @@ async function startSelectedConformerRun(node) {
     return;
   }
 
-  state.run.output = '';
+  resetRunOutput('Starting conformer search…\n');
   state.run.gates = [];
   state.run.nodeId = node.id;
   state.run.id = null;
   state.run.dir = null;
   state.run.ignoreEvents = false;
   syncVerifyButton($('#verify-run'), null);
-  $('#run-output').textContent = 'Starting conformer search…\n';
   $('#run-gates').innerHTML = '';
   mountThermochemistryView($('#run-thermo'), null);
   $('#run-title').textContent = node.title;
@@ -8178,6 +8264,10 @@ function applyQueue(queue, { paintHeader = true } = {}) {
     return;
   }
   if (state.lastForeignQueue?.id === queue.id) state.lastForeignQueue = null;
+  // Issue 374: the canvas only needs a rebuild when a block state or a task's
+  // live status changes. Capture the previous signature before the snapshot is
+  // replaced; progress ticks and output chunks leave it identical.
+  const previousGraph = state.queue?.id === (queue.id || null) ? queueGraphSignature(state.queue) : null;
   state.queue = {
     id: queue.id || null,
     status: queue.status || 'idle',
@@ -8206,9 +8296,12 @@ function applyQueue(queue, { paintHeader = true } = {}) {
     setRunState(header.status, header.label);
   }
   // Live cards: the running block gets its progress rail, a finished one its
-  // numbers. Cheap enough at canvas scale and it keeps the workbench honest
-  // while a queue drains.
-  renderGraph();
+  // numbers. Issue 374: `syncNodeStatesFromQueue` only reports a block that
+  // became decided, while a card also follows task status and the flow tab
+  // follows the queue status — compare that smaller signature so a burst of
+  // progress ticks does not rebuild the canvas, but the live rail still moves.
+  const graphChanged = reconciled || previousGraph !== queueGraphSignature(queue);
+  if (graphChanged) renderGraph();
   // ...and the Next Action is computed from those states, so it follows them.
   if (reconciled) renderInspector();
   renderRunLast();
@@ -8547,7 +8640,7 @@ async function startWorkflowUnlocked() {
   }
   clearRunRefusal();
 
-  state.run.output = '';
+  resetRunOutput();
   state.run.ignoreEvents = false;
   appendRunOutput(`Queued workflow · ${tasks.filter((task) => task.executable).length} calculation block(s)\n`);
   $('#run-gates').innerHTML = '';
@@ -8736,6 +8829,69 @@ function scheduleAttachParsed(queue) {
   }, 400);
 }
 
+/**
+ * Apply one coalesced batch of queue events (issue 374).
+ *
+ * `batch.queue` is already the newest snapshot in the frame, and
+ * `batch.started` / `batch.done` say whether that frame contained the one-shot
+ * events. Running every side effect against that single state means the console
+ * never paints an intermediate queue and then immediately corrects it.
+ */
+function applyQueueEventBatch(batch) {
+  const queue = batch?.queue;
+  if (!queue) return;
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  applyQueue(queue);
+  attachQueueEnsembles(queue);
+  if (batch.started) {
+    state.runPanePinned = false;
+    setRunPane('queue');
+    const queuedEngine = tasks.find((task) => task.engine)?.engine
+      || state.project?.defaults?.engine;
+    const records = groupTasksByRecord(tasks);
+    const recordCopy = records.hasRecords ? ` · ${countLabel(records.total, 'record')}` : '';
+    setStatusMessage(`Workflow running · ${countLabel(tasks.length, 'block')}${recordCopy} · ${runEngineLabel(queuedEngine, { dryRun: queue.options?.dryRun })}`);
+  }
+  if (!batch.done) {
+    scheduleAttachParsed(queue);
+    return;
+  }
+  const verdict = queue.status;
+  autoRunPane('results');
+  // Issue 256: "Workflow failed" without the reason is not an outcome. The
+  // line names the first failed block and the same text goes to the hint.
+  const failure = ['failed', 'needs-review', 'partial', 'timed out'].includes(String(verdict))
+    ? queueFailure(queue)
+    : null;
+  if (failure) {
+    appendRunOutput(`\nWorkflow ${verdict} — ${failureDetail(failure)}\n`);
+    setRunHint(failureHint(failure, verdict), {
+      warn: true,
+      action: failure.action,
+    });
+    setStatusMessage(`Workflow ${verdict} · ${failure.block || 'queue'}: ${failure.reason}`);
+    toast(`Workflow ${verdict} · ${failure.block || 'see the queue'}`);
+  } else {
+    appendRunOutput(`\nWorkflow ${verdict}${queue.reason ? ` — ${queue.reason}` : ''}\n`);
+    setRunHint(`Workflow ${verdict}${queue.reason ? ` — ${queue.reason}` : ''}.`);
+    setStatusMessage(`Workflow ${verdict}${queue.reason ? ` · ${queue.reason}` : ''}`);
+    toast(`Workflow ${verdict}.`);
+  }
+  attachQueueParsed(queue).catch(() => {});
+  refreshHistory();
+  // The last line of a run is in the log before the event returns, not on a
+  // frame that a hidden or minimised window may never produce.
+  runOutputFlush.flushNow();
+}
+
+/** Queue events waiting for the next frame; see handleQueueEvent. */
+const queueEvents = createQueueEventCoalescer(applyQueueEventBatch);
+
+/** Apply any queue event waiting for a frame (tests and teardown). */
+function flushQueueEvents() {
+  return queueEvents.flushNow();
+}
+
 function handleQueueEvent(event) {
   if (!event) return;
   if (event.type === 'queue-output') {
@@ -8752,43 +8908,11 @@ function handleQueueEvent(event) {
     noteForeignQueue(event.queue);
     return;
   }
-  applyQueue(event.queue);
-  attachQueueEnsembles(event.queue);
-  if (event.type === 'queue-started') {
-    state.runPanePinned = false;
-    setRunPane('queue');
-    const queuedEngine = event.queue.tasks.find((task) => task.engine)?.engine
-      || state.project?.defaults?.engine;
-    const records = groupTasksByRecord(event.queue.tasks);
-    const recordCopy = records.hasRecords ? ` · ${countLabel(records.total, 'record')}` : '';
-    setStatusMessage(`Workflow running · ${countLabel(event.queue.tasks.length, 'block')}${recordCopy} · ${runEngineLabel(queuedEngine, { dryRun: event.queue.options?.dryRun })}`);
-  }
-  if (event.type !== 'queue-done') scheduleAttachParsed(event.queue);
-  if (event.type === 'queue-done') {
-    const verdict = event.queue.status;
-    autoRunPane('results');
-    // Issue 256: "Workflow failed" without the reason is not an outcome. The
-    // line names the first failed block and the same text goes to the hint.
-    const failure = ['failed', 'needs-review', 'partial', 'timed out'].includes(String(verdict))
-      ? queueFailure(event.queue)
-      : null;
-    if (failure) {
-      appendRunOutput(`\nWorkflow ${verdict} — ${failureDetail(failure)}\n`);
-      setRunHint(failureHint(failure, verdict), {
-        warn: true,
-        action: failure.action,
-      });
-      setStatusMessage(`Workflow ${verdict} · ${failure.block || 'queue'}: ${failure.reason}`);
-      toast(`Workflow ${verdict} · ${failure.block || 'see the queue'}`);
-    } else {
-      appendRunOutput(`\nWorkflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}\n`);
-      setRunHint(`Workflow ${verdict}${event.queue.reason ? ` — ${event.queue.reason}` : ''}.`);
-      setStatusMessage(`Workflow ${verdict}${event.queue.reason ? ` · ${event.queue.reason}` : ''}`);
-      toast(`Workflow ${verdict}.`);
-    }
-    attachQueueParsed(event.queue).catch(() => {});
-    refreshHistory();
-  }
+  queueEvents.push(event);
+  // Issue 374: start and finish are the events whose side effects a user waits
+  // on, so they are flushed now. Any intermediate event already pending joins
+  // the same batch; nothing is skipped, only painted once.
+  if (event.type === 'queue-started' || event.type === 'queue-done') queueEvents.flushNow();
 }
 
 /**
@@ -11401,10 +11525,13 @@ function wireEvents() {
 // stubbed `document.readyState = 'loading'` does not boot the UI.
 export {
   applyQueue,
+  appendRunOutput,
   calcInspector,
   costCardText,
   failureDetail,
   failureHint,
+  flushQueueEvents,
+  flushRunOutput,
   formatCostDuration,
   formatRunStart,
   handleQueueEvent,
