@@ -36,6 +36,17 @@
         "notComputed": { "type": ["string", "null"] }
       }
     },
+    "spectrumAssignment": {
+      "type": "object",
+      "description": "Issue 348: the Boltzmann-averaged spectrum of one candidate, its comparison with a measured trace and the ranking of candidates, as `spectrumAssignment.js` returned it. `available` is required so a record cannot carry an empty assignment; a refusal is false with the code and the sentence that names the precondition. The rest is open because the result carries per-candidate curves, band tables and the populations the score depended on.",
+      "required": ["available"],
+      "additionalProperties": true,
+      "properties": {
+        "available": { "type": "boolean" },
+        "code": { "type": ["string", "null"] },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
     "spectrumOverlay": {
       "type": "object",
       "description": "Issue 184: a measured spectrum imported beside the computed sticks. The record carries the file's own points, its sha256, and the column names and units the file declared, so a report can name and redraw exactly the trace it was compared against. Absent when no measured trace was imported — never an empty curve.",
@@ -258,6 +269,10 @@
         "dp4": {
           "$ref": "#/$defs/dp4Result",
           "description": "Issue 165: the DP4+ probabilities a derived analyse block recorded. Optional, and absent (not null) on every run that computed no comparison."
+        },
+        "spectrumAssignment": {
+          "$ref": "#/$defs/spectrumAssignment",
+          "description": "Issue 348: the Boltzmann-averaged VCD/IR/Raman spectrum of one candidate, its comparison with a measured trace and the ranking of candidates. Optional, and absent (not null) on every run that computed no assignment."
         },
         "provenance": {
           "$ref": "#/$defs/provenance"
