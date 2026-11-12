@@ -49,6 +49,12 @@ writes the document the window has always written; `surfaces` also reads the `.c
 run folder and meshes them; `none` omits the figure section. The choice is per report and is not
 saved in the project — there is no new settings key, so opening an old project changes nothing.
 
+A large report shows what it is doing in the queue header — `reading run records`, `reading cube
+files`, `meshing surfaces` — with a percentage, and the window's taskbar carries the same fraction.
+The save dialog is chosen first, so cancelling it reads nothing. A cube file that has not changed
+since the last report (same path, modification time and size) is reused instead of parsed again;
+`none` never opens a cube.
+
 ## The per-flow report
 
 A flow that iterates over a dataset groups its tasks by record. The report has:

@@ -21,6 +21,15 @@ what the build contains — the GitHub release for each tag carries the long for
   prepare. It falls back to Settings → Tools like the other sidecars, and a block that needs it
   without a path now fails with a message that names the flag (#309).
 
+### Changed
+
+- **Workflow reports read in a pool, cache cube parses and show progress** — the per-task
+  `run.json` reads no longer run one after another, a parsed cube volume is reused across reports
+  under `(path, mtimeMs, size)`, and the queue header plus the window's taskbar show `reading run
+  records`, `reading cube files` and `meshing surfaces` while a large report builds. The save dialog
+  is chosen before any read, so cancelling it does no work. The HTML is unchanged for the same
+  inputs apart from `generatedAt`, and `--figures none` still opens no cube (#372).
+
 ### Fixed
 
 - The window no longer waits for queue history: `QueueManager.init()` runs while the shell is being

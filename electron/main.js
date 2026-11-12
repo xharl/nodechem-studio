@@ -26,7 +26,8 @@ import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowR
 import { methodsParagraphFor } from '../src/shared/methodsParagraph.js';
 import { parseGaussianOutput } from '../src/shared/gaussianOutput.js';
 import { convertParsed, convertWavefunctionFile } from '../src/shared/converters/index.js';
-import { figureInputsFor, normaliseFigureLevel } from '../src/shared/report.js';
+import { normaliseFigureLevel } from '../src/shared/report.js';
+import { loadReportInputs } from '../src/shared/reportInputs.js';
 import {
   PROJECT_EXTENSIONS,
   classifySavePath,
@@ -964,6 +965,33 @@ async function importLogDirectory() {
 }
 
 /**
+ * Progress for one report build, shown in the window that asked for it.
+ *
+ * The native save dialog is chosen first; once it closes, the build owns the
+ * taskbar progress and a queue-header line (`reading run records`, `reading
+ * cube files`, `meshing surfaces`). A cancelled dialog reads nothing.
+ */
+function createReportProgress(sender) {
+  const report = (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed() && typeof mainWindow.setProgressBar === 'function') {
+      mainWindow.setProgressBar(payload.fraction, { mode: 'normal' });
+    }
+    if (sender && typeof sender.send === 'function' && !sender.isDestroyed()) {
+      sender.send('queue:report-progress', payload);
+    }
+  };
+  return {
+    onProgress: report,
+    end() {
+      report({ phase: 'done', label: 'done', done: 1, total: 1, fraction: 1 });
+      if (mainWindow && !mainWindow.isDestroyed() && typeof mainWindow.setProgressBar === 'function') {
+        mainWindow.setProgressBar(-1);
+      }
+    },
+  };
+}
+
+/**
  * Write one workflow report for a finished queue: a self-contained
  * `report.html` plus the `report.json` model beside it. The per-task run
  * records are read from their run folders, so the report reflects what was
@@ -975,8 +1003,12 @@ async function importLogDirectory() {
  * inputs, which is byte-for-byte the report the window wrote before the choice
  * existed. A window report is therefore the document a user already has unless
  * they ask for more.
+ *
+ * Only `surfaces` reads cube files here. `basic` in `ncs report` does read them,
+ * which is why `loadCubeFigures` is false for the window's `basic` — changing
+ * that would change the report the window has always written.
  */
-async function exportWorkflowReport(queueId, figureLevel = 'basic') {
+async function exportWorkflowReport(queueId, figureLevel = 'basic', sender = null) {
   const id = String(queueId || '');
   const level = normaliseFigureLevel(figureLevel);
   if (!id) return { canceled: false, error: { message: 'No workflow queue is available yet.' } };
@@ -989,34 +1021,6 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic') {
   }
   if (!queue) return { canceled: false, error: { message: `Workflow ${id} was not found.` } };
 
-  const records = {};
-  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
-  for (const task of tasks) {
-    if (!task || typeof task !== 'object' || !task.runDir) continue;
-    try {
-      const record = JSON.parse(await fsp.readFile(path.join(task.runDir, 'run.json'), 'utf8'));
-      if (task.runId) records[task.runId] = record;
-      if (task.nodeId) records[task.nodeId] = record;
-    } catch {
-      // A task whose run.json is unreadable stays "not reported" in the report.
-    }
-  }
-
-  // `surfaces` meshes the cube files each run folder holds; `none` reads
-  // nothing; `basic` is the report's own figures, as it has always been.
-  let figures = { level, volumes: null, surfaces: null };
-  if (level === 'surfaces') {
-    figures = await figureInputsFor(queue, level);
-  }
-
-  const model = buildWorkflowReport(queue, records, {
-    generatedAt: new Date().toISOString(),
-    appVersion: currentAppInfo().version,
-    figureLevel: figures.level,
-    volumes: figures.volumes,
-    surfaces: figures.surfaces,
-  });
-
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Save workflow report',
     defaultPath: path.join(app.getPath('documents'), `workflow-${id}.html`),
@@ -1024,7 +1028,25 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic') {
     buttonLabel: 'Save report',
   });
   if (result.canceled || !result.filePath) return { canceled: true };
+
+  const progress = createReportProgress(sender);
   try {
+    // The dialog is the user's commitment to write; only now is the queue read.
+    // Records are pooled, cube parses are cached by (path, mtime, size), and
+    // each phase reports progress instead of freezing the window.
+    const { records, figures } = await loadReportInputs(queue, level, {
+      loadCubeFigures: level === 'surfaces',
+      onProgress: progress.onProgress,
+    });
+
+    const model = buildWorkflowReport(queue, records, {
+      generatedAt: new Date().toISOString(),
+      appVersion: currentAppInfo().version,
+      figureLevel: figures.level,
+      volumes: figures.volumes,
+      surfaces: figures.surfaces,
+    });
+
     const html = workflowReportHtml(model, {
       methodsFor: (row) => {
         const record = records[row.runId] || records[row.nodeId] || null;
@@ -1046,6 +1068,8 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic') {
     };
   } catch (error) {
     return { canceled: false, error: { message: error.message } };
+  } finally {
+    progress.end();
   }
 }
 
@@ -1488,7 +1512,7 @@ app.whenReady().then(async () => {
     return queueManager.get(queueId);
   });
   ipcMain.handle('logs:import-directory', () => importLogDirectory());
-  ipcMain.handle('queue:report', (_event, queueId, figureLevel) => exportWorkflowReport(queueId, figureLevel));
+  ipcMain.handle('queue:report', (event, queueId, figureLevel) => exportWorkflowReport(queueId, figureLevel, event.sender));
 
   createWindow();
 

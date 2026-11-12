@@ -1451,6 +1451,8 @@ body.is-dragging-run-console .run-head { cursor: grabbing; }
 .run-state.is-running { color: var(--kind-merge); border-color: color-mix(in srgb, var(--kind-merge) 45%, var(--tone-blue-71a)); }
 .run-state.is-completed { color: var(--state-passed); border-color: color-mix(in srgb, var(--state-passed) 45%, var(--tone-blue-71a)); }
 .run-state.is-failed { color: var(--state-review); border-color: color-mix(in srgb, var(--state-review) 45%, var(--tone-blue-71a)); }
+/* Report builds show their phase on one line beside the queue state (issue 372). */
+#report-progress { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-body { display: grid; grid-template-columns: 270px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; min-height: 0; overflow: hidden; }
 .run-config {
   padding: 12px 14px 10px;

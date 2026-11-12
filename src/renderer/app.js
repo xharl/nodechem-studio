@@ -8892,6 +8892,30 @@ async function startWorkflowUnlocked() {
 }
 
 /**
+ * What a report build is doing, in the queue header.
+ *
+ * The save dialog is chosen first; main then streams `reading run records`,
+ * `reading cube files` and `meshing surfaces` with a fraction. `done` hides the
+ * line before the toast reports the result.
+ */
+function handleReportProgress(payload) {
+  const el = $('#report-progress');
+  if (!el) return;
+  const phase = String(payload?.phase || '');
+  if (!phase || phase === 'done' || phase === 'idle') {
+    el.hidden = true;
+    el.textContent = '';
+    return;
+  }
+  const fraction = Number(payload?.fraction);
+  const percent = Number.isFinite(fraction)
+    ? ` ${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`
+    : '';
+  el.hidden = false;
+  el.textContent = `${payload.label || phase}${percent}`;
+}
+
+/**
  * Write the workflow report for the current queue (report.html + report.json).
  * The main process reads the queue's run folders; the renderer only asks.
  *
@@ -11909,6 +11933,7 @@ async function init() {
   syncRunnerInputs();
   if (desktop?.onRunEvent) desktop.onRunEvent(handleRunEvent);
   if (desktop?.onQueueEvent) desktop.onQueueEvent(handleQueueEvent);
+  if (desktop?.onReportProgress) desktop.onReportProgress(handleReportProgress);
   if (desktop?.onOpenProjectPath) desktop.onOpenProjectPath((filePath) => { openProjectPath(filePath); });
   const kbdHint = $('#kbd-hint');
   if (kbdHint) {

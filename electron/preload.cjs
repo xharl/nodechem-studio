@@ -67,6 +67,13 @@ contextBridge.exposeInMainWorld('desktop', {
   listQueues: () => ipcRenderer.invoke('queue:list'),
   getQueue: (queueId) => ipcRenderer.invoke('queue:get', queueId),
   exportWorkflowReport: (queueId, figureLevel) => ipcRenderer.invoke('queue:report', queueId, figureLevel),
+  // Progress for a report build: main sends phase/done/total/fraction while the
+  // report is assembled, then `phase: 'done'`.
+  onReportProgress: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('queue:report-progress', handler);
+    return () => ipcRenderer.removeListener('queue:report-progress', handler);
+  },
   importLogDirectory: () => ipcRenderer.invoke('logs:import-directory'),
   onRunEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);
