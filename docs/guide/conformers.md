@@ -155,8 +155,8 @@ block and the block changes accordingly:
 
 - **The enumerator is external.** `scripts/tautomer-enumerator.py` drives RDKit's
   `rdMolStandardize.TautomerEnumerator` (BSD-3; RDKit is not bundled and not installed by this app).
-  The installer does not embed the script: download it from the repository at the release tag, or use
-  a source checkout. Point the run console's **Tautomer sidecar** at a Python that has `rdkit` — or at
+  The installed build ships the script under `resources/scripts/`; a source checkout uses the
+  repository file. Point the run console's **Tautomer sidecar** at a Python that has `rdkit` — or at
   the interpreter with **Tautomer script** naming the file. The sidecar reads one JSON object on
   stdin (XYZ, charge, multiplicity, title, options) and writes one JSON object on stdout; the request
   is kept in the task folder as `request.json`, and the raw answer as `tautomers.json`.

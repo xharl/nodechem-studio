@@ -34,6 +34,7 @@ const TOOL_LABELS = Object.freeze({
   scorer: 'ML scorer',
   multiwfn: 'Multiwfn',
   tautomer: 'Tautomer sidecar',
+  chem: 'Chemistry sidecar',
   cclib: 'cclib (Python)',
 });
 
@@ -149,6 +150,7 @@ export async function validateSettingsPaths(settings, {
     await checkExecutable(`tools.${id}`, `${label} executable`, settings?.tools?.[id]);
   }
   await checkReadableFile('tools.tautomerScript', 'Tautomer script', settings?.tools?.tautomerScript);
+  await checkReadableFile('tools.chemScript', 'Chemistry script', settings?.tools?.chemScript);
   await checkDirectory('tools.scratch', 'Scratch directory', settings?.tools?.scratch);
   await checkDirectory('advanced.dataDir', 'Data directory', settings?.advanced?.dataDir);
   return errors;

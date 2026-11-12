@@ -37,6 +37,8 @@ import {
 import { ENGINES, engineOrDefault } from '../src/shared/engines/index.js';
 import { parseToolVersion } from '../src/shared/toolVersion.js';
 import { createSettingsStore } from './settingsStore.js';
+import { probeChem } from './runner/chemProbe.js';
+import { resolveChemScript } from './runner/chemPaths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -140,7 +142,7 @@ async function detectSettings() {
   for (const entry of Object.values(status)) if (entry?.path) paths.add(entry.path);
   for (const entry of Object.values(tools)) if (entry?.path) paths.add(entry.path);
   for (const value of Object.values(settings?.engines || {})) if (String(value || '').trim()) paths.add(String(value).trim());
-  for (const id of ['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'cclib']) {
+  for (const id of ['crest', 'obabel', 'scorer', 'multiwfn', 'tautomer', 'chem', 'cclib']) {
     const value = String(settings?.tools?.[id] || '').trim();
     if (value) paths.add(value);
   }
@@ -557,6 +559,11 @@ const COMPANION_DIALOG = Object.freeze({
   },
   tautomer: {
     title: 'Locate the tautomer sidecar interpreter',
+    windows: 'C:\\Python\\python.exe',
+    posix: '/usr/bin/python3',
+  },
+  chem: {
+    title: 'Locate the chemistry sidecar interpreter',
     windows: 'C:\\Python\\python.exe',
     posix: '/usr/bin/python3',
   },
@@ -1232,6 +1239,26 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:set', (_event, patch) => settingsStore.set(patch));
   ipcMain.handle('settings:path', () => ({ path: settingsStore.path }));
   ipcMain.handle('settings:detect', () => detectSettings());
+  // ADR 0003 §2.1: one probe for every chemistry op. It reports the RDKit
+  // version and the capability that failed; a missing interpreter or a missing
+  // rdkit is an answer, not an exception.
+  ipcMain.handle('chem:probe', async (_event, payload = {}) => {
+    const current = (await settingsStore.get()).settings;
+    const executable = String(payload?.executable || current?.tools?.chem || '').trim();
+    let script = String(payload?.script || current?.tools?.chemScript || '').trim();
+    if (!script) {
+      try {
+        script = resolveChemScript({
+          isPackaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          resourcesPath: process.resourcesPath,
+        });
+      } catch {
+        script = '';
+      }
+    }
+    return probeChem({ executable, script });
+  });
   // Issue #82: one user-triggered request. Nothing else in the app calls out.
   ipcMain.handle('updates:check', () => checkForUpdates());
   // Theme switching (#52): repaint the native chrome, record the launch cache.

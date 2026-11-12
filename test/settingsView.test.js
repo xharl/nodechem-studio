@@ -125,6 +125,8 @@ describe('Settings seed precedence (issue 252)', () => {
       multiwfn: '/settings/Multiwfn',
       tautomer: '/settings/python',
       tautomerScript: '/settings/tautomer.py',
+      chem: '',
+      chemScript: '',
       scratch: '/settings/scratch',
       dryRun: false,
     });

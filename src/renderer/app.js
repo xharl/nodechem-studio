@@ -5654,6 +5654,47 @@ async function refreshSettingsDetection() {
   }
 }
 
+/**
+ * ADR 0003 §2.1 — probe the chemistry interpreter from Settings.
+ *
+ * The answer is written into the probe row instead of re-rendering the modal:
+ * a re-render would rebuild the draft's inputs and steal focus from a path the
+ * user is still typing.
+ */
+async function probeChemSettings() {
+  const drawer = state.drawer;
+  if (drawer?.type !== 'app-settings') return;
+  const output = document.querySelector('[data-chem-probe-result]');
+  if (!desktop?.probeChemistry) {
+    if (output) output.textContent = 'Open the Electron app to probe a program.';
+    return;
+  }
+  if (output) output.textContent = 'Probing…';
+  let answer = null;
+  try {
+    answer = await desktop.probeChemistry({
+      executable: drawer.draft?.tools?.chem || '',
+      script: drawer.draft?.tools?.chemScript || '',
+    });
+  } catch (error) {
+    if (output) output.textContent = `Probe failed: ${error.message}`;
+    return;
+  }
+  if (!output) return;
+  if (!answer?.ok) {
+    const code = answer?.error?.code || 'chem-probe-failed';
+    output.textContent = `${code}: ${answer?.error?.message || 'the probe returned no answer'}`;
+    return;
+  }
+  const missing = Object.entries(answer.capabilities || {})
+    .filter(([, present]) => present !== true)
+    .map(([name]) => name);
+  const version = String(answer.version || 'unknown');
+  output.textContent = missing.length
+    ? `RDKit ${version} · missing capabilities: ${missing.join(', ')}`
+    : `RDKit ${version} · all probed capabilities present`;
+}
+
 function renderAppSettings() {
   const modal = $('#modal');
   const drawer = state.drawer;
@@ -10213,6 +10254,7 @@ function handleAction(action, element) {
       }
       break;
     case 'settings-detect': refreshSettingsDetection(); break;
+    case 'chem-probe': probeChemSettings(); break;
     case 'settings-browse': browseSettingsPath(element.dataset.settingsBrowse); break;
     case 'settings-reset-console': dockRunConsole(); toast('Run console returned to the corner.'); break;
     case 'toggle-export-menu': toggleExportMenu(); break;

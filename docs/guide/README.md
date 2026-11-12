@@ -62,6 +62,8 @@ Reference pages:
 - [Headless CLI](cli.md) — every `ncs` command (`validate`, `build-input`, `run`, `report`,
   `validation`, `export`, `record`, `diff`, `merge`, `convert`, `export-input`, `smiles`,
   `qcschema`, `cache`, `cube`) and its exit codes.
+- [The chemistry sidecar](chemistry-sidecar.md) — RDKit as one external sidecar: the
+  `nodechem-chem/1` protocol, its refusals, the capability probe, and what the installer ships.
 - [Scripting and the record schema](../SCRIPTING.md) — `run.json` as a versioned contract,
   `ncs export`, and the stdlib-only Python client.
 - [Engine plugins](../ENGINE_PLUGIN.md) — the `registerEngine` spec, its refusals, and why
