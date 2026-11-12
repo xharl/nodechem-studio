@@ -147,8 +147,11 @@ describe('ncs report writes the HTML model beside the document (issue 357)', () 
     expect(model.queue.id).toBe('q-one');
     expect(model.tasks).toHaveLength(1);
     expect(model.tasks[0].finalEnergyHartree).toBe(-76.123456789);
-    // Absolute paths belong in the model, never in the HTML.
-    expect(modelText).toContain(runDir);
+    // Absolute paths belong in the model, never in the HTML. Assert on the
+    // parsed model: on Windows JSON.stringify escapes the separators, so the raw
+    // text holds `C:\\...` and a `toContain(runDir)` on the text only ever passes
+    // where path.join produces forward slashes.
+    expect(model.tasks[0].runDir).toBe(runDir);
     expect(html).not.toContain(runDir);
 
     // Re-rendering the parsed model is byte-identical: the JSON is exactly

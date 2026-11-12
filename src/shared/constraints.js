@@ -226,8 +226,12 @@ export function modRedundantLine(constraint) {
       throw new Error('A scanned constraint needs a positive step count and a non-zero step size.');
     }
     // `S` = scan: number of steps, then the step size in angstrom (bond) or
-    // degrees (angle, dihedral). Gaussian requires both.
-    return `${code} ${numbers.join(' ')} S ${steps} ${size}`;
+    // degrees (angle, dihedral). Gaussian requires both, and l101 reads the size
+    // as a real number: an integral step written as `S 6 2` stops the job with
+    // "Wanted a floating point number as input. Found an integer as input."
+    // Keep the decimal point so a whole-degree scan is accepted.
+    const sizeText = Number.isInteger(size) ? `${size}.0` : String(size);
+    return `${code} ${numbers.join(' ')} S ${steps} ${sizeText}`;
   }
   return `${code} ${numbers.join(' ')} F`;
 }

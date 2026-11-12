@@ -6,10 +6,13 @@ Status: **0.5.1 released 2026-11-10 — tag `v0.5.1` → `b5f50a0`.** The instal
 workflows passed on the tag and the downloaded assets verify against `SHA256SUMS`. Sections 1–3 and 5
 describe the architecture and the original phase plan; §4 is the v0.1 baseline kept for history, §4b
 lists what landed since, and §6b is what remains.
-**GN-001 is partly satisfied**: on 2026-11-08 a peer run executed 25 cases written by this builder on
-a licensed Gaussian 16 Rev A.03 (Windows) and its logs are committed as
-`test/fixtures/real/g16-a03-*`; what is still unproven is the app's own run console driving a job end
-to end on that machine.
+**GN-001 is closed (2026-11-12)**: on 2026-11-08 a peer run executed 25 cases written by this builder
+on a licensed Gaussian 16 Rev A.03 (Windows) and its logs are committed as
+`test/fixtures/real/g16-a03-*`; on 2026-11-12 the app's own run console drove Gaussian end to end on
+that machine — `npm test` green (4002 passed / 81 skipped, after one Windows-only assertion was
+fixed), dry run PASS, a real `HF/3-21G Opt` water job whose `run.json` records
+`Normal termination of Gaussian` and `app.commit: 66db5ba`, and a screenshot of the run console. The
+same pass produced both code fixes and the two validator gaps recorded in §6b.
 
 0.5.1 carries everything merged after 0.5.0: the PySCF engine with TD-DFT, ORCA NMR, TD-DFT,
 Raman/VCD and `OptTS`/IRC/scan, the Multiwfn analysis sidecar, the cclib converter for foreign logs,
@@ -178,7 +181,8 @@ conformer search.
 - Validity thresholds (covalent-radius ratios, spin-contamination limits, imaginary-mode
   floors) are documented offline choices. The parser is now pinned by a corpus of twenty real
   Gaussian 09/16 outputs (§4b), but the thresholds themselves have not been calibrated against a
-  licensed run; GN-001 remains the gate.
+  licensed run; GN-001 ran on a licensed machine on 2026-11-12 but did not calibrate the thresholds
+  themselves.
 - The NSIS installer exists and CI builds it; it is unsigned and has not been installed on a
   clean Windows VM. No auto-update or crash reporting.
 
@@ -218,14 +222,14 @@ fixtures (`test/fixtures/real/g16-a03-*`).
 - Renderer loaded from the node-first shell.
 - Acceptance: `npm test`, `npm run check`, and `npm run build` pass.
 
-### Phase 1 — Node-first UI and single-task real runner (v0.1; GN-001 still open)
+### Phase 1 — Node-first UI and single-task real runner (v0.1; GN-001 closed 2026-11-12)
 
 - Graph editing and full inspector.
 - One selected calculation can be built and run.
 - Dry run and real run share the same parser/gate path.
 - Acceptance: on a licensed Windows machine, a dry run passes; a small licensed job produces a run
   folder with a parsed normal termination and gates.
-- **GN-001 is the gate for calling v0.1 done.**
+- **GN-001 was the gate for calling v0.1 done — closed 2026-11-12 (§6b).**
 
 ### Phase 2 — Project model and safe persistence (done)
 
@@ -296,7 +300,7 @@ and PR title. A task is not done until its acceptance evidence is in the PR.
 
 | ID | Task | Files | Acceptance |
 | --- | --- | --- | --- |
-| **GN-001** | Windows smoke test of the v0.1 runner | none (report) | `npm test` green; dry run PASS; real small job produces `run.json` with parsed termination; screenshot of run console |
+| **GN-001** | Windows smoke test of the v0.1 runner — **done 2026-11-12** (report bundle, §6b) | none (report) | `npm test` green; dry run PASS; real small job produces `run.json` with parsed termination; screenshot of run console |
 | **GN-002** | Versioned project schema + validation — **implemented** (`src/shared/projectSchema.js`, 44 tests) | `src/shared/projectSchema.js`, `test/projectSchema.test.js`, `electron/main.js` | Invalid project rejected before render; valid project round-trips; tests |
 | **GN-003** | Durable queue + topological scheduler — **implemented** (`electron/runner/queue.js`, `src/shared/workflowGraph.js`) | `electron/runner/queue.js`, `runManager.js`, tests | 4-node chain; kill/restart marks interrupted and resumes ready work |
 | **GN-004** | Checkpoint staging between tasks — **implemented** (`electron/runner/checkpoint.js`) | `runManager.js`, `gaussianInput.js`, tests | Only checkpoint edges copy `.chk`; missing/corrupt checkpoint fails with a recorded reason |
@@ -306,8 +310,9 @@ and PR title. A task is not done until its acceptance evidence is in the PR.
 | **GN-008** | Windows packaging — **implemented** (electron-builder NSIS + `windows-package` CI workflow) | `electron-builder` config, `scripts/`, docs | Installer on clean VM; no Node required; dry run works |
 | **GN-009** | Validity checks (issue #25) — **implemented** (`src/shared/validityChecks.js`) | `projectSchema.js`, `gaussianOutput.js`, `runManager.js`, `queue.js`, `app.js`, `test/validityChecks.test.js` | Each check has pass/fail fixtures; disabling removes it; `run.json` reports `gates.validity` |
 
-Priority: **GN-001 remains the only unverified gate** (real Windows + licensed Gaussian). GN-002
-through GN-009 are implemented and CI-tested on Linux; the Windows installer is built by the
+Priority: **GN-001 is closed (2026-11-12)** — the app's own run console drove a licensed Gaussian 16
+end to end on Windows and every acceptance line is evidenced in §6b. GN-002 through GN-009 are
+implemented and CI-tested on Linux; the Windows installer is built by the
 `Windows package` workflow but has not been installed on a clean VM. The Linux AppImage is built by
 the `Linux package` workflow but has not been installed on a clean Linux machine, and no real
 Linux/macOS Gaussian job has been run.
@@ -321,7 +326,8 @@ Linux/macOS Gaussian job has been run.
 | Tag and publish 0.4.0 | **Done** 2026-11-08 — tag `v0.4.0` → `36d36e1`, published as the current release (GitHub leaves the Latest badge on the newest non-prerelease, so 0.3.0 and 0.4.0 are not flagged prerelease) with both installers, `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations, both verified with `gh attestation verify` | `.github/workflows/*-package.yml`, `docs/guide/install.md` |
 | Tag and publish 0.5.0 | **Done** 2026-11-09 — tag `v0.5.0` → `21eb3a9`, published as the latest release with both installers, combined `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations; both package workflows passed on the tag and the downloaded assets verify against `SHA256SUMS`. Breaking: `schemaVersion: 3`; 0.4.0 projects are refused, not migrated | `.github/workflows/*-package.yml`, `CHANGELOG.md`, `docs/releases/0.5.0.md` |
 | Tag and publish 0.5.1 | **Done** 2026-11-10 — tag `v0.5.1` → `b5f50a0`, published as the latest release with both installers, combined `SHA256SUMS`, per-platform CycloneDX SBOMs and SLSA provenance attestations; both package workflows passed on the tag and the downloaded assets verify against `SHA256SUMS`. No format change: `schemaVersion` stays 3, 0.5.0 projects open unchanged. The first tag run failed the Windows suite on four POSIX-only test files; they were made portable (#311) and the tag moved to that merge | `.github/workflows/*-package.yml`, `CHANGELOG.md`, `docs/releases/0.5.1.md` |
-| GN-001 (real licensed Gaussian run) | **Partly satisfied** — 25 app-written cases ran on G16 Rev A.03 (Windows) on 2026-11-08 and their logs are fixtures; the app's own run console driving a job on that machine is still unproven | §6, `test/fixtures/real/g16-a03-*` |
+| GN-001 (real licensed Gaussian run) | **Done 2026-11-12** — the app's own run console drove Gaussian 16 Rev A.03 (Windows) end to end: `npm test` 4002 passed / 81 skipped (after the Windows-only `toContain(runDir)` assertion was fixed), preflight 10/10, dry run PASS, and a real `HF/3-21G Opt` water job with `Normal termination of Gaussian`, E = −75.585959753 Eh and 5/5 gates in `run.json` (`app.commit: 66db5ba`). Seven further jobs — TD + PCM + D3BJ, GIAO NMR, Raman, VCD, def2-SVP ECP, CBS-QB3 and a relaxed scan — exercised the advanced parsers through the same console. Return bundle `RETURNS/20261112-1747-*` (sha256-verified, 106 files). The pass also fixed two bugs: an integral scan step lost its decimal point and died in l101, and a report test asserted on JSON-escaped paths | §6, `test/fixtures/real/g16-a03-*` |
+| Two build-time refusals still pass Validate (GN-001 finding 4.3) | **Open, reported 2026-11-12** — `validateProject` accepts `jobType: "TD-DFT"` with `tdStates > 0` on a **Gaussian** block, and a composite job type (`CBS-QB3`, …) that still carries `method`/`basis`; the builder refuses both at deck time with a correct, specific message, so the user only learns after pressing Run. Both belong in the pre-run validator (and therefore the in-app **Validate**), not at build time. Reproduced on `66db5ba` by mutating `examples/single-point.ncs`: `validateProject` returned 0 errors and 0 warnings for either project | `src/shared/projectSchema.js`, `src/shared/gaussianInput.js`, `src/shared/validityChecks.js` |
 | Output bundle block | **Shipped** (RFC 0001) — an `output` block writes `html`, `csv`, `json` or `zip` under the artifact root, refuses an escaping path, and appends a SHA-256 manifest entry | `electron/runner/queue.js`, `src/shared/artifactExport.js` |
 | Join policy `any` | **Open** — `any` is recorded but readiness still waits for all inputs | `electron/runner/queue.js` |
 | Cross-engine geometry hand-off (#326) | **Fixed in the unreleased tree** — `applyGeometryHandoffFor()` rewrites every engine's deck (Gaussian molecule spec, PySCF data line, Psi4 `molecule {…}`, ORCA `* xyz … *`, a fresh `.xyz` for xTB), changing only the atom rows; an upstream run with no parsed geometry, or a deck with no geometry block, is refused by name. Shipped in 0.5.1 as Gaussian/PySCF only | `electron/runner/queue.js`, `electron/runner/geometryHandoff.js` |
@@ -357,7 +363,7 @@ Linux/macOS Gaussian job has been run.
 | Risk | Mitigation / owner |
 | --- | --- |
 | Licence does not permit other users or remote access | Confirm with the licence holder before any real run. Record the answer in the project notes, not in code. |
-| `C:\G16W\g16.exe` is not the actual path | Preflight + Browse; never hard-code any platform's path. Preflight validates the selected executable's own directory, resolving a POSIX symlink, and reports the `GAUSS_EXEDIR` it will set. GN-001 records the real Windows path. |
+| `C:\G16W\g16.exe` is not the actual path | Preflight + Browse; never hard-code any platform's path. Preflight validates the selected executable's own directory, resolving a POSIX symlink, and reports the `GAUSS_EXEDIR` it will set. GN-001 recorded `C:\G16W\g16.exe` on the licensed machine (2026-11-12). |
 | Scratch path spaces break scratch/chk | Prefer `C:\G16W\SCRATCH` or `/scratch/$USER`; preflight warns on spaces on every platform and on NFS/SMB-looking Linux/macOS paths, and never rewrites the path. |
 | Gaussian leaves child processes after cancel | `taskkill /T /F` on Windows; verify no `l1.exe`/`g16.exe` remains. |
 | Exit code 0 on error termination | Parser/gates are authoritative; add tests for error termination with code 0. |

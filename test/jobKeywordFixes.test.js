@@ -49,8 +49,11 @@ describe('Scan becomes a relaxed scan', () => {
 
   it('writes the S line with its step count and size', () => {
     expect(modRedundantLine(scanned)).toBe('B 1 2 S 10 0.05');
+    // Gaussian's l101 reads the step size as a real number and stops a Scan with
+    // "Wanted a floating point number as input. Found an integer as input." when
+    // a whole-number step arrives without a decimal point, so one is written.
     expect(modRedundantLine({ kind: 'dihedral', atoms: [1, 2, 3, 4], mode: 'scan', steps: 12, size: -5 }))
-      .toBe('D 1 2 3 4 S 12 -5');
+      .toBe('D 1 2 3 4 S 12 -5.0');
   });
 
   it('refuses a Scan with nothing to scan', () => {

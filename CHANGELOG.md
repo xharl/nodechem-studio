@@ -94,6 +94,17 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- **A whole-number scan step is written as a real number** — `modRedundantLine()` formatted the step
+  with `String(size)`, so a 2° scan became `A 2 1 3 S 6 2` and Gaussian stopped in l101 with
+  *"Wanted a floating point number as input. Found an integer as input."* An integral size now keeps
+  its decimal point (`S 6 2.0`); fractional sizes are unchanged. Every scan in the suite used a
+  fractional step, so no test caught it — the existing `S 12 -5` assertion now expects `S 12 -5.0`
+  with the reason stated beside it (GN-001).
+- **`npm test` is green on Windows again** — `test/cliReportModel.test.js` asserted
+  `expect(modelText).toContain(runDir)` against serialised JSON. `JSON.stringify` escapes the
+  backslashes `path.join` produces on Windows, so the assertion could only pass where separators are
+  forward slashes (observed: 1 failed / 4001 passed on unmodified `main`). It now asserts on
+  `model.tasks[0].runDir`, which is what the comment always meant (GN-001).
 - **The Multiwfn citation now matches the binary that ran** — every 2024-and-later Multiwfn banner
   requires *both* the 2012 and the 2024 papers to be cited in the main text; the card and
   `run.json:provenance.citation` named only the 2012 paper while the same record reported a 2026
