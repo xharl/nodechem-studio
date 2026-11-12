@@ -270,6 +270,9 @@ const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
 }[char]));
 
+/** A value safe inside a quoted attribute selector: `[data-x="…"]`. */
+const attrValue = (value) => String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
 const W = 216;
 // Cards carry a result line now (energy / SAPT / ensemble), so the height has
 // room for it between the route and the footer.
@@ -526,11 +529,77 @@ let nodeSequence = 0;
 
 /* ── Domain helpers ───────────────────────────────────────── */
 
-const nodeById = (id) => state.project.nodes.find((node) => node.id === id) || null;
+/* ── Graph index (issue 370) ────────────────────────────────
+ * `nodeById` used to be a linear scan, and `renderEdges` called it twice per
+ * edge: one redraw was O(nodes × edges), and a drag repeated it per mousemove.
+ * The index answers a lookup in constant time and holds the adjacency the
+ * incident-edge drag path needs.
+ *
+ * It is rebuilt only when the graph's structure changes. A different nodes or
+ * edges array — a flow switch, a project load, an undo — is detected by
+ * identity; an in-place push/splice calls `invalidateGraphIndex()`. A length
+ * mismatch is also caught, so a mutation site that forgets to invalidate
+ * degrades to a rebuild instead of serving a stale map.
+ */
+const graphIndex = {
+  nodes: null,
+  edges: null,
+  nodeCount: 0,
+  edgeCount: 0,
+  byId: new Map(),
+  incomingById: new Map(),
+  outgoingById: new Map(),
+  builds: 0,
+};
+
+function invalidateGraphIndex() {
+  graphIndex.nodes = null;
+  graphIndex.edges = null;
+}
+
+function buildGraphIndex() {
+  const nodes = Array.isArray(state.project?.nodes) ? state.project.nodes : [];
+  const edges = Array.isArray(state.project?.edges) ? state.project.edges : [];
+  const byId = new Map();
+  for (const node of nodes) {
+    if (node && node.id) byId.set(node.id, node);
+  }
+  const incomingById = new Map();
+  const outgoingById = new Map();
+  for (const edge of edges) {
+    if (!edge) continue;
+    if (!incomingById.has(edge.to)) incomingById.set(edge.to, []);
+    incomingById.get(edge.to).push(edge);
+    if (!outgoingById.has(edge.from)) outgoingById.set(edge.from, []);
+    outgoingById.get(edge.from).push(edge);
+  }
+  graphIndex.nodes = nodes;
+  graphIndex.edges = edges;
+  graphIndex.nodeCount = nodes.length;
+  graphIndex.edgeCount = edges.length;
+  graphIndex.byId = byId;
+  graphIndex.incomingById = incomingById;
+  graphIndex.outgoingById = outgoingById;
+  graphIndex.builds += 1;
+  return graphIndex;
+}
+
+function graphIndexFor() {
+  const nodes = state.project?.nodes;
+  const edges = state.project?.edges;
+  if (graphIndex.nodes !== nodes || graphIndex.edges !== edges
+    || graphIndex.nodeCount !== (nodes?.length ?? 0)
+    || graphIndex.edgeCount !== (edges?.length ?? 0)) {
+    return buildGraphIndex();
+  }
+  return graphIndex;
+}
+
+const nodeById = (id) => graphIndexFor().byId.get(id) || null;
 const edgeId = (edge) => `${edge.from}->${edge.to}:${edge.type}${edge.branch ? `:${edge.branch}` : ''}`;
 const edgeById = (id) => state.project.edges.find((edge) => edgeId(edge) === id) || null;
-const incoming = (id) => state.project.edges.filter((edge) => edge.to === id);
-const outgoing = (id) => state.project.edges.filter((edge) => edge.from === id);
+const incoming = (id) => graphIndexFor().incomingById.get(id) || [];
+const outgoing = (id) => graphIndexFor().outgoingById.get(id) || [];
 const statusFor = (node) => STATUS[node.state] || STATUS.blocked;
 function kindForJob(jobType) {
   if (isCompositeJobType(jobType)) return 'Composite';
@@ -1271,34 +1340,75 @@ function edgeLabel(edge) {
   return null;
 }
 
+/**
+ * The SVG body of one edge: the line, its hit target and its label.
+ *
+ * Issue 370: each edge is wrapped in its own `<g data-edge-group>` by
+ * `renderEdges`, so a drag can repaint one edge's group instead of the whole
+ * layer. The `data-edge-id` attributes stay where the click delegation and the
+ * selected-state CSS already look for them.
+ */
+function edgeMarkup(edge) {
+  const id = edgeId(edge);
+  const path = edgePath(edge);
+  if (!path) return '';
+  const selected = state.selected.type === 'edge' && state.selected.id === id;
+  const label = edgeLabel(edge);
+  const from = nodeById(edge.from);
+  const to = nodeById(edge.to);
+  let labelHtml = '';
+  if (label && from && to) {
+    const a = anchorFor(from, edgeFromSide(edge));
+    const b = anchorFor(to, edgeToSide(edge));
+    const lx = edge.type === 'loop' ? (a.x + b.x) / 2 : (a.x + b.x) / 2;
+    const ly = edge.type === 'loop' ? LOOP_LANE : (a.y + b.y) / 2;
+    labelHtml = `<g class="edge-label ${label.cls}${selected ? ' selected' : ''}" data-edge-id="${esc(id)}" transform="translate(${lx},${ly})">
+      <rect x="${-label.width / 2}" y="-8" width="${label.width}" height="16" rx="5"/>
+      <text>${esc(label.text)}</text>
+    </g>`;
+  }
+  return `
+      <path class="edge-line ${edgeClass(edge)}${selected ? ' selected' : ''}" d="${path}"></path>
+      <path class="edge-hit" d="${path}" data-edge-id="${esc(id)}"></path>
+      ${labelHtml}`;
+}
+
 function renderEdges() {
   const layer = edgesEl();
   if (!layer) return;
   layer.innerHTML = state.project.edges.map((edge) => {
-    const id = edgeId(edge);
-    const path = edgePath(edge);
-    if (!path) return '';
-    const selected = state.selected.type === 'edge' && state.selected.id === id;
-    const label = edgeLabel(edge);
-    const from = nodeById(edge.from);
-    const to = nodeById(edge.to);
-    let labelHtml = '';
-    if (label && from && to) {
-      const a = anchorFor(from, edgeFromSide(edge));
-      const b = anchorFor(to, edgeToSide(edge));
-      const lx = edge.type === 'loop' ? (a.x + b.x) / 2 : (a.x + b.x) / 2;
-      const ly = edge.type === 'loop' ? LOOP_LANE : (a.y + b.y) / 2;
-      labelHtml = `<g class="edge-label ${label.cls}${selected ? ' selected' : ''}" data-edge-id="${esc(id)}" transform="translate(${lx},${ly})">
-        <rect x="${-label.width / 2}" y="-8" width="${label.width}" height="16" rx="5"/>
-        <text>${esc(label.text)}</text>
-      </g>`;
-    }
-    return `
-      <path class="edge-line ${edgeClass(edge)}${selected ? ' selected' : ''}" d="${path}"></path>
-      <path class="edge-hit" d="${path}" data-edge-id="${esc(id)}"></path>
-      ${labelHtml}`;
+    const body = edgeMarkup(edge);
+    if (!body) return '';
+    return `<g class="edge" data-edge-group="${esc(edgeId(edge))}">${body}</g>`;
   }).join('');
   renderPreview();
+}
+
+/** Repaint one edge in place. False when the layer has no group for it. */
+function renderEdgeElement(edge) {
+  const group = document.querySelector(`[data-edge-group="${attrValue(edgeId(edge))}"]`);
+  if (!group) return false;
+  const body = edgeMarkup(edge);
+  if (!body) {
+    group.remove?.();
+    return true;
+  }
+  group.innerHTML = body;
+  return true;
+}
+
+/**
+ * Issue 370: while a block is dragged, only the edges that touch it change
+ * shape. Returns how many were repainted, or -1 when a group is missing — the
+ * caller then falls back to a full render rather than leaving a stale edge.
+ */
+function renderIncidentEdges(nodeId) {
+  const index = graphIndexFor();
+  const edges = [...(index.incomingById.get(nodeId) || []), ...(index.outgoingById.get(nodeId) || [])];
+  for (const edge of edges) {
+    if (!renderEdgeElement(edge)) return -1;
+  }
+  return edges.length;
 }
 
 function renderPreview() {
@@ -1498,6 +1608,11 @@ function cancelDeleteFlow() {
   renderFlowTabs();
 }
 
+/**
+ * The structural path: every card, every edge, the tabs and the counters.
+ * Called when the graph itself changed (a block or flow added/removed, a queue
+ * state applied, a project loaded). A field edit takes `updateNodeCard`.
+ */
 function renderGraph() {
   const container = nodesEl();
   if (!container) return;
@@ -1506,6 +1621,35 @@ function renderGraph() {
   renderFlowTabs();
   updateCounts();
   refreshDirty();
+}
+
+/**
+ * Issue 370: a committed edit on one block repaints that block's card and
+ * nothing else. Sixty-five `renderGraph()` calls rebuilt every card and every
+ * edge for a route change that touched one block.
+ *
+ * `edges: true` is for the few field writers that retype an existing edge
+ * (`checkpointFrom`, a loop target, a branch), where the card is not the only
+ * thing on screen that changed.
+ *
+ * Falls back to the full render when the card is not in the DOM, so an edit can
+ * never leave a stale card behind (a card can be missing mid-transition).
+ */
+function updateNodeCard(id, { edges = false } = {}) {
+  const node = nodeById(id);
+  const el = node ? document.querySelector(`.node[data-node-id="${attrValue(id)}"]`) : null;
+  if (!node || !el || typeof el.outerHTML !== 'string') {
+    renderGraph();
+    return false;
+  }
+  el.outerHTML = renderNodeCard(node);
+  if (edges) renderEdges();
+  // The tab strip and the counters describe states this edit can change
+  // (`ready` → `passed` is a queue's business, `passed` → `ready` is an edit's).
+  renderFlowTabs();
+  updateCounts();
+  refreshDirty();
+  return true;
 }
 
 function updateSavePill(dirty) {
@@ -4779,6 +4923,7 @@ function addBlock(type) {
     });
   }
   state.project.nodes.push(node);
+  invalidateGraphIndex();
   state.selected = { type: 'node', id: node.id };
   state.inspectorHidden = false;
   togglePalette(false);
@@ -5252,6 +5397,7 @@ function duplicateNode(id) {
   copy.state = 'ready';
   if (copy.type === 'calculate') copy.settings.checkpoint = `${copy.id.replace(/-/g, '_')}.chk`;
   state.project.nodes.push(copy);
+  invalidateGraphIndex();
   state.selected = { type: 'node', id: copy.id };
   renderGraph();
   renderInspector();
@@ -5344,6 +5490,7 @@ function addConnection(fromId, toId, port) {
     fromPort: port,
     toPort: type === 'loop' ? 'bottomIn' : type === 'branch' ? 'left' : port === 'bottom' ? 'top' : 'left',
   });
+  invalidateGraphIndex();
   const id = edgeId(state.project.edges[state.project.edges.length - 1]);
   state.selected = { type: 'edge', id };
   renderGraph();
@@ -5446,7 +5593,7 @@ function startNodeDrag(nodeEl, event) {
 function updateNodeDrag(event) {
   if (!state.drag) return;
   const node = nodeById(state.drag.id);
-  const el = document.querySelector(`.node[data-node-id="${state.drag.id}"]`);
+  const el = document.querySelector(`.node[data-node-id="${attrValue(state.drag.id)}"]`);
   if (!node || !el) return;
   const dx = (event.clientX - state.drag.startX) / state.zoom;
   const dy = (event.clientY - state.drag.startY) / state.zoom;
@@ -5455,19 +5602,27 @@ function updateNodeDrag(event) {
   node.y = clamp(Math.round(state.drag.y + dy), 0, STAGE_H - H);
   el.style.left = `${node.x}px`;
   el.style.top = `${node.y}px`;
-  renderEdges();
+  // Issue 370: a mousemove moved one card, so only the edges that touch it
+  // change shape. A full rebuild of every edge belongs to the drag's end.
+  if (renderIncidentEdges(node.id) < 0) renderEdges();
 }
 
 function endNodeDrag() {
   if (!state.drag) return;
   const moved = state.drag.moved === true;
-  const el = document.querySelector(`.node[data-node-id="${state.drag.id}"]`);
+  const el = document.querySelector(`.node[data-node-id="${attrValue(state.drag.id)}"]`);
   el?.classList.remove('is-dragging');
   state.drag = null;
-  // Dragging writes node.x/node.y but no other handler re-evaluates the dirty
-  // state, so without this a moved graph would stay "saved": no draft, and the
-  // close guard would let it go without asking.
-  if (moved) refreshDirty();
+  if (moved) {
+    // The incident updates kept the edges honest during the drag; one full pass
+    // at the end settles the ones whose side flipped at the last pixel and the
+    // selection state the drag started with.
+    renderEdges();
+    // Dragging writes node.x/node.y but no other handler re-evaluates the dirty
+    // state, so without this a moved graph would stay "saved": no draft, and the
+    // close guard would let it go without asking.
+    refreshDirty();
+  }
 }
 
 function startPan(event) {
@@ -10712,6 +10867,9 @@ function onDocumentChange(event) {
     return;
   }
   if (target.dataset.ensembleField) {
+    // Issue 370: a keystroke waits for the pause; the commit is immediate and
+    // carries whatever the last keystroke wrote.
+    flushEnsembleEdit(target.dataset.ensembleField);
     applyEnsembleInputField(target);
     return;
   }
@@ -10721,7 +10879,7 @@ function onDocumentChange(event) {
     if (!node || node.type !== 'input') return;
     if (!node.input) node.input = { datasetId: '', recordFilter: { field: '', equals: '' } };
     node.input[target.dataset.inputField] = target.value;
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10730,7 +10888,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !node.input?.series) return;
     updateSeriesField(node, target.dataset.seriesField, target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10739,7 +10897,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !node.input?.complex) return;
     updateComplexMember(node, Number(target.dataset.complexMember), target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10749,7 +10907,7 @@ function onDocumentChange(event) {
     if (!node || node.type !== 'input' || !node.input?.complex) return;
     updateComplexField(node, target.dataset.complexField,
       target.type === 'checkbox' ? null : target.value, target.checked);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10758,7 +10916,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
     updateDerivativeField(node, Number(target.dataset.derivativeEdit), target.dataset.derivativeField, target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10767,7 +10925,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'input' || !Array.isArray(node.input?.edits)) return;
     updateDerivativeField(node, null, 'parent', target.value);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10803,13 +10961,15 @@ function onDocumentChange(event) {
     const value = target.type === 'checkbox' ? target.checked : target.value;
     if (key === 'title') {
       node.title = String(value).trim() || node.title;
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
     if (node.type !== 'calculate') return;
     updateNodeField(node, key, value);
-    renderGraph();
+    // `checkpointFrom` retypes the incoming edges, so their colour and `chk`
+    // label change with the card.
+    updateNodeCard(node.id, { edges: key === 'checkpointFrom' });
     renderInspector();
     return;
   }
@@ -10818,7 +10978,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'calculate') return;
     updateGate(node, target.dataset.nodeGate, target.checked);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10837,7 +10997,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'calculate') return;
     updateSpinSweepState(node, Number(target.dataset.spinState), target.checked);
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10890,8 +11050,7 @@ function onDocumentChange(event) {
     } else {
       delete node.analyse.mode;
     }
-    refreshDirty();
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -10910,8 +11069,7 @@ function onDocumentChange(event) {
       for (const param of ['grid', 'isovalue']) {
         if (!analysis?.parameters?.[param]) delete definition[param];
       }
-      refreshDirty();
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
@@ -10955,8 +11113,7 @@ function onDocumentChange(event) {
       // from the previous level would name a table this level does not carry.
       const entry = dp4Levels().find((item) => item.id === definition.level && item.solvation === definition.solvation);
       if (definition.solvation === 'gas' || !(entry?.solvents || []).includes(definition.solvent)) definition.solvent = '';
-      refreshDirty();
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
@@ -10969,7 +11126,7 @@ function onDocumentChange(event) {
     // The solvent list depends on the level, so a level change redraws; the
     // other fields only move the preview.
     if (key === 'solvent' || key === 'variant') {
-      renderGraph();
+      updateNodeCard(node.id);
       renderInspector();
       return;
     }
@@ -11010,7 +11167,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'condition') return;
     node.condition[target.dataset.conditionField] = target.value;
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -11026,11 +11183,16 @@ function onDocumentChange(event) {
       if (!target.value) {
         if (edge) setFlowGraph(state.project, { edges: state.project.edges.filter((item) => item !== edge) });
       } else if (edge) { edge.to = target.value; edge.toPort = 'bottomIn'; }
-      else state.project.edges.push({ from: node.id, to: target.value, type: 'loop', fromPort: 'bottom', toPort: 'bottomIn' });
+      else {
+        state.project.edges.push({ from: node.id, to: target.value, type: 'loop', fromPort: 'bottom', toPort: 'bottomIn' });
+      }
+      // Retargeting or adding a loop edge moves it in the adjacency, even when
+      // the edge array itself is the same one.
+      invalidateGraphIndex();
     }
     const loopEdge = state.project.edges.find((item) => item.from === node.id && item.type === 'loop');
     if (loopEdge && key === 'maxAttempts') loopEdge.maxAttempts = node.loop.maxAttempts;
-    renderGraph();
+    updateNodeCard(node.id, { edges: true });
     renderInspector();
     return;
   }
@@ -11053,7 +11215,9 @@ function onDocumentChange(event) {
       if (wouldCreateCycle(node.id, target.value)) { toast('That branch would create an ordinary cycle.'); return; }
       state.project.edges.push({ from: node.id, to: target.value, type: 'branch', branch, fromPort: branch, toPort: 'left' });
     }
-    renderGraph();
+    // A retargeted branch edge is a different incident edge for both ends.
+    invalidateGraphIndex();
+    updateNodeCard(node.id, { edges: true });
     renderInspector();
     return;
   }
@@ -11083,7 +11247,7 @@ function onDocumentChange(event) {
     } else {
       node.output[key] = target.value;
     }
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -11092,7 +11256,7 @@ function onDocumentChange(event) {
     const node = nodeById(state.selected.id);
     if (!node || node.type !== 'note') return;
     node.note[target.dataset.noteField] = target.value;
-    renderGraph();
+    updateNodeCard(node.id);
     renderInspector();
     return;
   }
@@ -11157,9 +11321,73 @@ function applyPrepareField(target) {
   } else {
     return;
   }
-  refreshDirty();
-  renderGraph();
+  updateNodeCard(node.id);
   renderInspector();
+}
+
+/* ── Ensemble input: debounced typing, immediate commit (issue 370) ──
+ * The `input` event used to write the node and re-render the graph *and* the
+ * inspector on every keystroke — which replaced the very input being typed in.
+ * Typing now writes after a 150 ms pause and repaints only the block's card;
+ * `change` still commits at once, because that is the event that means "done".
+ */
+const ENSEMBLE_EDIT_DEBOUNCE_MS = 150;
+const ensembleEdit = { timer: null, pending: null };
+
+/** The node and field a typing event refers to, or null when it is not one. */
+function parseEnsembleEdit(target) {
+  const key = target?.dataset?.ensembleField;
+  if (!key || state.selected.type !== 'node') return null;
+  const node = nodeById(state.selected.id);
+  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return null;
+  return { nodeId: node.id, key, value: target.value };
+}
+
+/** One writer for the fields `input` owns; false for a key it does not. */
+function writeEnsembleField(node, key, value) {
+  const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
+  if (originField) {
+    node.input.origin = { ...(node.input.origin || {}), [originField]: String(value || '') };
+    return true;
+  }
+  if (key === 'path' || key === 'format' || key === 'energyUnit' || key === 'energyMethod') {
+    node.input[key] = String(value || '');
+    return true;
+  }
+  return false;
+}
+
+function scheduleEnsembleEdit(target) {
+  const edit = parseEnsembleEdit(target);
+  if (!edit) return;
+  ensembleEdit.pending = edit;
+  if (ensembleEdit.timer) clearTimeout(ensembleEdit.timer);
+  ensembleEdit.timer = setTimeout(flushEnsembleEdit, ENSEMBLE_EDIT_DEBOUNCE_MS);
+}
+
+/**
+ * Apply the pending keystroke now: the timer, or the `change` that commits the
+ * field. `skipKey` is the field the commit itself is about to write, so a
+ * commit does not repaint the same card twice.
+ */
+function flushEnsembleEdit(skipKey = null) {
+  if (ensembleEdit.timer) {
+    clearTimeout(ensembleEdit.timer);
+    ensembleEdit.timer = null;
+  }
+  const pending = ensembleEdit.pending;
+  ensembleEdit.pending = null;
+  if (!pending) return false;
+  if (skipKey && pending.key === skipKey) return false;
+  const node = nodeById(pending.nodeId);
+  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return false;
+  if (!writeEnsembleField(node, pending.key, pending.value)) return false;
+  // Any change to what the file is voids the record read from the old one.
+  node.output = null;
+  node.state = 'ready';
+  // No inspector re-render: the user is still typing in it.
+  updateNodeCard(node.id);
+  return true;
 }
 
 /**
@@ -11168,23 +11396,13 @@ function applyPrepareField(target) {
  * branch like the conformer block's origin.
  */
 function applyEnsembleInputField(target) {
-  if (state.selected.type !== 'node') return;
-  const node = nodeById(state.selected.id);
-  if (!node || node.type !== 'input' || node.input?.kind !== 'ensemble') return;
-  const key = target.dataset.ensembleField;
-  const originField = { originProgram: 'program', originVersion: 'version', originMethod: 'method' }[key];
-  if (originField) {
-    node.input.origin = { ...(node.input.origin || {}), [originField]: String(target.value || '') };
-  } else if (key === 'path' || key === 'format' || key === 'energyUnit' || key === 'energyMethod') {
-    node.input[key] = String(target.value || '');
-  } else {
-    return;
-  }
-  // Any change to what the file is voids the record read from the old one.
+  const edit = parseEnsembleEdit(target);
+  if (!edit) return;
+  const node = nodeById(edit.nodeId);
+  if (!writeEnsembleField(node, edit.key, edit.value)) return;
   node.output = null;
   node.state = 'ready';
-  refreshDirty();
-  renderGraph();
+  updateNodeCard(node.id);
   renderInspector();
 }
 
@@ -11263,8 +11481,7 @@ function applyConformerField(target) {
       node.state = 'ready';
     }
   }
-  refreshDirty();
-  renderGraph();
+  updateNodeCard(node.id);
   renderInspector();
 }
 
@@ -11279,7 +11496,9 @@ function onDocumentInput(event) {
     return;
   }
   if (target.dataset.ensembleField) {
-    applyEnsembleInputField(target);
+    // Issue 370: typing repaints the block's card after a pause, never the
+    // inspector the caret is in.
+    scheduleEnsembleEdit(target);
     return;
   }
   if (target.dataset.conformerField) {
@@ -11592,30 +11811,45 @@ function wireEvents() {
 // Exported for the Node-side inspector tests: importing this module with a
 // stubbed `document.readyState = 'loading'` does not boot the UI.
 export {
+  addBlock,
+  addConnection,
+  applyEnsembleInputField,
   applyQueue,
   appendRunOutput,
   attachQueueParsed,
   calcInspector,
   costCardText,
+  endNodeDrag,
   exportMenuGroups,
   failureDetail,
   failureHint,
+  flushEnsembleEdit,
   flushQueueEvents,
   flushRunOutput,
   formatCostDuration,
   formatRunStart,
+  graphIndex,
   handleQueueEvent,
   historyRowHtml,
   historyRows,
   inputInspector,
+  invalidateGraphIndex,
+  nodeById,
   nodeDetail,
   nodeFoot,
+  onDocumentChange,
+  onDocumentInput,
   prepareInspector,
   queueBelongsToProject,
   queueFailure,
   queueRowHtml,
   readRunConfig,
+  removeNode,
+  renderEdgeElement,
+  renderEdges,
   renderFlowTabs,
+  renderGraph,
+  renderIncidentEdges,
   renderRecordSummary,
   resetRunHeader,
   resultFacts,
@@ -11628,10 +11862,13 @@ export {
   spinMultiplicitiesForNode,
   spinSweepLabel,
   spinTaskMeta,
+  startNodeDrag,
   state,
   syncNodeStatesFromQueue,
   reconcileNodesWithQueue,
   taskFailure,
+  updateNodeCard,
+  updateNodeDrag,
   updateNodeField,
   updateRunConsoleCopy,
   updateSpinSweepState,
