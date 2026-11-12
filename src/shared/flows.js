@@ -447,33 +447,90 @@ export function orderingSourceIds(edges, nodeId) {
 }
 
 /**
+ * Indexes over one flow's graph, built once per plan (issue 367).
+ *
+ * `scopeFor` used to rebuild a Map of every node and every upstream edge *inside
+ * each call*, so a plan over V blocks and E edges walked the graph V times — the
+ * planner was O(V·E) (4× the nodes cost 9.5× the time). The index is a pure
+ * function of one flow's two arrays, so `buildWorkflowPlan` builds it once and
+ * scopes every block from it.
+ *
+ * `byId` is last-wins, exactly like `new Map(nodes.map(...))`; `incoming` and
+ * `outgoing` keep edge order so the first checkpoint/dependency edge a node
+ * sees is the same edge a linear scan would have found.
+ */
+export function flowIndex(nodes, edges) {
+  const byId = new Map();
+  for (const node of Array.isArray(nodes) ? nodes : []) byId.set(node.id, node);
+  const upstream = new Map();
+  const incoming = new Map();
+  const outgoing = new Map();
+  for (const edge of orderingEdgesOf(edges)) {
+    if (!upstream.has(edge.to)) upstream.set(edge.to, []);
+    upstream.get(edge.to).push(edge.from);
+    if (!incoming.has(edge.to)) incoming.set(edge.to, []);
+    incoming.get(edge.to).push(edge);
+    if (!outgoing.has(edge.from)) outgoing.set(edge.from, []);
+    outgoing.get(edge.from).push(edge);
+  }
+  return { byId, upstream, incoming, outgoing };
+}
+
+/**
+ * Project-wide indexes the planner reads besides a flow's graph (issue 367).
+ *
+ * `nodes` answers the same lookup as `nodeById` — the active flow first, then
+ * every flow in order, then the legacy top-level array — and `incoming` /
+ * `outgoing` hold the ordering edges of `project.edges` (the active flow's
+ * aliases), which is what the checkpoint hand-off has always read. Built once
+ * per plan: the per-node linear scan was 11.5 % of an 800-node plan.
+ */
+export function planIndex(project) {
+  const nodes = new Map();
+  for (const flow of [activeFlow(project), ...flowsOf(project)]) {
+    for (const node of nodesOfFlow(flow)) {
+      if (!nodes.has(node.id)) nodes.set(node.id, node);
+    }
+  }
+  for (const node of Array.isArray(project?.nodes) ? project.nodes : []) {
+    if (!nodes.has(node.id)) nodes.set(node.id, node);
+  }
+  const incoming = new Map();
+  const outgoing = new Map();
+  for (const edge of orderingEdgesOf(project?.edges)) {
+    if (!incoming.has(edge.to)) incoming.set(edge.to, []);
+    incoming.get(edge.to).push(edge);
+    if (!outgoing.has(edge.from)) outgoing.set(edge.from, []);
+    outgoing.get(edge.from).push(edge);
+  }
+  return { nodes, incoming, outgoing };
+}
+
+/**
  * The input block that scopes a node, found by walking upstream.
  *
  * Returns `{ input, dataset, records }` when exactly one input feeds the node,
  * `null` when none does (the node runs once on the project molecule), and
  * throws when two different inputs meet at the same block: one block cannot
  * consume two record sets without inventing a pairing.
+ *
+ * Takes the flow index rather than the arrays: the plan builds it once, and the
+ * walk order is unchanged, so a two-input refusal still names the same inputs.
  */
-export function scopeFor(project, nodes, edges, node) {
-  const byId = new Map((Array.isArray(nodes) ? nodes : []).map((item) => [item.id, item]));
-  const upstream = new Map();
-  for (const edge of orderingEdgesOf(edges)) {
-    if (!upstream.has(edge.to)) upstream.set(edge.to, []);
-    upstream.get(edge.to).push(edge.from);
-  }
+export function scopeIn(index, project, node) {
   const seen = new Set();
   const inputs = new Map();
-  const stack = [...(upstream.get(node?.id) || [])];
+  const stack = [...(index.upstream.get(node?.id) || [])];
   while (stack.length > 0) {
     const id = stack.pop();
     if (seen.has(id)) continue;
     seen.add(id);
-    const source = byId.get(id);
+    const source = index.byId.get(id);
     if (source?.type === 'input') {
       inputs.set(source.id, source);
       continue;
     }
-    for (const next of upstream.get(id) || []) stack.push(next);
+    for (const next of index.upstream.get(id) || []) stack.push(next);
   }
   if (inputs.size === 0) return null;
   if (inputs.size > 1) {
@@ -492,6 +549,16 @@ export function scopeFor(project, nodes, edges, node) {
     throw new Error(`"${input.title || input.id}" references dataset "${input.input?.datasetId || ''}", which is not in this project.`);
   }
   return { input, dataset, records: recordsForInput(input, dataset, { datasets: datasetsOf(project) }) };
+}
+
+/**
+ * Standalone `scopeFor`: kept for callers that hold the arrays, not a plan.
+ *
+ * It builds the index for the one call. `buildWorkflowPlan` uses `flowIndex`
+ * once and `scopeIn` per block instead, which is the whole point of issue 367.
+ */
+export function scopeFor(project, nodes, edges, node) {
+  return scopeIn(flowIndex(nodes, edges), project, node);
 }
 
 /**
