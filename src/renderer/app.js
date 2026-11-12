@@ -2033,7 +2033,9 @@ function offerDraftRestore() {
   }
   // Same project as the one just loaded: nothing was lost, so say nothing —
   // and drop the copy so it cannot resurface later against a different file.
-  if (!draftIsRestorable(draft, state.project)) {
+  // Same project, same view: the draft stores the authored project without the
+  // aliases or parsed run records, so compare it with the same snapshot view.
+  if (!draftIsRestorable(draft, projectSnapshotView(state.project))) {
     clearDraft();
     return;
   }
