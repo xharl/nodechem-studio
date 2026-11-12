@@ -2940,6 +2940,56 @@ function isQueueRunning(doc) {
  * Clicking a row in "Recent runs" or the workflow queue loads that run's
  * `run.json` through `desktop.listRuns()` and renders it.
  */
+/**
+ * ADR 0003 §3.4: one 2D figure for the results panel.
+ *
+ * The SVG is produced and validated in main. A missing sidecar or a refusal is
+ * printed as a sentence — never an empty frame that could be read as a drawing.
+ */
+async function mountStructureCard({ container, record, desktop, doc }) {
+  if (!desktop?.depictChemistry || !isObject(record) || isObject(record.analyse)) return;
+  const parsed = isObject(record.parsed) ? record.parsed : {};
+  const atoms = parsed.finalGeometry?.atoms
+    || parsed.geometry?.initial?.atoms
+    || parsed.geometry?.atoms
+    || (Array.isArray(parsed.coords) ? parsed.coords : null);
+  if (!Array.isArray(atoms) || atoms.length === 0 || atoms.length > 1000) return;
+  if (!atoms.every((atom) => typeof atom?.element === 'string'
+    && Number.isFinite(Number(atom.x)) && Number.isFinite(Number(atom.y)) && Number.isFinite(Number(atom.z)))) {
+    return;
+  }
+  const slot = doc.createElement('div');
+  slot.className = 'card wide';
+  slot.dataset.structureCard = 'true';
+  slot.innerHTML = '<h3>Structure</h3><div class="structure-slot"><span class="sub">Drawing…</span></div>';
+  container.append(slot);
+  let answer = null;
+  try {
+    answer = await desktop.depictChemistry({
+      molecule: {
+        title: text(record.title),
+        charge: Number.isInteger(parsed.charge) ? parsed.charge : 0,
+        multiplicity: Number.isInteger(parsed.multiplicity) ? parsed.multiplicity : 1,
+        atoms,
+      },
+      options: {
+        width: 360,
+        height: 260,
+        legend: [text(record.title), text(parsed.formula) || text(record.formula)].filter(Boolean).join(' · '),
+      },
+    });
+  } catch (error) {
+    answer = { ok: false, error: { code: 'op-failed', message: error?.message || String(error) } };
+  }
+  const body = slot.querySelector('.structure-slot');
+  if (!body) return;
+  if (!answer?.ok) {
+    body.innerHTML = `<span class="sub">No depiction: ${esc(answer?.error?.message || 'the chemistry sidecar refused')}</span>`;
+    return;
+  }
+  body.innerHTML = `<figure class="structure">${answer.svg}<figcaption>${esc(answer.legend || 'Structure')}</figcaption></figure>`;
+}
+
 export function installResultsView({
   desktop = globalThis.window?.desktop ?? null,
   doc = globalThis.document,
@@ -3039,6 +3089,9 @@ export function installResultsView({
     mountCompareBar(record);
     mountThermoEnsemble();
     mountSuperposition({ container, currentRecord: record, desktop, doc });
+    // ADR 0003 §3.4: draw the structure beside its numbers. The figure is
+    // fetched after the panel paints, so a slow sidecar cannot delay the record.
+    void mountStructureCard({ container, record, desktop, doc });
     // The wavefunction viewport evaluates the basis this record carries (or a
     // cube the user opens) into a slice or an isosurface. It mounts last so it
     // can append its own wide card after the generated ones.

@@ -119,3 +119,14 @@ source of truth: no live project is needed.
 ## Next
 
 [Projects and runs on disk →](project-files.md)
+
+
+## Structure figures
+
+When a chemistry sidecar is configured, the report draws each record's structure as a 2D SVG
+(RDKit, CoordGen layout) and embeds it in a **Structures** section. Figures are bounded: at most one
+per record, a fixed figure count and a total byte budget, so a large dataset cannot turn the report
+into a sidecar sweep. `--figures=none` drops them with every other figure. An SVG is validated
+before it enters the document — a single `<svg>` root, no scripts, event attributes, foreign objects
+or links — and a refusal drops that figure only. A missing sidecar leaves the section out; it never
+prints an empty frame as if it were a structure.

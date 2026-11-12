@@ -31,6 +31,7 @@ import { diffProjects, mergeProjects } from '../src/shared/projectMerge.js';
 import { flowById } from '../src/shared/flows.js';
 import { buildWorkflowPlan, moleculeForNode } from '../src/shared/workflowTasks.js';
 import { buildWorkflowReport, buildCombinedReportHtml, workflowReportHtml } from '../src/shared/workflowReport.js';
+import { depictStructuresFor } from '../electron/runner/depictStructures.js';
 import { parseGaussianOutput, geometryToXyz } from '../src/shared/gaussianOutput.js';
 import { parseStructureRecords } from '../src/shared/structureImport.js';
 import { kineticsSummary } from '../src/shared/kinetics.js';
@@ -502,7 +503,10 @@ async function commandRun({ positional, flags }) {
   // A project may declare combined reports (`reports[]`). They are written from
   // the queues this run left behind, so `ncs run` alone produces the document —
   // no second command, and no stale report from an earlier run.
-  const declared = await emitDeclaredReports(result.project, outDir)
+  const declared = await emitDeclaredReports(result.project, outDir, {
+    executable: String(flags.chem || settingsTools.chem || '').trim(),
+    script: String(flags['chem-script'] || settingsTools.chemScript || '').trim(),
+  })
     .catch((error) => fail(`declared report: ${error.message}`, EXIT.invalid));
 
   const runRecords = {};
@@ -608,7 +612,9 @@ async function queueRunRecords(queue) {
  * single `flow` does the same for `ncs report --flow`. A flow with no queue is
  * simply absent: the report describes what ran.
  */
-async function collectReportModels(outDir, { flow = null, flows = null, includeImported = false, figures = 'basic' } = {}) {
+async function collectReportModels(outDir, {
+  flow = null, flows = null, includeImported = false, figures = 'basic', chem = null,
+} = {}) {
   const queuesDir = path.join(outDir, 'queues');
   let entries;
   try {
@@ -653,6 +659,16 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
     // eslint-disable-next-line no-await-in-loop
     const volumes = figures === 'none' ? null : await cubeVolumesFor(queue);
     const surfaces = figures === 'surfaces' ? await surfacesFor(volumes) : null;
+    // ADR 0003 §3.4: figures only when a sidecar is named; a refusal drops the
+    // picture, never the report.
+    const structures = figures === 'none' || !chem?.executable
+      ? null
+      : await depictStructuresFor({
+        tasks: queue.tasks,
+        records,
+        executable: chem.executable,
+        script: chem.script || '',
+      });
     models.push(buildWorkflowReport({ ...queue, flowId }, records, {
       generatedAt,
       appVersion: 'cli',
@@ -661,6 +677,7 @@ async function collectReportModels(outDir, { flow = null, flows = null, includeI
       figureLevel: figures,
       volumes,
       surfaces,
+      structures,
     }));
   }
 
@@ -724,7 +741,7 @@ async function orphanImportedRecords(outDir, referenced = new Set()) {
  * project-relative and must stay inside the output folder, like an output
  * block's; a bad path is a run error, not a silent skip.
  */
-async function emitDeclaredReports(project, outDir) {
+async function emitDeclaredReports(project, outDir, chem = null) {
   const entries = (Array.isArray(project?.reports) ? project.reports : [])
     .filter((entry) => entry && entry.kind === 'html');
   const written = [];
@@ -736,7 +753,7 @@ async function emitDeclaredReports(project, outDir) {
       throw new Error(`Report "${entry.id || relative}" path must be relative and stay inside the output folder.`);
     }
     // eslint-disable-next-line no-await-in-loop
-    const models = await collectReportModels(outDir, { flows: entry.flows });
+    const models = await collectReportModels(outDir, { flows: entry.flows, chem });
     if (models.length === 0) continue;
     const html = buildCombinedReportHtml(models, {
       title: entry.title || `Project report — ${project.name || ''}`.trim(),
@@ -764,7 +781,16 @@ async function commandReport({ positional, flags }) {
   if (!FIGURE_LEVELS.includes(figuresFlag)) {
     throw new Error(`--figures must be basic, surfaces or none (got "${figuresFlag}")`);
   }
-  const models = await collectReportModels(outDir, { flow: wantedFlow, includeImported, figures: figuresFlag });
+  const reportSettings = await readRunSettings(flags);
+  const models = await collectReportModels(outDir, {
+    flow: wantedFlow,
+    includeImported,
+    figures: figuresFlag,
+    chem: {
+      executable: String(flags.chem || reportSettings?.tools?.chem || '').trim(),
+      script: String(flags['chem-script'] || reportSettings?.tools?.chemScript || '').trim(),
+    },
+  });
   if (models.length === 0) {
     fail(wantedFlow
       ? `no queue for flow "${wantedFlow}" under ${outDir}.`

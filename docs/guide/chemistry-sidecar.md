@@ -62,6 +62,8 @@ replays committed fixtures through a fake sidecar.
 | `probe` | Settings → Tools | version and capability flags |
 | `descriptors` | `analyse.mode = "chem"` | the curated `nodechem-1` set for one molecule |
 | `standardize` | `prepare.kind = "standardize"` | one cleaned structure, plus the change log and stereo audit |
+| `integrity` | every calculate record | what the final geometry is: composition, connectivity, tautomer, configuration |
+| `depict` | results panel and report | one 2D SVG, CoordGen layout; validated before embedding |
 
 Each answer records `program`, `version`, `op` and the parameters that change it. A repeated
 structure is answered from the run-local `chem-cache.json`; the record says whether the value was a

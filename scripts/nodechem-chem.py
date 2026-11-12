@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from nodechem_chem import PROTOCOL  # noqa: E402
 from nodechem_chem.common import fail, read_request  # noqa: E402
-from nodechem_chem.ops import descriptors, integrity, probe, standardize  # noqa: E402
+from nodechem_chem.ops import depict, descriptors, integrity, probe, standardize  # noqa: E402
 
 # Every op implemented in this build. The app refuses an unimplemented op before
 # spawning, so reaching the fall-through below means the wire and the script
@@ -56,6 +56,7 @@ OPS = {
     "descriptors": descriptors.run,
     "standardize": standardize.run,
     "integrity": integrity.run,
+    "depict": depict.run,
 }
 
 
