@@ -371,3 +371,171 @@ describe('method ladders in the report', () => {
     expect(html).toContain('gates-fail');
   });
 });
+
+/**
+ * Issue #355: the queue writes `task.history` on every retry reset, and until
+ * now the report dropped it — a block that failed twice and passed on the third
+ * attempt printed a row identical to a first-try pass.
+ */
+describe('retry history in the report (#355)', () => {
+  const retryQueue = () => ({
+    id: 'q-retry',
+    projectName: 'Retried deck',
+    status: 'completed',
+    createdAt: '2026-11-08T01:00:00.000Z',
+    finishedAt: '2026-11-08T01:20:00.000Z',
+    tasks: [
+      {
+        nodeId: 'opt-retry',
+        title: 'Optimise TS',
+        type: 'calculate',
+        kind: 'Opt',
+        status: 'completed',
+        attempts: 3,
+        gateVerdict: 'pass',
+        runId: 'run-3',
+        finishedAt: '2026-11-08T01:18:00.000Z',
+        history: [
+          { runId: 'run-1', status: 'failed', gateVerdict: 'fail', finishedAt: '2026-11-08T01:05:00.000Z' },
+          { runId: 'run-2', status: 'needs-review', gateVerdict: 'unknown', finishedAt: '2026-11-08T01:11:00.000Z' },
+        ],
+      },
+      {
+        nodeId: 'sp-first',
+        title: 'Single point',
+        type: 'calculate',
+        kind: 'SP',
+        status: 'completed',
+        attempts: 1,
+        gateVerdict: 'pass',
+        runId: 'run-sp',
+        history: [],
+      },
+      // A v1 queue.json: the field does not exist, which is not evidence of a retry.
+      {
+        nodeId: 'freq-v1', title: 'Frequency (v1 record)', type: 'calculate', status: 'completed',
+        attempts: 1, gateVerdict: 'pass',
+      },
+    ],
+  });
+
+  const records = () => ({
+    'run-3': { parsed: { finalEnergy: { hartree: -76.4 } } },
+    'run-1': { parsed: { finalEnergy: { hartree: -76.39 } } },
+  });
+
+  it('carries the queue history as copies and counts every attempt', () => {
+    const queue = retryQueue();
+    const model = buildWorkflowReport(queue, records());
+    const retried = model.tasks.find((row) => row.nodeId === 'opt-retry');
+    expect(retried.history).toHaveLength(2);
+    expect(retried.history.map((entry) => entry.status)).toEqual(['failed', 'needs-review']);
+    expect(retried.history.map((entry) => entry.runId)).toEqual(['run-1', 'run-2']);
+    expect(retried.attemptCount).toBe(3);
+    expect(model.retries).toMatchObject({ tasks: 1, extraAttempts: 2, withHistory: 1 });
+
+    // The model holds copies: mutating the queue after the build changes nothing.
+    queue.tasks[0].history[0].status = 'completed';
+    queue.tasks[0].history.push({ runId: 'run-9', status: 'completed' });
+    expect(retried.history.map((entry) => entry.status)).toEqual(['failed', 'needs-review']);
+    expect(retried.history).toHaveLength(2);
+  });
+
+  it('renders both failed attempts and the final passing verdict for a third-try pass', () => {
+    const html = workflowReportHtml(buildWorkflowReport(retryQueue(), records()));
+    expect(html).toContain('<summary>3 attempts</summary>');
+    // Three attempt rows: the two resets from `history` and the run in the table.
+    expect(html.match(/<tr data-attempt="/g)).toHaveLength(3);
+    expect(html).toContain('data-attempt="1"');
+    expect(html).toContain('data-attempt="2"');
+    expect(html).toContain('data-attempt="3"');
+    // The earlier attempts keep the outcome the queue recorded for them.
+    expect(html).toContain('<td>failed</td>');
+    expect(html).toContain('<td>needs-review</td>');
+    expect(html).toContain('<td class="mono">run-1</td>');
+    expect(html).toContain('<td class="mono">run-2</td>');
+    // The final attempt row carries the passing verdict, not the earlier failures.
+    const finalRow = html.slice(html.indexOf('data-attempt="3"'), html.indexOf('</tr>', html.indexOf('data-attempt="3"')));
+    expect(finalRow).toContain('completed');
+    expect(finalRow).toContain('gates-pass');
+    expect(finalRow).toContain('run-3');
+    // The Attempts cell links to the list instead of just printing a bare number.
+    expect(html).toContain('href="#attempts-opt-retry"');
+    expect(html).toContain('3</a> <span class="sub">see history</span>');
+  });
+
+  it('leaves a first-try pass and a v1 record undecorated', () => {
+    const model = buildWorkflowReport(retryQueue(), records());
+    const first = model.tasks.find((row) => row.nodeId === 'sp-first');
+    expect(first.attemptCount).toBe(1);
+    expect(first.history).toEqual([]);
+    const v1 = model.tasks.find((row) => row.nodeId === 'freq-v1');
+    expect(v1.history).toBeNull();
+    expect(v1.attemptCount).toBe(1);
+
+    const html = workflowReportHtml(model);
+    expect(html).not.toContain('attempts-sp-first');
+    expect(html).not.toContain('attempts-freq-v1');
+    expect(html.match(/<details/g)).toHaveLength(1);
+    // The column is present for every row; only the retried row is a link.
+    expect(html).toContain('<th>Attempts</th>');
+    expect(html.match(/href="#attempts-/g)).toHaveLength(1);
+  });
+
+  it('states the retry count in the Outcome summary', () => {
+    const html = workflowReportHtml(buildWorkflowReport(retryQueue(), records()));
+    expect(html).toContain('data-field="retries"');
+    expect(html).toContain('<strong>1</strong> task(s) needed more than one attempt (2 extra attempts recorded)');
+  });
+
+  it('counts a retried task with no history without inventing an attempt list', () => {
+    const queue = retryQueue();
+    delete queue.tasks[0].history;
+    const model = buildWorkflowReport(queue, records());
+    expect(model.tasks[0].history).toBeNull();
+    expect(model.tasks[0].attemptCount).toBe(3);
+    expect(model.retries).toMatchObject({ tasks: 1, extraAttempts: 2, withHistory: 0 });
+
+    const html = workflowReportHtml(model);
+    expect(html).not.toContain('<details');
+    expect(html).toContain('history not recorded');
+    expect(html).toContain('the queue recorded no attempt history for 1 of them');
+  });
+
+  it('keeps the queue bound of 20 attempts and says what it dropped', () => {
+    const queue = retryQueue();
+    queue.tasks[0].history = Array.from({ length: 25 }, (_, index) => ({
+      runId: `run-${index + 1}`, status: 'failed', gateVerdict: 'fail', finishedAt: `2026-11-08T01:0${index}:00.000Z`,
+    }));
+    queue.tasks[0].attempts = 26;
+    const model = buildWorkflowReport(queue, records());
+    expect(model.tasks[0].history).toHaveLength(20);
+    expect(model.tasks[0].historyTruncated).toBe(true);
+    expect(model.tasks[0].attemptCount).toBe(26);
+
+    const html = workflowReportHtml(model);
+    expect(html).toContain('<summary>26 attempts</summary>');
+    expect(html).toContain('The queue keeps the last 20 attempts; earlier attempts are not in this report.');
+    expect(html).toContain('The queue counted 5 more attempt(s) than its history holds.');
+  });
+
+  it('escapes attempt text and stays self-contained and script-free', () => {
+    const queue = retryQueue();
+    queue.tasks[0].history = [
+      { runId: '<script>alert(1)</script>', status: '<img onerror=x>', gateVerdict: 'fail', finishedAt: '" onmouseover="' },
+      { runId: 'run-2', status: 'failed', gateVerdict: 'fail', finishedAt: '2026-11-08T01:11:00.000Z' },
+    ];
+    const html = workflowReportHtml(buildWorkflowReport(queue, records(), { figureLevel: 'none' }));
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('<img onerror=x>');
+    expect(html).toContain('&lt;img onerror=x&gt;');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    // `--figures none` keeps the attempt history: the retry record is not a figure.
+    expect(html).toContain('<summary>3 attempts</summary>');
+    expect(html).not.toContain('<figure class="fig"');
+    // Self-contained: no network reference, and the stylesheet is inline.
+    expect(html).not.toMatch(/https?:\/\//i);
+    expect(html.startsWith('<!doctype html>')).toBe(true);
+    expect(html.trimEnd().endsWith('</html>')).toBe(true);
+  });
+});

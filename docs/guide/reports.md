@@ -87,7 +87,9 @@ since the last report (same path, modification time and size) is reused instead 
 A flow that iterates over a dataset groups its tasks by record. The report has:
 
 1. **Outcome** — task counts, the gate verdict, the task failures, and the names of any records
-   that need attention.
+   that need attention. When a block ran more than once, a second line states how many tasks were
+   retried and how many extra attempts were recorded — a green verdict reached on the third attempt
+   is not the same claim as a first-try pass.
 2. **Records** — one row per dataset record: status, gates, final energy, ΔE against the first
    completed record, and the method/basis pairs used. ΔE is recomputed from the reported energies
    in kcal mol⁻¹; a record with no energy leaves the cell as `not reported`.
@@ -114,6 +116,14 @@ A flow that iterates over a dataset groups its tasks by record. The report has:
    **Provenance** — run ids and the input/output SHA-256 prefixes.
 
 A v1 project (no dataset) is unchanged: one table of blocks, no record sections.
+
+Every task table has an **Attempts** column. A first-try run prints `1`. A block the queue retried
+prints its attempt count, linked to a collapsible list of attempts under the table: attempt number,
+status, gate verdict, run id and finish time, taken from the queue's own `history[]` (the last 20
+attempts are kept). The final row is the attempt the table itself reports, so `failed, failed,
+passed` is three rows and not one green cell. A count the queue recorded without a history prints
+`history not recorded` rather than inventing a list. The same capped history is in `report.json`,
+so the HTML's list can be checked against the model.
 
 ## The combined report
 
