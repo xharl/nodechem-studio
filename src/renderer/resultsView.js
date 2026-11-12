@@ -33,6 +33,12 @@ import { elementForNucleus, nmrSpectrum } from '../shared/nmr.js';
 import { SHIPPED_REFERENCES, levelLabel, lookupReference, shiftFor } from '../shared/nmrReferences.js';
 import { ramanPolyline, ramanSpectrum } from '../shared/raman.js';
 import { VCD_DIPOLE_UNITS, VCD_UNITS, vcdPolyline, vcdSpectrum } from '../shared/vcd.js';
+import {
+  describeFrequencyScale,
+  methodBasisFromRoute,
+  resolveFrequencyScale,
+  scaleZeroPoint,
+} from '../shared/frequencyScaling.js';
 import { ROA_UNITS, roaSpectrum } from '../shared/roa.js';
 import { ecdPolyline, ecdSpectrum } from '../shared/ecd.js';
 import { scaleToSpectrum } from '../shared/overlay.js';
@@ -649,7 +655,34 @@ function ensembleTableHtml(rows, { temperatureK = 298.15, selected = [] } = {}) 
     + 'nothing checks that assumption for you.</p>';
 }
 
-function thermochemistryCard(parsed, flags) {
+/**
+ * The block's frequency-scale resolution for a results card (issue 350).
+ * `options.settings` is the queued task's settings; a record opened without
+ * them reads as `unscaled`, which is the schema default.
+ */
+function frequencyScaleFor(parsed, options) {
+  // A run.json records the decision it ran with. That is authoritative for a
+  // reopened record; the block settings are the fallback for a task that has
+  // not written its record yet.
+  const recorded = isObject(options?.frequencyScaleResolution) ? options.frequencyScaleResolution : null;
+  if (recorded) {
+    return {
+      ...recorded,
+      factor: Number.isFinite(recorded.factor) ? recorded.factor : 1,
+      applied: recorded.applied === true,
+      warnings: Array.isArray(recorded.warnings) ? recorded.warnings : [],
+    };
+  }
+  const settings = isObject(options?.settings) ? options.settings : {};
+  const pair = methodBasisFromRoute(parsed?.route);
+  return resolveFrequencyScale({
+    setting: settings.frequencyScale ?? 'unscaled',
+    method: pair.method,
+    basis: pair.basis,
+  });
+}
+
+function thermochemistryCard(parsed, flags, options = {}) {
   const thermo = isObject(parsed?.thermochemistry) ? parsed.thermochemistry : {};
   // Gaussian writes `zeroPointEnergyHartree`; the canonical engine-neutral
   // shape uses `zpeHartree`. Read both, but never derive one from the SCF
@@ -661,13 +694,32 @@ function thermochemistryCard(parsed, flags) {
   const temperature = finite(thermo.temperatureK);
   const pressure = finite(thermo.pressureAtm);
   const treatment = text(thermo.entropyTreatment);
+  // Issue 350: the printed ZPE correction is the derived value's baseline.
+  // The absolute `E + ZPE` and `G` stay the log's numbers; only this line and
+  // the entropy-derived corrections move with the factor.
+  const frequencyScale = frequencyScaleFor(parsed, options);
+  const zpe = scaleZeroPoint(thermo.zeroPointCorrectionHartree, frequencyScale);
   const rows = [
     fieldValue('E + ZPE', hartreeText(eZpe) ?? missingHtml(), 'thermo-ezpe'),
     fieldValue('H (enthalpy)', hartreeText(thermo.enthalpyHartree) ?? missingHtml(), 'thermo-h'),
     fieldValue('G (free energy)', hartreeText(thermo.freeEnergyHartree) ?? missingHtml(), 'thermo-g'),
     fieldValue('Entropy', entropy === null ? missingHtml() : `${entropy.toFixed(3)} cal mol⁻¹ K⁻¹`, 'thermo-entropy'),
   ];
+  if (zpe.rawHartree !== null) {
+    const textValue = zpe.applied
+      ? `${zpe.rawHartree.toFixed(6)} → ${zpe.scaledHartree.toFixed(6)} Eh · ${esc(describeFrequencyScale(frequencyScale))}`
+      : `${zpe.rawHartree.toFixed(6)} Eh · ${esc(describeFrequencyScale(frequencyScale))}`;
+    rows.push(fieldValue('ZPE correction', textValue, 'thermo-zpe'));
+  }
   if (treatment) rows.push(fieldValue('Entropy treatment', esc(treatment), 'thermo-entropy-treatment'));
+  const scalingNote = frequencyScale.applied
+    ? `<p class="results-note" data-field="thermo-scale-note">ZPE and the quasi-RRHO entropy are derived from frequencies `
+      + `scaled ${esc(describeFrequencyScale(frequencyScale))} (table ${esc(frequencyScale.tableVersion)}). `
+      + 'The printed G is Gaussian&#39;s harmonic value; it is not re-derived.</p>'
+    : '';
+  const scalingWarning = frequencyScale.warnings.length
+    ? `<p class="results-note is-warn" data-field="thermo-scale-warning">${frequencyScale.warnings.map(esc).join('<br>')}</p>`
+    : '';
   const conditions = [
     temperature === null ? null : `${temperature.toFixed(2)} K`,
     pressure === null ? null : `${pressure.toFixed(5)} atm`,
@@ -694,6 +746,8 @@ function thermochemistryCard(parsed, flags) {
     : '';
   return card('Thermochemistry', kv(rows)
     + (conditions ? `<p class="results-note" data-field="thermo-conditions">${esc(conditions)}</p>` : '')
+    + scalingNote
+    + scalingWarning
     + workbench
     + caveatHtml(flags, 'Thermochemistry'), workbench ? 'is-wide' : '');
 }
@@ -1990,11 +2044,14 @@ function dp4Card(record, flags) {
  * cross-section: converting to one needs the excitation wavelength and a
  * Boltzmann population factor that the log does not carry.
  */
-function ramanCard(parsed, flags) {
+function ramanCard(parsed, flags, options = {}) {
   const modes = parsed?.raman;
   if (!Array.isArray(modes) || modes.length === 0) return '';
   const withActivity = modes.filter((mode) => Number.isFinite(mode.ramanActivity));
   if (withActivity.length === 0) return '';
+  // Issue 350: the factor is a display choice; the modes keep the printed
+  // wavenumbers and the section prints both columns when one is applied.
+  const frequencyScale = frequencyScaleFor(parsed, options);
   const body = '<p class="results-note">Per-mode Raman scattering activities as printed by Gaussian '
     + `(Å⁴/amu), with the depolarisation ratio for plane- and unpolarised incident light. `
     + 'The curve below is the <em>activity</em> broadened with a Lorentzian of the stated FWHM: it is not a '
@@ -2003,14 +2060,14 @@ function ramanCard(parsed, flags) {
     + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-raman-fwhm value="12"></label>'
     + '<label>Measured trace <input type="file" accept=".csv,.txt,.jdx,.dx,text/csv,text/plain" data-raman-overlay></label>'
     + '</div>'
-    + `<div data-field="raman-figure">${ramanSectionHtml(modes, { fwhmCm: 12 })}</div>`
+    + `<div data-field="raman-figure">${ramanSectionHtml(modes, { fwhmCm: 12, scale: frequencyScale })}</div>`
     + caveatHtml(flags, 'These activities');
   return card('Raman', body, 'is-wide');
 }
 
 /** The figure and the per-mode table, recomputed when a control changes. */
-export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '', overlayNote = '' } = {}) {
-  const spectrum = ramanSpectrum(modes, { fwhmCm });
+export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayName = '', overlayNote = '', scale = null } = {}) {
+  const spectrum = ramanSpectrum(modes, { fwhmCm, scale });
   if (!spectrum) return '<p class="results-missing">No Raman activity was printed, so there is nothing to plot.</p>';
   const scaled = measured ? scaleToSpectrum(measured, { peakIntensity: 1 }) : null;
   // The measured trace is passed in data units and clipped by the figure: the
@@ -2028,6 +2085,7 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
     + (drawn ? drawn.svg : '')
     + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(modes.length)} modes · `
     + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
+    + (scale ? ` · frequencies ${esc(describeFrequencyScale(scale))}` : '')
     + (scaled ? ` · measured series “${esc(overlayName || 'imported')}” scaled by ×${esc(scaled.scale.toPrecision(4))} to match the strongest simulated peak` : '')
     + (overlayNote ? `<br>${esc(overlayNote)}` : '')
     + '</figcaption>'
@@ -2036,11 +2094,14 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
   const rows = spectrum.peaks.map((peak, index) => '<tr>'
     + `<td>${esc(index + 1)}</td>`
     + `<td>${esc(peak.wavenumber.toFixed(4))}</td>`
+    + (scale?.applied ? `<td>${esc(peak.wavenumberRaw.toFixed(4))}</td>` : '')
     + `<td>${esc(peak.ramanActivity.toFixed(4))}</td>`
     + `<td>${peak.depolarizationPlane === null ? MISSING_TEXT : esc(peak.depolarizationPlane.toFixed(4))}</td>`
     + '</tr>').join('');
   const table = '<table class="results-table" data-field="raman-modes">'
-    + '<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th><th>Activity / Å⁴ amu⁻¹</th><th>Depolarisation (plane)</th></tr></thead>'
+    + '<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th>'
+    + (scale?.applied ? '<th>Raw / cm⁻¹</th>' : '')
+    + '<th>Activity / Å⁴ amu⁻¹</th><th>Depolarisation (plane)</th></tr></thead>'
     + `<tbody>${rows}</tbody></table>`;
   return figure + table;
 }
@@ -2056,12 +2117,13 @@ export function ramanSectionHtml(modes, { fwhmCm = 12, measured = null, overlayN
  * instead of choosing one; the unit and the E–M angle are printed so a reader
  * can identify the convention from the numbers.
  */
-function vcdCard(parsed, flags) {
+function vcdCard(parsed, flags, options = {}) {
   const modes = parsed?.vcd;
   if (!Array.isArray(modes) || modes.length === 0) return '';
   const withStrength = modes.filter((mode) => Number.isFinite(mode.rotationalStrength));
   if (withStrength.length === 0) return '';
   const representation = parsed?.vcdTable?.representation ?? null;
+  const frequencyScale = frequencyScaleFor(parsed, options);
   const body = '<p class="results-note">Per-mode vibrational circular dichroism as printed by Gaussian: '
     + 'rotational strength <em>R</em>, dipole strength and the E–M angle between the electric and magnetic '
     + `dipole transition moments. R is <strong>signed</strong> (${esc(VCD_UNITS)}), and the curve below is `
@@ -2073,32 +2135,37 @@ function vcdCard(parsed, flags) {
     + '<div class="nmr-controls">'
     + '<label>FWHM / cm<sup>−1</sup> <input type="number" step="1" min="0.5" data-vcd-fwhm value="12"></label>'
     + '</div>'
-    + `<div data-field="vcd-figure">${vcdSectionHtml(modes, { fwhmCm: 12 })}</div>`
+    + `<div data-field="vcd-figure">${vcdSectionHtml(modes, { fwhmCm: 12, scale: frequencyScale })}</div>`
     + caveatHtml(flags, 'These rotational strengths');
   return card('VCD', body, 'is-wide');
 }
 
 /** The signed figure and the per-mode table, recomputed when the FWHM changes. */
-export function vcdSectionHtml(modes, { fwhmCm = 12 } = {}) {
-  const spectrum = vcdSpectrum(modes, { fwhmCm });
+export function vcdSectionHtml(modes, { fwhmCm = 12, scale = null } = {}) {
+  const spectrum = vcdSpectrum(modes, { fwhmCm, scale });
   if (!spectrum) return '<p class="results-missing">No rotational strengths were printed, so there is nothing to plot.</p>';
   const drawn = fromVcd(spectrum);
   const figure = '<figure class="results-spectrum" data-field="vcd-spectrum">'
     + (drawn ? drawn.svg : '')
     + `<figcaption>${esc(spectrum.quantity)} · ${esc(spectrum.units)} · ${esc(spectrum.counts.total)} modes `
     + `(${esc(spectrum.counts.positive)} positive, ${esc(spectrum.counts.negative)} negative) · `
-    + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}</figcaption>`
+    + `Lorentzian broadening, FWHM ${esc(Number(fwhmCm).toFixed(1))} cm⁻¹ · ${esc(spectrum.normalisation)}`
+    + (scale ? ` · frequencies ${esc(describeFrequencyScale(scale))}` : '')
+    + '</figcaption>'
     + '</figure>';
 
   const rows = spectrum.peaks.map((peak, index) => '<tr>'
     + `<td>${esc(index + 1)}</td>`
     + `<td>${esc(peak.wavenumber.toFixed(4))}</td>`
+    + (scale?.applied ? `<td>${esc(peak.wavenumberRaw.toFixed(4))}</td>` : '')
     + `<td>${esc(peak.rotationalStrength.toFixed(4))}</td>`
     + `<td>${peak.dipoleStrength === null ? MISSING_TEXT : esc(peak.dipoleStrength.toFixed(4))}</td>`
     + `<td>${peak.emAngle === null ? MISSING_TEXT : esc(peak.emAngle.toFixed(4))}</td>`
     + '</tr>').join('');
   const table = '<table class="results-table" data-field="vcd-modes">'
-    + `<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th><th>R / ${esc(VCD_UNITS)}</th>`
+    + `<thead><tr><th>Mode</th><th>Frequency / cm⁻¹</th>`
+    + (scale?.applied ? '<th>Raw / cm⁻¹</th>' : '')
+    + `<th>R / ${esc(VCD_UNITS)}</th>`
     + `<th>Dip. strength / ${esc(VCD_DIPOLE_UNITS)}</th><th>E–M angle / °</th></tr></thead>`
     + `<tbody>${rows}</tbody></table>`;
   return figure + table;
@@ -2742,6 +2809,16 @@ export function resultsPanelHtml(record, options = {}) {
   // that already carries them. Nothing here is guessed from the log.
   const task = isObject(record.task) ? record.task : {};
   const jobSettings = isObject(options.settings) ? options.settings : (isObject(task.settings) ? task.settings : {});
+  // Issue 350: a finished run recorded the factor it used; that decision is
+  // what the cards print, even if the block's setting was changed afterwards.
+  const recordedFrequencyScale = isObject(record.provenance?.frequencyScale)
+    ? record.provenance.frequencyScale : null;
+  const scaleOptions = recordedFrequencyScale
+    ? { ...options, frequencyScaleResolution: recordedFrequencyScale }
+    : options;
+  // The cards need the resolved block settings even when `options.settings` was
+  // empty and the settings came from the queued task.
+  const cardOptions = { ...scaleOptions, settings: jobSettings };
   const emission = isObject(options.emission) ? options.emission
     : (isObject(task.emission) ? task.emission : (isObject(record.emission) ? record.emission : null));
   const nto = isObject(options.nto) ? options.nto : (isObject(task.nto) ? task.nto : (isObject(record.nto) ? record.nto : null));
@@ -2805,7 +2882,7 @@ export function resultsPanelHtml(record, options = {}) {
       spinSweepCard(options.spinSweep, options.spinStates),
       saptCard(parsed, flags),
       solvationCard(parsed, flags),
-      thermochemistryCard(parsed, flags),
+      thermochemistryCard(parsed, flags, cardOptions),
       methodsCard(record),
       frequenciesCard(parsed, flags),
       excitedStatesCard(parsed, flags, record, spectrumOverlay, spectrumOverlayNote),
@@ -2818,8 +2895,8 @@ export function resultsPanelHtml(record, options = {}) {
       solutionEnergeticsCard(record, parsed, flags, options),
       trajectoryCard(parsed, flags),
       nmrCard(parsed, flags, record),
-      ramanCard(parsed, flags),
-      vcdCard(parsed, flags),
+      ramanCard(parsed, flags, cardOptions),
+      vcdCard(parsed, flags, cardOptions),
       roaCard(parsed, flags),
       ecdCard(parsed, flags),
       chargesCard(parsed, flags),

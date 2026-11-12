@@ -18,6 +18,13 @@
  *   behaviour; the enthalpy stays the harmonic value printed by Gaussian.
  */
 
+import {
+  SCALE_FACTOR_TABLE_VERSION,
+  methodBasisFromRoute,
+  resolveFrequencyScale,
+  scaleZeroPoint,
+} from './frequencyScaling.js';
+
 /** kcal mol^-1 per Hartree. The value named by issue #22 and GoodVibes. */
 export const HARTREE_TO_KCAL_PER_MOL = 627.5095;
 
@@ -169,11 +176,28 @@ function correctionLine({ id, label, enabled, constant, detail, correctionKcalPe
  * zero to the total. If an enabled correction cannot be computed (for example
  * a frequency job without frequencies), the total is `null` rather than a
  * partial number. `cutoffCm1` is the exposed Grimme cutoff; it must be > 0.
+ *
+ * `frequencyScale` is the block's setting: `unscaled` (the default), `auto`, or
+ * an explicit factor. A factor changes only derived values — the printed ZPE
+ * correction (`zeroPoint.scaledHartree`), the harmonic entropy baseline and the
+ * quasi-RRHO correction are recomputed from the scaled wavenumbers. The printed
+ * G stays Gaussian's harmonic value: v1 does not re-run the full thermal
+ * analysis, and folding a scaled ZPE into a G whose translational/rotational
+ * terms came from the raw frequencies would mix two thermochemistries in one
+ * number. `method`/`basis` override the route-derived pair; `imported` refuses
+ * scaling outright, whatever the setting says. A reopened record passes
+ * `frequencyScaleResolution` (its `provenance.frequencyScale`) so the recorded
+ * factor and table version are used as recorded, not re-resolved.
  */
 export function buildThermochemistryReport(parsed, {
   quasiRRHO = true,
   standardState = true,
   cutoffCm1 = DEFAULT_QUASI_RRHO_CUTOFF_CM1,
+  frequencyScale = 'unscaled',
+  frequencyScaleResolution = null,
+  method = null,
+  basis = null,
+  imported = false,
 } = {}) {
   assertPositive(cutoffCm1, 'Quasi-RRHO cutoff', 'cm^-1');
 
@@ -181,6 +205,37 @@ export function buildThermochemistryReport(parsed, {
     ? parsed.thermochemistry : {};
   const warnings = [];
   if (!parsed) warnings.push('No parsed output was supplied.');
+
+  // Issue #350: the factor is resolved once, from the block setting and the
+  // level of theory, and every derived number below uses this one decision.
+  // A reopened record passes its recorded block instead: that decision was made
+  // against the table version named in it and must not drift with a new table.
+  const routePair = methodBasisFromRoute(parsed?.route);
+  const recorded = !imported && frequencyScaleResolution && typeof frequencyScaleResolution === 'object'
+    ? frequencyScaleResolution : null;
+  const scaling = recorded
+    ? {
+      mode: recorded.mode ?? 'unknown',
+      setting: recorded.setting ?? frequencyScale,
+      key: recorded.key ?? null,
+      factor: Number.isFinite(recorded.factor) ? recorded.factor : 1,
+      applied: recorded.applied === true && Number.isFinite(recorded.factor) && recorded.factor !== 1,
+      source: recorded.source ?? null,
+      doi: recorded.doi ?? null,
+      url: recorded.url ?? null,
+      tableVersion: recorded.tableVersion ?? SCALE_FACTOR_TABLE_VERSION,
+      warnings: Array.isArray(recorded.warnings) ? recorded.warnings.slice() : [],
+      method: recorded.method ?? routePair.method,
+      basis: recorded.basis ?? routePair.basis,
+    }
+    : resolveFrequencyScale({
+      setting: frequencyScale,
+      method: method ?? routePair.method,
+      basis: basis ?? routePair.basis,
+      imported,
+    });
+  const factor = scaling.applied ? scaling.factor : 1;
+  if (scaling.warnings.length > 0) warnings.push(...scaling.warnings);
 
   const temperatureK = Number.isFinite(thermochemistry.temperatureK)
     && thermochemistry.temperatureK > 0
@@ -209,11 +264,15 @@ export function buildThermochemistryReport(parsed, {
   const baselineKcalPerMol = baselineHartree === null
     ? null : baselineHartree * HARTREE_TO_KCAL_PER_MOL;
 
-  const frequencies = Array.isArray(parsed?.frequencies?.values)
+  const rawFrequencies = Array.isArray(parsed?.frequencies?.values)
     ? parsed.frequencies.values.filter((value) => Number.isFinite(value) && value > 0)
     : [];
+  // Issue #350: a scaled entropy is recomputed from the scaled wavenumbers. The
+  // log's printed vibrational entropy belongs to the printed frequencies, so it
+  // is only used when no factor was applied.
+  const frequencies = factor === 1 ? rawFrequencies : rawFrequencies.map((value) => value * factor);
   let harmonicBaselineJ = null;
-  if (Number.isFinite(thermochemistry.entropyCalPerMolK?.vibrational)) {
+  if (factor === 1 && Number.isFinite(thermochemistry.entropyCalPerMolK?.vibrational)) {
     harmonicBaselineJ = thermochemistry.entropyCalPerMolK.vibrational * CALORIE_TO_JOULE;
   } else if (frequencies.length > 0) {
     harmonicBaselineJ = frequencies
@@ -280,6 +339,11 @@ export function buildThermochemistryReport(parsed, {
   const totalHartree = unknown ? null : baselineHartree + (deltaKcalPerMol / HARTREE_TO_KCAL_PER_MOL);
   const totalKcalPerMol = totalHartree === null ? null : totalHartree * HARTREE_TO_KCAL_PER_MOL;
 
+  // Issue #350: the ZPE correction is linear in the frequencies, so its derived
+  // value is the printed correction × the same factor. It is printed beside the
+  // raw value and is never folded into the total above.
+  const zeroPoint = scaleZeroPoint(thermochemistry.zeroPointCorrectionHartree, scaling);
+
   return {
     available: totalHartree !== null,
     temperatureK,
@@ -292,6 +356,36 @@ export function buildThermochemistryReport(parsed, {
       deltaKcalPerMol,
       deltaHartree: deltaKcalPerMol === null ? null : deltaKcalPerMol / HARTREE_TO_KCAL_PER_MOL,
     },
+    // What was applied to the derived values, and why. `factor` is 1 whenever
+    // nothing was applied; `source` is null unless a table entry was used.
+    scaling: {
+      mode: scaling.mode,
+      setting: scaling.setting,
+      key: scaling.key,
+      factor,
+      applied: factor !== 1,
+      source: scaling.source,
+      doi: scaling.doi,
+      url: scaling.url,
+      tableVersion: scaling.tableVersion,
+      warnings: scaling.warnings.slice(),
+      // The values the derived numbers were computed from. `raw` is the parsed
+      // list (positively filtered); `scaled` is `raw × factor` and is only
+      // present when a factor applied. The stored `parsed` object is untouched.
+      frequencies: rawFrequencies.length === 0
+        ? null
+        : {
+          raw: rawFrequencies.slice(),
+          scaled: factor === 1 ? rawFrequencies.slice() : frequencies.slice(),
+          factor,
+        },
+      // The printed G is Gaussian's; only the ZPE and the entropy-derived
+      // correction are re-derived. Stated here so a reader cannot mistake the
+      // total for a fully re-scaled thermochemistry.
+      derived: factor === 1 ? [] : ['zeroPoint', 'harmonicEntropy', 'quasiRRHO'],
+      notDerived: factor === 1 ? [] : ['gibbs'],
+    },
+    zeroPoint,
     constants: {
       hartreeToKcalPerMol: HARTREE_TO_KCAL_PER_MOL,
       calorieToJoule: CALORIE_TO_JOULE,
@@ -303,6 +397,7 @@ export function buildThermochemistryReport(parsed, {
       quasiRRHOCutoffCm1: cutoffCm1,
       quasiRRHOAlpha: QUASI_RRHO_ALPHA,
       grimmeBavKgM2: GRIMME_BAV_KG_M2,
+      scaleFactorTableVersion: SCALE_FACTOR_TABLE_VERSION,
     },
     warnings,
   };

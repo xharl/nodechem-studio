@@ -31,6 +31,7 @@ Program capabilities from Gaussian's published job-type and model-chemistry list
 | Single point | SP | **Implemented** | `gaussianInput.js`, `gaussianOutput.js` |
 | Geometry optimisation | Opt | **Implemented** | with convergence control and force-constant choice |
 | Frequency + thermochemistry | Freq | **Implemented** | RRHO and quasi-RRHO, standard state |
+| Harmonic frequency scaling | Freq | **Implemented** (Gaussian) | `frequencyScaling.js`: 24 sourced entries (Merrick 2007 Tables 2 and 4 / CCCBDB Release 22), per-block `frequencyScale`, applied to displayed band positions and the derived ZPE; unknown pairs stay unscaled with a warning |
 | Optimise then frequency | Opt Freq | **Implemented** | |
 | Transition-state search | Opt=TS | **Implemented** | `tsForceConstants.js`, CalcFC/CalcAll/ReadFC |
 | Synchronous transit (QST2/QST3) | Opt=QST2/QST3 | **Implemented** | extra structures stored in the block |

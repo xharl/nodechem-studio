@@ -39,6 +39,7 @@
  */
 
 import { toLines } from './lines.js';
+import { scaledModeTable } from './frequencyScaling.js';
 
 const DIP_STRENGTH = /^\s*Dip\.\s*str(?:ength)?\.?\s*-{2,}\s*(.*)$/i;
 const ROT_STRENGTH = /^\s*Rot\.\s*str(?:ength)?\.?\s*-{2,}\s*(.*)$/i;
@@ -126,10 +127,16 @@ export function attachVcd(modes, vcd) {
  * strongest |R| so an overlay can be scaled onto the same axis. `zero` marks
  * the sign change line at y = 0 in the normalised frame, because a VCD curve
  * that is drawn without it is unreadable.
+ *
+ * `scale` is a frequency-scaling resolution from `frequencyScaling.js`: when it
+ * applied a factor the peaks carry `wavenumberRaw` beside the scaled
+ * `wavenumber`, and `scaling` records the factor and its source. The rotational
+ * strength itself is not scaled — #350's scope excludes intensities.
  */
-export function vcdSpectrum(modes, { fwhmCm = 12, points = 600 } = {}) {
-  const peaks = (Array.isArray(modes) ? modes : [])
-    .filter((mode) => Number.isFinite(mode.wavenumber) && Number.isFinite(mode.rotationalStrength));
+export function vcdSpectrum(modes, { fwhmCm = 12, points = 600, scale = null } = {}) {
+  const factor = scale?.applied ? Number(scale.factor) : 1;
+  const peaks = scaledModeTable((Array.isArray(modes) ? modes : [])
+    .filter((mode) => Number.isFinite(mode.wavenumber) && Number.isFinite(mode.rotationalStrength)), scale);
   if (peaks.length === 0) return null;
 
   const values = peaks.map((mode) => mode.wavenumber);
@@ -161,11 +168,23 @@ export function vcdSpectrum(modes, { fwhmCm = 12, points = 600 } = {}) {
     units: VCD_UNITS,
     representation: null,
     normalisation: `strongest |R| = 1.00 (${strongest.toFixed(4)} ${VCD_UNITS})`,
+    scaling: scale
+      ? {
+        mode: scale.mode,
+        factor,
+        applied: factor !== 1,
+        key: scale.key ?? null,
+        source: scale.source ?? null,
+        doi: scale.doi ?? null,
+        tableVersion: scale.tableVersion ?? null,
+      }
+      : null,
     minCm: low,
     maxCm: high,
     peaks: peaks
       .map((mode) => ({
         wavenumber: mode.wavenumber,
+        wavenumberRaw: mode.wavenumberRaw,
         rotationalStrength: mode.rotationalStrength,
         dipoleStrength: Number.isFinite(mode.dipoleStrength) ? mode.dipoleStrength : null,
         emAngle: Number.isFinite(mode.emAngle) ? mode.emAngle : null,

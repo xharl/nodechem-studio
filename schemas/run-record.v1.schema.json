@@ -352,6 +352,24 @@
           "additionalProperties": true
         },
         "solvation": { "type": ["string", "null"] },
+        "frequencyScale": {
+          "type": ["object", "null"],
+          "description": "Issue #350: the harmonic-frequency scaling decision this run recorded. Present on Gaussian blocks; an imported record never carries it.",
+          "additionalProperties": false,
+          "required": ["mode", "setting", "factor", "applied", "tableVersion"],
+          "properties": {
+            "mode": { "type": "string", "enum": ["unscaled", "auto", "explicit", "unknown", "invalid", "imported"] },
+            "setting": { "type": "string" },
+            "factor": { "type": ["number", "null"] },
+            "applied": { "type": "boolean" },
+            "key": { "type": ["string", "null"] },
+            "tableVersion": { "type": "string" },
+            "source": { "type": ["string", "null"] },
+            "doi": { "type": ["string", "null"] },
+            "url": { "type": ["string", "null"] },
+            "warnings": { "type": "array", "items": { "type": "string" } }
+          }
+        },
         "ecp": {
           "anyOf": [{ "$ref": "#/$defs/ecp" }, { "type": "null" }]
         },

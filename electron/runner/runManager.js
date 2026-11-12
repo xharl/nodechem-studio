@@ -14,6 +14,10 @@ import { ecpFromInput } from '../../src/shared/ecp.js';
 import { normaliseAppInfo, provenanceKindFor } from '../../src/shared/provenance.js';
 import { engineFor, DEFAULT_ENGINE_ID } from '../../src/shared/engines/index.js';
 import { withRunProvenance } from './runProvenance.js';
+import {
+  frequencyScaleProvenance,
+  resolveFrequencyScale,
+} from '../../src/shared/frequencyScaling.js';
 import { xtbSolvationFromArgv, parseXtbGeometry } from '../../src/shared/engines/xtb.js';
 import { normalizeValidityContext, runValidityChecks } from '../../src/shared/validityChecks.js';
 import { cacheFromParsed, writeCache } from '../../src/shared/cache.js';
@@ -346,6 +350,21 @@ export class RunManager {
         ? engine.methodBlock(settings, { argv, jobType })
         : methodBlockFor(settings))
       : null;
+    // Issue #350: the block's frequency-scale decision, resolved and recorded at
+    // the same moment the route is. The report and the results cards read this
+    // instead of re-deriving it from a log that may be reopened years later.
+    // Only Gaussian writes harmonic frequencies in the shape this table is
+    // keyed on; other engines carry no table entry and get no block. A block
+    // that is neither a frequency job nor asking for a factor keeps its old
+    // run.json exactly, so the key appears only where it can mean something.
+    const frequencyScale = engine.id === 'gaussian' && settings
+      && (/freq/i.test(jobType ?? '') || (settings.frequencyScale ?? 'unscaled') !== 'unscaled')
+      ? frequencyScaleProvenance(resolveFrequencyScale({
+        setting: settings.frequencyScale,
+        method: method?.functional,
+        basis: method?.basis,
+      }))
+      : null;
 
     const record = withRunProvenance({
       // The published contract this record conforms to (schemas/run-record.v1.schema.json).
@@ -376,6 +395,9 @@ export class RunManager {
         // must be able to say "optimization + frequency" from run.json alone.
         jobType,
         method,
+        // Issue #350: the scaling decision and its source, when this is a
+        // Gaussian block. An imported record never carries this key.
+        ...(frequencyScale ? { frequencyScale } : {}),
         // Issue #42: xTB solvation is recorded beside the method so a reader
         // does not have to parse argv to know the model and solvent. Gaussian
         // records keep their existing shape.

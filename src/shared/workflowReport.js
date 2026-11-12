@@ -114,6 +114,92 @@ function taskHistory(task) {
   };
 }
 
+/**
+ * Issue #350: the frequency-scale decision each run recorded.
+ *
+ * A row exists for a frequency run that carries `provenance.frequencyScale`, or
+ * for a non-frequency block that explicitly applied a factor, or (when imported
+ * records are included) an imported record with a printed ZPE. A plain
+ * non-frequency Gaussian block adds nothing: there is no spectrum to print and
+ * no ZPE to derive. The derived ZPE is `raw × factor`, computed here from the
+ * record's own numbers, never re-parsed from the log.
+ */
+function frequencyScalingModel(tasks, recordMap, includeImported = false) {
+  if (!Array.isArray(tasks)) return null;
+  const entries = [];
+  for (const task of tasks.slice(0, 500)) {
+    const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+    if (!record) continue;
+    const imported = importedSummary(record);
+    const resolution = record?.provenance?.frequencyScale && typeof record.provenance.frequencyScale === 'object'
+      ? record.provenance.frequencyScale : null;
+    const zpeRaw = num(record?.parsed?.thermochemistry?.zeroPointCorrectionHartree);
+    const jobType = text(record?.provenance?.jobType);
+    const title = text(record.title) || text(task.title) || text(task.nodeId);
+    const method = record?.provenance?.method && typeof record.provenance.method === 'object'
+      ? record.provenance.method : {};
+    if (imported) {
+      // An imported result is never scaled, and the row says why. It is listed
+      // only when the report is already including imported records, and only
+      // when it carries a ZPE; otherwise the imported-results section already
+      // names it and there is no second number to print.
+      if (!includeImported || zpeRaw === null) continue;
+      entries.push({
+        nodeId: text(task.nodeId),
+        title,
+        level: [imported.method, imported.basis].filter(Boolean).join('/') || null,
+        mode: 'imported',
+        factor: null,
+        applied: false,
+        tableVersion: null,
+        key: null,
+        source: null,
+        doi: null,
+        zpeRawHartree: zpeRaw,
+        zpeScaledHartree: zpeRaw,
+        note: 'imported — kept as its producer printed it, never scaled',
+        warnings: [],
+      });
+      continue;
+    }
+    if (!resolution) continue;
+    const factor = num(resolution.factor);
+    const applied = resolution.applied === true && factor !== null && factor !== 1;
+    // A non-frequency block has no spectrum or ZPE; only its applied/refused
+    // decision is worth a report row.
+    if (!/Freq/i.test(jobType ?? '') && !applied) continue;
+    entries.push({
+      nodeId: text(task.nodeId),
+      title,
+      level: [text(method.functional) || text(method.hamiltonian), text(method.basis)].filter(Boolean).join('/') || null,
+      mode: text(resolution.mode) || 'unknown',
+      factor,
+      applied,
+      tableVersion: text(resolution.tableVersion),
+      key: text(resolution.key),
+      source: text(resolution.source),
+      doi: text(resolution.doi),
+      zpeRawHartree: zpeRaw,
+      zpeScaledHartree: zpeRaw !== null && applied && factor !== null ? zpeRaw * factor : zpeRaw,
+      note: null,
+      warnings: Array.isArray(resolution.warnings) ? resolution.warnings.slice(0, 4).map(String) : [],
+    });
+  }
+  if (entries.length === 0) return null;
+  return {
+    tableVersion: entries.map((entry) => entry.tableVersion).find(Boolean) || null,
+    entries,
+    applied: entries.filter((entry) => entry.applied).length,
+    unscaled: entries.filter((entry) => !entry.applied
+      && entry.mode !== 'unknown' && entry.mode !== 'imported').length,
+    unknown: entries.filter((entry) => entry.mode === 'unknown').length,
+    imported: entries.filter((entry) => entry.mode === 'imported').length,
+    // `includeImported` is part of the model for the same reason it is on the
+    // task rows: a reader can see whether an imported number was allowed in.
+    includeImported: Boolean(includeImported),
+  };
+}
+
 function taskRow(task, record, { includeImported = false } = {}) {
   const parsed = record?.parsed && typeof record.parsed === 'object' ? record.parsed : {};
   const method = record?.provenance?.method && typeof record.provenance.method === 'object'
@@ -607,6 +693,8 @@ export function buildWorkflowReport(queue, records = {}, {
   // up the row and the run record by node id to recover the level of theory
   // and the SCF energy the correlation extrapolation needs.
   const rowByNodeId = new Map(rows.map((row) => [row.nodeId, row]));
+  // Issue #350: the frequency-scale decisions, from the records themselves.
+  const frequencyScaling = frequencyScalingModel(tasks, recordMap, includeImported);
   const recordByNodeId = new Map();
   for (const task of tasks) {
     const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
@@ -924,6 +1012,10 @@ export function buildWorkflowReport(queue, records = {}, {
       title: row.title,
       ...row.imported,
     })),
+    // Issue #350: what each frequency run applied, with the raw and derived
+    // ZPE. Absent from every report whose records predate the setting, so the
+    // document is byte-identical for a queue that never used it.
+    ...(frequencyScaling ? { frequencyScaling } : {}),
     // Issue 168: one entry per run that recorded an EPR block — spin
     // populations, Fermi-contact couplings, and the g-tensor refusal. Read from
     // `run.json`'s `parsed.epr`, so the report prints the numbers the run
@@ -1968,6 +2060,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
     + spinBlocks
     + dp4SectionHtml(model.dp4, sectionHeading)
     + eprSectionHtml(model.epr, sectionHeading)
+    + frequencyScalingSectionHtml(model.frequencyScaling, sectionHeading)
     + nmrSectionHtml(model.nmr, sectionHeading)
     + reactionBlocks
     + uncertaintySectionHtml(model.uncertainty, sectionHeading)
@@ -2336,6 +2429,56 @@ export function dp4SectionHtml(entries, headingTag = 'h2') {
     + 'committed parameter bank carries. A candidate at a level the bank does not carry has no probability '
     + 'here: it is refused, never estimated.</p>'
     + blocks;
+}
+
+/**
+ * The frequency-scaling section (issue #350): one row per run that made a
+ * scaling decision, with the factor, the raw ZPE and the derived ZPE.
+ *
+ * The two ZPE columns are the point of the table. A scaled ZPE without the raw
+ * one looks like a calculation; the pair makes it a derivation. The source cell
+ * carries the citation for the factor, and an unknown pair prints the warning
+ * that says no factor was guessed.
+ */
+export function frequencyScalingSectionHtml(section, headingTag = 'h2') {
+  if (!section || !Array.isArray(section.entries) || section.entries.length === 0) return '';
+  const entries = section.entries;
+  const rows = entries.map((entry) => {
+    const factorText = entry.applied
+      ? `×${Number(entry.factor).toFixed(4)}`
+      : entry.mode === 'unknown' ? 'unscaled (no entry)' : entry.mode === 'imported' ? 'not applied' : 'unscaled';
+    const sourceText = entry.applied
+      ? `${entry.source || 'source not recorded'}${entry.doi ? ` · doi:${entry.doi}` : ''}`
+      : entry.note || (entry.mode === 'unknown'
+        ? (entry.warnings[0] || `no published factor for ${entry.key || 'this pair'}`)
+        : 'as printed');
+    return '<tr data-field="frequency-scale" data-node="' + escapeHtml(entry.nodeId || '') + '">'
+      + `<td>${escapeHtml(entry.title || entry.nodeId || MISSING)}</td>`
+      + `<td>${escapeHtml(entry.level || MISSING)}</td>`
+      + `<td>${escapeHtml(factorText)}</td>`
+      + `<td class="num">${escapeHtml(value(entry.zpeRawHartree, 6))}</td>`
+      + `<td class="num">${escapeHtml(value(entry.zpeScaledHartree, 6))}</td>`
+      + `<td>${escapeHtml(sourceText)}</td>`
+      + '</tr>';
+  }).join('');
+  const warnings = entries.flatMap((entry) => (Array.isArray(entry.warnings) ? entry.warnings : []))
+    .filter(Boolean)
+    .map((warning) => `<li>${escapeHtml(warning)}</li>`)
+    .join('');
+  const tableVersion = section.tableVersion ? ` Table version ${escapeHtml(section.tableVersion)}.` : '';
+  return `<${headingTag}>Frequency scaling</${headingTag}>`
+    + `<p>${escapeHtml(String(entries.length))} frequency run(s): `
+    + `<strong>${escapeHtml(String(section.applied || 0))}</strong> scaled, `
+    + `${escapeHtml(String(section.unscaled || 0))} unscaled, `
+    + `${escapeHtml(String(section.unknown || 0))} with no published table entry`
+    + (section.imported ? `, ${escapeHtml(String(section.imported))} imported (kept unscaled)` : '')
+    + '. '
+    + 'The factor moves the displayed band positions, the derived ZPE and the quasi-RRHO entropy; '
+    + `the parsed record keeps the numbers the program printed.${tableVersion}</p>`
+    + '<table><thead><tr><th>Block</th><th>Level</th><th>Factor</th>'
+    + '<th class="num">ZPE raw / Eh</th><th class="num">ZPE scaled / Eh</th><th>Factor source</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>'
+    + (warnings ? `<ul class="warn">${warnings}</ul>` : '');
 }
 
 /**

@@ -204,6 +204,24 @@ exception: it is plotted as its reciprocal wavelength (λ = 10⁷/ν̄) and the 
 says so. Requesting that plot is opt-in (`placeMeasuredOverlay(..., { allowReciprocal: true })`);
 the default answer to a unit mismatch is an error naming both units.
 
+## Computed bands: raw and scaled
+
+A computed harmonic spectrum is drawn from the wavenumbers Gaussian printed, unless the block's
+`frequencyScale` asks for a correction. The setting is documented in
+[Results and analysis](results.md#frequency-scaling); what matters on this page is the figure:
+
+- the curve is built from `wavenumber × factor`, so a band moves with the factor;
+- each peak keeps `wavenumberRaw` (the parsed value) and the per-mode table grows a **Raw / cm⁻¹**
+  column when a factor was applied;
+- the caption names the factor and its source, or says `unscaled — no factor for <method>/<basis>`
+  when `auto` found no published entry;
+- intensities are not scaled. Rotational strength, Raman activity and oscillator strength stay the
+  numbers the program printed; #350's scope excludes empirical intensity scaling.
+
+The same rule holds for an imported record: it is never scaled. Its producer's numbers are the
+record, and the card says `not applied — imported record` rather than applying this machine's table
+to another program's output.
+
 ## What is not wired
 
 - **No CLI verb.** `ncs spectra import spectrum.jdx` does not exist yet. The reader is a shared

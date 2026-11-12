@@ -37,6 +37,11 @@ import {
   recordsForInput,
 } from './flows.js';
 import { MODERN_ROUTE_PRESET, COMPOSITE_JOB_TYPES, COUNTERPOISE_MAX_FRAGMENTS, clearCompositeConflicts, defaultDispersionFor, isCompositeJobType } from './routePresets.js';
+import {
+  MAX_SCALE_FACTOR,
+  MIN_SCALE_FACTOR,
+  normaliseFrequencyScaleSetting,
+} from './frequencyScaling.js';
 import { COMPLEX_MAX_MEMBERS, COMPLEX_PLACEMENT_MODES } from './complex.js';
 import { ENGINE_IDS } from './engines/index.js';
 import { XTB_METHODS, XTB_OPT_LEVELS, XTB_SOLVATION_MODELS } from './engines/xtb.js';
@@ -330,6 +335,10 @@ const SETTINGS_KEYS = new Set([
   // Issue 269: the CASSCF active space, written "electrons,orbitals". Absent
   // by default, so a project that never used CASSCF serialises unchanged.
   'pyscfActiveSpace',
+  // Issue #350: harmonic frequency scaling. `unscaled` is the semantic default,
+  // so a block that never sets it reads as unscaled; an explicit value must be
+  // read back or a save would drop it.
+  'frequencyScale',
 ]);
 const GATE_KEYS = new Set(['termination', 'scf', 'imaginary', 'minMagnitude', 'thermo', 'finalEnergy']);
 
@@ -1784,6 +1793,28 @@ function normalizeQst(c, raw, path, legacy) {
   return { structures };
 }
 
+/**
+ * Issue #350: a block's harmonic-frequency scaling choice.
+ *
+ * `unscaled` | `auto` | a factor in [MIN_SCALE_FACTOR, MAX_SCALE_FACTOR].
+ * Absent stays absent, so a project written before this setting existed
+ * serialises byte-identically; the runtime reads absent as `unscaled`. A
+ * malformed value is a save-time error naming the field — never a silent
+ * fallback to a factor nobody chose.
+ */
+function normalizeFrequencyScale(c, raw, path) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const normalised = normaliseFrequencyScaleSetting(raw);
+  if (normalised === null) {
+    c.error(path, 'must be "unscaled", "auto" or a factor between '
+      + `${MIN_SCALE_FACTOR} and ${MAX_SCALE_FACTOR}.`);
+    return null;
+  }
+  // `readString` is not used: a JSON number is a legitimate spelling of the
+  // factor, and stringifying it here keeps the stored form canonical.
+  return normalised;
+}
+
 function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   const source = requiredObject(c, raw, path, legacy, {});
   warnUnknown(c, source, SETTINGS_KEYS, path);
@@ -1864,6 +1895,14 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
   const recordTransitionDipoles = source.recordTransitionDipoles === undefined || source.recordTransitionDipoles === null
     ? null
     : readBoolean(c, source.recordTransitionDipoles, `${path}.recordTransitionDipoles`, { legacy: true, optional: true, fallback: false });
+  // Issue #350: the harmonic-frequency scale choice. Read after `jobType` so a
+  // factor on a block that computes no frequencies can say so instead of
+  // pretending it will be used.
+  const frequencyScale = normalizeFrequencyScale(c, source.frequencyScale, `${path}.frequencyScale`);
+  if (frequencyScale !== null && frequencyScale !== 'unscaled' && !/Freq/i.test(jobType)) {
+    c.warn(`${path}.frequencyScale`,
+      'applies to a frequency job; this block reports no harmonic frequencies to scale.');
+  }
   return {
     // Per-block engine override. Empty means "use the project default", which is
     // what every .ncs written before this setting existed says.
@@ -1953,6 +1992,9 @@ function normalizeSettings(c, raw, path, legacy, projectEngine = 'gaussian') {
     ...(matrixElement ? { matrixElement } : {}),
     ...(recordTransitionDipoles !== null ? { recordTransitionDipoles } : {}),
     ...(provider ? { provider } : {}),
+    // Issue #350: only when the block declared one. Absent reads as `unscaled`
+    // and keeps a pre-#350 project byte-identical on save.
+    ...(frequencyScale !== null ? { frequencyScale } : {}),
   };
 }
 
