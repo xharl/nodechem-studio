@@ -99,7 +99,7 @@ describe('theme contract', () => {
       const values = THEMES.map((theme) => themes[theme].get(name));
       expect(new Set(values).size, `${name} differs between themes`).toBe(1);
     }
-    expect(SCALE.map((name) => themes.current.get(name))).toEqual(['11px', '12px', '13px', '15px', '18px', '22px']);
+    expect(SCALE.map((name) => themes.current.get(name))).toEqual(['12px', '13px', '13px', '15px', '18px', '22px']);
   });
 });
 
@@ -189,7 +189,7 @@ describe('no literals outside the theme files', () => {
 });
 
 describe('type scale', () => {
-  it('has no size below 11 px and no size outside the scale', () => {
+  it('has no size below 12 px and no size outside the scale', () => {
     const sources = [
       'src/renderer/styles.css',
       'index.html',
