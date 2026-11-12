@@ -37,6 +37,7 @@ import {
 import { ENGINES, engineOrDefault } from '../src/shared/engines/index.js';
 import { parseToolVersion } from '../src/shared/toolVersion.js';
 import { createSettingsStore } from './settingsStore.js';
+import { createStartupClock } from './startupTiming.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -56,10 +57,12 @@ function packagedCommit() {
 const APP_COMMIT = String(process.env.GIT_COMMIT || '').trim() || packagedCommit() || 'unknown';
 
 /**
- * The single description of this build. `app:info` and the diagnostics bundle
- * must agree; deriving both from one function prevents the About chip and a
- * bug report from disagreeing about which build produced the problem.
+ * Launch phases, from this process's time origin to the renderer's first paint.
+ * The table is returned by `app:info` and appended to the diagnostics bundle;
+ * nothing is written to disk and nothing leaves this machine.
  */
+const startupClock = createStartupClock();
+
 /**
  * Which engine binaries this machine can actually launch, for the status bar.
  *
@@ -151,6 +154,11 @@ async function detectSettings() {
   return { ...status, tools, platform: process.platform, versions };
 }
 
+/**
+ * The single description of this build. `app:info` and the diagnostics bundle
+ * must agree; deriving both from one function prevents the About chip and a
+ * bug report from disagreeing about which build produced the problem.
+ */
 function currentAppInfo() {
   return {
     version: app.getVersion(),
@@ -161,6 +169,10 @@ function currentAppInfo() {
     arch: process.arch,
     userData: app.getPath('userData'),
     commit: APP_COMMIT,
+    // Issue #375: the phase table is the measurement the launch acceptance
+    // refers to. `app:info` keeps returning it as the launch progresses, so a
+    // later call shows every mark.
+    startup: startupClock.snapshot(),
   };
 }
 
@@ -336,6 +348,12 @@ function writeThemeCache(payload) {
 let runManager = null;
 let queueManager = null;
 let settingsStore = null;
+/**
+ * Issue #375: `queueManager.init()` now runs while the window is being created.
+ * Every queue IPC call awaits this promise, so a start cannot race the
+ * crash-recovery pass that rewrites a queue left `running` by the last exit.
+ */
+let queueReady = Promise.resolve(false);
 let windowDirty = false;
 
 /**
@@ -376,6 +394,7 @@ function emitQueueEvent(event) {
 }
 
 function createWindow() {
+  startupClock.mark('window-create');
   readThemeCache();
   // Each window starts unguarded: a previous window's permission to close must
   // never carry over (macOS keeps the app alive after the last close), and the
@@ -402,7 +421,13 @@ function createWindow() {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    startupClock.mark('window-shown');
+    mainWindow.show();
+  });
+  mainWindow.webContents.on('did-finish-load', () => {
+    startupClock.mark('did-finish-load');
+  });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -955,6 +980,7 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic') {
   const id = String(queueId || '');
   const level = normaliseFigureLevel(figureLevel);
   if (!id) return { canceled: false, error: { message: 'No workflow queue is available yet.' } };
+  await queueReady;
   let queue;
   try {
     queue = await queueManager.get(id);
@@ -1079,7 +1105,7 @@ async function collectDiagnostics(summary = {}) {
   const project = summary && typeof summary === 'object' && !Array.isArray(summary)
     ? summary.project ?? null
     : null;
-  return buildDiagnostics({
+  const report = buildDiagnostics({
     app: {
       version: info.version,
       commit: info.commit === 'unknown' ? null : info.commit,
@@ -1104,7 +1130,10 @@ async function collectDiagnostics(summary = {}) {
     runs,
     project,
     generatedAt: new Date().toISOString(),
-  }).markdown;
+  });
+  // Issue #375: appended rather than folded into the shared builder so the
+  // diagnostics schema and its redaction tests stay untouched.
+  return `${report.markdown}${startupClock.markdown()}`;
 }
 
 function diagnosticsFileName(now = new Date()) {
@@ -1194,6 +1223,7 @@ async function checkForUpdates() {
 }
 
 app.whenReady().then(async () => {
+  startupClock.mark('app-ready');
   // No application menu on Windows/Linux: the app's own topbar carries every
   // command, and Electron's default File/Edit/View/Window menu is unbranded and
   // duplicates it (it also draws a second "View" next to the app's own). macOS
@@ -1204,6 +1234,7 @@ app.whenReady().then(async () => {
   // to the runs and queues this launch will write.
   settingsStore = createSettingsStore({ userDataDir: app.getPath('userData') });
   const startupSettings = (await settingsStore.get()).settings;
+  startupClock.mark('settings-read');
   const dataRoot = String(startupSettings?.advanced?.dataDir || '').trim() || app.getPath('userData');
   runManager = new RunManager({
     runsRoot: path.join(dataRoot, 'runs'),
@@ -1215,9 +1246,34 @@ app.whenReady().then(async () => {
     runManager,
     emit: emitQueueEvent,
   });
-  await queueManager.init();
+  startupClock.mark('managers-ready');
+  // Issue #375: the window does not wait for queue history. `init()` parses
+  // every `queue.json` and is only needed by the queue pane; starting it here
+  // and awaiting it behind the IPC handlers keeps it off the first-paint path.
+  startupClock.mark('queue-hydrate-start');
+  queueReady = queueManager.init()
+    .then(() => {
+      startupClock.mark('queue-hydrated');
+      console.info(startupClock.logLine());
+      return true;
+    })
+    .catch((error) => {
+      startupClock.mark('queue-hydrate-failed');
+      console.error(`[queue] Could not read queue history: ${error.message}`);
+      return false;
+    });
 
   ipcMain.handle('app:info', () => currentAppInfo());
+  // Issue #375: the renderer's first-frame mark. Only the window that owns the
+  // report may write it; timing is diagnostics, so a malformed payload is
+  // ignored rather than thrown back at the renderer.
+  ipcMain.on('app:startup-mark', (event, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (event.sender !== mainWindow.webContents) return;
+    if (payload?.phase === 'renderer' && startupClock.recordRenderer(payload)) {
+      console.info(startupClock.logLine());
+    }
+  });
   // Issue #258: the engine answer keeps its shape and gains the companion
   // probes plus the platform, so one call seeds every path field in the console.
   ipcMain.handle('engines:status', () => ({
@@ -1401,12 +1457,32 @@ app.whenReady().then(async () => {
     payload?.spectrum,
   ));
   ipcMain.handle('runs:export-dataset', (_event, format) => exportDataset(format));
-  ipcMain.handle('queue:start', (_event, payload) => queueManager.start(payload));
-  ipcMain.handle('queue:pause', (_event, queueId) => queueManager.pause(queueId));
-  ipcMain.handle('queue:resume', (_event, queueId) => queueManager.resume(queueId));
-  ipcMain.handle('queue:cancel', (_event, queueId) => queueManager.cancel(queueId));
-  ipcMain.handle('queue:list', () => queueManager.list());
-  ipcMain.handle('queue:get', (_event, queueId) => queueManager.get(queueId));
+  ipcMain.handle('queue:start', async (_event, payload) => {
+    await queueReady;
+    return queueManager.start(payload);
+  });
+  ipcMain.handle('queue:pause', async (_event, queueId) => {
+    await queueReady;
+    return queueManager.pause(queueId);
+  });
+  ipcMain.handle('queue:resume', async (_event, queueId) => {
+    await queueReady;
+    return queueManager.resume(queueId);
+  });
+  ipcMain.handle('queue:cancel', async (_event, queueId) => {
+    await queueReady;
+    return queueManager.cancel(queueId);
+  });
+  // The queue pane asks for this while hydration is still running; waiting here
+  // is what makes "the queue on screen" true instead of a partial read.
+  ipcMain.handle('queue:list', async () => {
+    await queueReady;
+    return queueManager.list();
+  });
+  ipcMain.handle('queue:get', async (_event, queueId) => {
+    await queueReady;
+    return queueManager.get(queueId);
+  });
   ipcMain.handle('logs:import-directory', () => importLogDirectory());
   ipcMain.handle('queue:report', (_event, queueId, figureLevel) => exportWorkflowReport(queueId, figureLevel));
 

@@ -12,6 +12,10 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Added
 
+- **Launch phase timing** — `app:info` and the diagnostics bundle now report monotonic marks from
+  process start to the renderer's first paint (`app-ready`, `settings-read`, `window-create`,
+  `queue-hydrated`, `renderer-first-paint`), and the same table is printed once to the terminal.
+  A slow launch is measured instead of guessed (#375).
 - **`ncs run --scorer <path>`** — the ML scorer sidecar the run console already had is reachable
   headlessly, for `rankBy` on a generate block, a `provider` on calculate and an `aimnet2` relax on
   prepare. It falls back to Settings → Tools like the other sidecars, and a block that needs it
@@ -19,6 +23,10 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Fixed
 
+- The window no longer waits for queue history: `QueueManager.init()` runs while the shell is being
+  created and every queue IPC call awaits it, so a start cannot race the crash-recovery pass. The
+  parsed-results surface is a dynamic import and the renderer is emitted as feature chunks, none
+  above the 500 kB build gate (#375).
 - A Multiwfn child killed by a signal is a failed run, not a parse failure: the queue tested
   `Number(raw.exitCode) !== 0`, and `Number(null)` is `0`, so a crashed binary was read as a successful
   run whose output the parser then blamed. The signal is the verdict, and the message says `killed by

@@ -81,10 +81,11 @@ queue decision, send the run's `queues/<queueId>/queue.json` as well. Do not sen
 number without the record that produced it.
 
 **⋯ → Save diagnostics…** writes that bundle as one markdown file (schema
-`nodechem-diagnostics/1`): version, commit, platform, the engines this build registers and the last
-ten run records, with no coordinates and no output text. Your home directory becomes `~`, the app
-data directory `<userData>`, every other path `<path>/basename`, and anything shaped like a
-credential `<redacted>` — read it before you attach it if you want to check that for yourself.
+`nodechem-diagnostics/1`): version, commit, platform, the startup phase timing (from process start
+to first paint), the engines this build registers and the last ten run records, with no coordinates
+and no output text. Your home directory becomes `~`, the app data directory `<userData>`, every
+other path `<path>/basename`, and anything shaped like a credential `<redacted>` — read it before
+you attach it if you want to check that for yourself.
 
 ## Next
 
