@@ -34,6 +34,8 @@ import {
   compareQtaimToApp,
   multiwfnAnalysis,
   multiwfnCitationFor,
+  multiwfnEngineSourcesSentence,
+  multiwfnInputFormat,
   multiwfnMenuScript,
   multiwfnSummary,
   multiwfnVersionRefusal,
@@ -4322,16 +4324,20 @@ export class QueueManager {
       } catch {
         names = [];
       }
+      // Issue 343: the format comes from the whole file name, not just the
+      // extension, so xTB's `molden.input` is a Molden file while an unrelated
+      // `notes.input` in the same folder is not a candidate at all.
       const candidates = names
-        .filter((name) => preferred.includes((/\.([A-Za-z0-9]+)$/.exec(name) || [])[1]?.toLowerCase()))
+        .filter((name) => preferred.includes(multiwfnInputFormat(name)))
         .sort((a, b) => {
-          const rank = (name) => preferred.indexOf((/\.([A-Za-z0-9]+)$/.exec(name) || [])[1].toLowerCase());
+          const rank = (name) => preferred.indexOf(multiwfnInputFormat(name));
           return rank(a) - rank(b) || a.localeCompare(b);
         });
       if (candidates.length === 0) {
         const error = new Error(`Multiwfn input: the run folder for "${chosen.title || chosen.nodeId}" carries no `
           + `${preferred.map((format) => `.${format}`).join(', ')} file. ${analysis.label} reads `
-          + `${preferred.map((format) => `.${format}`).join(', ')}; attach or generate one before running this block.`);
+          + `${preferred.map((format) => `.${format}`).join(', ')}. `
+          + multiwfnEngineSourcesSentence());
         error.code = 'multiwfn-input';
         throw error;
       }
@@ -4345,7 +4351,7 @@ export class QueueManager {
       };
     }
     const name = path.basename(target);
-    const format = (/\.([A-Za-z0-9]+)$/.exec(name) || [])[1]?.toLowerCase() || '';
+    const format = multiwfnInputFormat(name);
     if (!analysis.inputs.includes(format)) {
       const error = new Error(`Multiwfn ${analysis.label} cannot read "${name}": it reads `
         + `${analysis.inputs.map((entry) => `.${entry}`).join(', ')}.`);

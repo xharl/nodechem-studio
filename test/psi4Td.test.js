@@ -39,7 +39,9 @@ describe('the Psi4 TD-DFT input', () => {
   it('writes tdscf_states and the td- entry point, not a Gaussian keyword', () => {
     const built = build({});
     expect(built.inputText).toContain('set tdscf_states 5');
-    expect(built.inputText).toContain("energy('td-b3lyp')");
+    expect(built.inputText).toContain("E, wfn = energy('td-b3lyp', return_wfn=True)");
+    // Issue 343: the TD deck writes the ground-state reference checkpoint too.
+    expect(built.inputText).toContain("fchk(wfn, 'td.fchk')");
     // `set tda` is not a Psi4 option at all; `nstates` is a Gaussian belief.
     expect(built.inputText).not.toMatch(/set\s+tda\b/);
     expect(built.inputText).not.toMatch(/set\s+nstates\b/);

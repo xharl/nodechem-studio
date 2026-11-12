@@ -3431,7 +3431,11 @@ function multiwfnInspectorBody(definition, upstream, node) {
       + '<div class="inspector-note">The menu script is chosen from the installed release band '
       + '(<code>2024+</code> or <code>3.8</code>). ELF/LOL write a cube; QTAIM integrates basins and '
       + 'critical points; ESP reports surface statistics; RDG–NCI reports sign(λ₂)ρ / RDG points.</div></div>',
-    `<div class="field full"><label>Wavefunction from an upstream block</label><select class="select" data-multiwfn-input="nodeId" aria-label="Upstream block">${sourceOptions}</select></div>`,
+    `<div class="field full"><label>Wavefunction from an upstream block</label><select class="select" data-multiwfn-input="nodeId" aria-label="Upstream block">${sourceOptions}</select>`
+      + '<div class="inspector-note">Psi4 and xTB runs write the file this reads: '
+      + '<code>&lt;job&gt;.fchk</code> for Psi4 and <code>molden.input</code> for xTB. A Gaussian '
+      + 'run needs <code>formchk -3</code> on its .chk first, and an ORCA .gbw is not readable — '
+      + 'supply a wavefunction with the path below instead.</div></div>',
     `<div class="field full"><label>…or a project-relative path</label><input class="input" data-multiwfn-input="path" value="${esc(input.path || '')}" placeholder="wavefunctions/water.fchk" aria-label="Wavefunction path" spellcheck="false" autocomplete="off">`
       + '<div class="inspector-note">Exactly one source: an upstream block, a run id, or a path. '
       + 'A path is relative to the project folder and may not contain “..”.</div></div>',

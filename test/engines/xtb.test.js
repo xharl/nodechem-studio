@@ -56,7 +56,7 @@ describe('xTB input builder', () => {
     expect(built.inputName).toBe('sp.xyz');
     expect(built.outputName).toBe('sp.out');
     expect(built.captureStdout).toBe(true);
-    expect(built.argv).toEqual(['sp.xyz', '--gfn', '2']);
+    expect(built.argv).toEqual(['sp.xyz', '--gfn', '2', '--molden']);
     const lines = built.inputText.split('\n');
     expect(lines[0]).toBe('3');
     expect(lines[1]).toBe('water sp');
@@ -69,9 +69,9 @@ describe('xTB input builder', () => {
       molecule: molecule(),
       inputName: 'task.xyz',
     }).argv.join(' ');
-    expect(build('Opt')).toBe('task.xyz --gfn 2 --opt tight');
-    expect(build('Opt Freq')).toBe('task.xyz --gfn 2 --ohess tight');
-    expect(build('Freq')).toBe('task.xyz --gfn 2 --hess');
+    expect(build('Opt')).toBe('task.xyz --gfn 2 --opt tight --molden');
+    expect(build('Opt Freq')).toBe('task.xyz --gfn 2 --ohess tight --molden');
+    expect(build('Freq')).toBe('task.xyz --gfn 2 --hess --molden');
   });
 
   it('selects the Hamiltonian and passes charge and unpaired electrons explicitly', () => {
@@ -80,16 +80,19 @@ describe('xTB input builder', () => {
       molecule: molecule({ charge: 1, multiplicity: 2 }),
       inputName: 'cat.xyz',
     });
-    expect(built.argv).toEqual(['cat.xyz', '--gfn', '1', '--chrg', '1', '--uhf', '1']);
+    expect(built.argv).toEqual(['cat.xyz', '--gfn', '1', '--molden', '--chrg', '1', '--uhf', '1']);
   });
 
-  it('uses --gfnff for the force-field model', () => {
+  it('uses --gfnff for the force-field model, and asks for no wavefunction there', () => {
     const built = buildXtbInput({
       settings: { jobType: 'SP', xtbMethod: 'gfnff' },
       molecule: molecule(),
       inputName: 'ff.xyz',
     });
     expect(built.argv).toEqual(['ff.xyz', '--gfnff']);
+    // Issue 343: GFN-FF is a force field with no orbitals, so `--molden` would
+    // ask for a wavefunction that does not exist.
+    expect(built.argv).not.toContain('--molden');
   });
 
   it('passes the implicit-solvation model and solvent identifier', () => {

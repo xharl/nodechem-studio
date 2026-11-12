@@ -87,6 +87,16 @@ export const MULTIWFN_BINARY_NAMES = Object.freeze(['Multiwfn', 'multiwfn']);
 /** File extensions Multiwfn can read as a wavefunction in this sidecar. */
 export const MULTIWFN_WAVEFUNCTION_FORMATS = Object.freeze(['wfn', 'wfx', 'fchk', 'molden']);
 
+/**
+ * Wavefunction files whose name the extension rule would miss (issue 343).
+ *
+ * xTB writes `molden.input`. `input` is not a Multiwfn format, and accepting a
+ * bare `.input` extension would also claim unrelated files — an xTB deck is not
+ * called `.input`, but a job folder can hold `request.input`, `notes.input` or a
+ * third-party input file. So the whole basename is matched, and only this one.
+ */
+export const MULTIWFN_WAVEFUNCTION_FILENAMES = Object.freeze(['molden.input']);
+
 /** File extensions accepted as an input, per analysis. */
 export const MULTIWFN_INPUT_FORMATS = Object.freeze({
   qtaim: Object.freeze(['wfn', 'wfx', 'fchk', 'molden']),
@@ -95,6 +105,68 @@ export const MULTIWFN_INPUT_FORMATS = Object.freeze({
   lol: Object.freeze(['wfn', 'wfx', 'fchk', 'molden']),
   rdg: Object.freeze(['wfn', 'wfx', 'fchk', 'molden']),
 });
+
+/** Every extension any analysis reads, for name→format detection. */
+const MULTIWFN_INPUT_EXTENSIONS = Object.freeze(
+  [...new Set(Object.values(MULTIWFN_INPUT_FORMATS).flat())],
+);
+
+/**
+ * The Multiwfn format a file name names, or `''` when it is not one this build
+ * reads. `molden.input` is matched by its whole basename; every other file by
+ * its extension (issue 343).
+ */
+export function multiwfnInputFormat(name) {
+  // A project-relative `input.path` arrives with its folders; only the basename
+  // decides the format.
+  const base = String(name ?? '').trim().split(/[\\/]/).pop().toLowerCase();
+  if (MULTIWFN_WAVEFUNCTION_FILENAMES.includes(base)) return 'molden';
+  const extension = multiwfnExtension(base);
+  return MULTIWFN_INPUT_EXTENSIONS.includes(extension) ? extension : '';
+}
+
+/**
+ * Where a Multiwfn input comes from, per engine (issue 343).
+ *
+ * A refusal that only names the formats leaves a user asking which block could
+ * have produced one, so this table is the single place the queue, the guide and
+ * the tests read. `file: null` is an engine whose own artifact Multiwfn cannot
+ * read: it is named rather than omitted, because otherwise the user tries it.
+ */
+export const MULTIWFN_ENGINE_SOURCES = Object.freeze([
+  Object.freeze({
+    engine: 'Psi4',
+    file: '<job>.fchk',
+    detail: 'every job type — SP, Opt, Freq, Opt Freq and TD-DFT; not SAPT0, which has no single wavefunction',
+  }),
+  Object.freeze({
+    engine: 'xTB',
+    file: 'molden.input',
+    detail: 'every GFN job, because the argv carries --molden; GFN-FF has no orbitals',
+  }),
+  Object.freeze({
+    engine: 'Gaussian',
+    file: '<job>.fchk',
+    detail: 'after `formchk -3` on the .chk the run leaves',
+  }),
+  Object.freeze({
+    engine: 'ORCA',
+    file: null,
+    detail: 'writes only a .gbw, which Multiwfn cannot read',
+  }),
+]);
+
+/** The engines-that-can-satisfy-it sentence a refusal appends (issue 343). */
+export function multiwfnEngineSourcesSentence() {
+  const writers = MULTIWFN_ENGINE_SOURCES
+    .filter((entry) => entry.file)
+    .map((entry) => `${entry.engine} (${entry.file}: ${entry.detail})`);
+  const readers = MULTIWFN_ENGINE_SOURCES
+    .filter((entry) => !entry.file)
+    .map((entry) => `${entry.engine} ${entry.detail}`);
+  return `A wavefunction file is written by ${writers.join(', ')}, or name one with input.path. `
+    + `${readers.join('; ')}.`;
+}
 
 /**
  * The five analyses v1 implements. Each declares the formats it can read, the
@@ -338,11 +410,12 @@ export function validateMultiwfnDefinition(raw) {
       if (key === 'path') {
         const problem = relativeInputPathProblem(text);
         if (problem) errors.push({ path: 'input.path', message: problem });
-        const extension = multiwfnExtension(text);
-        if (!problem && analysis && !analysis.inputs.includes(extension)) {
+        const format = multiwfnInputFormat(text);
+        if (!problem && analysis && !analysis.inputs.includes(format)) {
+          const extension = multiwfnExtension(text);
           errors.push({
             path: 'input.path',
-            message: `${analysis.label} reads ${analysis.inputs.map((format) => `.${format}`).join(', ')}; `
+            message: `${analysis.label} reads ${analysis.inputs.map((entry) => `.${entry}`).join(', ')}; `
               + `"${text}" is ${extension ? `a .${extension} file` : 'a file with no extension'}.`,
           });
         }

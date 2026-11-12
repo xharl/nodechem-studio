@@ -303,6 +303,11 @@ xTB is an open-source (LGPL) family of fast approximate methods. In this app it 
 - **Threads** via `OMP_NUM_THREADS`, from the `Threads` field in the inspector.
 - **Restart hand-off** between blocks: xTB re-reads `xtbrestart` from its working directory, and a
   checkpoint edge copies the upstream run's `xtbrestart` into the downstream run folder.
+- **A Molden wavefunction for Multiwfn** (issue 343): the argv carries `--molden` on every GFN job
+  (`SP`, `Opt`, `Freq`, `Opt Freq`), so xTB leaves `molden.input` in the run folder and a wired
+  Multiwfn block finds it without a hand copy. **GFN-FF gets no `--molden`**: it is a force field with
+  no orbitals, so there is no wavefunction for Multiwfn to read from that model, and the builder does
+  not ask for a file it could not honestly produce.
 
 What xTB does **not** give you here:
 
@@ -455,7 +460,9 @@ What ORCA does **not** give you through this builder:
 - No Gaussian `.chk` checkpoint hand-off. ORCA's restart file is `<job>.gbw`: the builder writes
   `%moinp "<job>.gbw"`, the queue transfers that file between ORCA blocks, and an ORCA edge that
   names a `.chk` is refused rather than staged under the wrong name. A cross-engine edge still
-  hands over a geometry, not a checkpoint.
+  hands over a geometry, not a checkpoint. **Multiwfn cannot read a `.gbw`** either, and the app ships
+  no `.gbw` → `.molden`/`.fchk` converter: a Multiwfn block fed by an ORCA run needs a wavefunction
+  supplied with `input.path` (see [Analyse blocks](analyse.md#where-the-wavefunction-comes-from)).
 
 ### Setting up ORCA
 
@@ -601,6 +608,14 @@ Psi4 is an open-source electronic-structure package. In this app it gives you:
   job prints `no unpaired electrons`. The **g-tensor is refused by name**: Psi4 has no such property in
   the modules this builder writes, so a run that needs one belongs on ORCA, which computes it and whose
   imported log carries the `ELECTRONIC G-MATRIX` block.
+- **A formatted checkpoint for Multiwfn** (issue 343). Every Psi4 job type that has a wavefunction —
+  `SP`, `Opt`, `Freq`, `Opt Freq` and `TD-DFT` — appends `fchk(wfn, '<job>.fchk')` after its call, so
+  a Multiwfn block wired to it finds the file in the run folder and `input.nodeId` works without a
+  hand copy. The honest limits come with it: **SAPT0 writes none** (a dimer has no single
+  wavefunction; the deck carries a comment saying so); a **correlated** MP2/CCSD/CCSD(T) job's file
+  holds its SCF reference density, because that is the wavefunction Psi4's `return_wfn` returns, and
+  the deck says so; and a **TD-DFT** file holds the ground-state reference density, not the transition
+  density. A solvated single point writes the **solvated** density — the second of its two SCFs.
 
 **Which energy is reported.** A correlated Psi4 job prints several totals in the same log, and the
 result is the one the job asked for: the `CCSD(T)` total when that is the method, else the `CCSD`
@@ -629,8 +644,8 @@ What a Psi4 block will **not** do in this build, each refused by name rather tha
   or MP2 level.
 - **Checkpoint hand-off** — Psi4 leaves no restart file this app can hand to another block; the edge
   hands over the parsed final geometry instead and the receiving block's deck is rewritten from it,
-  whichever engine it runs. The `.fchk` an open-shell single point
-  writes for the EPR block is read by this run's parser and kept with its `run.json`; it is not a
+  whichever engine it runs. The `.fchk` a Psi4 job writes (for the EPR block, and for a Multiwfn
+  block wired to it, issue 343) is read by this run's parser and kept with its `run.json`; it is not a
   restart file and is not passed to another block.
 
 Two things the parser does deliberately, because a Psi4 log can mislead:

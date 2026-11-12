@@ -60,9 +60,17 @@ const DECK_BEFORE_ISSUE_173 = [
 ].join('\n');
 
 describe('the transition-dipole record in the Psi4 deck', () => {
-  it('is byte-identical when the block did not opt in', () => {
-    expect(build({}).inputText).toBe(DECK_BEFORE_ISSUE_173);
-    expect(build({ recordTransitionDipoles: false }).inputText).toBe(DECK_BEFORE_ISSUE_173);
+  it('adds only the checkpoint when the block did not opt in (issue 343)', () => {
+    for (const settings of [{}, { recordTransitionDipoles: false }]) {
+      const text = build(settings).inputText;
+      // The wavefunction record is absent; the checkpoint every job with a
+      // wavefunction writes is not, so the deck is the pre-173 deck plus exactly
+      // those two lines.
+      expect(text).not.toContain('NCS-TDM');
+      expect(text
+        .replace("E, wfn = energy('td-b3lyp', return_wfn=True)", "energy('td-b3lyp')")
+        .replace("\nfchk(wfn, 'td.fchk')\n", '\n')).toBe(DECK_BEFORE_ISSUE_173);
+    }
   });
 
   it('adds the wavefunction record and changes nothing else when it did', () => {

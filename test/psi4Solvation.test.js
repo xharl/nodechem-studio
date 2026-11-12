@@ -149,7 +149,7 @@ describe('Psi4 DDX deck', () => {
     const { inputText } = build({ solvation: true }, 'water-pcm.dat', 'water DDX-PCM');
     const gasCall = inputText.indexOf("E_gas = energy('scf')");
     const ddxOn = inputText.indexOf('set ddx true');
-    const solvCall = inputText.indexOf("E_solv = energy('scf')");
+    const solvCall = inputText.indexOf("E_solv, wfn = energy('scf', return_wfn=True)");
     expect(gasCall).toBeGreaterThan(-1);
     expect(gasCall).toBeLessThan(ddxOn);
     expect(ddxOn).toBeLessThan(solvCall);
@@ -164,21 +164,38 @@ describe('Psi4 DDX deck', () => {
     // Energy:` twice, and position alone is not a label.
     expect(inputText).toContain('"NCS gas-phase energy = %.15f');
     expect(inputText).toContain('"NCS solvated energy = %.15f');
+    // Issue 343: the checkpoint is the solvated density — the last SCF — and it
+    // is written after the solvated energy, not after the gas-phase one.
+    expect(inputText.indexOf("fchk(wfn, 'water-pcm.fchk')")).toBeGreaterThan(solvCall);
   });
 
-  it('is byte-identical to the decks the fixtures were captured from', () => {
-    expect(build().inputText).toBe(GAS_DECK);
-    expect(build({ solvation: true }, 'water-pcm.dat', 'water DDX-PCM').inputText).toBe(PCM_DECK);
-    // The checkpoint deck is the only hand-touched one; it must still be the
-    // builder's deck plus exactly the two documented changes.
-    const hand = FCHK_DECK.replace("E_solv, wfn = energy(\"scf\", return_wfn=True)", "E_solv = energy('scf')")
-      .replace(/\nfchk\(wfn, 'water-pcm\.fchk'\)\n?$/, '\n');
-    expect(hand).toBe(PCM_DECK);
+  // Issue 343: every deck with a wavefunction now appends `return_wfn=True` and a
+  // `fchk(...)` line. The captured `.dat` fixtures are the same scripts without
+  // those two statements, so removing them has to reproduce the measured input
+  // byte for byte; a change anywhere else fails here.
+  const stripGasCheckpoint = (text) => text
+    .replace("E, wfn = energy('scf', return_wfn=True)", "energy('scf')")
+    .replace("\nfchk(wfn, 'water-gas.fchk')\n", '\n');
+  const stripPcmCheckpoint = (text) => text
+    .replace("E_solv, wfn = energy('scf', return_wfn=True)", "E_solv = energy('scf')")
+    .replace("\nfchk(wfn, 'water-pcm.fchk')\n", '\n');
+
+  it('writes the measured decks plus the checkpoint statements issue 343 added', () => {
+    const gas = build().inputText;
+    const pcm = build({ solvation: true }, 'water-pcm.dat', 'water DDX-PCM').inputText;
+    expect(stripGasCheckpoint(gas)).toBe(GAS_DECK);
+    expect(stripPcmCheckpoint(pcm)).toBe(PCM_DECK);
+    // The solvated deck is the hand-touched `water-pcm-fchk.dat` whose log and
+    // .fchk are committed; the builder's own quote style is the only difference.
+    expect(pcm).toBe(FCHK_DECK.replace(
+      'E_solv, wfn = energy("scf", return_wfn=True)',
+      "E_solv, wfn = energy('scf', return_wfn=True)",
+    ));
   });
 
   it('writes nothing about DDX when the block asks for no solvent', () => {
     const { inputText } = build({ solvation: false, solvationModel: 'SMD', solvent: 'Toluene' });
-    expect(inputText).toBe(GAS_DECK);
+    expect(stripGasCheckpoint(inputText)).toBe(GAS_DECK);
     expect(inputText).not.toContain('ddx');
     // A stored model/solvent on a solvation-off block is an inert placeholder,
     // not a request — the schema fills both fields on every block.

@@ -23,21 +23,26 @@ image **without** pyddx, which is the evidence for what the addon is and is not.
 | `water-gas.out` | its log, gas phase | `b54abd352dbd0062dd4f43e33df98fad8e4edf01a2b511f9feeabdb4f652c199` |
 | `water-pcm.dat` | the builder's deck, solvation on (`PCM`, `Water`) | `71ff69794f99aa2ac03a0994c87fdb8a5a22b8da417eee91de5afafe5ba051d9` |
 | `water-pcm.out` | its log: gas-phase SCF, then the DDX-PCM SCF | `c7e252fa7989712046add600771c691652ff361c9d447c5cfd75e1332e1c2e01` |
-| `water-pcm-fchk.dat` | the same deck with `return_wfn=True` and a `fchk` line added by hand | `fa46bd72ce9951ec16ebd5d334a1a2bd6595eab097cb5ccddeda528eaddbd57f` |
+| `water-pcm-fchk.dat` | the same deck with `return_wfn=True` and a `fchk` line added by hand — the shape issue 343 later made `buildPsi4Input` write for a solvated single point | `fa46bd72ce9951ec16ebd5d334a1a2bd6595eab097cb5ccddeda528eaddbd57f` |
 | `water-pcm-fchk.out` | its log — the same three energies | `d7ab9ef95e3d0b143f491f6fcbc21243944c4e75713bfe3a890d42c7bd2a111c` |
 | `water-pcm.fchk` | the solvated wavefunction, from that run | `11b21c9edae2fce09ca7a8aa12551a253f80ddb39aa3363b7ef2a6334d2ee938` |
 | `water-pcm-no-pyddx.out` | `water-pcm.dat` run in the **base** image: `ModuleNotFoundError: Python module ddx not found` | `5e9c4364ef1a7bb680846160b98e9d07907ebc5b62320a14bbf972ebd4fbca34` |
-| `make-decks.mjs` | regenerates the two builder decks from `buildPsi4Input` | `440fc7e97a190dafe5d3536b57be72b500f89f7f59ff3da94a2d86383b1d189e` |
+| `make-decks.mjs` | prints the two builder decks and whether they still match the captured files; `--write` replaces them | `d020df930164e7273bbf00e5eef89bf9d3ed26219df91526d4a875d20aabfd60` |
 
 Nothing in the logs was edited, trimmed or reordered. `water-pcm-fchk.dat` is the
 only hand-touched deck: `E_solv = energy('scf')` became
 `E_solv, wfn = energy('scf', return_wfn=True)` and `fchk(wfn, 'water-pcm.fchk')`
-was appended, so the fixture ships the solvated density beside the log. The app
-does not write those two changes for a closed-shell block.
+was appended, so the fixture ships the solvated density beside the log. **Issue
+343** made `buildPsi4Input` write those two statements for a solvated single
+point, so the builder's deck now equals this file apart from its single-quote
+style (`energy('scf', …)`); the captured `.dat` files stay as the input their
+logs were produced from, and `make-decks.mjs` prints that comparison instead of
+overwriting them.
 
 `test/psi4Solvation.test.js` re-runs `buildPsi4Input` and asserts both committed
-decks are byte-identical to what the builder writes today — a deck that drifts
-from its fixture fails the suite instead of quietly invalidating the energies.
+decks are what the builder writes today once the issue-343 checkpoint statements
+are removed — a deck that drifts from its fixture fails the suite instead of
+quietly invalidating the energies.
 
 ## Numbers these logs pin
 

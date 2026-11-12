@@ -317,9 +317,10 @@ export const PSI4_CAPABILITIES = Object.freeze({
    * Issue 168: what this engine can say about an open-shell species.
    *
    * `spinPopulations` and `hyperfine` are read from the checkpoint the builder
-   * writes for an open-shell single point; both are density-only and the card
-   * states that. `gTensor` is false with its reason, which is the whole point of
-   * the entry.
+   * writes for an open-shell job (issue 343: every job type with a wavefunction
+   * writes one; a correlated method's is its SCF reference and is not read here);
+   * both are density-only and the card states that. `gTensor` is false with its
+   * reason, which is the whole point of the entry.
    */
   epr: Object.freeze({
     spinPopulations: true,
@@ -842,6 +843,23 @@ export function buildPsi4Input({
   lines.push('');
 
   const fn = method.fn;
+  // Issue 343: the checkpoint a Multiwfn block reads (`input.nodeId`) has to be
+  // written by the engine, not hand-copied into the run folder. Every job type
+  // whose method leaves a wavefunction therefore writes one formatted checkpoint
+  // named for the job, `<job>.fchk`, beside its log — the same file the EPR block
+  // reads its `Spin SCF Density` from. SAPT0 is the exception: it is an
+  // interaction energy of two monomer references, and Psi4's `energy('sapt0')`
+  // returns no single wavefunction to write.
+  const checkpointName = `${safeName.replace(/\.dat$/i, '')}.fchk`;
+  const writesCheckpoint = method.kind !== 'sapt';
+  // A correlated job's `return_wfn` wavefunction is its SCF reference (Psi4's own
+  // documentation and the 2019 forum thread on fchk density labels both say so),
+  // so the checkpoint holds the reference density. The deck says that in a
+  // comment, because a file named after an MP2 job must not imply an MP2 density.
+  const correlatedNote = method.kind === 'correlated'
+    ? ['# The wavefunction a correlated Psi4 job returns is its SCF reference: this',
+      '# checkpoint carries that reference density, not a correlated one.']
+    : [];
   // Issue 167: the solvation request, resolved through the same function the
   // preflight uses, so the deck and the refusal can never disagree about which
   // model or solvent is written.
@@ -855,18 +873,6 @@ export function buildPsi4Input({
       + 'for the open-shell checkpoint the EPR block reads; run the open-shell single point gas-phase, '
       + 'or the solvated one closed-shell.');
   }
-  // Issue 168: an open-shell single point on a single-reference SCF/DFT method
-  // also writes the checkpoint, because the spin populations and the
-  // Fermi-contact couplings are read from `Spin SCF Density` in that file and
-  // from nothing else. Restricted to a single point on purpose: for an
-  // optimisation the converged density belongs to the last geometry, and Psi4's
-  // `optimize()` does not hand back a wavefunction that can be checked against
-  // the log's final energy. Correlated methods are excluded too — their
-  // `return_wfn` wavefunction is the SCF reference, and a spin density from the
-  // reference presented as the correlated one would be a different calculation
-  // wearing this one's name.
-  const writesSpinCheckpoint = multiplicity > 1 && jobType === 'SP'
-    && (method.kind === 'scf' || method.kind === 'dft');
   if (jobType === 'TD-DFT') {
     // Psi4 splits a scalar request across the point group's irreducible
     // representations, one state per irrep in point-group order, so the number
@@ -886,10 +892,11 @@ export function buildPsi4Input({
         fragmentLabels: (Array.isArray(molecule.coords) ? molecule.coords : []).map((atom) => (
           Number.isInteger(Number(atom?.fragment)) && Number(atom.fragment) >= 1 ? Number(atom.fragment) : 1
         )),
-        checkpointName: `${safeName.replace(/\.dat$/i, '')}.fchk`,
+        checkpointName,
       }));
     } else {
-      lines.push(`energy('td-${fn}')`);
+      lines.push(`E, wfn = energy('td-${fn}', return_wfn=True)`);
+      lines.push(`fchk(wfn, '${checkpointName}')`);
     }
   } else if (jobType === 'SP') {
     if (solvation) {
@@ -913,19 +920,40 @@ export function buildPsi4Input({
       lines.push(`set ddx_solvent ${solvation.solvent}`);
       lines.push(`set ddx_radii_set ${solvation.radiiSet}`);
       lines.push(`set ddx_radii_scaling ${solvation.radiiScaling}`);
-      lines.push(`E_solv = energy('${fn}')`);
+      lines.push(`E_solv, wfn = energy('${fn}', return_wfn=True)`);
       lines.push('core.print_out("NCS solvated energy = %.15f\\n" % E_solv)');
-    } else if (writesSpinCheckpoint) {
-      lines.push(`E, wfn = energy('${fn}', return_wfn=True)`);
-      lines.push(`fchk(wfn, '${safeName.replace(/\.dat$/i, '')}.fchk')`);
-    } else {
+      // Issue 343: the checkpoint holds the *solvated* density — the last SCF the
+      // deck runs, and the state the job is named for. The gas-phase half above
+      // is a different calculation and is not the one written to disk. This is
+      // exactly the hand-touched deck `test/fixtures/psi4-ddx/water-pcm-fchk.dat`
+      // was measured from in Psi4 1.11 (its log and .fchk are committed).
+      lines.push(`fchk(wfn, '${checkpointName}')`);
+    } else if (!writesCheckpoint) {
+      // Issue 343: no checkpoint is written, and the deck says why rather than
+      // silently leaving a job type that looks like it should have one.
+      lines.push('# No checkpoint: SAPT0 is a property of the dimer, computed from two');
+      lines.push('# monomer references, so there is no single wavefunction for fchk().');
       lines.push(`energy('${fn}')`);
+    } else {
+      lines.push(`E, wfn = energy('${fn}', return_wfn=True)`);
+      lines.push(...correlatedNote);
+      lines.push(`fchk(wfn, '${checkpointName}')`);
     }
-  } else if (jobType === 'Opt') lines.push(`optimize('${fn}')`);
-  else if (jobType === 'Freq') lines.push(`frequencies('${fn}')`);
-  else {
-    lines.push(`optimize('${fn}')`);
-    lines.push(`frequencies('${fn}')`);
+  } else if (jobType === 'Opt') {
+    lines.push(`E, wfn = optimize('${fn}', return_wfn=True)`);
+    lines.push(...correlatedNote);
+    lines.push(`fchk(wfn, '${checkpointName}')`);
+  } else if (jobType === 'Freq') {
+    lines.push(`E, wfn = frequencies('${fn}', return_wfn=True)`);
+    lines.push(...correlatedNote);
+    lines.push(`fchk(wfn, '${checkpointName}')`);
+  } else {
+    // The wavefunction from the second call is the one at the optimised
+    // geometry; writing it after the Hessian keeps one checkpoint, not two.
+    lines.push(`E, wfn = optimize('${fn}', return_wfn=True)`);
+    lines.push(`E, wfn = frequencies('${fn}', return_wfn=True)`);
+    lines.push(...correlatedNote);
+    lines.push(`fchk(wfn, '${checkpointName}')`);
   }
   lines.push('');
 
@@ -1691,14 +1719,23 @@ export function parsePsi4Output(text, { truncated = false, argv = null, route = 
   // block keeps the level string it has always printed.
   const ranAs = /Compute energy\(\): method=([A-Za-z0-9_-]+), basis=([^\s,\]]+)/.exec(body);
   const ctLevel = ranAs ? `${ranAs[1]}/${ranAs[2]}` : null;
+  // Issue 343: every Psi4 job with a wavefunction now writes a checkpoint, so a
+  // correlated run's file reaches this parser too. That file holds the SCF
+  // reference density (Psi4's `return_wfn` for MP2/CCSD is the reference), and a
+  // spin population labelled with the correlated method would be a different
+  // calculation wearing this one's name. The block is withheld by name instead.
+  const correlatedCheckpoint = echo.method?.kind === 'correlated';
   const epr = eprBlock({
-    fchk: checkpoint,
+    fchk: correlatedCheckpoint ? null : checkpoint,
     level: [reference, echo.method?.label, basisEntry?.label ?? namedBasis].filter(Boolean).join(' ') || null,
     engine: 'Psi4',
     multiplicity,
     unavailableReason: checkpointError
       ? `the checkpoint beside this run could not be read: ${checkpointError}`
-      : null,
+      : correlatedCheckpoint && checkpoint
+        ? `${echo.method.label}'s checkpoint carries the SCF reference density, not a correlated one, `
+          + 'so it is not read as this method\'s spin populations.'
+        : null,
   });
 
   // Issue 173, route B: the charge-transfer block, computed from the transition
