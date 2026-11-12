@@ -1511,12 +1511,15 @@ body.is-dragging-run-console .run-head { cursor: grabbing; }
   bottom: -1px;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  /* Issue 360: at 12 px the three labels no longer fit one 226 px row; the
+     workflow action gets its own row instead of painting over Stop. */
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   margin-top: auto;
   padding: 10px 0 4px;
   background: linear-gradient(to bottom, transparent, var(--tone-blue-24) 30%);
 }
+.run-primary [data-action="run-workflow"] { grid-column: 1 / -1; }
 .run-primary .btn { justify-content: center; min-height: 30px; }
 .run-tools { margin: 2px 0 0; }
 .run-tools > summary {

@@ -44,7 +44,8 @@ what the build contains — the GitHub release for each tag carries the long for
   rows, results tables (including the table header, which had inherited the 22 px display tier) and
   the inspector body sit on `sm`; no stylesheet text is left at 11 px. On the canvas the route line is
   clamped to two lines instead of one ellipsis, and the node card grows to 150 px so the second line
-  clears the result row. Ports keep their 11 px dot but gain a 19 px pointer target. The topbar and
+  clears the result row. Ports keep their 11 px dot but gain a 19 px pointer target. The run-console
+  actions stack into two rows so the larger labels no longer paint over **Stop**. The topbar and
   canvas HUD still fit 1440×900, 1100×700 and 390×844 with `scrollWidth == clientWidth` (#360).
 - **Inspector edits serialize the authored project once** — the dirty check, undo step and
   crash-safe draft now share one snapshot of the project without the in-memory `nodes`/`edges`
