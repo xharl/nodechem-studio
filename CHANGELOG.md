@@ -42,7 +42,7 @@ what the build contains — the GitHub release for each tag carries the long for
 - **The type scale no longer bottoms out at 11 px** — `xs` moves 11 → 12 px and `sm` 12 → 13 px, so
   every label, hint, table cell and queue row that used `--text-size-xs` moves up together. Queue
   rows, results tables (including the table header, which had inherited the 22 px display tier) and
-  the inspector body sit on `sm`; 11 px is no longer used anywhere. On the canvas the route line is
+  the inspector body sit on `sm`; no stylesheet text is left at 11 px. On the canvas the route line is
   clamped to two lines instead of one ellipsis, and the node card grows to 150 px so the second line
   clears the result row. Ports keep their 11 px dot but gain a 19 px pointer target. The topbar and
   canvas HUD still fit 1440×900, 1100×700 and 390×844 with `scrollWidth == clientWidth` (#360).
