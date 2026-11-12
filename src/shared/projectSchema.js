@@ -941,6 +941,7 @@ function normalizePrepareSettings(c, raw, path, legacy) {
   warnUnknown(c, provided, new Set([
     'kind', 'converter', 'forceField', 'smiles', 'charge', 'multiplicity',
     'solvent', 'solventCount', 'seed', 'shellAngstrom',
+    'normalize', 'disconnectMetals', 'removeFragments', 'chargeParent',
   ]), path);
   const kind = readEnum(c, provided.kind, PREPARE_KINDS, `${path}.kind`, {
     legacy, fallback: DEFAULT_PREPARE_SETTINGS.kind,
@@ -955,9 +956,12 @@ function normalizePrepareSettings(c, raw, path, legacy) {
   if (kind === 'solvate' && requestedConverter !== 'geometric') {
     c.error(`${path}.converter`, 'must be "geometric": explicit solvation is deterministic placement, not a force-field relaxation.');
   }
+  if (kind === 'standardize' && requestedConverter !== 'rdkit') {
+    c.error(`${path}.converter`, 'must be "rdkit": standardisation is the chemistry sidecar, not a force field.');
+  }
   const forceField = readEnum(c, provided.forceField, PREPARE_FORCE_FIELDS, `${path}.forceField`, {
     legacy,
-    fallback: kind === 'embed3d' ? 'MMFF94' : (kind === 'solvate' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
+    fallback: kind === 'embed3d' ? 'MMFF94' : (kind === 'solvate' || kind === 'standardize' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
   });
   const smiles = readString(c, provided.smiles, `${path}.smiles`, { legacy, fallback: '', max: 1000 });
   if (kind === 'embed3d' && !smiles.trim()) {
@@ -979,6 +983,16 @@ function normalizePrepareSettings(c, raw, path, legacy) {
       `${path}.seed`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.seed, min: 0, max: 0x7fffffff }),
     shellAngstrom: readNumber(c, provided.shellAngstrom ?? DEFAULT_PREPARE_SETTINGS.shellAngstrom,
       `${path}.shellAngstrom`, { legacy, fallback: DEFAULT_PREPARE_SETTINGS.shellAngstrom, min: 1, max: 20 }),
+    // ADR 0003 §3.2: a saved standardise block keeps the exact cleanup steps it
+    // ran, so reopening the project cannot silently re-enable one.
+    ...(kind === 'standardize'
+      ? {
+        normalize: readBoolean(c, provided.normalize, `${path}.normalize`, { legacy, fallback: true }),
+        disconnectMetals: readBoolean(c, provided.disconnectMetals, `${path}.disconnectMetals`, { legacy, fallback: true }),
+        removeFragments: readBoolean(c, provided.removeFragments, `${path}.removeFragments`, { legacy, fallback: true }),
+        chargeParent: readBoolean(c, provided.chargeParent, `${path}.chargeParent`, { legacy, fallback: true }),
+      }
+      : {}),
   };
 }
 
@@ -990,6 +1004,7 @@ function normalizePrepareOutput(c, raw, path, legacy) {
     'atomCount', 'generatedAt', 'origin', 'scorer',
     'solvent', 'count', 'seed', 'shellAngstrom', 'minDistanceAngstrom', 'composition',
     'formula', 'method', 'limitation', 'solvationModel',
+    'before', 'after', 'fragmentsRemoved', 'stereoAudit', 'geometry', 'identity',
   ]), path);
   const output = {
     kind: readEnum(c, source.kind, PREPARE_KINDS, `${path}.kind`, { legacy, fallback: 'relax' }),
@@ -1048,8 +1063,64 @@ function normalizePrepareOutput(c, raw, path, legacy) {
           : {}),
       }
       : {}),
+    // ADR 0003 §3.2: the cleanup is recorded as a fact, not recomputed on load.
+    // `before`/`after` say what changed; `fragmentsRemoved` names what went;
+    // `stereoAudit` is the evidence a downstream calculation was planned on.
+    ...(isPlainObject(source.before) || isPlainObject(source.after)
+      ? {
+        before: prepareStateOf(c, source.before, `${path}.before`, legacy),
+        after: prepareStateOf(c, source.after, `${path}.after`, legacy),
+        fragmentsRemoved: Array.isArray(source.fragmentsRemoved)
+          ? source.fragmentsRemoved.slice(0, 32).map((entry, index) => ({
+            smiles: readString(c, entry?.smiles, `${path}.fragmentsRemoved[${index}].smiles`, { legacy, fallback: '', max: 400 }),
+            formula: readString(c, entry?.formula, `${path}.fragmentsRemoved[${index}].formula`, { legacy, fallback: '', max: 80 }),
+            atomCount: readInteger(c, entry?.atomCount, `${path}.fragmentsRemoved[${index}].atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+          }))
+          : [],
+        stereoAudit: {
+          unassignedStereocentres: Array.isArray(source.stereoAudit?.unassignedStereocentres)
+            ? source.stereoAudit.unassignedStereocentres.slice(0, 200).map((entry) => ({
+              atomIndex: readInteger(c, entry?.atomIndex, `${path}.stereoAudit.atomIndex`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              element: readString(c, entry?.element, `${path}.stereoAudit.element`, { legacy, fallback: '', max: 3 }),
+            }))
+            : [],
+          unassignedDoubleBonds: Array.isArray(source.stereoAudit?.unassignedDoubleBonds)
+            ? source.stereoAudit.unassignedDoubleBonds.slice(0, 200).map((entry) => ({
+              beginAtomIndex: readInteger(c, entry?.beginAtomIndex, `${path}.stereoAudit.beginAtomIndex`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              endAtomIndex: readInteger(c, entry?.endAtomIndex, `${path}.stereoAudit.endAtomIndex`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+            }))
+            : [],
+        },
+        geometry: { source: readString(c, source.geometry?.source, `${path}.geometry.source`, { legacy, fallback: '', max: 20 }) },
+        ...(isPlainObject(source.identity)
+          ? {
+            identity: {
+              smiles: readString(c, source.identity.smiles, `${path}.identity.smiles`, { legacy, fallback: '', max: 400 }),
+              inchiKey: readString(c, source.identity.inchiKey, `${path}.identity.inchiKey`, { legacy, fallback: '', max: 64 }),
+              tautomerHash: readString(c, source.identity.tautomerHash, `${path}.identity.tautomerHash`, { legacy, fallback: '', max: 200 }),
+              formula: readString(c, source.identity.formula, `${path}.identity.formula`, { legacy, fallback: '', max: 80 }),
+              atomCount: readInteger(c, source.identity.atomCount, `${path}.identity.atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+              heavyAtomCount: readInteger(c, source.identity.heavyAtomCount, `${path}.identity.heavyAtomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+            },
+          }
+          : {}),
+      }
+      : {}),
   };
   return output;
+}
+
+/** ADR 0003 §3.2: one side of a standardise record. */
+function prepareStateOf(c, raw, path, legacy) {
+  const source = isPlainObject(raw) ? raw : {};
+  return {
+    smiles: readString(c, source.smiles, `${path}.smiles`, { legacy, fallback: '', max: 400 }),
+    formula: readString(c, source.formula, `${path}.formula`, { legacy, fallback: '', max: 80 }),
+    atomCount: readInteger(c, source.atomCount, `${path}.atomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+    heavyAtomCount: readInteger(c, source.heavyAtomCount, `${path}.heavyAtomCount`, { legacy, fallback: 0, min: 0, max: LIMITS.atoms }),
+    charge: readInteger(c, source.charge, `${path}.charge`, { legacy, fallback: 0, min: -10, max: 10 }),
+    fragments: readInteger(c, source.fragments, `${path}.fragments`, { legacy, fallback: 0, min: 0, max: 64 }),
+  };
 }
 
 /**
@@ -2413,7 +2484,8 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     const settings = normalizePrepareSettings(c, raw.settings, `${path}.settings`, legacy);
     return {
       ...common,
-      kind: settings.kind === 'embed3d' ? '3D embed' : (settings.kind === 'solvate' ? 'Solvate' : 'Relax'),
+      kind: settings.kind === 'embed3d' ? '3D embed'
+        : (settings.kind === 'solvate' ? 'Solvate' : (settings.kind === 'standardize' ? 'Standardise' : 'Relax')),
       settings,
       ...(raw.output === undefined ? {} : {
         output: normalizePrepareOutput(c, raw.output, `${path}.output`, legacy),

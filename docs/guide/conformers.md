@@ -31,10 +31,22 @@ project geometry.
 
 A **Prepare structure** block is the 1→1 stage: `relax` minimises one structure with the in-app UFF
 engine (or Open Babel MMFF94, or the AIMNet2 sidecar), `embed3d` turns a SMILES into one 3D
-structure with `obabel --gen3d`, and `solvate` adds a deterministic explicit solvent cluster around
-the current geometry. It never enumerates protonation states, tautomers or conformers — those are
+structure with `obabel --gen3d`, `solvate` adds a deterministic explicit solvent cluster around
+the current geometry, and `standardize` cleans one structure with RDKit before anything computes
+on it. It never enumerates protonation states, tautomers or conformers — those are
 sets, and sets belong to Generate. A Calculate block wired from Prepare runs on its written
 `prepared.xyz`, not on the geometry the workflow was planned with.
+
+### Standardisation
+
+`standardize` is RDKit's `rdMolStandardize` cleanup: normalise functional groups, disconnect
+organometallic bonds, drop counterions and pick the charge parent. Each step is a switch, and the
+answer records exactly what ran. The record states the formula, atom count, charge and fragment
+count **before and after**, names every removed fragment, and carries a stereo audit: unassigned
+stereocentres and double bonds are listed before a calculation can run on the structure. A missing
+RDKit is `rdkit-missing`; a molecule that cannot be sanitised is refused, not silently passed
+through. When the cleanup removes atoms, the input conformer no longer matches and the sidecar says
+`geometry.source: "etkdgv3"` instead of pretending the coordinates survived.
 
 ### Explicit solvent clusters
 

@@ -82,8 +82,10 @@ export function planToolNeeds(tasks = []) {
       else if (generate.generator === 'obabel') needs.add('obabel');
     }
     if (task.type === 'analyse' && task.analyse?.mode === 'multiwfn') needs.add('multiwfn');
-    // ADR 0003: a chem analyse block spawns the chemistry sidecar.
+    // ADR 0003: a chem analyse block, and a standardise prepare block, spawn
+    // the chemistry sidecar. Neither has an in-app fallback.
     if (task.type === 'analyse' && task.analyse?.mode === 'chem') needs.add('chem');
+    if (task.type === 'prepare' && task.prepare?.kind === 'standardize') needs.add('chem');
   }
   return PLAN_TOOL_IDS.filter((toolId) => needs.has(toolId));
 }
@@ -1091,14 +1093,18 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
           validity: null,
           checkpointFrom: null,
           prepare: {
-            kind: settings.kind === 'embed3d' ? 'embed3d' : (settings.kind === 'solvate' ? 'solvate' : 'relax'),
+            kind: settings.kind === 'embed3d' ? 'embed3d'
+              : (settings.kind === 'solvate' ? 'solvate'
+                : (settings.kind === 'standardize' ? 'standardize' : 'relax')),
             converter: settings.kind === 'embed3d'
               ? 'openbabel'
               : (settings.kind === 'solvate'
                 ? 'geometric'
-                : (settings.converter === 'openbabel' || settings.converter === 'aimnet2'
-                  ? settings.converter : 'uff')),
-            forceField: settings.kind === 'solvate'
+                : (settings.kind === 'standardize'
+                  ? 'rdkit'
+                  : (settings.converter === 'openbabel' || settings.converter === 'aimnet2'
+                    ? settings.converter : 'uff'))),
+            forceField: settings.kind === 'solvate' || settings.kind === 'standardize'
               ? 'none'
               : (settings.forceField === 'MMFF94' || settings.forceField === 'AIMNet2'
                 ? settings.forceField
@@ -1106,6 +1112,14 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
             smiles: String(settings.smiles || ''),
             charge: chemistry.charge ?? 0,
             multiplicity: chemistry.multiplicity ?? 1,
+            ...(settings.kind === 'standardize'
+              ? {
+                normalize: settings.normalize !== false,
+                disconnectMetals: settings.disconnectMetals !== false,
+                removeFragments: settings.removeFragments !== false,
+                chargeParent: settings.chargeParent !== false,
+              }
+              : {}),
             ...(settings.kind === 'solvate'
               ? {
                 solvent: String(settings.solvent || 'water'),

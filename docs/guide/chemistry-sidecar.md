@@ -61,10 +61,19 @@ replays committed fixtures through a fake sidecar.
 | --- | --- | --- |
 | `probe` | Settings → Tools | version and capability flags |
 | `descriptors` | `analyse.mode = "chem"` | the curated `nodechem-1` set for one molecule |
+| `standardize` | `prepare.kind = "standardize"` | one cleaned structure, plus the change log and stereo audit |
 
 Each answer records `program`, `version`, `op` and the parameters that change it. A repeated
 structure is answered from the run-local `chem-cache.json`; the record says whether the value was a
 cache hit.
+
+## Choosing the interpreter
+
+The sidecar runs under whichever Python the Tools settings name. It needs RDKit; a distribution
+Python without `pip` cannot provide it. Point the field at the interpreter that actually imports
+RDKit and press **Probe** — the answer names the interpreter, the RDKit version and the capability
+flags, and a build without the standardiser refuses with `capability-missing` rather than
+pretending the op ran.
 
 ## What ships, and where
 

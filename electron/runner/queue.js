@@ -47,6 +47,11 @@ import {
   normalizeDescriptorResult,
 } from '../../src/shared/chemDescriptors.js';
 import { CHEM_PROTOCOL, ChemError } from '../../src/shared/chemistry.js';
+import {
+  normalizeStandardizeResult,
+  standardizeRequest,
+  stereoAuditWarnings,
+} from '../../src/shared/chemStandardize.js';
 import { SidecarRunner } from './sidecarRunner.js';
 import { cacheFingerprint, cacheGet, cachePut, readChemCache, writeChemCache } from './chemCache.js';
 import {
@@ -77,7 +82,7 @@ import {
 } from '../../src/shared/obabelConformers.js';
 import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
 import { optimizeUff } from '../../src/shared/uff.js';
-import { prepareSummaryLine } from '../../src/shared/prepare.js';
+import { PREPARE_DRY_RUN_REASON, prepareSummaryLine } from '../../src/shared/prepare.js';
 import { buildSolventCluster } from '../../src/shared/explicitSolvation.js';
 import { relaxWithForces } from '../../src/shared/mlRelax.js';
 import {
@@ -687,12 +692,15 @@ function taskAtomList(raw) {
  */
 function prepareTaskRecord(raw, nodeId) {
   const prep = raw?.prepare && typeof raw.prepare === 'object' ? raw.prepare : {};
-  const kind = prep.kind === 'embed3d' ? 'embed3d' : (prep.kind === 'solvate' ? 'solvate' : 'relax');
+  const kind = prep.kind === 'embed3d' ? 'embed3d'
+    : (prep.kind === 'solvate' ? 'solvate' : (prep.kind === 'standardize' ? 'standardize' : 'relax'));
   const converter = kind === 'embed3d'
     ? 'openbabel'
     : (kind === 'solvate'
       ? 'geometric'
-      : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff'));
+      : (kind === 'standardize'
+        ? 'rdkit'
+        : (prep.converter === 'openbabel' || prep.converter === 'aimnet2' ? prep.converter : 'uff')));
   const inputName = String(raw?.inputName || '');
   const inputText = String(raw?.inputText || '');
   if (!/^[A-Za-z0-9._-]+\.xyz$/i.test(inputName)) {
@@ -757,7 +765,16 @@ function prepareTaskRecord(raw, nodeId) {
       converter,
       forceField: prep.forceField === 'MMFF94' || prep.forceField === 'AIMNet2' || prep.forceField === 'none'
         ? prep.forceField
-        : (kind === 'solvate' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
+        : (kind === 'solvate' || kind === 'standardize' ? 'none' : (converter === 'aimnet2' ? 'AIMNet2' : 'UFF')),
+      // ADR 0003 §3.2: the cleanup steps are part of the task, frozen at start.
+      ...(kind === 'standardize'
+        ? {
+          normalize: prep.normalize !== false,
+          disconnectMetals: prep.disconnectMetals !== false,
+          removeFragments: prep.removeFragments !== false,
+          chargeParent: prep.chargeParent !== false,
+        }
+        : {}),
       smiles,
       charge: Math.round(number(prep.charge, 0, -10, 10)),
       multiplicity: Math.round(number(prep.multiplicity, 1, 1, 10)),
@@ -1481,7 +1498,8 @@ export class QueueManager {
     // are, so a replay names the same interpreter and script.
     const chemExecutable = String(options.chemExecutable || '').trim();
     const chemScript = String(options.chemScript || '').trim();
-    const needsChem = tasks.some((task) => task.type === 'analyse' && task.analyse?.mode === 'chem');
+    const needsChem = tasks.some((task) => (task.type === 'analyse' && task.analyse?.mode === 'chem')
+      || (task.type === 'prepare' && task.prepare?.kind === 'standardize'));
     // Issue #270: a Multiwfn analyse block spawns the user-installed sidecar.
     // A dry run must not spawn it, exactly as it spawns no engine.
     const needsMultiwfn = tasks.some((task) => task.type === 'analyse'
@@ -3538,6 +3556,87 @@ export class QueueManager {
    * writes `prepared.xyz` and a `prepare.json` record, and a downstream
    * calculate reads that geometry — never the structure it was planned with.
    */
+  /**
+   * ADR 0003 §3.2: one structure in, one standardised structure out.
+   *
+   * The sidecar owns the chemistry; this method owns the record. A dry run
+   * carries the geometry forward and says so, and a missing sidecar is
+   * `rdkit-missing` — never an in-app imitation of a clean-up.
+   */
+  async standardizePrepare(queue, task, conf, atoms, dir) {
+    const options = {
+      normalize: conf.normalize !== false,
+      disconnectMetals: conf.disconnectMetals !== false,
+      removeFragments: conf.removeFragments !== false,
+      chargeParent: conf.chargeParent !== false,
+    };
+    if (queue.options?.dryRun) {
+      return {
+        atoms,
+        summary: {
+          kind: 'standardize',
+          converter: 'rdkit',
+          forceField: 'none',
+          energyKcal: null,
+          converged: null,
+          reason: PREPARE_DRY_RUN_REASON,
+          iterations: 0,
+          atomCount: atoms.length,
+          options,
+        },
+      };
+    }
+    if (!queue.options?.chemExecutable) {
+      throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. Standardisation needs RDKit '
+        + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+    }
+    const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+      executable: queue.options.chemExecutable,
+      script: queue.options.chemScript || '',
+      request: standardizeRequest({
+        molecule: {
+          title: task.title,
+          charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+          multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+          atoms,
+        },
+        options,
+      }),
+      timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+      cwd: dir,
+      onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+    });
+    const result = normalizeStandardizeResult(raw);
+    for (const warning of stereoAuditWarnings(result.stereoAudit)) {
+      this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Standardise: ${warning}` });
+    }
+    return {
+      atoms: result.atoms,
+      summary: {
+        kind: 'standardize',
+        converter: 'rdkit',
+        forceField: 'none',
+        energyKcal: null,
+        converged: null,
+        reason: 'standardize-completed',
+        iterations: 0,
+        atomCount: result.atoms.length,
+        before: result.before,
+        after: result.after,
+        fragmentsRemoved: result.removed,
+        stereoAudit: result.stereoAudit,
+        geometry: result.geometry,
+        identity: result.identity,
+        options: result.options,
+        origin: {
+          program: result.program,
+          version: result.version,
+          method: `rdMolStandardize cleanup (${(result.options?.steps || []).join(' + ') || 'no steps'})`,
+        },
+      },
+    };
+  }
+
   async runPrepare(queue, task) {
     const dir = path.join(this.queueDir(queue.id), 'prepare', task.nodeId);
     await fsp.mkdir(dir, { recursive: true });
@@ -3599,6 +3698,10 @@ export class QueueManager {
           nodeId: task.nodeId,
           text: `Explicit cluster: ${cluster.formula}, ${cluster.count} solvent molecule(s), seed ${cluster.seed}.`,
         });
+      } else if (conf.kind === 'standardize') {
+        const standardized = await this.standardizePrepare(queue, task, conf, atoms, dir);
+        atoms = standardized.atoms;
+        summary = standardized.summary;
       } else if (queue.options.dryRun && conf.converter !== 'uff') {
         // A dry run spawns nothing — the queue records no binaries for it — so a
         // prepare block must not spawn either. It used to call Open Babel anyway
@@ -3761,6 +3864,11 @@ export class QueueManager {
     } catch (error) {
       task.status = 'failed';
       task.error = oneLine(error?.message || String(error), 400);
+      // ADR 0003 §2.3: a sidecar refusal keeps its typed code in the record, so
+      // the card can distinguish "no RDKit" from "this molecule was refused".
+      if (error instanceof ChemError) {
+        task.refusal = { code: error.code, message: task.error };
+      }
       task.finishedAt = new Date().toISOString();
       this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Prepare failed: ${task.error}` });
     }

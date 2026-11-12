@@ -123,7 +123,7 @@ import {
   buildPyscfInput,
 } from '../shared/engines/pyscf.js';
 import { compositionOf, describeAtoms, formulaOf, massOf } from '../shared/formula.js';
-import { prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
+import { PREPARE_KINDS, prepareConvergenceText, prepareLabel, prepareSummaryLine } from '../shared/prepare.js';
 import { EXPLICIT_SOLVENTS } from '../shared/explicitSolvation.js';
 import * as shared from '../shared/workflowTasks.js';
 import { engineForNode } from '../shared/workflowTasks.js';
@@ -3271,15 +3271,18 @@ function loopInspector(node) {
 function prepareInspector(node) {
   const s = node.settings || {};
   const output = node.output && typeof node.output === 'object' ? node.output : null;
-  const kind = s.kind === 'embed3d' ? 'embed3d' : (s.kind === 'solvate' ? 'solvate' : 'relax');
-  const converter = kind === 'embed3d' ? 'openbabel' : (s.converter === 'openbabel' ? 'openbabel' : 'uff');
+  const kind = PREPARE_KINDS.includes(s.kind) ? s.kind : 'relax';
+  const converter = kind === 'embed3d' ? 'openbabel'
+    : (kind === 'standardize' ? 'rdkit' : (s.converter === 'openbabel' ? 'openbabel' : 'uff'));
   const detail = output
     ? prepareSummaryLine(output)
     : (kind === 'embed3d' ? 'SMILES → one 3D structure'
-      : (kind === 'solvate' ? 'one structure → one explicit solvent cluster' : 'one structure → one relaxed structure'));
+      : (kind === 'solvate' ? 'one structure → one explicit solvent cluster'
+        : (kind === 'standardize' ? 'one structure → one cleaned structure' : 'one structure → one relaxed structure')));
   const methodLabel = kind === 'solvate'
     ? 'Deterministic placement, rigid templates, no relaxation'
-    : (kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app')));
+    : (kind === 'standardize' ? 'RDKit rdMolStandardize, deterministic cleanup'
+      : (kind === 'embed3d' ? 'Open Babel, --gen3d' : (converter === 'openbabel' ? 'Open Babel, MMFF94' : (converter === 'aimnet2' ? 'AIMNet2, ML forces + L-BFGS' : 'UFF, in-app'))));
   return `${inspectorHead('Structure · prepare', node.title, detail)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">1 structure in, 1 out · no enumeration</span></div>
@@ -3288,6 +3291,7 @@ function prepareInspector(node) {
         <option value="relax"${kind === 'relax' ? ' selected' : ''}>Relax one structure</option>
         <option value="solvate"${kind === 'solvate' ? ' selected' : ''}>Add explicit solvent</option>
         <option value="embed3d"${kind === 'embed3d' ? ' selected' : ''}>Embed SMILES in 3D</option>
+        <option value="standardize"${kind === 'standardize' ? ' selected' : ''}>Standardise (RDKit cleanup)</option>
       </select></div>`,
       ...(kind === 'solvate' ? [
         `<div class="field"><label>Solvent</label><select class="select" data-prepare-field="solvent">${Object.values(EXPLICIT_SOLVENTS)
@@ -3295,6 +3299,13 @@ function prepareInspector(node) {
         `<div class="field"><label>Molecules</label><input class="input" type="number" min="1" max="64" data-prepare-field="solventCount" value="${esc(s.solventCount ?? 10)}"></div>`,
         `<div class="field"><label>Seed</label><input class="input" type="number" min="0" max="2147483647" data-prepare-field="seed" value="${esc(s.seed ?? 1)}"></div>`,
         `<div class="field"><label>Shell / Å</label><input class="input" type="number" min="1" max="20" step="0.1" data-prepare-field="shellAngstrom" value="${esc(s.shellAngstrom ?? 3.5)}"></div>`,
+      ] : kind === 'standardize' ? [
+        `<div class="field full"><label>Cleanup steps</label><div class="inspector-note">
+          Normalise functional groups, disconnect metals, drop counterions and pick the charge parent.
+          The answer records what changed: formula, atom count, fragments removed and the stereo audit.</div></div>`,
+        ...[['normalize', 'Normalise'], ['disconnectMetals', 'Disconnect metals'],
+          ['removeFragments', 'Remove fragments'], ['chargeParent', 'Charge parent']].map(([key, label]) =>
+          `<label class="field checkbox"><input type="checkbox" data-prepare-field="${key}"${s[key] !== false ? ' checked' : ''}> ${label}</label>`),
       ] : [
         `<div class="field"><label>Converter</label><select class="select" data-prepare-field="converter"${kind === 'embed3d' ? ' disabled' : ''}>
           <option value="uff"${converter === 'uff' ? ' selected' : ''}>UFF (in-app)</option>
@@ -11043,12 +11054,17 @@ function applyPrepareField(target) {
     if (!Number.isFinite(value)) return;
     node.settings[key] = key === 'shellAngstrom' ? clamp(value, bounds[0], bounds[1]) : Math.round(clamp(value, bounds[0], bounds[1]));
   } else if (key === 'kind') {
-    node.settings.kind = target.value === 'embed3d' ? 'embed3d' : (target.value === 'solvate' ? 'solvate' : 'relax');
+    node.settings.kind = PREPARE_KINDS.includes(target.value) ? target.value : 'relax';
     node.settings.converter = node.settings.kind === 'embed3d'
       ? 'openbabel'
-      : (node.settings.kind === 'solvate' ? 'geometric' : 'uff');
-    if (node.settings.kind === 'solvate') node.settings.forceField = 'none';
-    node.kind = node.settings.kind === 'embed3d' ? '3D embed' : (node.settings.kind === 'solvate' ? 'Solvate' : 'Relax');
+      : (node.settings.kind === 'solvate' ? 'geometric' : (node.settings.kind === 'standardize' ? 'rdkit' : 'uff'));
+    if (node.settings.kind === 'solvate' || node.settings.kind === 'standardize') node.settings.forceField = 'none';
+    node.kind = node.settings.kind === 'embed3d' ? '3D embed'
+      : (node.settings.kind === 'solvate' ? 'Solvate' : (node.settings.kind === 'standardize' ? 'Standardise' : 'Relax'));
+    node.output = null;
+    node.state = 'ready';
+  } else if (['normalize', 'disconnectMetals', 'removeFragments', 'chargeParent'].includes(key)) {
+    node.settings[key] = Boolean(target.checked);
     node.output = null;
     node.state = 'ready';
   } else if (key === 'converter' || key === 'forceField' || key === 'smiles' || key === 'solvent') {

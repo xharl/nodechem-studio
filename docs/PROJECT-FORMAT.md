@@ -239,10 +239,11 @@ naming the first differing index, and nothing is reordered automatically.
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `kind` | `embed3d`, `relax` or `solvate` | default `relax` |
-| `converter` | `uff`, `openbabel`, `aimnet2` or `geometric` | `embed3d` always resolves to `openbabel`, `solvate` to `geometric`, and `relax` keeps `uff`, `openbabel` or `aimnet2`; a mismatched pair is a validation error |
-| `forceField` | `UFF`, `MMFF94`, `AIMNet2` or `none` | the force field or scorer the converter uses; `none` is what `solvate` defaults to, because deterministic placement is not a relaxation |
-| `smiles` | string | required for `embed3d`; ignored by `relax` and `solvate` |
+| `kind` | `embed3d`, `relax`, `solvate` or `standardize` | default `relax` |
+| `converter` | `uff`, `openbabel`, `aimnet2`, `geometric` or `rdkit` | `embed3d` always resolves to `openbabel`, `solvate` to `geometric`, `standardize` to `rdkit`, and `relax` keeps `uff`, `openbabel` or `aimnet2`; a mismatched pair is a validation error |
+| `forceField` | `UFF`, `MMFF94`, `AIMNet2` or `none` | the force field or scorer the converter uses; `none` is what `solvate` and `standardize` default to, because neither is a relaxation |
+| `smiles` | string | required for `embed3d`; ignored by `relax`, `solvate` and `standardize` |
+| `normalize`, `disconnectMetals`, `removeFragments`, `chargeParent` | boolean | `standardize` only; each cleanup step, default `true`, recorded in the answer |
 | `charge`, `multiplicity` | integer | the structure's chemistry, not a method |
 | `solvent` | string | explicit-solvent id: `water`, `methanol` or `acetonitrile`; default `water` |
 | `solventCount` | integer | 1–64 solvent molecules; default 10 |

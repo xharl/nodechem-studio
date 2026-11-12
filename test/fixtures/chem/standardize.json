@@ -1,0 +1,139 @@
+{
+  "program": "RDKit",
+  "options": {
+    "normalize": true,
+    "disconnectMetals": true,
+    "removeFragments": true,
+    "chargeParent": true,
+    "steps": [
+      "Normalize",
+      "DisconnectOrganometallics",
+      "ChargeParent"
+    ]
+  },
+  "result": {
+    "before": {
+      "smiles": "[H]C([H])([H])C(=O)[O-].[Na+]",
+      "formula": "C2H3NaO2",
+      "atomCount": 8,
+      "heavyAtomCount": 5,
+      "charge": 0,
+      "fragments": 2
+    },
+    "after": {
+      "smiles": "[H]OC(=O)C([H])([H])[H]",
+      "formula": "C2H4O2",
+      "atomCount": 8,
+      "heavyAtomCount": 4,
+      "charge": 0,
+      "fragments": 1
+    },
+    "fragmentsRemoved": [
+      {
+        "smiles": "[Na+]",
+        "formula": "Na+",
+        "atomCount": 1
+      }
+    ],
+    "stereoAudit": {
+      "unassignedStereocentres": [],
+      "unassignedDoubleBonds": [],
+      "doubleBondsAudited": true
+    },
+    "geometry": {
+      "source": "etkdgv3"
+    },
+    "atoms": [
+      {
+        "element": "C",
+        "x": -0.9883928916581012,
+        "y": -0.09053295479474617,
+        "z": 0.12782474972779667
+      },
+      {
+        "element": "C",
+        "x": 0.4203339467761028,
+        "y": 0.3153163978516296,
+        "z": -0.1358712705420609
+      },
+      {
+        "element": "O",
+        "x": 0.7612995645246151,
+        "y": 1.4868713251139323,
+        "z": -0.4257493990907588
+      },
+      {
+        "element": "O",
+        "x": 1.416560345148085,
+        "y": -0.6451396575693327,
+        "z": -0.05961285342887606
+      },
+      {
+        "element": "H",
+        "x": -1.080541120860431,
+        "y": -0.10545558535428619,
+        "z": 1.2359072713856978
+      },
+      {
+        "element": "H",
+        "x": -1.1909941664042538,
+        "y": -1.1265286381546988,
+        "z": -0.23325545012272184
+      },
+      {
+        "element": "H",
+        "x": -1.7243645340733724,
+        "y": 0.6350850334599003,
+        "z": -0.2899988281065032
+      },
+      {
+        "element": "H",
+        "x": 2.3860988565473598,
+        "y": -0.46961592055239604,
+        "z": -0.21924421982256878
+      }
+    ],
+    "identity": {
+      "smiles": "[H]OC(=O)C([H])([H])[H]",
+      "inchiKey": "QTBSBXVTEAMEQO-UHFFFAOYSA-N",
+      "tautomerHash": "[H]O[C]([O])C([H])([H])[H]_0_0",
+      "formula": "C2H4O2",
+      "atomCount": 8,
+      "heavyAtomCount": 4
+    }
+  },
+  "version": "2026.9.1",
+  "protocol": "nodechem-chem/1",
+  "op": "standardize",
+  "ok": true,
+  "_provenance": {
+    "recordedWith": "/usr/local/bin/python3",
+    "rdkit": "2026.9.1",
+    "request": {
+      "protocol": "nodechem-chem/1",
+      "op": "standardize",
+      "molecule": {
+        "title": "sodium acetate",
+        "smiles": "CC(=O)[O-].[Na+]",
+        "charge": 0,
+        "multiplicity": 1,
+        "atoms": [
+          {
+            "element": "C",
+            "x": 0,
+            "y": 0,
+            "z": 0
+          }
+        ]
+      },
+      "options": {
+        "normalize": true,
+        "disconnectMetals": true,
+        "removeFragments": true,
+        "chargeParent": true
+      }
+    },
+    "recordedAt": "2026-11-11",
+    "note": "Real RDKit answer; CI replays it through a fake sidecar."
+  }
+}
