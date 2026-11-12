@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld('desktop', {
   runTask: (payload) => ipcRenderer.invoke('gaussian:run', payload),
   cancelRun: (runId) => ipcRenderer.invoke('gaussian:cancel', runId),
   listRuns: () => ipcRenderer.invoke('runs:list'),
+  // Issue #371: full records for exactly the ids a consumer asks for.
+  getRunRecords: (ids) => ipcRenderer.invoke('runs:records', ids),
   saveText: (payload) => ipcRenderer.invoke('text:save', payload),
   verifyRun: (runId) => ipcRenderer.invoke('runs:verify', runId),
   exportRunBundle: (runId) => ipcRenderer.invoke('runs:export-bundle', runId),

@@ -2871,8 +2871,15 @@ export function resultsPanelHtml(record, options = {}) {
 /* ── Console wiring ────────────────────────────────────────── */
 
 async function findRun(desktop, runId) {
-  if (!runId || !desktop?.listRuns) return null;
+  if (!runId) return null;
   try {
+    // Issue 371: ask for exactly this run; `runs:list` is now a summary.
+    if (desktop?.getRunRecords) {
+      const records = await desktop.getRunRecords([runId]);
+      return Array.isArray(records) ? records.find((run) => run?.id === runId) || null : null;
+    }
+    // Compatibility with a preload that predates `runs:records`.
+    if (!desktop?.listRuns) return null;
     const runs = await desktop.listRuns();
     return Array.isArray(runs) ? runs.find((run) => run?.id === runId) || null : null;
   } catch {
@@ -2890,7 +2897,7 @@ function isQueueRunning(doc) {
  * The module subscribes to the same run/queue events as `app.js`; a finished
  * run updates the panel without `app.js` having to pass records around.
  * Clicking a row in "Recent runs" or the workflow queue loads that run's
- * `run.json` through `desktop.listRuns()` and renders it.
+ * `run.json` through `desktop.getRunRecords([id])` and renders it.
  */
 export function installResultsView({
   desktop = globalThis.window?.desktop ?? null,
@@ -3123,10 +3130,16 @@ export function installResultsView({
   };
   const mountThermoEnsemble = async () => {
     const picker = container.querySelector('[data-field="thermo-ensemble-picker"]');
-    if (!picker || !desktop?.listRuns) return;
+    if (!picker || !desktop?.listRuns || !desktop?.getRunRecords) return;
     let runs = [];
     try {
-      runs = await desktop.listRuns();
+      // Issue 371: list summaries, then read only the records they name; the
+      // free energy lives in each record's `parsed` block.
+      const summaries = await desktop.listRuns();
+      const ids = (Array.isArray(summaries) ? summaries : [])
+        .map((run) => run?.id)
+        .filter((id) => typeof id === 'string' && id !== '');
+      runs = ids.length ? await desktop.getRunRecords(ids) : [];
     } catch {
       return;
     }
@@ -3252,6 +3265,8 @@ export function installResultsView({
     if (!runId) return;
     let runs = [];
     try {
+      // Issue 371: the comparison bar only needs id/title/status, which the
+      // summary carries; the chosen run's full record is read on selection.
       runs = await desktop.listRuns();
     } catch {
       return;
