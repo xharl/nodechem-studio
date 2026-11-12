@@ -37,6 +37,18 @@ on it. It never enumerates protonation states, tautomers or conformers — those
 sets, and sets belong to Generate. A Calculate block wired from Prepare runs on its written
 `prepared.xyz`, not on the geometry the workflow was planned with.
 
+### RDKit conformer search
+
+`generator: "rdkit"` runs ETKDGv4 embedding followed by an MMFF94 (or UFF) optimisation in the
+chemistry sidecar. It is a force-field search, not CREST/xTB and not a QM result: energies are
+kcal/mol and the record says so. The block takes the number of embedded geometries, the seed, the
+ETKDG RMSD prune, the force field, a heavy-atom cap (default 60, hard maximum 100) and a thread
+count (default 1). Above the cap the block refuses with `size-refused` — an open-ended search on a
+large flexible molecule is not offered. The sidecar returns every geometry; the app's shared
+curation applies the energy window, RMSD prune and retention cap, exactly as it does for CREST and
+Open Babel. MMFF94 has no parameters for some elements; the sidecar falls back to UFF and records
+that fallback in both the ensemble and its warnings.
+
 ### Standardisation
 
 `standardize` is RDKit's `rdMolStandardize` cleanup: normalise functional groups, disconnect

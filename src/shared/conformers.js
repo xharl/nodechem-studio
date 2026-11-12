@@ -58,6 +58,9 @@ export const DEFAULT_CONFORMER_METHOD = Object.freeze({
   crest: 'gfn2',
   uff: 'UFF',
   obabel: 'MMFF94',
+  // ADR 0003 §3.4: the RDKit search's force field. The block also stores it in
+  // `forceField`, which is the field the sidecar reads.
+  rdkit: 'MMFF94',
 });
 
 /** The methods `generator` runs, in canonical spelling; [] when it runs none. */
@@ -744,11 +747,18 @@ export function conformerOriginShort(ensemble) {
     return `Open Babel · ${method}`;
   }
   if (generator === 'rdkit') {
-    // Issue #226: enumeration, not a search. The ruleset matters because it is
-    // the thing that decides which candidates exist.
-    const ruleset = String(origin.ruleset ?? '').trim();
+    if (ensembleField(ensemble, 'produces') === 'tautomers') {
+      // Issue #226: enumeration, not a search. The ruleset matters because it is
+      // the thing that decides which candidates exist.
+      const ruleset = String(origin.ruleset ?? '').trim();
+      const version = String(origin.version ?? '').trim();
+      return ['RDKit', version, ruleset ? `· ${ruleset}` : ''].filter(Boolean).join(' ');
+    }
+    // ADR 0003 §3.4: a force-field search. The embedding and the force field are
+    // the claim; no QM method is named.
     const version = String(origin.version ?? '').trim();
-    return ['RDKit', version, ruleset ? `· ${ruleset}` : ''].filter(Boolean).join(' ');
+    const method = String(origin.method ?? '').trim();
+    return ['RDKit', version, method ? `· ${method}` : ''].filter(Boolean).join(' ');
   }
   if (generator === 'fixture') return 'dry-run fixture';
   if (generator === 'import') {
@@ -786,11 +796,15 @@ export function conformerOriginLabel(ensemble) {
     return `external MM stage · ${program} · ${method} (force field, not QM)`;
   }
   if (generator === 'rdkit') {
-    // Issue #226: the candidates are molecules, not geometries. No energy was
-    // computed at this stage and none is implied.
-    const ruleset = String(origin.ruleset ?? '').trim() || 'ruleset not recorded';
-    return `external enumeration · ${originProgramText(origin) || 'RDKit'} · TautomerEnumerator · ${ruleset} `
-      + '(distinct molecules, not conformers; no energy computed here)';
+    if (ensembleField(ensemble, 'produces') === 'tautomers') {
+      // Issue #226: the candidates are molecules, not geometries. No energy was
+      // computed at this stage and none is implied.
+      const ruleset = String(origin.ruleset ?? '').trim() || 'ruleset not recorded';
+      return `external enumeration · ${originProgramText(origin) || 'RDKit'} · TautomerEnumerator · ${ruleset} `
+        + '(distinct molecules, not conformers; no energy computed here)';
+    }
+    const method = String(origin.method ?? '').trim() || 'ETKDGv4';
+    return `external search · ${originProgramText(origin) || 'RDKit'} · ${method} (force field, not QM)`;
   }
   const parts = ['imported'];
   const program = originProgramText(origin);

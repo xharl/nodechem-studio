@@ -80,6 +80,7 @@ export function planToolNeeds(tasks = []) {
       if (generate.produces === 'tautomers') needs.add('tautomer');
       else if (generate.generator === 'crest') needs.add('crest');
       else if (generate.generator === 'obabel') needs.add('obabel');
+      else if (generate.generator === 'rdkit') needs.add('chem');
     }
     if (task.type === 'analyse' && task.analyse?.mode === 'multiwfn') needs.add('multiwfn');
     // ADR 0003: a chem analyse block, and a standardise prepare block, spawn

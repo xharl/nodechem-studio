@@ -52,6 +52,12 @@ import {
   standardizeRequest,
   stereoAuditWarnings,
 } from '../../src/shared/chemStandardize.js';
+import {
+  normalizeRdkitConformerResult,
+  rdkitConformerOrigin,
+  rdkitConformerRequest,
+  rdkitConformerWarnings,
+} from '../../src/shared/rdkitConformers.js';
 import { SidecarRunner } from './sidecarRunner.js';
 import { cacheFingerprint, cacheGet, cachePut, readChemCache, writeChemCache } from './chemCache.js';
 import {
@@ -655,7 +661,9 @@ function conformerTaskRecord(raw, nodeId) {
           ? (conf.method === 'gfnff' ? 'gfnff' : 'gfn2')
           : (generator === 'uff'
             ? 'UFF'
-            : (obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94'))),
+            : (generator === 'rdkit'
+              ? (conf.forceField === 'UFF' ? 'UFF' : 'MMFF94')
+              : (obabelForceFieldKeyword(conf.method) || obabelForceFieldKeyword(conf.ff) || 'MMFF94')))),
       energyWindowKcal: number(conf.energyWindowKcal, 10, 0, 100),
       rmsdThreshold: number(conf.rmsdThreshold, 0.5, 0.01, 10),
       maxConformers: Math.round(number(conf.maxConformers, produces === 'tautomers' ? 16 : 20, 1, 200)),
@@ -684,6 +692,17 @@ function conformerTaskRecord(raw, nodeId) {
       // hand-written queue payload could carry.
       ...(generator === 'obabel' && Number.isFinite(Number(conf.nconf))
         ? { nconf: Math.round(number(conf.nconf, 20, 1, 1000)) } : {}),
+      // ADR 0003 §3.4: the RDKit search's knobs, bounded here as well.
+      ...(generator === 'rdkit'
+        ? {
+          nconf: Math.round(number(conf.nconf, 50, 1, 200)),
+          seed: Math.round(number(conf.seed, 1, 0, 0x7fffffff)),
+          pruneRms: number(conf.pruneRms, 0.5, 0, 5),
+          forceField: conf.forceField === 'UFF' ? 'UFF' : 'MMFF94',
+          maxHeavyAtoms: Math.round(number(conf.maxHeavyAtoms, 60, 1, 100)),
+          threads: Math.round(number(conf.threads, 1, 1, 8)),
+        }
+        : {}),
       ...(generator === 'uff' && Array.isArray(conf.bonds)
         ? {
           bonds: conf.bonds.slice(0, LIMITS.atoms * 2).map((bond) => ({
@@ -1529,7 +1548,9 @@ export class QueueManager {
     const chemExecutable = String(options.chemExecutable || '').trim();
     const chemScript = String(options.chemScript || '').trim();
     const needsChem = tasks.some((task) => (task.type === 'analyse' && task.analyse?.mode === 'chem')
-      || (task.type === 'prepare' && task.prepare?.kind === 'standardize'));
+      || (task.type === 'prepare' && task.prepare?.kind === 'standardize')
+      || (task.type === 'generate' && task.generate?.generator === 'rdkit'
+        && task.generate?.produces !== 'tautomers' && !task.generate?.member));
     // Issue #270: a Multiwfn analyse block spawns the user-installed sidecar.
     // A dry run must not spawn it, exactly as it spawns no engine.
     const needsMultiwfn = tasks.some((task) => task.type === 'analyse'
@@ -2276,6 +2297,67 @@ export class QueueManager {
           nodeId: task.nodeId,
           text: 'Dry run: a labelled three-member fixture, not a conformer search.',
         });
+      } else if (conf.generator === 'rdkit') {
+        // ADR 0003 §3.4: ETKDGv4 + MMFF94/UFF, then the shared curation below.
+        const inputText = await fsp.readFile(this.conformerInputPath(queue.id, task.nodeId), 'utf8');
+        const parsedInput = parseMultiXyz(inputText);
+        if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
+          throw new Error(`The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
+        }
+        if (!queue.options.chemExecutable) {
+          throw new ChemError('rdkit-missing', 'No chemistry sidecar is configured. An RDKit conformer search '
+            + 'needs Python with rdkit (scripts/nodechem-chem.py); there is no in-app fallback.');
+        }
+        const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+          executable: queue.options.chemExecutable,
+          script: queue.options.chemScript || '',
+          request: rdkitConformerRequest({
+            molecule: {
+              title: task.title,
+              charge: Number.isInteger(conf.charge) ? conf.charge : 0,
+              multiplicity: Number.isInteger(conf.multiplicity) ? conf.multiplicity : 1,
+              atoms: parsedInput.frames[0].atoms,
+            },
+            options: {
+              nconf: conf.nconf,
+              seed: conf.seed,
+              pruneRms: conf.pruneRms,
+              forceField: conf.forceField,
+              maxHeavyAtoms: conf.maxHeavyAtoms,
+              threads: conf.threads,
+            },
+          }),
+          timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+          cwd: dir,
+          onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+        });
+        const result = normalizeRdkitConformerResult(raw);
+        ensembleText = result.conformers
+          .map((conformer, index) => xyzText(conformer.atoms, `${task.title} · c${index + 1}`))
+          .join('');
+        energies = result.conformers.map((conformer) => conformer.energyKcal);
+        source = 'rdkit';
+        energyUnit = 'kcal/mol';
+        energyMethod = result.forceField;
+        origin = rdkitConformerOrigin(result);
+        searchWarnings = rdkitConformerWarnings(result).map((message) => ({
+          id: 'rdkit-conformers', status: 'warn', message,
+        }));
+        await fsp.writeFile(path.join(dir, task.outputName || 'rdkit.log'), [
+          `${task.title} · RDKit conformer search`,
+          `Embedding: ${result.embedding}, seed ${result.seed}, prune ${conf.pruneRms} Å, ${result.threads} thread(s)`,
+          `Force field: ${result.forceField}${result.fallback ? ' (MMFF94 unavailable; UFF used)' : ''}`,
+          `Geometry: ${result.conformers.length} of ${result.requested} requested; ${result.convergedCount} converged`,
+          `Heavy atoms: ${result.heavyAtomCount} (cap ${conf.maxHeavyAtoms})`,
+          'Energies: force-field energies in kcal/mol. Not QM, not comparable with a Hartree value.',
+        ].join('\n') + '\n', 'utf8');
+        this.emit({
+          type: 'queue-output',
+          queueId: queue.id,
+          nodeId: task.nodeId,
+          text: `RDKit ${result.embedding} + ${result.forceField}: ${result.conformers.length} geometries, `
+            + `${result.convergedCount} converged. Force-field structures, not QM.`,
+        });
       } else if (conf.generator === 'obabel') {
         // Open Babel is external, like CREST: the app stages one starting
         // geometry, spawns the search, then evaluates one MMFF94 energy per
@@ -2481,7 +2563,8 @@ export class QueueManager {
           ? scorerProvenance.label
           : (conf.source === 'imported'
             ? (origin?.method || energyMethod || '')
-            : (conf.generator === 'uff' || conf.generator === 'obabel' ? '' : conf.method)),
+            : (conf.generator === 'uff' || conf.generator === 'obabel' || conf.generator === 'rdkit'
+              ? '' : conf.method)),
         origin: recordedOrigin,
         energyUnit,
         energyMethod,
@@ -2521,6 +2604,9 @@ export class QueueManager {
     } catch (error) {
       task.status = 'failed';
       task.error = oneLine(error?.message || String(error), 400);
+      // ADR 0003 §2.3: a sidecar refusal keeps its typed code, so `size-refused`
+      // is not flattened into a generic search failure.
+      if (error instanceof ChemError) task.refusal = { code: error.code, message: task.error };
       task.finishedAt = new Date().toISOString();
       this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text: `Conformer search failed: ${task.error}` });
     }

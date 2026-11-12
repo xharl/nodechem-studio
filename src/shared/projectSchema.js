@@ -789,6 +789,8 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     // Issue #226: what the block enumerates, and the tautomer ruleset. The
     // candidate cap is `maxConformers`; there is deliberately no pH setting.
     'produces', 'tautomerRuleset',
+    // ADR 0003 §3.4: the RDKit conformer search's own settings.
+    'nconf', 'seed', 'pruneRms', 'forceField', 'maxHeavyAtoms', 'threads',
   ]), path);
   // A generate block is new in this schema, so a file that names one setting
   // and omits the rest is complete enough: the documented defaults fill in.
@@ -826,8 +828,6 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     if (generator && generator !== 'rdkit') {
       c.error(`${path}.generator`, 'must be "rdkit" when produces is "tautomers"; no other generator in this build enumerates tautomers.');
     }
-  } else if (generator === 'rdkit') {
-    c.error(`${path}.generator`, 'is only wired for tautomer enumeration in this build; a conformer search uses CREST, UFF or Open Babel.');
   }
   const rankBy = readEnum(c, source.rankBy ?? '', ['', ...SCORER_SPECS], `${path}.rankBy`, {
     legacy, fallback: '',
@@ -903,6 +903,18 @@ function normalizeConformerSettings(c, raw, path, legacy) {
     multiplicity: readInteger(c, source.multiplicity, `${path}.multiplicity`, { legacy, fallback: 1, min: 1, max: 10 }),
     // Issue #132: the study this block belongs to, or '' for "stands alone".
     group: readConformerGroup(c, source.group, `${path}.group`),
+    // ADR 0003 §3.4: the RDKit search's own settings, recorded only on a block
+    // that names that generator, so every other ensemble serialises as before.
+    ...(generator === 'rdkit' && produces === 'conformers'
+      ? {
+        nconf: readOptionalInteger(c, source.nconf, `${path}.nconf`, { fallback: 50, min: 1, max: 200 }),
+        seed: readOptionalInteger(c, source.seed, `${path}.seed`, { fallback: 1, min: 0, max: 0x7fffffff }),
+        pruneRms: readNumber(c, source.pruneRms, `${path}.pruneRms`, { legacy: true, fallback: 0.5, min: 0, max: 5 }),
+        forceField: readEnum(c, source.forceField, ['MMFF94', 'UFF'], `${path}.forceField`, { legacy, fallback: 'MMFF94' }),
+        maxHeavyAtoms: readOptionalInteger(c, source.maxHeavyAtoms, `${path}.maxHeavyAtoms`, { fallback: 60, min: 1, max: 100 }),
+        threads: readOptionalInteger(c, source.threads, `${path}.threads`, { fallback: 1, min: 1, max: 8 }),
+      }
+      : {}),
     // Issue #226: recorded only for a tautomer block, so every other generate
     // block serialises exactly as it did before.
     ...(produces === 'tautomers' || provided.tautomerRuleset !== undefined ? { tautomerRuleset } : {}),

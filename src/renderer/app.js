@@ -3429,7 +3429,9 @@ function conformersInspector(node) {
           ? 'Run the block: the UFF search runs here and needs no external binary.'
           : (s.generator === 'obabel'
             ? 'Run the block with an Open Babel executable configured in the run console.'
-            : 'Run the block with a CREST executable configured.')))}</div>`;
+            : (s.generator === 'rdkit'
+              ? 'Run the block with the chemistry sidecar configured; ETKDGv4 and the force field run in RDKit.'
+              : 'Run the block with a CREST executable configured.'))))}</div>`;
 
   return `${inspectorHead(tautomersBlock ? 'Generate · tautomers' : 'Generate · conformers', node.title, summaryLine)}
   <div class="inspector-scroll">
@@ -3448,7 +3450,8 @@ function conformersInspector(node) {
         ? 'wired ensemble input'
         : (s.generator === 'crest'
           ? 'CREST'
-          : (s.generator === 'uff' ? 'UFF, in-app' : 'Open Babel, external'))), true, [
+          : (s.generator === 'uff' ? 'UFF, in-app'
+            : (s.generator === 'rdkit' ? 'RDKit, external (force field)' : 'Open Babel, external')))), true, [
       `<div class="field full"><label>Produces</label><select class="select" data-conformer-field="produces">
         <option value="conformers"${!tautomersBlock ? ' selected' : ''}>Conformers — geometries of one molecule</option>
         <option value="tautomers"${tautomersBlock ? ' selected' : ''}>Tautomers — distinct molecules of one formula</option>
@@ -3483,6 +3486,7 @@ function conformersInspector(node) {
           <option value="crest"${s.generator === 'crest' ? ' selected' : ''}>CREST (external)</option>
           <option value="uff"${s.generator === 'uff' ? ' selected' : ''}>UFF (in-app, no binary)</option>
           <option value="obabel"${s.generator === 'obabel' ? ' selected' : ''}>Open Babel (external, MMFF94)</option>
+          <option value="rdkit"${s.generator === 'rdkit' ? ' selected' : ''}>RDKit (external, ETKDGv4 + MMFF94/UFF)</option>
         </select></div>`,
         ...(s.generator === 'crest' ? [`<div class="field"><label>Method</label><select class="select" data-conformer-field="method">
             <option value="gfn2"${s.method === 'gfn2' ? ' selected' : ''}>GFN2-xTB</option>
@@ -3498,6 +3502,18 @@ function conformersInspector(node) {
           </select></div>`,
           `<div class="field"><label>Conformers (--nconf)</label><input class="input" type="number" min="1" max="1000" step="1" data-conformer-field="nconf" value="${esc(s.nconf ?? 20)}"></div>`,
           `<div class="field full"><span class="inspector-note" data-conformer-obabel-note>Open Babel runs as a separate program, like CREST: a genetic-algorithm search scored on the chosen force field, then one energy per conformer. Every member is a force-field structure in kcal/mol — not QM, and not Spartan's DLFF03 stage. MMFF94 covers H, C, N, O, F, Si, P, S, Cl, Br and I; an atom outside that list is refused by name, while UFF is parameterised across the periodic table. Open Babel 3.2.x crashes in its conformer search (--conformer); the queue refuses that series by version before spawning — install 3.1.x or use the in-app UFF search.</span></div>`,
+        ] : []),
+        ...(s.generator === 'rdkit' ? [
+          `<div class="field"><label>Force field</label><select class="select" data-conformer-field="forceField">
+            <option value="MMFF94"${s.forceField === undefined || s.forceField === 'MMFF94' ? ' selected' : ''}>MMFF94</option>
+            <option value="UFF"${s.forceField === 'UFF' ? ' selected' : ''}>UFF</option>
+          </select></div>`,
+          `<div class="field"><label>Embedded geometries</label><input class="input" type="number" min="1" max="200" data-conformer-field="nconf" value="${esc(s.nconf ?? 50)}"></div>`,
+          `<div class="field"><label>Seed</label><input class="input" type="number" min="0" max="2147483647" data-conformer-field="seed" value="${esc(s.seed ?? 1)}"></div>`,
+          `<div class="field"><label>ETKDG prune / Å</label><input class="input" type="number" min="0" max="5" step="0.1" data-conformer-field="pruneRms" value="${esc(s.pruneRms ?? 0.5)}"></div>`,
+          `<div class="field"><label>Heavy-atom cap</label><input class="input" type="number" min="1" max="100" data-conformer-field="maxHeavyAtoms" value="${esc(s.maxHeavyAtoms ?? 60)}"></div>`,
+          `<div class="field"><label>Threads</label><input class="input" type="number" min="1" max="8" data-conformer-field="threads" value="${esc(s.threads ?? 1)}"></div>`,
+          `<div class="field full"><span class="inspector-note" data-conformer-rdkit-note>ETKDGv4 embedding followed by an MMFF94 (or UFF) optimisation in RDKit, run by the chemistry sidecar. This is a force-field search, not CREST/xTB and not a QM result; energies are kcal/mol. Above the heavy-atom cap the block refuses with <code>size-refused</code> rather than starting an open-ended search. The energy window, RMSD prune and retention cap below are applied by the app, not the sidecar.</span></div>`,
         ] : []),
         ...(s.generator === 'uff' ? [
           `<div class="field"><label>Torsion grid</label><select class="select" data-conformer-field="torsionStepDegrees">
@@ -11128,6 +11144,8 @@ function applyConformerField(target) {
       temperature: [1, 1000], spreadThresholdKcal: [0, 50], charge: [-10, 10], multiplicity: [1, 10],
       // Issue 144: the in-app UFF route's grid resolution and trial cap.
       torsionStepDegrees: [15, 360], maxTrials: [1, 2000],
+      // ADR 0003 §3.4: the RDKit search's knobs; the schema bounds them again.
+      seed: [0, 0x7fffffff], pruneRms: [0, 5], maxHeavyAtoms: [1, 100], threads: [1, 8],
       // The Open Babel route's conformer count; the schema bounds it the same way.
       nconf: [1, 1000],
     }[key];
