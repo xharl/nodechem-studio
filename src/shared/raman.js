@@ -14,6 +14,8 @@
  * and is not. The panel says which quantity it shows.
  */
 
+import { toLines } from './lines.js';
+
 const RAMAN_ACTIVITIES = /^\s*Raman\s+Activ\S*\s*-{2,}\s*(.*)$/i;
 const DEPOL_PLANE = /^\s*Depol(?:ar)?\.?\s*\(\s*(?:Plane|P)\s*\)\s*-{2,}\s*(.*)$/i;
 const DEPOL_UNPOL = /^\s*Depol(?:ar)?\.?\s*\(\s*(?:Unpol|U)\s*\)\s*-{2,}\s*(.*)$/i;
@@ -28,7 +30,7 @@ const numbers = (text) => (String(text || '').match(NUMBER) || []).map(Number);
  * is distinguishable from a `Freq=Raman` job whose rows came out empty.
  */
 export function parseRamanActivities(text) {
-  const lines = String(text || '').split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const activities = [];
   const depolarizationPlane = [];
   const depolarizationUnpolarized = [];

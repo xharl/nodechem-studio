@@ -19,7 +19,12 @@
  * Nothing is invented: a block whose vectors do not cover every atom is dropped
  * (and counted in `incomplete`), and an output without displacement blocks
  * returns `null` rather than an empty mode list.
+ *
+ * `text` is the whole document as a string or the lines the top-level parser
+ * already split; an array is read in place, never split again.
  */
+
+import { toLines } from './lines.js';
 
 const NUMBER = /-?\d+\.\d+/g;
 // Coordinate rows start with three integers (mode, atom, atomic number) before
@@ -60,7 +65,7 @@ function valueLine(lines, start, pattern) {
  * of `{ x, y, z }` per atom, or `null` when the output has no such blocks.
  */
 export function parseNormalModes(text, { maxAtoms = 2000 } = {}) {
-  const lines = String(text ?? '').split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const starts = modeBlockStarts(lines);
   if (starts.length === 0) return null;
 

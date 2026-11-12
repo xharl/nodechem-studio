@@ -15,6 +15,8 @@
  * never produced.
  */
 
+import { toLines } from './lines.js';
+
 const NUCLEUS_ELEMENTS = Object.freeze({
   '1H': 'H',
   H: 'H',
@@ -48,7 +50,7 @@ export function elementForNucleus(nucleus) {
  * A job with no NMR block returns null; a block with no atoms returns null.
  */
 export function parseShieldings(source) {
-  const lines = String(source ?? '').split(/\r\n|\n|\r/);
+  const lines = toLines(source);
   const start = lines.findIndex((line) => /Magnetic shielding tensor\s*\(ppm\)/i.test(line));
   if (start === -1) return null;
 
@@ -270,7 +272,7 @@ function readCouplingBlock(lines, start) {
  * incomplete.
  */
 export function parseCouplings(source) {
-  const lines = String(source ?? '').split(/\r\n|\n|\r/);
+  const lines = toLines(source);
   const blocks = { K: null, J: null };
   for (let index = 0; index < lines.length; index += 1) {
     const header = COUPLING_HEADER.exec(lines[index]);

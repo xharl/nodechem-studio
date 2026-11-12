@@ -33,6 +33,8 @@
  * the parser branch is not claimed for anything newer than the fixture.
  */
 
+import { toLines } from './lines.js';
+
 const ROW = /^\s*(AlphaG|Gamma2|Delta2|Raman1|Raman2|Raman3|ROA1|ROA2|ROA3|CID1|CID2|CID3|RC180)\s+Fr=\s*\d+\s*-{2,}\s*(.*)$/i;
 const NUMBER = /-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g;
 
@@ -42,14 +44,14 @@ export const ROA_GEOMETRY_KEYS = Object.freeze(['roa1', 'roa2', 'roa3']);
 
 const numbers = (text) => (String(text || '').match(NUMBER) || []).map(Number);
 
-function geometryLabels(text) {
+function geometryLabels(lines) {
   const labels = {
     roa1: 'ICPu/SCPu(180)',
     roa2: 'ICPd/SCPd(90)',
     roa3: 'DCPI(180)',
     rc180: 'degree of circularity',
   };
-  for (const line of String(text || '').split(/\r\n|\n|\r/)) {
+  for (const line of lines) {
     if (/\bRaman1;ROA1;CID1\b/i.test(line)) {
       const match = line.match(/Raman1;ROA1;CID1\s*=\s*(.+?)(?:,|$)/i);
       if (match) labels.roa1 = match[1].trim();
@@ -72,8 +74,7 @@ function geometryLabels(text) {
  * frequency table.
  */
 export function parseRoaIntensities(text) {
-  const source = String(text || '');
-  const lines = source.split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const values = {
     alphaG: [], gamma2: [], delta2: [],
     roa1: [], roa2: [], roa3: [],
@@ -103,7 +104,7 @@ export function parseRoaIntensities(text) {
     incidentWavenumber,
     units: ROA_UNITS,
     invariantUnits: ROA_INVARIANT_UNITS,
-    geometries: geometryLabels(source),
+    geometries: geometryLabels(lines),
     // The log states the geometry labels but not a G16 revision; keeping this
     // null is the honest record of what the table itself says.
     release: null,
