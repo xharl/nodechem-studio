@@ -588,6 +588,7 @@ export function buildWorkflowReport(queue, records = {}, {
   surfaces = null,
   figureBudgetBytes = FIGURE_BUDGET_BYTES,
   wavefunction = null,
+  artifacts = null,
 } = {}) {
   const source = queue && typeof queue === 'object' ? queue : {};
   const tasks = Array.isArray(source.tasks) ? source.tasks : [];
@@ -873,6 +874,11 @@ export function buildWorkflowReport(queue, records = {}, {
         : null,
     }));
   const uncertainty = buildUncertaintySection({ ladders, conformers, reactions: reactionModels });
+  // Issue #354: the manifest is read by the caller and handed in, so the builder
+  // stays pure. Absent (null) means "not asked", and the key is left out of the
+  // model entirely; `{ recorded: false }` is a queue with no manifest, which the
+  // document prints as `not recorded`.
+  const artifactSection = artifactsModel(artifacts);
 
   return {
     schemaVersion: WORKFLOW_REPORT_SCHEMA_VERSION,
@@ -899,6 +905,9 @@ export function buildWorkflowReport(queue, records = {}, {
     retries,
     tasks: rows,
     figures,
+    // Issue #354: the files the workflow's output blocks recorded, with the
+    // manifest's own digest. Omitted when the caller did not ask for it.
+    ...(artifactSection ? { artifacts: artifactSection } : {}),
     // Issue 59: the wavefunction analysis, present only when the caller supplied
     // a parsed checkpoint. `null` means "no checkpoint was attached", which is
     // the normal case — a run.json carries no density.
@@ -1518,6 +1527,131 @@ function uncertaintySectionHtml(section, headingTag = 'h2') {
 }
 
 /**
+ * Issue #354: the artifacts a workflow wrote, as the model carries them.
+ *
+ * The caller reads `<artifactRoot>/manifest.json` (`loadArtifactsManifest()` in
+ * `report.js`) and passes the result in; this function only keeps the fields
+ * the document prints and re-derives the totals, so `buildWorkflowReport()`
+ * stays pure and a hand-built model cannot inject a row the loader would not
+ * have produced. `null` means the report was not asked about artifacts at all,
+ * and the section is absent — a queue that has no manifest is a different case
+ * and arrives as `{ recorded: false }`, which the document prints.
+ */
+function artifactsModel(input) {
+  if (!input || typeof input !== 'object') return null;
+  const entries = (Array.isArray(input.entries) ? input.entries : [])
+    .filter((entry) => entry && typeof entry === 'object' && text(entry.path))
+    .map((entry) => {
+      const size = Number(entry.bytes);
+      return {
+        path: text(entry.path),
+        kind: text(entry.kind),
+        flowId: text(entry.flowId),
+        bytes: Number.isFinite(size) && size >= 0 ? Math.trunc(size) : null,
+        sha256: text(entry.sha256),
+        generatedAt: text(entry.generatedAt),
+        // A row is never dropped for a missing file: the manifest named it and
+        // the folder no longer holds it, which is what the reader came for.
+        missingOnDisk: entry.missingOnDisk === true,
+      };
+    });
+  const sizes = entries.map((entry) => entry.bytes).filter((size) => size !== null);
+  const manifestBytes = input.manifestBytes === null || input.manifestBytes === undefined
+    ? null : Number(input.manifestBytes);
+  return {
+    recorded: input.recorded === true,
+    reason: text(input.reason),
+    source: text(input.source),
+    outsideQueue: input.outsideQueue === true,
+    manifestSha256: text(input.manifestSha256),
+    manifestBytes: Number.isFinite(manifestBytes) ? Math.trunc(manifestBytes) : null,
+    generatedAt: text(input.generatedAt),
+    entries,
+    count: entries.length,
+    totalBytes: sizes.length === 0 ? null : sizes.reduce((sum, size) => sum + size, 0),
+    missingOnDisk: entries.filter((entry) => entry.missingOnDisk).length,
+    skipped: Number.isInteger(input.skipped) && input.skipped > 0 ? input.skipped : 0,
+  };
+}
+
+/**
+ * The Artifacts written section (issue #354).
+ *
+ * One row per file the workflow's output blocks recorded: the queue-relative
+ * path (never an absolute one), the kind, the flow, the byte count the manifest
+ * states and a 16-character SHA-256 prefix. The section's own line carries the
+ * manifest's digest and size, so the index is verifiable too, and an entry
+ * whose file is gone prints `missing on disk` rather than disappearing.
+ *
+ * A missing or unreadable manifest prints `not recorded` with its reason: an
+ * empty table would read as "this workflow wrote nothing", which is not what an
+ * absent manifest proves.
+ */
+function artifactsHtml(section, headingTag = 'h2') {
+  if (!section) return '';
+  const heading = `<${headingTag} data-field="artifacts-heading">Artifacts written</${headingTag}>`;
+  const source = section.source || 'manifest.json';
+  if (!section.recorded) {
+    return heading
+      + `<p class="warn" data-field="artifacts-not-recorded">Artifacts: <strong>not recorded</strong> — `
+      + `${escapeHtml(section.reason || `no ${source} was found for this queue`)}. `
+      + 'The report does not claim the workflow wrote no file; it only says no manifest was read.</p>';
+  }
+
+  const summary = [
+    `${section.count} file${section.count === 1 ? '' : 's'}`,
+    Number.isFinite(section.totalBytes) ? `${section.totalBytes} B recorded` : null,
+    section.manifestSha256
+      ? `index ${source} sha256 ${shortHash(section.manifestSha256)}` +
+        (Number.isFinite(section.manifestBytes) ? ` (${section.manifestBytes} B)` : '')
+      : `index ${source}`,
+    section.generatedAt ? `last write ${section.generatedAt}` : null,
+  ].filter(Boolean).join(' · ');
+
+  const notes = [];
+  if (section.outsideQueue) {
+    notes.push('The artifacts folder is outside the queue folder, so these paths are relative to it.');
+  }
+  if (section.skipped > 0) {
+    notes.push(`${section.skipped} manifest entr${section.skipped === 1 ? 'y was' : 'ies were'} not printed: `
+      + 'the recorded path is absolute or leaves the artifacts folder, and this report prints only paths it can prove stay inside it.');
+  }
+  if (section.missingOnDisk > 0) {
+    notes.push(`${section.missingOnDisk} recorded file${section.missingOnDisk === 1 ? ' is' : 's are'} missing on disk. `
+      + 'The row stays, because the manifest named the file; the report does not claim it exists.');
+  }
+
+  if (section.count === 0) {
+    return heading
+      + `<p class="meta" data-field="artifacts-summary">${escapeHtml(summary)}.</p>`
+      + '<p class="warn" data-field="artifacts-empty">The manifest exists but records no files.</p>'
+      + (notes.length ? `<p class="meta">${notes.map(escapeHtml).join(' ')}</p>` : '');
+  }
+
+  const showFlow = section.entries.some((entry) => entry.flowId);
+  const body = section.entries.map((entry) => '<tr data-field="artifact"'
+    + ` data-kind="${escapeHtml(entry.kind || '')}"`
+    + (entry.missingOnDisk ? ' data-missing="true"' : '') + '>'
+    + `<td class="mono">${escapeHtml(entry.path)}</td>`
+    + `<td>${escapeHtml(entry.kind === null ? MISSING : entry.kind)}</td>`
+    + (showFlow ? `<td>${escapeHtml(entry.flowId === null ? MISSING : entry.flowId)}</td>` : '')
+    + `<td class="num">${entry.bytes === null ? escapeHtml(MISSING) : String(entry.bytes)}</td>`
+    + `<td class="mono">${escapeHtml(shortHash(entry.sha256) ?? MISSING)}</td>`
+    + `<td>${entry.missingOnDisk
+      ? '<span class="warn-text">missing on disk</span>'
+      : 'present'}</td>`
+    + '</tr>').join('');
+
+  return heading
+    + `<p class="meta" data-field="artifacts-summary">${escapeHtml(summary)}.</p>`
+    + '<table data-field="artifacts"><thead><tr><th>File</th><th>Kind</th>'
+    + (showFlow ? '<th>Flow</th>' : '')
+    + '<th class="num">Bytes</th><th>SHA-256</th><th>On disk</th></tr></thead>'
+    + `<tbody>${body}</tbody></table>`
+    + (notes.length ? `<p class="meta" data-field="artifacts-notes">${notes.map(escapeHtml).join(' ')}</p>` : '');
+}
+
+/**
  * The body of one report. `level` is 1 for a stand-alone document and 2 for a
  * flow section inside the combined report, so heading depth stays correct.
  */
@@ -1841,6 +1975,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
     + multiwfnSectionHtml(model.multiwfn, sectionHeading)
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')
+    + artifactsHtml(model.artifacts, sectionHeading)
     + `<${sectionHeading}>Provenance</${sectionHeading}>`
     + '<table><thead><tr><th>Block</th><th>Run</th><th>Input SHA-256</th><th>Output SHA-256</th></tr></thead>'
     + '<tbody>' + provenanceRows + '</tbody></table>';

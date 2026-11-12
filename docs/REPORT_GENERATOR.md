@@ -78,6 +78,7 @@ Outcome     7 task(s): 6 passed, 1 failed, 0 skipped, 0 cancelled, 0 not run.
             Gate verdict: passed.
 What ran    Block · Status · Attempts · Gates · Validity · Engine · Level · E / Eh · G / Eh · Imag. · Elapsed
 Methods     one collapsible paragraph per block, only when the caller supplies them
+Artifacts   File · Kind · Flow · Bytes · SHA-256 · On disk — one row per manifest entry
 Provenance  Block · Run · Input SHA-256 · Output SHA-256
 ```
 
@@ -137,8 +138,30 @@ imported results. Each prints its own parameters and, when it cannot compare, th
 
 One row per task with a run: block, run id, and a 16-character prefix of the input and output
 SHA-256. The full digests, executable paths, argv/route and parse-coverage windows stay in
-`report.json`. There is no separate artifacts section, and output file names and sizes are not
-printed in the HTML.
+`report.json`.
+
+### 4.6 Artifacts written
+
+The files the workflow's output blocks wrote, read from `<artifactRoot>/manifest.json` — the
+manifest `appendArtifactEntry()` maintains (#354). One row per manifest entry: **File · Kind ·
+Flow · Bytes · SHA-256 · On disk**. The File cell is the queue-relative path (`artifacts/reports/
+barrier.html` in the app, `reports/barrier.html` for `ncs run --out`), never an absolute one; the
+digest is a 16-character prefix and the full value stays in `report.json`. The section's summary
+line carries the manifest's own SHA-256 and byte size, the file count, the recorded total and the
+newest `generatedAt`, so the index is checkable as well as its entries.
+
+| Manifest state | Printed |
+|---|---|
+| entries present | one row per file; `missing on disk` in a row whose file is no longer in the folder |
+| manifest readable but empty | `The manifest exists but records no files.` |
+| no manifest, or not JSON, or not a list | `Artifacts: not recorded — <reason>`; the section is kept and says the report makes no claim about what was written |
+| an entry whose path is absolute or leaves the artifact root | not printed; the count of skipped entries is stated, the names are not |
+
+`buildWorkflowReport()` never reads the manifest itself: `loadArtifactsManifest(queueDir,
+{ artifactsRoot })` in `src/shared/report.js` reads it and `stat`s every entry, and the result is
+passed in as `artifacts`. Omitting the option leaves the section out entirely — the byte-identical
+document older callers produce. A report written *by* a workflow output block does not carry the
+section: the manifest is appended after the block's artifact is written.
 
 ---
 
@@ -233,7 +256,7 @@ graph, not a screenshot of the editor (`Execution graph · N blocks · counts by
 
 `src/shared/workflowReport.js`:
 
-1. `buildWorkflowReport(queue, records, { generatedAt, appVersion, recordInfo, includeImported, figureLevel, volumes, surfaces, figureBudgetBytes, wavefunction })` reads the queue model and the per-task `run.json`; a task with no readable record is still listed, with its values shown as `not reported`, and the report is produced;
+1. `buildWorkflowReport(queue, records, { generatedAt, appVersion, recordInfo, includeImported, figureLevel, volumes, surfaces, figureBudgetBytes, wavefunction, artifacts })` reads the queue model, the per-task `run.json` and the pre-read artifacts manifest; a task with no readable record is still listed, with its values shown as `not reported`, and the report is produced;
 2. `workflowReportHtml(model, { modelDigest })` renders the document, `buildProjectReportModel(models, { title, generatedAt })` wraps a combined report's per-flow models, and `buildCombinedReportHtml(models, { title, generatedAt, modelDigest })` stacks one section per flow for a project report;
 3. the figure set comes from `src/shared/report.js` — `figureInputsFor(queue, level)` returns cube volumes for `basic` and meshed isosurfaces for `surfaces` — and the builders live in `src/shared/figures/*`;
 4. the desktop action writes the HTML and, beside it, `serializeReportModel(model)`; `ncs report` writes the HTML and, unless `--no-model`, the same serialisation of the per-flow model (or the project-report envelope when several flows are combined). The SHA-256 of those exact bytes is passed back into the renderer as `modelDigest` and printed by the document.
@@ -251,7 +274,7 @@ Failure is loud and local: if rendering throws, no partial HTML is written, the 
 5. Derived values obey §5 or are omitted with a reason.
 6. No JavaScript, no external URL, no `<script>`, no `javascript:` href in the output.
 7. Deterministic: same inputs + frozen clock ⇒ identical bytes.
-8. No absolute user paths in HTML; they exist only in `report.json`.
+8. No absolute user paths in HTML; they exist only in `report.json`. A manifest entry's path is printed relative to the queue folder, and one that cannot be shown to stay inside the artifact root is not printed at all.
 
 ---
 
@@ -283,6 +306,12 @@ Failure is loud and local: if rendering throws, no partial HTML is written, the 
 - A cube volume is sliced; an isosurface is projected; a rotated cube is refused by name instead of drawn as an xy plane.
 - The 5 MB budget drops figures in build order and names them, and `--figures none` switches them off.
 - The generated bytes are script-free, network-free (no `href`/`src` other than `#`) and deterministic.
+
+`test/reportArtifacts.test.js`
+- A three-entry manifest renders three rows, each with its kind, queue-relative path, byte count and hash prefix; the section prints the manifest's own digest, size and total.
+- A queue with no manifest (or an unreadable one) prints `not recorded`, not an empty table; a manifest entry whose file was deleted prints `missing on disk` and does not abort the build.
+- A manifest path that is absolute or climbs out of the artifact root is not printed; only the count of refused entries is stated.
+- The generated bytes stay script-free and network-free, carry no absolute path, and are byte-identical for the same inputs.
 
 `test/cliImportedReport.test.js`
 - `ncs report --include-imported` lists an imported result and only puts its number in the energy column when the flag is set.
