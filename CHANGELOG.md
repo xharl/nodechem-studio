@@ -23,6 +23,11 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Changed
 
+- **Inspector edits serialize the authored project once** — the dirty check, undo step and
+  crash-safe draft now share one snapshot of the project without the in-memory `nodes`/`edges`
+  aliases or the parsed run records attached to calculation blocks. Editing a block beside a large
+  frequency job no longer rewrites tens of megabytes per field, and the undo history is capped by
+  bytes (32 MB) as well as 100 steps. Ensemble typing still commits after the 150 ms pause (#366).
 - **Workflow reports read in a pool, cache cube parses and show progress** — the per-task
   `run.json` reads no longer run one after another, a parsed cube volume is reused across reports
   under `(path, mtimeMs, size)`, and the queue header plus the window's taskbar show `reading run

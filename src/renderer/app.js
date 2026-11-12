@@ -21,7 +21,7 @@ import {
   draftIsRestorable,
   normalizeDraft,
 } from '../shared/draft.js';
-import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, MATRIX_ELEMENT_OPTIONS, defaultGates, defaultSettings, validateProject } from '../shared/projectSchema.js';
+import { JOB_TYPES as SHARED_JOB_TYPES, LIMITS, MATRIX_ELEMENT_OPTIONS, defaultGates, defaultSettings, projectSnapshotView, validateProject } from '../shared/projectSchema.js';
 import { applyQueueToProject, nextAction } from '../shared/queueReconcile.js';
 import { clampFloatingRect, readFloatingRect } from '../shared/floatingWindow.js';
 import {
@@ -490,12 +490,20 @@ const state = {
   draftTimer: null,
   dirty: null,
   history: null,
-  // Issue 367: the plan cache's inputs. `planSnapshot` is the last serialized
-  // project `refreshDirty` saw and `projectRevision` counts changes to it; a
+  // Issue 367: the plan cache's inputs. `planSnapshot` is the last slim
+  // snapshot `refreshDirty` saw and `projectRevision` counts changes to it; a
   // repaint that changes nothing does not move the revision, so the plan built
   // once survives every inspector/console render.
   planSnapshot: null,
   projectRevision: 0,
+  // Issue 366: dirty checks from the same edit are coalesced into one
+  // serialization. `snapshotQueued` marks work already scheduled for the end of
+  // this task; `snapshotCount` is an observability counter the tests read.
+  snapshotQueued: false,
+  snapshotCount: 0,
+  // Issue 366: parsed run records are derived and live outside the snapshot, so
+  // undo restores them by node id instead of carrying them in every step.
+  runRecords: new Map(),
   run: {
     id: null,
     status: 'idle',
@@ -640,6 +648,10 @@ function invalidatePlanCache() {
 function workflowPlan() {
   const project = state.project;
   if (!project) throw new Error('No project is open.');
+  // Issue 366: an edit may have queued its dirty check; answer it now so the
+  // plan is built from (and cached for) the edit that is on screen, not the
+  // previous one. The queued microtask then finds nothing left to do.
+  if (state.snapshotQueued) flushDirtyCheck();
   const nodes = project.nodes;
   const edges = project.edges;
   const flowId = project.activeFlowId ?? null;
@@ -1743,8 +1755,20 @@ function updateSavePill(dirty) {
   pill.innerHTML = `<i class="dot"></i> ${dirty ? 'unsaved changes' : 'saved locally'}`;
 }
 
-function refreshDirty() {
-  const snapshot = JSON.stringify(state.project);
+/**
+ * Issue 366: the one serialization an edit pays for.
+ *
+ * The view drops the `nodes`/`edges` aliases (the graph is already inside
+ * `flows[]`) and the parsed run records, which are derived and never part of
+ * the project file. What remains is proportional to the authored project, so
+ * editing a block beside a 495 KB frequency record no longer rewrites 20 MB.
+ */
+function serializeProjectSnapshot() {
+  state.snapshotCount += 1;
+  return JSON.stringify(projectSnapshotView(state.project));
+}
+
+function applyProjectSnapshot(snapshot) {
   // Issue 367: this is the funnel every mutation already passes through, and
   // `renderInspector` calls it on every paint. Move the plan revision only when
   // the serialized project actually changed, so a repaint or a selection change
@@ -1766,14 +1790,39 @@ function refreshDirty() {
   if (dirty) scheduleDraftSave();
 }
 
+/**
+ * Serialize now. An edit handler usually reaches `refreshDirty` twice — once
+ * from `updateNodeCard`, once from the `renderInspector` that follows — and a
+ * paint may too. The first call schedules this for the end of the task, so both
+ * see one snapshot and one history step. Code that needs the answer inside the
+ * task (`workflowPlan`, save, the close guard) calls this directly.
+ */
+function flushDirtyCheck() {
+  state.snapshotQueued = false;
+  if (!state.project) return;
+  applyProjectSnapshot(serializeProjectSnapshot());
+}
+
+function refreshDirty() {
+  if (state.snapshotQueued) return;
+  state.snapshotQueued = true;
+  queueMicrotask(() => {
+    // A synchronous flush (a plan build, a save) may have answered already.
+    if (!state.snapshotQueued) return;
+    flushDirtyCheck();
+  });
+}
+
 /* ── Undo / redo ──────────────────────────────────────────── */
 
 /**
- * One JSON snapshot per committed edit. `refreshDirty` is the funnel every
+ * One JSON snapshot per committed edit. `flushDirtyCheck` is the funnel every
  * mutation already passes through, so recording here cannot miss an edit — and
- * a render that changes nothing produces no step.
+ * a render that changes nothing produces no step. Callers pass the snapshot
+ * they already computed; there is deliberately no default, so this function
+ * cannot quietly add a second serialization.
  */
-function syncEditHistory(snapshot = JSON.stringify(state.project)) {
+function syncEditHistory(snapshot) {
   if (!state.history) {
     state.history = createHistory(snapshot);
   } else {
@@ -1782,7 +1831,7 @@ function syncEditHistory(snapshot = JSON.stringify(state.project)) {
 }
 
 function resetEditHistory() {
-  state.history = createHistory(JSON.stringify(state.project));
+  state.history = createHistory(serializeProjectSnapshot());
 }
 
 function applyHistorySnapshot(snapshot) {
@@ -1796,6 +1845,12 @@ function applyHistorySnapshot(snapshot) {
   // A snapshot is plain JSON: `nodes`/`edges` are a second copy, so point
   // them back at the active flow's arrays before anything reads them.
   hydrateProject(state.project);
+  // Run records are derived and stay out of the snapshot; put back the ones
+  // this session read, or undo would blank a block's cards and viewers.
+  for (const node of state.project.nodes) {
+    const parsed = state.runRecords.get(node.id);
+    if (parsed) node.parsed = parsed;
+  }
   state.selected = { type: 'project', id: null };
   state.connecting = null;
   state.keyboardConnect = null;
@@ -1833,12 +1888,16 @@ function redoEdit() {
 
 function markProjectSaved(filePath) {
   state.projectPath = filePath;
-  state.savedSnapshot = JSON.stringify(state.project);
-  state.draftBaseline = state.savedSnapshot;
+  // The saved baseline is the same view the dirty check uses, computed once:
+  // the queued check from the save's own paint must not serialize a second time.
+  const snapshot = serializeProjectSnapshot();
+  state.savedSnapshot = snapshot;
+  state.draftBaseline = snapshot;
+  state.snapshotQueued = false;
   // The draft bar offers to replace what is on screen; once another project
   // becomes current that offer is meaningless, so it goes away with it.
   dismissDraftBar();
-  refreshDirty();
+  applyProjectSnapshot(snapshot);
 }
 
 /* ── Crash-safe draft ─────────────────────────────────────── */
@@ -1881,12 +1940,14 @@ function writeDraft() {
   if (!storage || !state.dirty) return;
   let payload;
   try {
-    if (JSON.stringify(state.project) === state.draftBaseline) return;
+    if (serializeProjectSnapshot() === state.draftBaseline) return;
     payload = JSON.stringify({
       version: DRAFT_VERSION,
       updatedAt: Date.now(),
       filePath: state.projectPath || null,
-      project: state.project,
+      // Same view as the dirty check: a draft is the authored project, not the
+      // parsed run records attached to it.
+      project: projectSnapshotView(state.project),
     });
   } catch {
     clearDraft();
@@ -1990,6 +2051,7 @@ function restoreDraft(draft) {
     return;
   }
   state.project = parsed.project;
+  state.runRecords.clear();
   state.selected = { type: 'project', id: null };
   state.projectPath = draft.filePath || null;
   state.history = null;
@@ -9065,6 +9127,10 @@ function attachParsedRun(record, nodeId) {
   const node = nodeById(nodeId);
   if (!node || node.type !== 'calculate') return;
   node.parsed = record.parsed;
+  state.runRecords.set(node.id, record.parsed);
+  // A run record is not in the project snapshot, so the revision cannot see
+  // this change; the plan reads it for downstream energies, so drop the cache.
+  invalidatePlanCache();
   // The card carries the result now, so it has to be redrawn when one arrives.
   renderGraph();
   if (state.selected.type === 'node' && state.selected.id === node.id) renderInspector();
@@ -9089,9 +9155,11 @@ async function attachQueueParsed(queue) {
     const node = nodeById(task.nodeId);
     if (!record?.parsed || !node || node.type !== 'calculate') continue;
     node.parsed = record.parsed;
+    state.runRecords.set(node.id, record.parsed);
     changed = true;
   }
   if (changed) {
+    invalidatePlanCache();
     renderGraph();
     if (state.selected.type === 'node') renderInspector();
   }
@@ -9431,6 +9499,7 @@ function applyOpenedProject(result) {
   // a title or an outcome hint from the one that was on screen.
   const previousQueue = resetRunConsoleForProjectSwap();
   state.project = result.project;
+  state.runRecords.clear();
   hydrateProject(state.project);
   // Issue 160: the queue may already be restored — it is read at start up, before
   // any project file exists — so the verdicts are applied here, where the blocks
@@ -9546,7 +9615,7 @@ function hasUnsavedChanges() {
   // "Unsaved" means different from what the session loaded, not "has no file":
   // the seeded demo would otherwise warn about changes nobody made.
   const baseline = state.savedSnapshot ?? state.draftBaseline ?? null;
-  return baseline === null || JSON.stringify(state.project) !== baseline;
+  return baseline === null || serializeProjectSnapshot() !== baseline;
 }
 
 /**
@@ -9909,6 +9978,7 @@ function applyTemplateProject(templateId) {
   closeDrawer();
   const previousQueue = resetRunConsoleForProjectSwap();
   state.project = project;
+  state.runRecords.clear();
   state.selected = { type: 'project', id: null };
   state.connecting = null;
   state.keyboardConnect = null;
@@ -10485,6 +10555,7 @@ function closeProject() {
   requestProjectReplacement(() => {
     const previousQueue = resetRunConsoleForProjectSwap();
     state.project = blankProject();
+    state.runRecords.clear();
     // Issue 252: closing a project creates a new blank one, so it adopts the
     // machine's project defaults just like a template does.
     applySettingsProjectDefaults(state.project);
@@ -11939,6 +12010,7 @@ export {
   exportMenuGroups,
   failureDetail,
   failureHint,
+  flushDirtyCheck,
   flushEnsembleEdit,
   flushQueueEvents,
   flushRunOutput,
@@ -11946,6 +12018,7 @@ export {
   formatRunStart,
   graphIndex,
   handleQueueEvent,
+  hasUnsavedChanges,
   historyRowHtml,
   historyRows,
   inputInspector,
@@ -11975,6 +12048,7 @@ export {
   runExecutables,
   runHeaderFor,
   runStateOf,
+  serializeProjectSnapshot,
   setRunHint,
   clearRunHint,
   simpleInspector,
@@ -11986,6 +12060,7 @@ export {
   syncNodeStatesFromQueue,
   reconcileNodesWithQueue,
   taskFailure,
+  undoEdit,
   updateNodeCard,
   updateNodeDrag,
   updateNodeField,
@@ -12020,7 +12095,7 @@ async function init() {
   applySettingsProjectDefaults(state.project);
   // Remember the project exactly as loaded: until it changes, there is nothing
   // worth drafting, and a fresh session must not overwrite a recoverable draft.
-  state.draftBaseline = JSON.stringify(state.project);
+  state.draftBaseline = serializeProjectSnapshot();
   if (window.innerWidth <= 820) state.inspectorHidden = true;
   readRunConfig();
   updateRunConsoleCopy();
