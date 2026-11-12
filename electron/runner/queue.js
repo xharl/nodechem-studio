@@ -66,8 +66,8 @@ import {
   obabelSearchSummary,
   obabelVersionRefusal,
 } from '../../src/shared/obabelConformers.js';
-import { generateUffEnsemble, perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
-import { optimizeUff } from '../../src/shared/uff.js';
+import { perceiveBonds, UFF_SEARCH_METHOD } from '../../src/shared/uffConformers.js';
+import { UffJobExecutor } from './uffJob.js';
 import { prepareSummaryLine } from '../../src/shared/prepare.js';
 import { buildSolventCluster } from '../../src/shared/explicitSolvation.js';
 import { relaxWithForces } from '../../src/shared/mlRelax.js';
@@ -430,6 +430,22 @@ function routeSettings(raw) {
   }
   if ('solvation' in raw) out.solvation = Boolean(raw.solvation);
   return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * One line of UFF progress for the run console. Carries the iteration count,
+ * because that is the number the worker reports and the number that tells a
+ * reader the job is advancing rather than merely alive.
+ */
+function uffProgressLine(progress) {
+  const energy = Number(progress?.energyKcal);
+  const energyText = Number.isFinite(energy) ? ` · ${energy.toFixed(4)} kcal/mol` : '';
+  const iteration = Number(progress?.iteration) || 0;
+  if (progress?.trial) {
+    return `UFF search · trial ${progress.trial}/${progress.trials} · step ${iteration}${energyText}`;
+  }
+  const cap = Number(progress?.maxIterations);
+  return `UFF relax · step ${iteration}${Number.isFinite(cap) && cap > 0 ? `/${cap}` : ''}${energyText}`;
 }
 
 function conformerTaskRecord(raw, nodeId) {
@@ -1167,7 +1183,9 @@ function publicQueue(queue) {
 }
 
 export class QueueManager {
-  constructor({ queuesRoot, runManager, emit, artifactsRoot = null, projectDir = '' }) {
+  constructor({
+    queuesRoot, runManager, emit, artifactsRoot = null, projectDir = '', uffExecutor = null,
+  }) {
     this.queuesRoot = queuesRoot;
     this.runManager = runManager;
     // A relative `importPath` in a conformer block is resolved against this,
@@ -1191,6 +1209,9 @@ export class QueueManager {
     // Issue #270: the Multiwfn sidecar child currently running, so a queue
     // cancellation can stop it the way it stops an engine.
     this.multiwfnRunner = null;
+    // Issue #369: the in-app UFF route runs in a worker (or yields, when a
+    // worker cannot load), with an input-hash LRU so a retry is a lookup.
+    this.uffExecutor = uffExecutor || new UffJobExecutor();
     this.starting = false;
     this.unsubscribe = this.runManager.onEvent((event) => this.handleRunEvent(event));
   }
@@ -2004,6 +2025,31 @@ export class QueueManager {
   }
 
   /**
+   * Issue #369: run one in-app UFF job (a single relaxation or a whole
+   * conformer search) through the executor, relaying its progress into the run
+   * console. The executor decides worker/yield; this method owns the text.
+   */
+  async runUffJob(queue, task, job) {
+    return this.uffExecutor.run(job, {
+      jobId: `${queue.id}/${task.nodeId}`,
+      onProgress: (progress) => this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: uffProgressLine(progress),
+        uff: progress,
+      }),
+      onFallback: (error) => this.emit({
+        type: 'queue-output',
+        queueId: queue.id,
+        nodeId: task.nodeId,
+        text: `UFF worker unavailable (${oneLine(error?.message || String(error), 200)}); `
+          + 'relaxing on this thread in yielding batches instead.',
+      }),
+    });
+  }
+
+  /**
    * Run one conformer search and rank what it produced.
    *
    * Deliberately outside `runTask`: CREST has no route, gates or termination
@@ -2110,18 +2156,31 @@ export class QueueManager {
         if (parsedInput.errors.length > 0 || parsedInput.frames.length === 0) {
           throw new Error(`The starting geometry could not be read: ${parsedInput.errors[0]?.message || 'no frames'}`);
         }
-        const generated = generateUffEnsemble({
-          atoms: parsedInput.frames[0].atoms,
-          bonds: Array.isArray(conf.bonds) ? conf.bonds : null,
-          torsionStepDegrees: conf.torsionStepDegrees,
-          maxTrials: conf.maxTrials,
-          rmsdThreshold: conf.rmsdThreshold,
-          energyWindowKcal: conf.energyWindowKcal,
-          maxConformers: conf.maxConformers,
-          temperature: conf.temperature,
-          spreadThresholdKcal: conf.spreadThresholdKcal,
-          selectedConformerId: conf.selectedConformerId,
+        const outcome = await this.runUffJob(queue, task, {
+          kind: 'search',
+          input: {
+            atoms: parsedInput.frames[0].atoms,
+            bonds: Array.isArray(conf.bonds) ? conf.bonds : null,
+            torsionStepDegrees: conf.torsionStepDegrees,
+            maxTrials: conf.maxTrials,
+            rmsdThreshold: conf.rmsdThreshold,
+            energyWindowKcal: conf.energyWindowKcal,
+            maxConformers: conf.maxConformers,
+            temperature: conf.temperature,
+            spreadThresholdKcal: conf.spreadThresholdKcal,
+            selectedConformerId: conf.selectedConformerId,
+          },
         });
+        if (outcome.result.cancelled) throw new Error('Conformer search cancelled by the user.');
+        const generated = outcome.result;
+        if (outcome.cacheHit) {
+          this.emit({
+            type: 'queue-output',
+            queueId: queue.id,
+            nodeId: task.nodeId,
+            text: 'UFF search reused the cached result for identical input; nothing was re-relaxed.',
+          });
+        }
         if (generated.error) throw new Error(generated.error);
         ensembleText = generated.ensembleText;
         energies = generated.energies;
@@ -3678,7 +3737,13 @@ export class QueueManager {
         };
       } else {
         const bonds = Array.isArray(conf.bonds) && conf.bonds.length > 0 ? conf.bonds : perceiveBonds(atoms);
-        const relaxed = optimizeUff({ atoms, bonds }, { maxIterations: 500 });
+        const outcome = await this.runUffJob(queue, task, {
+          kind: 'relax',
+          molecule: { atoms, bonds },
+          options: { maxIterations: 500 },
+        });
+        if (outcome.result.cancelled) throw new Error('The UFF relaxation was stopped.');
+        const relaxed = outcome.result;
         atoms = relaxed.atoms;
         summary = {
           kind: 'relax',
@@ -4602,6 +4667,7 @@ export class QueueManager {
     if (!queue) return { abandoned: false, interrupted: [] };
     const running = queue.tasks.filter((task) => task.status === 'running');
     for (const task of running) {
+      this.uffExecutor.cancel(`${queue.id}/${task.nodeId}`);
       if (task.runId) {
         // eslint-disable-next-line no-await-in-loop
         await this.runManager.cancel(task.runId).catch(() => {});
@@ -4639,6 +4705,11 @@ export class QueueManager {
       }
       if (task.status === 'running' && task.type === 'generate') {
         this.conformersRunner?.cancel();
+      }
+      if (task.status === 'running' && (task.type === 'generate' || task.type === 'prepare')) {
+        // Issue #369: the in-app UFF job is ours to stop; a CREST/Open Babel
+        // child is stopped by `conformersRunner` above.
+        this.uffExecutor.cancel(`${queue.id}/${task.nodeId}`);
       }
       if (task.status === 'running' && task.type === 'analyse' && task.analyse?.mode === 'multiwfn') {
         this.multiwfnRunner?.cancel();
@@ -4678,5 +4749,6 @@ export class QueueManager {
 
   dispose() {
     this.unsubscribe?.();
+    this.uffExecutor.cancelAll();
   }
 }

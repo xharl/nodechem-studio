@@ -116,6 +116,15 @@ calculation. It is a small, documented search — not a stand-in for CREST's bas
 - **Relaxation.** Every trial is minimised with UFF (`optimizeUff`: L-BFGS to a 0.05 kcal/mol/Å
   maximum force component, at most 800 steps per trial). A trial that stops at that cap is reported
   as such, and its last energy is shown, not called a minimum.
+- **Runs off the main process.** The search runs in a worker thread, so the window keeps answering
+  while a 200-trial search relaxes. Progress lines name the trial and the iteration count.
+  Cancelling the queue stops the worker within one iteration. A retry with identical atoms, bonds
+  and settings is served from a small in-memory LRU keyed by that input's hash, so it costs a
+  lookup rather than another search. If the worker cannot be started, the app says so in the run
+  log and relaxes on the main thread in short yielding batches instead. The
+  `NCS_UFF_EXECUTION` environment variable forces a path for diagnosis: `worker`
+  (never fall back), `yield` (never start a worker), `sync` (the old blocking
+  call) or `auto`, the default.
 - **Deduplication.** Relaxed trials are sorted by energy and a trial is dropped when its
   **heavy-atom RMSD** to an already-kept member is below the block's RMSD threshold (0.5 Å by
   default). The number of collapsed trials is recorded in the ensemble's `search` record.
