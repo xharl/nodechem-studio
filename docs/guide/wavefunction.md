@@ -5,11 +5,17 @@ carry the wavefunction itself. Five files do:
 
 | File | Written by | What it holds |
 | --- | --- | --- |
-| `.fchk` (formatted checkpoint) | `formchk -3 run.chk run.fchk` | Scalars and arrays: geometry, orbital energies, charges, electron counts, total energy, and the basis/MO arrays the Molden writer needs |
+| `.fchk` (formatted checkpoint) | `formchk -3 run.chk run.fchk`; Psi4 (`fchk(wfn, '<job>.fchk')`) | Scalars and arrays: geometry, orbital energies, charges, electron counts, total energy, and the basis/MO arrays the Molden writer needs |
 | `.cube` | `cubegen` | One scalar field sampled on a regular 3D grid, plus the nuclei |
-| `.molden` | ORCA (`orca_2mkl -molden`), Psi4 (`psi4.molden(wfn)`), PySCF, Q-Chem, GAMESS via Molden2AIM, or this app's own `ncs convert job.fchk --format molden` | Atoms, the Gaussian basis, spherical/Cartesian markers, and the molecular-orbital coefficients |
+| `.molden` | ORCA (`orca_2mkl -molden`), Psi4 (`psi4.molden(wfn)`), PySCF, Q-Chem, GAMESS via Molden2AIM, xTB (`--molden`, which names the file `molden.input`), or this app's own `ncs convert job.fchk --format molden` | Atoms, the Gaussian basis, spherical/Cartesian markers, and the molecular-orbital coefficients |
 | `.wfn` (traditional AIM wavefunction) | Gaussian (`output=wfn`), GAMESS, Q-Chem, ORCA, Molden2AIM and other AIM-era writers | Atoms, an uncontracted Cartesian Gaussian basis, orbital energies and occupations (occupied orbitals only) |
 | `.wfx` (AIM extended wavefunction) | AIMAll; Gaussian 09 B.01 and later (`output=wfx`); Multiwfn | The same data as WFN in tagged sections, plus explicit electron counts, spin types, total energy, virial ratio and optional ECP core-density (EDF) sections |
+
+An engine block writes one of these itself (issue 343), so a Multiwfn block can read it from the
+upstream run folder: Psi4 writes `<job>.fchk` on every job type with a wavefunction, and xTB writes
+`molden.input` on every GFN job. `molden.input` is matched by its whole name, not by an `.input`
+extension. A Gaussian block leaves only a `.chk` (convert it with `formchk -3`), and an ORCA block
+leaves a `.gbw`, which neither this app nor Multiwfn reads as a wavefunction.
 
 The `-3` is not optional. Gaussian's own description of the format says that running `formchk`
 without options produces, for backward compatibility, a **subset** of the full information, and

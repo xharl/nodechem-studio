@@ -49,6 +49,15 @@ what the build contains — the GitHub release for each tag carries the long for
   headlessly, for `rankBy` on a generate block, a `provider` on calculate and an `aimnet2` relax on
   prepare. It falls back to Settings → Tools like the other sidecars, and a block that needs it
   without a path now fails with a message that names the flag (#309).
+- **Engines write the wavefunction a Multiwfn block reads** — a Psi4 deck now appends
+  `fchk(wfn, '<job>.fchk')` after the call of every job type that has a wavefunction (`SP`, `Opt`,
+  `Freq`, `Opt Freq`, `TD-DFT`), and an xTB argv carries `--molden`, which leaves `molden.input` in
+  the run folder. The run-folder scan accepts that full name — never a bare `.input`, so an
+  unrelated `notes.input` is not read — and its refusal now names the formats and the engines that
+  produce them. The guide states where each engine's file comes from, that SAPT0 writes none (a dimer
+  has no single wavefunction), that GFN-FF gets no `--molden` (no orbitals), that a correlated Psi4
+  job's checkpoint is its SCF reference density, and that an ORCA `.gbw` is not readable by Multiwfn
+  (#343).
 
 ### Changed
 

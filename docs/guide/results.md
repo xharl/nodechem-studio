@@ -493,15 +493,18 @@ was not cross-checked against the log.
 The words are the answer: a closed-shell wavefunction has no spin density, and a
 zero-filled population table would claim a calculation that never happened.
 
-**How the numbers reach `run.json`.** A Psi4 open-shell single point is written
-with `E, wfn = energy('…', return_wfn=True)` and a `fchk(wfn, '…fchk')` line, so
-the checkpoint lives beside the log; the runner reads it, the EPR block is
-computed from it, and the whole block — populations, couplings, method statement,
-caveat and the g-tensor refusal — is carried in `parsed.epr`. It is passed into
-the canonical result whole rather than field by field, because a population
-without its scheme and caveat is a number with its provenance removed. An
-open-shell run with no checkpoint reports **not available** with the reason; it
-does not show empty tables.
+**How the numbers reach `run.json`.** A Psi4 job's call is written to return the
+wavefunction (`E, wfn = energy('…', return_wfn=True)` and the same for `optimize` and
+`frequencies`) and to write `fchk(wfn, '<job>.fchk')`, so the checkpoint lives
+beside the log (issue 343: every job type with a wavefunction writes one). The
+runner reads it, the EPR block is computed from it, and the whole block —
+populations, couplings, method statement, caveat and the g-tensor refusal — is
+carried in `parsed.epr`. It is passed into the canonical result whole rather than
+field by field, because a population without its scheme and caveat is a number
+with its provenance removed. An open-shell run with no checkpoint reports **not
+available** with the reason; it does not show empty tables. A correlated method's
+checkpoint carries its **SCF reference** density, so the EPR block withholds those
+populations by name instead of labelling them with the correlated method.
 
 ## NMR: shieldings, shifts and couplings
 
@@ -824,7 +827,8 @@ Two details in that block are there because the obvious version does not work on
 `print` writes to the process's stdout, which the runner does not keep, so every record goes through
 `psi4.core.print_out`; and `wfn.get_array(name)` does not exist — `wfn.array_variable(name)` does.
 `set tdscf_print` does **not** print the dipole either (tried at level 3). A block that does not opt
-in produces exactly the input it did before, and its log gains no line.
+in writes no `NCS-*` record, so its log gains no line; since issue 343 it still writes the
+`<job>.fchk` checkpoint every Psi4 job with a wavefunction leaves.
 
 **What the card prints**, all units explicit:
 

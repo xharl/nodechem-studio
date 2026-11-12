@@ -222,6 +222,11 @@ export function xtbMethodBlock(settings = {}, { argv = null, jobType = null } = 
  * Hamiltonian with `--gfn`, and honouring a Gaussian basis keyword here would
  * be a lie. The builder refuses job types xTB cannot do instead of downgrading
  * them to a single point.
+ *
+ * Every GFN job carries `--molden` (issue 343), which makes xTB write
+ * `molden.input` beside the input — the wavefunction a Multiwfn block reads
+ * from the run folder. GFN-FF is a force field with no orbitals, so it gets no
+ * such flag.
  */
 export function buildXtbInput({
   title = 'xTB task',
@@ -278,6 +283,13 @@ export function buildXtbInput({
   else argv.push('--gfn', method.replace('gfn', ''));
 
   argv.push(...flagBuilder(xtbOptLevelFor(settings)));
+
+  // Issue 343: Multiwfn needs a wavefunction file, and xTB writes one only when
+  // asked. `--molden` leaves `molden.input` in the run folder, which is the file
+  // a Multiwfn block reads through `input.nodeId`. GFN-FF has no orbitals — it is
+  // a force field — so the flag is not written there rather than producing a
+  // file that would misrepresent the method.
+  if (method !== 'gfnff') argv.push('--molden');
 
   if (charge !== 0) argv.push('--chrg', String(charge));
   if (multiplicity > 1) argv.push('--uhf', String(multiplicity - 1));

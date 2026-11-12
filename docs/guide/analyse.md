@@ -90,7 +90,9 @@ cube for QTAIM, for example) is refused with both the file and the formats it do
 Exactly one of:
 
 - `input.nodeId` — an upstream block wired into the analyse block; its run folder supplies the first
-  `.fchk`/`.wfx`/`.wfn`/`.molden`/`.cube` in the order the analysis prefers;
+  `.fchk`/`.wfx`/`.wfn`/`.molden`/`.cube` in the order the analysis prefers. xTB's Molden file is the
+  full name `molden.input`: the scan matches that name, not a bare `.input` extension, so an unrelated
+  `notes.input` or a job's own input file in the same folder is never read as a wavefunction;
 - `input.runId` — a specific upstream run id in the same queue;
 - `input.path` — a project-relative path, e.g. `wavefunctions/water.fchk`. It may not be absolute or
   contain `..`, so a project keeps its own data inside its folder.
@@ -100,6 +102,38 @@ run folder with no readable wavefunction, a file that is empty, a formatted chec
 density matrix, a Multiwfn banner outside every known menu band, and a Multiwfn child killed by a
 signal are each **named failures**; none is reported as `unknown`, and a killed child is not read as
 a successful run whose output the parser could not use.
+
+### Where the wavefunction comes from
+
+A wired block is a wavefunction source only when the engine wrote the file, so the decks ask for it
+(issue 343). This is what each engine leaves in its run folder:
+
+| Engine | File `input.nodeId` finds | How it gets there |
+| --- | --- | --- |
+| Psi4 | `<job>.fchk` | every job type that has a wavefunction appends `fchk(wfn, '<job>.fchk')` after its call: `SP`, `Opt`, `Freq`, `Opt Freq` and `TD-DFT`. |
+| xTB | `molden.input` | the argv carries `--molden` on every GFN job (`SP`, `Opt`, `Freq`, `Opt Freq`). |
+| Gaussian | `<job>.fchk` | the run leaves `<job>.chk`, which Multiwfn cannot read; convert it with `formchk -3 <job>.chk <job>.fchk` and keep the result beside `run.json`. |
+| ORCA | none | an ORCA block leaves `<job>.gbw`, its restart file. **Multiwfn cannot read a `.gbw`**, and this app ships no converter for it; point `input.path` at a wavefunction you made with ORCA's own tools. |
+| PySCF | none | this build's PySCF deck writes no checkpoint or Molden file; use `input.path`. |
+
+The limits are stated rather than hidden:
+
+- **SAPT0 writes no checkpoint.** A SAPT0 job is an interaction energy of two monomer references, so
+  there is no single wavefunction to write, and the deck says so in a comment. Wire the Multiwfn block
+  to one of the monomers, or name a wavefunction with `input.path`.
+- **A correlated method's checkpoint is its SCF reference.** Psi4's `return_wfn` for MP2, CCSD and
+  CCSD(T) returns the reference wavefunction, so the `<job>.fchk` a correlated job writes carries the
+  SCF density, not a correlated density. The deck says so in a comment, Multiwfn analyses of that file
+  describe the reference, and the Psi4 EPR block withholds its spin populations for a correlated run
+  for the same reason.
+- **A TD-DFT checkpoint is the ground-state reference.** `fchk(wfn, …)` writes the SCF density of the
+  TD job's reference; the transition density is a different object and is not in that file.
+- **A solvated single point's checkpoint is the solvated density.** The DDX deck runs the gas phase
+  first and then in solvent; the file written is the second (solvated) SCF. This is the deck measured
+  in `test/fixtures/psi4-ddx/water-pcm-fchk.dat`.
+
+`.wfn` and `.wfx` are read when a project supplies one with `input.path`; no engine in this build
+writes them.
 
 ### What the record holds
 

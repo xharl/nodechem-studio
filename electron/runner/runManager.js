@@ -25,8 +25,14 @@ import { wavefunctionRecord } from '../../src/shared/wavefunction.js';
 
 const SAFE_INPUT = /^[A-Za-z0-9._-]+\.(gjf|com)$/i;
 
-/** The wavefunction files a run folder may carry (#334). */
-const WAVEFUNCTION_FILES = /\.(fchk|fch|molden|wfn|wfx|cube)$/i;
+/**
+ * The wavefunction files a run folder may carry (#334).
+ *
+ * `molden.input` is xTB's Molden file (issue 343): its extension is not a
+ * format, so the whole name is matched. The alternative — accepting `.input` —
+ * would read a job's own input file as a wavefunction.
+ */
+const WAVEFUNCTION_FILES = /^molden\.input$|\.(fchk|fch|molden|wfn|wfx|cube)$/i;
 
 /** A cube can be tens of megabytes; past this the record keeps the name and no parse. */
 const WAVEFUNCTION_MAX_BYTES = 16 * 1024 * 1024;
