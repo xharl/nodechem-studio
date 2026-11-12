@@ -547,7 +547,7 @@ describe('UFF route in the queue (issue 144)', () => {
     const validated = validateProject(raw);
     expect(validated.ok).toBe(true);
     const plan = buildWorkflowPlan(validated.project);
-    const { queueManager } = await stack();
+    const { queueManager, events } = await stack();
     const started = await queueManager.start({
       projectName: validated.project.name,
       tasks: plan.tasks.filter((task) => task.type === 'generate'),
@@ -579,5 +579,108 @@ describe('UFF route in the queue (issue 144)', () => {
     expect(log).toMatch(/not comparable with a Hartree value/);
     await fsp.access(path.join(task.runDir, 'conformers.json'));
     await fsp.access(path.join(task.runDir, 'ensemble.xyz'));
+    // Issue #369: the queue relays the worker's progress with the iteration
+    // count, not just a "searching…" line.
+    const progress = events.filter((event) => event.type === 'queue-output' && event.uff);
+    expect(progress.length).toBeGreaterThan(0);
+    expect(progress.every((event) => Number.isInteger(event.uff.iteration) && event.uff.iteration >= 1)).toBe(true);
+    expect(progress.some((event) => event.uff.trial >= 1 && event.uff.trials === 2)).toBe(true);
+    expect(progress.some((event) => /UFF search · trial \d+\/2 · step \d+/.test(event.text))).toBe(true);
+  });
+
+  it.skipIf(onWindows)('cancels a running in-app search and settles the queue', async () => {
+    const molecule = alkane(10);
+    const raw = {
+      schemaVersion: 3,
+      name: 'UFF cancel',
+      molecule: {
+        charge: 0,
+        multiplicity: 1,
+        fragments: [],
+        geometry: { source: 'imported', file: 'decane.sdf', format: 'sdf' },
+        coords: molecule.atoms,
+        bonds: molecule.bonds,
+      },
+      defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
+      nodes: [{
+        id: 'conf', type: 'generate', title: 'UFF ensemble', state: 'ready', x: 0, y: 0,
+        settings: { generator: 'uff', torsionStepDegrees: 120, maxTrials: 200 },
+      }],
+      edges: [],
+    };
+    const validated = validateProject(raw);
+    expect(validated.ok).toBe(true);
+    const plan = buildWorkflowPlan(validated.project);
+    const { queueManager, events } = await stack();
+    const started = await queueManager.start({
+      projectName: validated.project.name,
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
+      edges: [],
+      options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
+    });
+    // Wait until the worker is demonstrably inside the search, then cancel.
+    await waitFor(() => events.some((event) => event.type === 'queue-output' && event.uff?.iteration >= 1));
+    const cancelStarted = Date.now();
+    await queueManager.cancel(started.id);
+    const done = await waitFor(async () => {
+      const list = await queueManager.list();
+      const queue = list.find((entry) => entry.id === started.id);
+      const current = queue?.tasks.find((entry) => entry.nodeId === 'conf');
+      return queue && queue.status !== 'running' && current && current.status !== 'running' ? queue : null;
+    });
+    const elapsed = Date.now() - cancelStarted;
+    const task = done.tasks.find((entry) => entry.nodeId === 'conf');
+    expect(done.status).toBe('cancelled');
+    expect(task.error).toMatch(/cancelled by the user/i);
+    expect(elapsed).toBeLessThan(5000);
+  });
+
+  it.skipIf(onWindows)('serves an identical retry from the input-hash cache', async () => {
+    const molecule = butane();
+    const raw = {
+      schemaVersion: 3,
+      name: 'UFF retry',
+      molecule: {
+        charge: 0,
+        multiplicity: 1,
+        fragments: [],
+        geometry: { source: 'imported', file: 'butane.sdf', format: 'sdf' },
+        coords: molecule.atoms,
+        bonds: molecule.bonds,
+      },
+      defaults: { method: 'B3LYP', basis: '6-31G(d)', memory: '4', memoryUnit: 'GB', nproc: '4' },
+      nodes: [{
+        id: 'conf', type: 'generate', title: 'UFF ensemble', state: 'ready', x: 0, y: 0,
+        settings: { generator: 'uff', torsionStepDegrees: 180, maxTrials: 2 },
+      }],
+      edges: [],
+    };
+    const validated = validateProject(raw);
+    expect(validated.ok).toBe(true);
+    const plan = buildWorkflowPlan(validated.project);
+    const { queueManager, events } = await stack();
+    const start = () => queueManager.start({
+      projectName: validated.project.name,
+      tasks: plan.tasks.filter((task) => task.type === 'generate'),
+      edges: [],
+      options: { dryRun: false, executable: null, crestExecutable: '', scratchDir: '' },
+    });
+    const finish = async (started) => {
+      const done = await waitFor(async () => {
+        const list = await queueManager.list();
+        const queue = list.find((entry) => entry.id === started.id);
+        return queue && queue.status !== 'running' ? queue : null;
+      });
+      return done.tasks.find((entry) => entry.nodeId === 'conf');
+    };
+
+    const firstTask = await finish(await start());
+    expect(firstTask.status).toBe('completed');
+    const secondTask = await finish(await start());
+    expect(secondTask.status).toBe('completed');
+    expect(JSON.stringify(secondTask.ensemble.members)).toBe(JSON.stringify(firstTask.ensemble.members));
+    expect(JSON.stringify(secondTask.ensemble.search)).toBe(JSON.stringify(firstTask.ensemble.search));
+    expect(queueManager.uffExecutor.stats.cacheHits).toBe(1);
+    expect(events.some((event) => /reused the cached result/.test(String(event.text)))).toBe(true);
   });
 });

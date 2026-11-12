@@ -99,6 +99,10 @@ Success at v1:
 Since v0.2 the main process also hosts `xtbRunner` (same contract, different engine), the durable
 queue with conditions, loops and checkpoint staging, and the report/export writers; `bin/ncs.js`
 reuses `buildWorkflowTasks` and `RunManager` so a headless run and a UI run cannot diverge.
+Issue #369 moved the CPU-bound in-app UFF relaxation off that thread: `electron/runner/uffJob.js`
+runs it in a `worker_threads` worker (or in yielding batches when a worker cannot load), reports
+progress, and caches results by input hash, so the main process keeps serving IPC during a long
+conformer search.
 
 - The existing design is HTML/CSS/JS; Chromium gives one rendering target on Windows.
 - Node's `child_process` is the runner, native dialogs are straightforward, and packaging is
