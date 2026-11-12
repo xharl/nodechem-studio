@@ -8,6 +8,8 @@
  * `energyHartree: null` rather than borrowing the next one's.
  */
 
+import { toLines } from './lines.js';
+
 const ENERGY = /SCF Done:\s+E\([^)]*\)\s*=\s*(-?\d+\.\d+)/;
 const ORIENTATION = /^\s*Standard orientation:/;
 const DASHES = /^\s*-{10,}\s*$/;
@@ -24,7 +26,7 @@ function elementFor(atomicNumber) {
  * list.
  */
 export function parseTrajectory(text) {
-  const lines = String(text ?? '').split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const steps = [];
   let lastEnergy = null;
 

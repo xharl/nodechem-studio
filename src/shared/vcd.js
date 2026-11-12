@@ -38,6 +38,8 @@
  * different claims about a run.
  */
 
+import { toLines } from './lines.js';
+
 const DIP_STRENGTH = /^\s*Dip\.\s*str(?:ength)?\.?\s*-{2,}\s*(.*)$/i;
 const ROT_STRENGTH = /^\s*Rot\.\s*str(?:ength)?\.?\s*-{2,}\s*(.*)$/i;
 const EM_ANGLE = /^\s*E-M\s*angle\s*-{2,}\s*(.*)$/i;
@@ -57,7 +59,7 @@ const numbers = (text) => (String(text || '').match(NUMBER) || []).map(Number);
  * exactly like the frequency table itself.
  */
 export function parseVcdStrengths(text) {
-  const lines = String(text || '').split(/\r\n|\n|\r/);
+  const lines = toLines(text);
   const rotational = [];
   const dipole = [];
   const emAngle = [];

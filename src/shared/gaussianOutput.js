@@ -1305,22 +1305,24 @@ function parseLink(section, index) {
     records,
   };
   const frequencyBlocks = parseFrequencyBlocks(lines, startLine);
-  // Raman rows (#76) sit inside the same frequency section. They are attached
-  // to the modes rather than summarised, because the spectrum needs every
-  // mode, not the ten lowest.
+  // Every reader below takes the section's lines directly. Joining them back
+  // into a string only for the parser to split it again was one of the 8–9
+  // document splits per parse (#368).
   const raman = attachRaman(
     (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
-    parseRamanActivities(lines.join('\n')),
+    parseRamanActivities(lines),
   );
-  // VCD (#78) rides the same frequency block, one signed row per mode.
+  // VCD (#78) rides the same frequency block, one signed row per mode. The
+  // table is read once and reused for the link's metadata.
+  const vcdTable = parseVcdStrengths(lines);
   const vcdModes = attachVcd(
     (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
-    parseVcdStrengths(lines.join('\n')),
+    vcdTable,
   );
   // ROA (#127) prints its intensities and invariants in the same frequency
   // section, in three named scattering geometries. Keep the table and attach
   // it per mode; a job without Freq=ROA has no rows at all.
-  const roaTable = parseRoaIntensities(lines.join('\n'));
+  const roaTable = parseRoaIntensities(lines);
   const roaModes = attachRoa(
     (frequencyBlocks[frequencyBlocks.length - 1]?.values || []).map((wavenumber) => ({ wavenumber })),
     roaTable,
@@ -1356,10 +1358,9 @@ function parseLink(section, index) {
     frequencies: summarizeFrequencies(frequencyBlocks),
     raman: raman.some((mode) => mode.ramanActivity !== null) ? raman : null,
     vcd: vcdModes.some((mode) => mode.rotationalStrength !== null) ? vcdModes : null,
-    vcdMeta: (() => {
-      const table = parseVcdStrengths(lines.join('\n'));
-      return table ? { units: table.units, dipoleUnits: table.dipoleUnits, representation: table.representation } : null;
-    })(),
+    vcdMeta: vcdTable
+      ? { units: vcdTable.units, dipoleUnits: vcdTable.dipoleUnits, representation: vcdTable.representation }
+      : null,
     roa: roaModes.some((mode) => mode.roa1 !== null || mode.roa2 !== null || mode.roa3 !== null)
       ? roaModes : null,
     roaMeta: roaTable
@@ -1371,7 +1372,7 @@ function parseLink(section, index) {
         release: roaTable.release,
       }
       : null,
-    oniom: parseOniom(lines.join('\n')),
+    oniom: parseOniom(lines),
     frequencyBlocks,
     thermochemistry: parseThermochemistry(joined, lines),
     solvation: parseGaussianSolvation(routeText, lines, scf),
@@ -1671,7 +1672,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   const solvation = solvationLink ? solvationLink.solvation : null;
   // ONIOM prints several SCF energies (each gridpoint and each layer). The
   // reported answer is the extrapolated energy, never the last low-level SCF.
-  const oniom = parseOniom(text);
+  const oniom = parseOniom(lines);
   let finalEnergy;
   if (composite?.expected) {
     const hartree = composite.found && Number.isFinite(composite.zeroPointEnergyHartree)
@@ -1746,14 +1747,14 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
 
   // Reaction-path and scan tables are printed once per job by the link that ran
   // them; absence means the job was neither, which is not an empty path.
-  const reactionPath = parseIrcSummary(text);
-  const scan = parseScanSummary(text);
-  const nmr = parseShieldings(text);
+  const reactionPath = parseIrcSummary(lines);
+  const scan = parseScanSummary(lines);
+  const nmr = parseShieldings(lines);
   // A `NMR=(GIAO,SpinSpin)` job prints the coupling tables after the shieldings.
   // They ride in the same block because a run's shieldings and its J values are
   // the same calculation; `couplings` is null (not an empty table) when the
   // route asked for neither table.
-  const nmrCouplings = couplingSummary(parseCouplings(text));
+  const nmrCouplings = couplingSummary(parseCouplings(lines));
   const nmrBlock = nmr
     ? { ...nmr, couplings: nmrCouplings }
     : (nmrCouplings ? { gauge: null, method: null, count: 0, atoms: [], couplings: nmrCouplings } : null);
@@ -1762,7 +1763,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   // say what it is not showing.
   // Optimisation geometries: bounded so a long optimisation cannot bloat the
   // run record; the number left out is stated rather than silently dropped.
-  const parsedTrajectory = parseTrajectory(text);
+  const parsedTrajectory = parseTrajectory(lines);
   const TRAJECTORY_LIMIT = 80;
   const trajectory = parsedTrajectory && parsedTrajectory.steps.length > TRAJECTORY_LIMIT
     ? {
@@ -1771,20 +1772,20 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
       dropped: parsedTrajectory.steps.length - TRAJECTORY_LIMIT,
     }
     : parsedTrajectory;
-  const parsedModes = parseNormalModes(text);
+  const parsedModes = parseNormalModes(lines);
   const normalModes = parsedModes ? animatableModes(parsedModes) : null;
   // Raman rows come from the same frequency section the summary was built
   // from, so they are attached to that section's modes and never to another
   // link's.
   const ramanModes = attachRaman(
     (frequencyLink?.frequencyBlocks?.at(-1)?.values || []).map((wavenumber) => ({ wavenumber })),
-    parseRamanActivities(text),
+    parseRamanActivities(lines),
   );
   const raman = ramanModes.some((mode) => mode.ramanActivity !== null) ? ramanModes : null;
   // VCD (#78) sits in the same frequency section: rotational strengths per
   // mode, signed, with the dipole strength and E-M angle Gaussian prints
   // beside them. Null means the route did not ask for VCD, never "all zero".
-  const vcdTable = parseVcdStrengths(text);
+  const vcdTable = parseVcdStrengths(lines);
   const vcdModes = attachVcd(
     (frequencyLink?.frequencyBlocks?.at(-1)?.values || []).map((wavenumber) => ({ wavenumber })),
     vcdTable,
@@ -1793,7 +1794,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
   // ROA (#127) rides the same frequency table. `roa` is null when the route
   // asked for no ROA; an all-zero ROA table is still a table, so null must not
   // be inferred from zero values.
-  const roaTable = parseRoaIntensities(text);
+  const roaTable = parseRoaIntensities(lines);
   const roaModes = attachRoa(
     (frequencyLink?.frequencyBlocks?.at(-1)?.values || []).map((wavenumber) => ({ wavenumber })),
     roaTable,
@@ -1817,10 +1818,10 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     : null;
   // ECD (#75): only a chiral TD job prints non-zero rotatory strengths, but the
   // table is present whenever the route asks for it. Null means "not printed".
-  const rotatoryStrengths = parseRotatoryStrengths(text);
+  const rotatoryStrengths = parseRotatoryStrengths(lines);
   // Frontier orbitals (#88): printed only when the route asked for Pop=Full.
   // `matched: false` means the print is absent, not that the gap is zero.
-  const orbitals = parseOrbitals(text);
+  const orbitals = parseOrbitals(lines);
 
   return {
     status,
@@ -1864,7 +1865,7 @@ export function parseGaussianOutput(text, { truncated = false, byteRange = null 
     // #146: the per-step ladder of an Opt TD job. It is parsed from the same
     // text and carries `verified: false` until a real Opt TD log is committed;
     // the results card repeats that.
-    excitedStateOptimization: parseExcitedStateOptimization(text, { truncated: truncated === true }),
+    excitedStateOptimization: parseExcitedStateOptimization(lines, { truncated: truncated === true }),
     reactionPath,
     scan,
     nmr: nmrBlock,
