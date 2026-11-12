@@ -86,6 +86,7 @@ export function planToolNeeds(tasks = []) {
     // ADR 0003: a chem analyse block, and a standardise prepare block, spawn
     // the chemistry sidecar. Neither has an in-app fallback.
     if (task.type === 'analyse' && task.analyse?.mode === 'chem') needs.add('chem');
+    if (task.type === 'analyse' && task.analyse?.mode === 'similarity') needs.add('chem');
     if (task.type === 'prepare' && task.prepare?.kind === 'standardize') needs.add('chem');
   }
   return PLAN_TOOL_IDS.filter((toolId) => needs.has(toolId));
@@ -1199,6 +1200,31 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
         idsFor.set(node.id, ids);
         continue;
       }
+      if (context.mode === 'similarity') {
+        // ADR 0003 §3.7: one matrix per block, over every wired record. A
+        // per-record task would compare one molecule with itself.
+        const taskId = taskIdFor(node.id, null);
+        pushTask({
+          nodeId: taskId,
+          type: 'analyse',
+          title: node.title,
+          kind: node.kind || 'Analyse',
+          executable: false,
+          analyse: {
+            mode: 'similarity',
+            options: node.analyse?.similarity || {},
+            declared: [],
+            sources,
+            status: 'pending',
+            value: null,
+            unit: null,
+            summary: `Similarity · ${node.analyse?.similarity?.fingerprint || 'morgan'}`,
+          },
+        }, null);
+        ids.push(taskId);
+        idsFor.set(node.id, ids);
+        continue;
+      }
       if (context.mode === 'dp4') {
         const taskId = taskIdFor(node.id, null);
         const rows = dp4RowsFromSources(sources, context.rowsFor);
@@ -1735,14 +1761,21 @@ export function computeContext(project, node, { results = null, edges = null } =
   // declares none; its `input.nodeId` must name a wired block.
   const mode = definition.mode === 'dp4'
     ? 'dp4'
-    : (definition.mode === 'multiwfn' ? 'multiwfn' : (definition.mode === 'chem' ? 'chem' : 'expression'));
-  const declared = mode === 'dp4' || mode === 'multiwfn' || mode === 'chem' ? [] : computeInputsOf(definition);
+    : (definition.mode === 'multiwfn'
+      ? 'multiwfn'
+      : (definition.mode === 'chem' ? 'chem' : (definition.mode === 'similarity' ? 'similarity' : 'expression')));
+  const declared = mode === 'dp4' || mode === 'multiwfn' || mode === 'chem' || mode === 'similarity'
+    ? [] : computeInputsOf(definition);
   if (mode === 'expression' && declared.length === 0) {
     throw new ComputeError(`"${node.title}" declares no inputs; an analyse block reads at least one field`
       + ' from an upstream block.');
   }
   if (mode !== 'multiwfn' && sources.length === 0) {
     throw new ComputeError(`"${node.title}" has no upstream block; wire the blocks whose results it ${mode === 'dp4' ? 'compares' : 'computes from'}.`);
+  }
+  if (mode === 'similarity' && sources.length < 2) {
+    throw new ComputeError(`"${node.title}" compares molecules and needs at least two upstream blocks wired into it; `
+      + `${sources.length} ${sources.length === 1 ? 'is' : 'are'} wired (${sources.join(', ') || 'none'}).`);
   }
   if (mode === 'multiwfn') {
     const multiwfnInput = definition.multiwfn && typeof definition.multiwfn === 'object'

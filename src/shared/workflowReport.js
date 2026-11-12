@@ -152,6 +152,16 @@ function taskRow(task, record, { includeImported = false } = {}) {
     elapsedSeconds: num(record?.elapsedSeconds ?? parsed.resources?.elapsedSeconds),
     inputSha256: text(record?.inputSha256),
     outputSha256: text(record?.outputSha256),
+    // ADR 0003 §3.7: a similarity matrix, when the record carries one.
+    similarity: record?.similarity && typeof record.similarity === 'object'
+      ? {
+        molecules: Array.isArray(record.similarity.molecules) ? record.similarity.molecules : [],
+        matrix: Array.isArray(record.similarity.matrix) ? record.similarity.matrix : [],
+        clusters: Array.isArray(record.similarity.clusters) ? record.similarity.clusters : [],
+        mcs: record.similarity.mcs && typeof record.similarity.mcs === 'object' ? record.similarity.mcs : null,
+        options: record.analyse?.options && typeof record.analyse.options === 'object' ? record.analyse.options : {},
+      }
+      : null,
     // ADR 0003 §3.6: what the final geometry is. Absent on every record that
     // carried no integrity gate, so no other row grows a column.
     structureIntegrity: record?.structureIntegrity && typeof record.structureIntegrity === 'object'
@@ -199,6 +209,44 @@ function integritySectionHtml(rows, headingTag = 'h2') {
     + 'tautomer and configuration are compared separately. `inconclusive` is not a pass.</p>'
     + '<table class="integrity"><thead><tr><th>Record</th><th>Status</th><th>Before</th><th>After</th><th>Reason</th></tr></thead>'
     + `<tbody>${body}</tbody></table>`;
+}
+
+/**
+ * ADR 0003 §3.7 — the similarity matrix and its clusters.
+ *
+ * A matrix is printed in full; a cluster list alone would hide the numbers the
+ * verdict came from.
+ */
+function similaritySectionHtml(rows, headingTag = 'h2') {
+  const entries = (Array.isArray(rows) ? rows : []).filter((row) => row.similarity);
+  if (entries.length === 0) return '';
+  return entries.map((row) => {
+    const similarity = row.similarity;
+    const molecules = similarity.molecules;
+    const matrix = similarity.matrix;
+    if (molecules.length < 2 || matrix.length !== molecules.length) return '';
+    const head = '<tr><th>Molecule</th>'
+      + molecules.map((molecule) => `<th class="num">${escapeHtml(molecule.label || molecule.id)}</th>`).join('') + '</tr>';
+    const body = matrix.map((line, i) => '<tr>'
+      + `<td>${escapeHtml(molecules[i]?.label || molecules[i]?.id || '')}</td>`
+      + line.map((value) => `<td class="num">${escapeHtml(value, 2)}</td>`).join('')
+      + '</tr>').join('');
+    const clusters = similarity.clusters.map((cluster) => {
+      const names = (cluster.members || []).map((index) => molecules[index]?.label || molecules[index]?.id).filter(Boolean);
+      return `${cluster.id} (${names.length}): ${names.join(', ')}`;
+    }).join('; ') || 'no clusters at this cutoff';
+    const mcs = similarity.mcs;
+    return `<${headingTag}>Similarity — ${escapeHtml(row.label || row.id)}</${headingTag}>`
+      + '<p class="sub">'
+      + `${escapeHtml(similarity.options?.fingerprint || 'morgan')} fingerprint`
+      + `${similarity.options?.nBits ? ` · ${escapeHtml(String(similarity.options.nBits))} bits` : ''}`
+      + ` · Tanimoto · clusters at ${escapeHtml(String(similarity.options?.clusterCutoff ?? '?'))}.`
+      + '</p>'
+      + `<table class="similarity"><thead>${head}</thead><tbody>${body}</tbody></table>`
+      + `<p class="sub">Clusters: ${escapeHtml(clusters)}</p>`
+      + (mcs ? `<p class="sub">Maximum common substructure: <code>${escapeHtml(mcs.smarts || 'not reported')}</code>`
+        + `${mcs.timedOut ? ' (the search timed out)' : ''}</p>` : '');
+  }).join('');
 }
 
 /**
@@ -1677,6 +1725,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1 } = {}) {
     + integritySectionHtml(rows, sectionHeading)
     + descriptorsSectionHtml(rows, sectionHeading)
     + structureFiguresHtml(model.structures, model.figureLevel, sectionHeading)
+    + similaritySectionHtml(rows, sectionHeading)
     + multiwfnSectionHtml(model.multiwfn, sectionHeading)
     + importedBlocks
     + (methodsBlocks ? `<${sectionHeading}>Methods</${sectionHeading}>` + methodsBlocks : '')

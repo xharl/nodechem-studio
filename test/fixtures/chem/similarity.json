@@ -1,0 +1,216 @@
+{
+  "program": "RDKit",
+  "options": {
+    "fingerprint": "morgan",
+    "radius": 2,
+    "nBits": 2048,
+    "metric": "tanimoto",
+    "clusterCutoff": 0.6,
+    "mcsTimeoutSeconds": 5
+  },
+  "result": {
+    "molecules": [
+      {
+        "id": "m1",
+        "label": "benzene",
+        "smiles": "c1ccccc1",
+        "formula": "C6H6",
+        "scaffold": "c1ccccc1"
+      },
+      {
+        "id": "m2",
+        "label": "toluene",
+        "smiles": "Cc1ccccc1",
+        "formula": "C7H8",
+        "scaffold": "c1ccccc1"
+      },
+      {
+        "id": "m3",
+        "label": "phenol",
+        "smiles": "Oc1ccccc1",
+        "formula": "C6H6O",
+        "scaffold": "c1ccccc1"
+      },
+      {
+        "id": "m4",
+        "label": "ethanol",
+        "smiles": "CCO",
+        "formula": "C2H6O",
+        "scaffold": ""
+      }
+    ],
+    "matrix": [
+      [
+        1.0,
+        0.2727272727272727,
+        0.2727272727272727,
+        0.0
+      ],
+      [
+        0.2727272727272727,
+        1.0,
+        0.375,
+        0.0625
+      ],
+      [
+        0.2727272727272727,
+        0.375,
+        1.0,
+        0.0625
+      ],
+      [
+        0.0,
+        0.0625,
+        0.0625,
+        1.0
+      ]
+    ],
+    "clusters": [
+      {
+        "id": "k1",
+        "members": [
+          0
+        ]
+      },
+      {
+        "id": "k2",
+        "members": [
+          1
+        ]
+      },
+      {
+        "id": "k3",
+        "members": [
+          2
+        ]
+      },
+      {
+        "id": "k4",
+        "members": [
+          3
+        ]
+      }
+    ],
+    "pairs": [
+      {
+        "i": 0,
+        "j": 1,
+        "similarity": 0.2727272727272727
+      },
+      {
+        "i": 0,
+        "j": 2,
+        "similarity": 0.2727272727272727
+      },
+      {
+        "i": 0,
+        "j": 3,
+        "similarity": 0.0
+      },
+      {
+        "i": 1,
+        "j": 2,
+        "similarity": 0.375
+      },
+      {
+        "i": 1,
+        "j": 3,
+        "similarity": 0.0625
+      },
+      {
+        "i": 2,
+        "j": 3,
+        "similarity": 0.0625
+      }
+    ],
+    "mcs": {
+      "smarts": "[#6]1:[#6]:[#6]:[#6]:[#6]:[#6]:1",
+      "atoms": 6,
+      "bonds": 6,
+      "timedOut": false
+    }
+  },
+  "version": "2026.9.1",
+  "protocol": "nodechem-chem/1",
+  "op": "similarity",
+  "ok": true,
+  "_provenance": {
+    "recordedWith": "/usr/local/bin/python3",
+    "rdkit": "2026.9.1",
+    "request": {
+      "protocol": "nodechem-chem/1",
+      "op": "similarity",
+      "molecules": [
+        {
+          "id": "m1",
+          "label": "benzene",
+          "smiles": "c1ccccc1",
+          "charge": 0,
+          "multiplicity": 1,
+          "atoms": [
+            {
+              "element": "C",
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          ]
+        },
+        {
+          "id": "m2",
+          "label": "toluene",
+          "smiles": "Cc1ccccc1",
+          "charge": 0,
+          "multiplicity": 1,
+          "atoms": [
+            {
+              "element": "C",
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          ]
+        },
+        {
+          "id": "m3",
+          "label": "phenol",
+          "smiles": "Oc1ccccc1",
+          "charge": 0,
+          "multiplicity": 1,
+          "atoms": [
+            {
+              "element": "C",
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          ]
+        },
+        {
+          "id": "m4",
+          "label": "ethanol",
+          "smiles": "CCO",
+          "charge": 0,
+          "multiplicity": 1,
+          "atoms": [
+            {
+              "element": "C",
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          ]
+        }
+      ],
+      "options": {
+        "fingerprint": "morgan",
+        "radius": 2,
+        "nBits": 2048,
+        "clusterCutoff": 0.6,
+        "mcsTimeoutSeconds": 5
+      }
+    },
+    "recordedAt": "2026-11-11",
+    "note": "Real RDKit answer; CI replays it through a fake sidecar."
+  }
+}

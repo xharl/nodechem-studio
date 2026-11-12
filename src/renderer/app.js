@@ -3095,7 +3095,11 @@ function computeInspector(node) {
     ? node.analyse : { expression: '', inputs: [] };
   const mode = definition.mode === 'dp4'
     ? 'dp4'
-    : (definition.mode === 'multiwfn' ? 'multiwfn' : (definition.mode === 'chem' ? 'chem' : 'expression'));
+    : (definition.mode === 'multiwfn'
+      ? 'multiwfn'
+      : (definition.mode === 'chem' ? 'chem' : (definition.mode === 'similarity' ? 'similarity' : 'expression')));
+  const similarity = mode === 'similarity' && definition.similarity && typeof definition.similarity === 'object'
+    ? definition.similarity : {};
   const dp4 = mode === 'dp4' ? dp4DefinitionOf(node) : null;
   const multiwfn = mode === 'multiwfn' ? multiwfnDefinitionOf(node) : null;
   const inputs = Array.isArray(definition.inputs) ? definition.inputs : [];
@@ -3104,10 +3108,12 @@ function computeInspector(node) {
     : '<tr><td colspan="4" class="inspector-note">No inputs yet — add one to name a field from an upstream block.</td></tr>';
   const functions = COMPUTE_FUNCTIONS.map((fn) => `<div><code>${esc(fn.name)}</code> — ${esc(fn.summary)}</div>`).join('');
   const eyebrow = mode === 'dp4' ? 'Derived · DP4+'
-    : (mode === 'multiwfn' ? 'Sidecar · Multiwfn' : (mode === 'chem' ? 'Sidecar · RDKit' : 'Derived · analyse'));
+    : (mode === 'multiwfn' ? 'Sidecar · Multiwfn'
+      : (mode === 'chem' ? 'Sidecar · RDKit' : (mode === 'similarity' ? 'Sidecar · similarity' : 'Derived · analyse')));
   const subtitle = mode === 'dp4'
     ? 'candidate comparison'
-    : (mode === 'multiwfn' ? 'wavefunction analysis' : (mode === 'chem' ? 'descriptor set' : 'derived quantity'));
+    : (mode === 'multiwfn' ? 'wavefunction analysis'
+      : (mode === 'chem' ? 'descriptor set' : (mode === 'similarity' ? 'dataset matrix' : 'derived quantity')));
   return `${inspectorHead(eyebrow, node.title, `${upstream.length} upstream · ${subtitle}`)}
   <div class="inspector-scroll">
     <div class="inspector-status-row">${statusPill(node.state)}<span class="inspector-note">${ins.length} input${ins.length === 1 ? '' : 's'} · ${mode === 'multiwfn' ? 'ran by the user-installed Multiwfn binary' : 'evaluated from upstream records'}</span></div>
@@ -3118,9 +3124,22 @@ function computeInspector(node) {
         <option value="dp4"${mode === 'dp4' ? ' selected' : ''}>DP4+ probabilities over candidate structures</option>
         <option value="multiwfn"${mode === 'multiwfn' ? ' selected' : ''}>Multiwfn analysis of a wavefunction</option>
         <option value="chem"${mode === 'chem' ? ' selected' : ''}>Descriptors for each record's molecule (RDKit)</option>
+        <option value="similarity"${mode === 'similarity' ? ' selected' : ''}>Similarity matrix over the wired records (RDKit)</option>
       </select></div>`,
     ].join(''))}
-    ${mode === 'chem' ? group('Descriptors', 'the versioned nodechem-1 set', true, [
+    ${mode === 'similarity' ? group('Similarity', 'fingerprints, clusters, scaffolds', true, [
+      `<div class="field"><label>Fingerprint</label><select class="select" data-similarity-field="fingerprint">
+        <option value="morgan"${(similarity.fingerprint || 'morgan') === 'morgan' ? ' selected' : ''}>Morgan (ECFP-like)</option>
+        <option value="rdkit"${similarity.fingerprint === 'rdkit' ? ' selected' : ''}>RDKit</option>
+        <option value="maccs"${similarity.fingerprint === 'maccs' ? ' selected' : ''}>MACCS keys</option>
+      </select></div>`,
+      `<div class="field"><label>Radius</label><input class="input" type="number" min="1" max="4" data-similarity-field="radius" value="${esc(similarity.radius ?? 2)}"></div>`,
+      `<div class="field"><label>Bits</label><input class="input" type="number" min="512" max="8192" step="512" data-similarity-field="nBits" value="${esc(similarity.nBits ?? 2048)}"></div>`,
+      `<div class="field"><label>Cluster cutoff</label><input class="input" type="number" min="0" max="1" step="0.05" data-similarity-field="clusterCutoff" value="${esc(similarity.clusterCutoff ?? 0.6)}"></div>`,
+      `<div class="field"><label>MCS timeout / s</label><input class="input" type="number" min="1" max="60" data-similarity-field="mcsTimeoutSeconds" value="${esc(similarity.mcsTimeoutSeconds ?? 10)}"></div>`,
+      `<div class="field"><label>Max records</label><input class="input" type="number" min="2" max="200" data-similarity-field="maxRecords" value="${esc(similarity.maxRecords ?? 200)}"></div>`,
+      `<div class="field full"><span class="inspector-note">Wire at least two blocks. One matrix is computed for the whole set; a record with no geometry refuses the matrix rather than comparing a partial set. Tanimoto is the only metric in this build.</span></div>`,
+    ].join('')) : mode === 'chem' ? group('Descriptors', 'the versioned nodechem-1 set', true, [
       `<div class="field full"><div class="inspector-note">One row per wired record or ensemble member. The chemistry sidecar must be chosen in the run console (or Settings → Tools). The set is versioned; a value it did not report stays empty, and a molecule RDKit cannot sanitise refuses the row.</div></div>`,
     ].join('')) : mode === 'multiwfn' ? multiwfnInspectorBody(multiwfn, upstream, node) : mode === 'dp4' ? dp4InspectorBody(dp4) : group('Expression', 'safe arithmetic', true, [
       `<div class="field full"><label>Expression</label><textarea class="textarea" rows="3" data-compute-field="expression" data-role="compute-expression" aria-label="Expression">${esc(definition.expression || '')}</textarea></div>`,
@@ -10806,8 +10825,13 @@ function onDocumentChange(event) {
     if (!node.analyse || typeof node.analyse !== 'object') node.analyse = { expression: '', inputs: [] };
     const mode = target.value === 'dp4'
       ? 'dp4'
-      : (target.value === 'multiwfn' ? 'multiwfn' : (target.value === 'chem' ? 'chem' : 'expression'));
-    if (mode === 'dp4') {
+      : (target.value === 'multiwfn'
+        ? 'multiwfn'
+        : (target.value === 'chem' ? 'chem' : (target.value === 'similarity' ? 'similarity' : 'expression')));
+    if (mode === 'similarity') {
+      node.analyse.mode = 'similarity';
+      node.analyse.similarity = node.analyse.similarity || {};
+    } else if (mode === 'dp4') {
       // Switching modes creates the DP4+ definition with no level chosen: a
       // block that quietly inherited the first bank level would be computing a
       // level the user never picked.
@@ -10828,6 +10852,29 @@ function onDocumentChange(event) {
       multiwfnDefinitionOf(node);
     } else {
       delete node.analyse.mode;
+    }
+    refreshDirty();
+    renderGraph();
+    renderInspector();
+    return;
+  }
+  if (target.dataset.similarityField) {
+    if (state.selected.type !== 'node') return;
+    const node = nodeById(state.selected.id);
+    if (!node || node.type !== 'analyse') return;
+    if (!node.analyse || typeof node.analyse !== 'object') node.analyse = {};
+    if (!node.analyse.similarity || typeof node.analyse.similarity !== 'object') node.analyse.similarity = {};
+    const key = target.dataset.similarityField;
+    const bounds = {
+      radius: [1, 4], nBits: [512, 8192], clusterCutoff: [0, 1],
+      mcsTimeoutSeconds: [1, 60], maxRecords: [2, 200],
+    };
+    if (key === 'fingerprint') {
+      node.analyse.similarity.fingerprint = target.value;
+    } else if (bounds[key]) {
+      const value = Number(target.value);
+      if (!Number.isFinite(value)) return;
+      node.analyse.similarity[key] = clamp(value, bounds[key][0], bounds[key][1]);
     }
     refreshDirty();
     renderGraph();

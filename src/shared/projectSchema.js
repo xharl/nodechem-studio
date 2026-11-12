@@ -46,6 +46,7 @@ import { PSI4_SOLVATION_MODELS } from './engines/psi4.js';
 import { EXPLICIT_SOLVENT_IDS } from './explicitSolvation.js';
 import { validateBlockContracts } from './blockContracts.js';
 import { SCORER_SPECS } from './scorer.js';
+import { normalizeSimilarityOptions } from './chemSimilarity.js';
 import {
   DEFAULT_PREPARE_SETTINGS,
   PREPARE_CONVERTERS,
@@ -2535,13 +2536,15 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
     // `dp4`. Absent `mode` is the expression block byte for byte, so every
     // project written before this existed saves exactly as it did.
     const source = requiredObject(c, raw.analyse, `${path}.analyse`, legacy, {});
-    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4', 'multiwfn', 'chem']), `${path}.analyse`);
-    if (source.mode !== undefined && !['dp4', 'expression', 'multiwfn', 'chem'].includes(source.mode)) {
-      c.error(`${path}.analyse.mode`, 'must be "expression" (the default), "dp4", "multiwfn" or "chem".');
+    warnUnknown(c, source, new Set(['mode', 'expression', 'inputs', 'notes', 'dp4', 'multiwfn', 'chem', 'similarity']), `${path}.analyse`);
+    if (source.mode !== undefined && !['dp4', 'expression', 'multiwfn', 'chem', 'similarity'].includes(source.mode)) {
+      c.error(`${path}.analyse.mode`, 'must be "expression" (the default), "dp4", "multiwfn", "chem" or "similarity".');
     }
     const mode = source.mode === 'dp4'
       ? DP4_COMPUTE_MODE
-      : (source.mode === 'multiwfn' ? 'multiwfn' : (source.mode === 'chem' ? 'chem' : 'expression'));
+      : (source.mode === 'multiwfn'
+        ? 'multiwfn'
+        : (source.mode === 'chem' ? 'chem' : (source.mode === 'similarity' ? 'similarity' : 'expression')));
     if (mode === 'dp4') {
       const checked = validateDp4Definition(source.dp4);
       for (const problem of checked.errors) {
@@ -2586,6 +2589,31 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
           mode: 'multiwfn',
           ...(checked.value ? { multiwfn: checked.value } : {}),
         },
+      };
+    }
+    if (mode === 'similarity') {
+      // ADR 0003 §3.7: one block compares every wired record, so it declares no
+      // field inputs. The options are validated here, before a queue exists.
+      if (source.similarity !== undefined && !isPlainObject(source.similarity)) {
+        c.error(`${path}.analyse.similarity`, 'must be an object.');
+      }
+      let options = null;
+      try {
+        options = normalizeSimilarityOptions(isPlainObject(source.similarity) ? source.similarity : {});
+      } catch (error) {
+        c.error(`${path}.analyse.similarity`, error.message);
+      }
+      if (Array.isArray(source.inputs) && source.inputs.length) {
+        c.error(`${path}.analyse.inputs`,
+          'a similarity block reads whole run records, not fields; wire the blocks whose structures it compares and leave the input list empty.');
+      }
+      if (String(source.expression ?? '').trim()) {
+        c.warn(`${path}.analyse.expression`,
+          'is not saved or evaluated by a similarity block: it compares molecules, not an expression.');
+      }
+      return {
+        ...common,
+        analyse: { mode: 'similarity', ...(options ? { similarity: options } : {}) },
       };
     }
     if (mode === 'chem') {

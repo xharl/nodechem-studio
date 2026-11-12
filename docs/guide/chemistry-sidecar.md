@@ -66,6 +66,7 @@ replays committed fixtures through a fake sidecar.
 | `depict` | results panel and report | one 2D SVG, CoordGen layout; validated before embedding |
 | `conformers` | `generate.generator = "rdkit"` | ETKDGv4 + MMFF94/UFF geometries and energies; the app curates |
 | `stereoisomers` | `generate.produces = "stereoisomers"` | distinct configurations; only the input-identical candidate keeps its coordinates |
+| `similarity` | `analyse.mode = "similarity"` | fingerprint matrix, clusters, scaffolds and MCS over every wired record |
 
 Each answer records `program`, `version`, `op` and the parameters that change it. A repeated
 structure is answered from the run-local `chem-cache.json`; the record says whether the value was a

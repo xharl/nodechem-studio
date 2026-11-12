@@ -63,6 +63,11 @@ import {
   stereoisomerRequest,
   stereoisomerSummary,
 } from '../../src/shared/stereoisomers.js';
+import {
+  normalizeSimilarityResult,
+  similarityRequest,
+  similaritySummary,
+} from '../../src/shared/chemSimilarity.js';
 import { SidecarRunner } from './sidecarRunner.js';
 import { cacheFingerprint, cacheGet, cachePut, readChemCache, writeChemCache } from './chemCache.js';
 import {
@@ -4208,6 +4213,11 @@ export class QueueManager {
       await this.runChemAnalyse(queue, task);
       return;
     }
+    // ADR 0003 §3.7: one matrix over every wired record.
+    if (analyse.mode === 'similarity') {
+      await this.runSimilarity(queue, task);
+      return;
+    }
     // Issue 165: a DP4+ block is an analyse block with a definition instead of
     // an expression. It reads whole run records (candidates) rather than named
     // fields, so it has its own reader below but the same record contract.
@@ -4499,6 +4509,148 @@ export class QueueManager {
    * `run.json`. The record carries the Multiwfn version, the exact script and
    * the input SHA-256; a refusal is written down too, never left as `unknown`.
    */
+  /**
+   * ADR 0003 §3.7 — fingerprint every wired record, then compare.
+   *
+   * The block reads whole run records, so a record without a geometry refuses
+   * the whole matrix: a similarity table built from the subset that happened to
+   * parse would misdescribe the dataset.
+   */
+  async runSimilarity(queue, task) {
+    const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
+    const dir = path.join(this.queueDir(queue.id), 'analyse', String(task.nodeId).replace(/[^A-Za-z0-9._-]/g, '_'));
+    await fsp.mkdir(dir, { recursive: true });
+    task.status = 'running';
+    task.attempts += 1;
+    task.startedAt = new Date().toISOString();
+    task.finishedAt = null;
+    task.error = null;
+    task.reason = null;
+    task.runDir = dir;
+    task.runId = null;
+    queue.currentTaskId = task.nodeId;
+    await this.persist(queue);
+    this.publish(queue);
+
+    const refuse = async (code, message) => {
+      task.analyse = { ...analyse, status: 'refused', value: null, unit: null, notComputed: message, refusal: { code, message } };
+      task.refusal = { code, message };
+      this.setTaskOutcome(task, 'failed', oneLine(message, 400));
+      await this.persist(queue);
+      this.publish(queue);
+      this.announce(queue, task);
+    };
+
+    if (queue.options?.dryRun) {
+      await refuse('chem-dry-run', 'A dry run cannot compare structures: the chemistry sidecar is an external '
+        + 'program, and a dry run never fabricates a matrix.');
+      return;
+    }
+    if (!queue.options?.chemExecutable) {
+      await refuse('rdkit-missing', 'No chemistry sidecar is configured. Similarity needs RDKit '
+        + '(scripts/nodechem-chem.py); there is no in-app fallback.');
+      return;
+    }
+
+    const sources = this.incomingSources(queue, task.nodeId);
+    const molecules = [];
+    for (const source of sources) {
+      if (!source.runDir) {
+        await refuse('bad-input', `The upstream block "${source.nodeId}" has produced no record to compare.`);
+        return;
+      }
+      let record = null;
+      try {
+        record = JSON.parse(await fsp.readFile(path.join(source.runDir, 'run.json'), 'utf8'));
+      } catch {
+        record = null;
+      }
+      const atoms = record ? atomsFromRecord(record) : null;
+      if (!atoms) {
+        await refuse('bad-input', `The record "${source.nodeId}" carries no geometry; a similarity matrix over a `
+          + 'partial set would misdescribe the dataset.');
+        return;
+      }
+      molecules.push({
+        id: source.nodeId,
+        label: String(record.title || source.title || source.nodeId).slice(0, 120),
+        charge: Number.isInteger(record.parsed?.charge) ? record.parsed.charge : 0,
+        multiplicity: Number.isInteger(record.parsed?.multiplicity) ? record.parsed.multiplicity : 1,
+        atoms,
+      });
+    }
+    if (molecules.length < 2) {
+      await refuse('bad-input', `A similarity block needs at least two records; ${molecules.length} were wired.`);
+      return;
+    }
+    const options = analyse.options && typeof analyse.options === 'object' ? analyse.options : {};
+    if (molecules.length > (options.maxRecords ?? 200)) {
+      await refuse('size-refused', `This block received ${molecules.length} records; the similarity cap is `
+        + `${options.maxRecords ?? 200}. Raise the cap deliberately or narrow the dataset.`);
+      return;
+    }
+
+    try {
+      const raw = await new SidecarRunner({ label: 'chemistry sidecar' }).run({
+        executable: queue.options.chemExecutable,
+        script: queue.options.chemScript || '',
+        request: similarityRequest({ molecules, options }),
+        timeoutMs: this.taskTimeoutSeconds(queue, task) * 1000,
+        cwd: dir,
+        onOutput: ({ text }) => this.emit({ type: 'queue-output', queueId: queue.id, nodeId: task.nodeId, text }),
+      });
+      const result = normalizeSimilarityResult(raw);
+      const summary = similaritySummary(result);
+      task.analyse = {
+        ...analyse,
+        status: 'computed',
+        value: null,
+        unit: null,
+        similarity: {
+          molecules: result.molecules,
+          matrix: result.matrix,
+          clusters: result.clusters,
+          mcs: result.mcs,
+          pairs: result.pairs,
+          origin: result.origin,
+        },
+        summary,
+      };
+      task.summary = summary;
+      await writeJsonAtomic(path.join(dir, 'run.json'), {
+        schemaVersion: 1,
+        kind: 'derived',
+        nodeId: task.nodeId,
+        title: task.title,
+        createdAt: new Date().toISOString(),
+        provenance: { kind: 'derived', jobType: 'Analyse', method: {}, basis: null },
+        analyse: {
+          mode: 'similarity',
+          options: result.options,
+          sources: sources.map((source) => source.nodeId),
+          status: 'computed',
+          origin: result.origin,
+        },
+        similarity: {
+          molecules: result.molecules,
+          matrix: result.matrix,
+          clusters: result.clusters,
+          mcs: result.mcs,
+          pairs: result.pairs,
+        },
+      });
+      task.runId = task.nodeId;
+      this.setTaskOutcome(task, 'completed', oneLine(summary, 400));
+    } catch (error) {
+      const code = error instanceof ChemError ? error.code : 'op-failed';
+      await refuse(code, `Similarity failed: ${error?.message || String(error)}`);
+      return;
+    }
+    await this.persist(queue);
+    this.publish(queue);
+    this.announce(queue, task);
+  }
+
   async runMultiwfn(queue, task) {
     const analyse = task.analyse && typeof task.analyse === 'object' ? task.analyse : {};
     const definition = analyse.multiwfn && typeof analyse.multiwfn === 'object' ? analyse.multiwfn : null;

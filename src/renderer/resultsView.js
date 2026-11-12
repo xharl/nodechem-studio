@@ -2749,13 +2749,53 @@ function chemCard(analyse) {
     + '</div>';
 }
 
-function analyseCard(analyse, dp4, multiwfn, provenance = null) {
+/**
+ * ADR 0003 §3.7 — the similarity card.
+ *
+ * The matrix is the result: every cell is printed, so a cluster can be checked
+ * rather than trusted. The MCS says when its search timed out; the caption
+ * names the fingerprint and the cutoff.
+ */
+function similarityCard(similarity, analyse = {}) {
+  const molecules = Array.isArray(similarity?.molecules) ? similarity.molecules : [];
+  const matrix = Array.isArray(similarity?.matrix) ? similarity.matrix : [];
+  const clusters = Array.isArray(similarity?.clusters) ? similarity.clusters : [];
+  if (molecules.length === 0 || matrix.length !== molecules.length) {
+    return card('Similarity', `<p class="warn" data-role="similarity-refusal">${esc(text(analyse?.notComputed) || 'not computed')}</p>`);
+  }
+  const head = '<tr><th>Molecule</th>' + molecules.map((molecule) => `<th class="num">${esc(text(molecule.label) || text(molecule.id))}</th>`).join('') + '</tr>';
+  const body = matrix.map((row, i) => '<tr data-role="similarity-row">'
+    + `<td>${esc(text(molecules[i]?.label) || text(molecules[i]?.id))}</td>`
+    + row.map((value) => `<td class="num">${esc(numberText(value, 2))}</td>`).join('')
+    + '</tr>').join('');
+  const clusterText = clusters.map((cluster) => {
+    const names = (cluster.members || []).map((index) => text(molecules[index]?.label) || text(molecules[index]?.id)).filter(Boolean);
+    return `${text(cluster.id) || 'cluster'} (${names.length}): ${names.join(', ')}`;
+  }).join('\n') || 'no clusters at this cutoff';
+  const mcs = similarity.mcs && typeof similarity.mcs === 'object' ? similarity.mcs : null;
+  return '<div class="results-stack">'
+    + card('Similarity matrix',
+      `<table class="results-table" data-role="similarity-matrix"><thead>${head}</thead><tbody>${body}</tbody></table>`
+      + `<p class="results-note">${esc(text(analyse?.options?.fingerprint) || 'morgan')} fingerprint`
+      + `${analyse?.options?.nBits ? ` · ${esc(String(analyse.options.nBits))} bits` : ''}`
+      + ` · Tanimoto · clusters at ${esc(String(analyse?.options?.clusterCutoff ?? '?'))}.</p>`)
+    + card('Clusters', `<pre class="results-pre" data-role="similarity-clusters">${esc(clusterText)}</pre>`)
+    + (mcs ? card('Maximum common substructure',
+      `<code data-role="similarity-mcs">${esc(text(mcs.smarts) || 'not reported')}</code>`
+      + `<p class="results-note">${esc(String(mcs.atoms ?? '?'))} atoms, ${esc(String(mcs.bonds ?? '?'))} bonds`
+      + `${mcs.timedOut ? ' · the search timed out, so this is not necessarily the largest common substructure' : ''}.</p>`) : '')
+    + '</div>';
+}
+
+function analyseCard(analyse, dp4, multiwfn, provenance = null, similarity = null) {
   // Issue 270: a Multiwfn block's record is not a derived quantity and has no
   // expression; it gets its own card with the normalised analysis and the
   // user-installed program's provenance.
   if (analyse?.mode === 'multiwfn') return multiwfnCard(analyse, multiwfn, provenance || analyse?.provenance || null);
   // ADR 0003 §3.1: a descriptors block's result is a table, not a value.
   if (analyse?.mode === 'chem') return chemCard(analyse);
+  // ADR 0003 §3.7: a similarity block's result is a matrix, not a value.
+  if (analyse?.mode === 'similarity') return similarityCard(similarity, analyse);
   const inputs = Array.isArray(analyse?.inputs) ? analyse.inputs : [];
   const value = finite(analyse?.value);
   const unit = text(analyse?.unit);
@@ -2799,7 +2839,7 @@ function analyseCard(analyse, dp4, multiwfn, provenance = null) {
 export function resultsPanelHtml(record, options = {}) {
   if (!isObject(record)) return emptyStateHtml();
   // Issue 175: an analyse block's record carries `analyse` and no `parsed` block.
-  if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4, record.multiwfn, record.provenance);
+  if (isObject(record.analyse)) return analyseCard(record.analyse, record.dp4, record.multiwfn, record.provenance, record.similarity);
   const parsed = isObject(record.parsed) ? record.parsed : {};
   const gates = isObject(record.gates) ? record.gates : null;
   const flags = flagsFor(record);
