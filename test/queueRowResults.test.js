@@ -236,11 +236,19 @@ const RECORD = {
   gates: { overall: 'pass', gates: [] },
 };
 
+/** A desktop bridge whose summary list and `runs:records` agree. */
+function desktopFor(records) {
+  return {
+    listRuns: async () => records,
+    getRunRecords: async (ids) => records.filter((record) => ids.includes(record.id)),
+  };
+}
+
 describe('queue row opens the Results section (#154)', () => {
   it('switches the console to results and marks the row selected', async () => {
     const doc = new FakeDocument();
     const ui = buildConsole(doc, ['run-finished']);
-    const view = installResultsView({ desktop: { listRuns: async () => [RECORD] }, doc });
+    const view = installResultsView({ desktop: desktopFor([RECORD]), doc });
     expect(view).toBeTruthy();
 
     await ui.queueList.dispatch('click', { target: ui.rows[0] });
@@ -257,7 +265,7 @@ describe('queue row opens the Results section (#154)', () => {
   it('enables the Results tab in the same gesture', async () => {
     const doc = new FakeDocument();
     const ui = buildConsole(doc, ['run-finished']);
-    installResultsView({ desktop: { listRuns: async () => [RECORD] }, doc });
+    installResultsView({ desktop: desktopFor([RECORD]), doc });
 
     expect(ui.resultsTab.classList.contains('is-disabled')).toBe(true);
     await ui.queueList.dispatch('click', { target: ui.rows[0] });
@@ -271,7 +279,7 @@ describe('queue row opens the Results section (#154)', () => {
   it('activates a focused row with Enter', async () => {
     const doc = new FakeDocument();
     const ui = buildConsole(doc, ['run-finished']);
-    installResultsView({ desktop: { listRuns: async () => [RECORD] }, doc });
+    installResultsView({ desktop: desktopFor([RECORD]), doc });
 
     ui.rows[0].focus();
     expect(doc.activeElement).toBe(ui.rows[0]);
@@ -284,7 +292,7 @@ describe('queue row opens the Results section (#154)', () => {
   it('still leaves the console on results when the row cannot be loaded', async () => {
     const doc = new FakeDocument();
     const ui = buildConsole(doc, ['run-missing']);
-    installResultsView({ desktop: { listRuns: async () => [] }, doc });
+    installResultsView({ desktop: desktopFor([]), doc });
 
     await ui.queueList.dispatch('click', { target: ui.rows[0] });
 

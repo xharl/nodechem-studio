@@ -31,13 +31,32 @@ function projectionSvg(reference, aligned, { width = 360, height = 220, padding 
     + '</svg>';
 }
 
+/**
+ * Issue 371: list the run summaries, then read the records they name. The
+ * geometry lives in each record's `parsed` block, so the summary alone cannot
+ * decide which runs are comparable.
+ */
+async function comparableRecords(desktop) {
+  try {
+    const summaries = await desktop.listRuns();
+    const ids = (Array.isArray(summaries) ? summaries : [])
+      .map((run) => run?.id)
+      .filter((id) => typeof id === 'string' && id !== '');
+    if (ids.length === 0) return [];
+    const records = await desktop.getRunRecords(ids);
+    return Array.isArray(records) ? records : [];
+  } catch {
+    return [];
+  }
+}
+
 export function mountSuperposition({
   container,
   currentRecord,
   desktop = globalThis.window?.desktop ?? null,
   doc = globalThis.document,
 } = {}) {
-  if (!container || !doc || !desktop?.listRuns) return;
+  if (!container || !doc || !desktop?.listRuns || !desktop?.getRunRecords) return;
   const reference = currentRecord?.parsed?.finalGeometry?.atoms;
   if (!Array.isArray(reference) || reference.length === 0) return;
   const grid = container.querySelector('.results-grid');
@@ -57,13 +76,8 @@ export function mountSuperposition({
   const result = card.querySelector('[data-overlay-result]');
 
   const comparable = async () => {
-    let runs = [];
-    try {
-      runs = await desktop.listRuns();
-    } catch {
-      return [];
-    }
-    return (Array.isArray(runs) ? runs : []).filter((run) => {
+    const runs = await comparableRecords(desktop);
+    return runs.filter((run) => {
       const atoms = run?.parsed?.finalGeometry?.atoms;
       return run?.id !== currentRecord?.id
         && Array.isArray(atoms)

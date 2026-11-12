@@ -8800,8 +8800,15 @@ function attachParsedRun(record, nodeId) {
 }
 
 async function attachQueueParsed(queue) {
-  if (!desktop?.listRuns || !queue?.tasks?.length) return;
-  const runs = await desktop.listRuns();
+  // Issue 371: ask for the records of the runs this queue names, not every
+  // run on disk, and only the full records (not the summary list) can carry
+  // `parsed`.
+  if (!desktop?.getRunRecords || !queue?.tasks?.length) return;
+  const ids = [...new Set(queue.tasks
+    .map((task) => task?.runId)
+    .filter((runId) => typeof runId === 'string' && runId !== ''))];
+  if (ids.length === 0) return;
+  const runs = await desktop.getRunRecords(ids);
   if (!Array.isArray(runs)) return;
   const byId = new Map(runs.map((run) => [run?.id, run]));
   let changed = false;
@@ -9050,6 +9057,9 @@ function historyRows(runs, queues, { limit = 6 } = {}) {
 
 function historyRowHtml(row) {
   const { run } = row;
+  // Issue 371: the row is built from the `runs:list` summary, which carries
+  // the gate verdict directly instead of the full `gates` object.
+  const verdict = run.verdict ?? run.gates?.overall ?? null;
   // Issue 131: an imported record in the runs folder is listed, but its row
   // says where the number came from instead of adopting the run's status/engine
   // meta. Issue 255: a queue-produced run also names its project and start.
@@ -9059,7 +9069,7 @@ function historyRowHtml(row) {
       row.projectName,
       row.date,
       run.status,
-      run.gates?.overall ? `gates ${run.gates.overall}` : '',
+      verdict ? `gates ${verdict}` : '',
       run.dryRun ? 'dry' : engineOrDefault(run.engine).label,
     ].filter(Boolean).join(' · ');
   // Issue 154: the same keyboard contract as the queue rows.
@@ -10344,6 +10354,9 @@ async function exportMenuGroups() {
 
   let runs = [];
   if (desktop?.listRuns) {
+    // Issue 371: the count comes from the summary projection, so opening the
+    // menu performs no `run.json` record reads. The export itself re-reads the
+    // full records in the main process.
     try { runs = (await desktop.listRuns()) || []; } catch { runs = []; }
   }
   if (Array.isArray(runs) && runs.length > 0) {
@@ -11581,8 +11594,10 @@ function wireEvents() {
 export {
   applyQueue,
   appendRunOutput,
+  attachQueueParsed,
   calcInspector,
   costCardText,
+  exportMenuGroups,
   failureDetail,
   failureHint,
   flushQueueEvents,
