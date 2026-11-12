@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('desktop', {
   getInfo: () => ipcRenderer.invoke('app:info'),
+  // Issue #375: one fire-and-forget mark for the first painted frame. It is
+  // diagnostics only; main ignores it if the sender is not the window.
+  reportStartup: (mark) => ipcRenderer.send('app:startup-mark', mark),
   // Presence of each engine binary on PATH, for the status bar.
   engineStatus: () => ipcRenderer.invoke('engines:status'),
   // Issue #252: machine/app settings stored outside every project.

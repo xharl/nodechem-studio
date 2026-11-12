@@ -178,7 +178,9 @@ import { exportRunFormatAction } from './runConverter.js';
 import { exportDeckAction } from './deckExport.js';
 import { provenanceSummary, syncVerifyButton, verifyRunInput } from './provenance.js';
 import { mountThermochemistryView } from './thermochemistryView.js';
-import { installResultsView } from './resultsView.js';
+// Issue 375: `resultsView` (the parsed-result cards, and with them the
+// wavefunction viewport and the workflow-report helpers) is the heaviest
+// renderer module. It is imported after the shell paints, not with it.
 import { IMPORTED_BADGE_TEXT, importedSummary, isImportedRecord } from '../shared/importedRecord.js';
 import { mountStructureViewer } from './structureViewer.js';
 import { formatPreflightReport, preflightFailureMessage, preflightRefusalToast, preflightRefusals } from './preflightReport.js';
@@ -210,6 +212,55 @@ import {
 const desktop = window.desktop || null;
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '';
 let appVersion = APP_VERSION;
+
+/* ── Startup timing (issue 375) ─────────────────────────────────────
+ * The main process owns the clock. This module reports where the renderer had
+ * got to when its first frame was committed; `timeOrigin` is the epoch of this
+ * navigation, so main can place it on the same timeline as `app.whenReady`.
+ */
+const RENDERER_SCRIPT_AT = typeof performance !== 'undefined' ? performance.now() : 0;
+let rendererDomReadyAt = null;
+let latestRunRecord = null;
+let resultsViewPromise = null;
+
+function reportStartupTiming(firstPaintMs) {
+  if (!desktop?.reportStartup) return;
+  try {
+    desktop.reportStartup({
+      phase: 'renderer',
+      timeOrigin: performance.timeOrigin,
+      scriptMs: RENDERER_SCRIPT_AT,
+      domReadyMs: rendererDomReadyAt,
+      firstPaintMs,
+    });
+  } catch {
+    // Timing is diagnostics; failing to report it must not affect startup.
+  }
+}
+
+/**
+ * Install the results surface once it is needed. Returns the same promise for
+ * every caller, so a run finishing while the module is still in flight cannot
+ * install it twice.
+ */
+function loadResultsView() {
+  if (resultsViewPromise) return resultsViewPromise;
+  resultsViewPromise = import('./resultsView.js')
+    .then(({ installResultsView }) => {
+      const view = installResultsView({ desktop });
+      // A run that completed before the module arrived has already emitted its
+      // `done` event; replay the latest one so the console is not blank.
+      if (latestRunRecord) view?.show(latestRunRecord);
+      return view;
+    })
+    .catch((error) => {
+      // The shell is usable without the results cards; keep the reason visible
+      // in the renderer console instead of failing startup.
+      console.error('[results] Could not load the results view:', error?.message || error);
+      return null;
+    });
+  return resultsViewPromise;
+}
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -8151,6 +8202,10 @@ function handleRunEvent(event) {
     appendRunOutput(event.text);
   } else if (event.type === 'done') {
     const record = event.record;
+    // Issue 375: the results surface loads just after first paint. Remember
+    // the latest completed record so a run that finished before the module
+    // arrived is replayed when it installs.
+    latestRunRecord = record;
     state.run.id = record.id || state.run.id;
     setRunState(record.status, record.status);
     renderRunGates(record.gates?.gates || [], record.gates?.validity || null);
@@ -11586,6 +11641,7 @@ async function loadAppInfo() {
 }
 
 async function init() {
+  rendererDomReadyAt = typeof performance !== 'undefined' ? performance.now() : null;
   loadAppInfo();
   // Issue 252: Settings are loaded before the console is seeded, so a fresh
   // profile with machine paths configured needs nothing typed in the console.
@@ -11613,8 +11669,19 @@ async function init() {
   renderGraph();
   renderInspector();
   renderQueue();
+  // Issue 375: the graph and the 5-flow canvas are painted by the three calls
+  // above. The frame callback is the first one after those DOM writes, so it is
+  // the moment the launch timing reports. The results surface — the largest
+  // module in the bundle — starts loading at that frame, not before it.
+  const afterFirstFrame = (frameTime) => {
+    reportStartupTiming(Number.isFinite(frameTime) ? frameTime : performance.now());
+    loadResultsView();
+  };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(afterFirstFrame);
+  else afterFirstFrame(performance.now());
   // Issue 160: the project first, then its queue. The other order left the
-  // restored verdicts with nowhere to land.
+  // restored verdicts with nowhere to land. `queue:list` in main waits for the
+  // deferred hydration (issue 375), so this chain still sees the full queue store.
   openStartupProject()
     .then(() => restoreQueue())
     .then(() => reconcileNodesWithQueue())
@@ -11622,7 +11689,6 @@ async function init() {
   refreshHistory();
   setZoom(state.zoom);
   wireEvents();
-  installResultsView({ desktop });
   installCloseGuard();
   installThemeSwitcher();
 }
