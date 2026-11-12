@@ -2750,7 +2750,7 @@ function chemCard(analyse) {
 }
 
 /**
- * ADR 0003 §3.7 — the similarity card.
+ * ADR 0003 §3.8 — the similarity card.
  *
  * The matrix is the result: every cell is printed, so a cluster can be checked
  * rather than trusted. The MCS says when its search timed out; the caption
@@ -2794,7 +2794,7 @@ function analyseCard(analyse, dp4, multiwfn, provenance = null, similarity = nul
   if (analyse?.mode === 'multiwfn') return multiwfnCard(analyse, multiwfn, provenance || analyse?.provenance || null);
   // ADR 0003 §3.1: a descriptors block's result is a table, not a value.
   if (analyse?.mode === 'chem') return chemCard(analyse);
-  // ADR 0003 §3.7: a similarity block's result is a matrix, not a value.
+  // ADR 0003 §3.8: a similarity block's result is a matrix, not a value.
   if (analyse?.mode === 'similarity') return similarityCard(similarity, analyse);
   const inputs = Array.isArray(analyse?.inputs) ? analyse.inputs : [];
   const value = finite(analyse?.value);
@@ -2981,7 +2981,7 @@ function isQueueRunning(doc) {
  * `run.json` through `desktop.listRuns()` and renders it.
  */
 /**
- * ADR 0003 §3.4: one 2D figure for the results panel.
+ * ADR 0003 §3.7: one 2D figure for the results panel.
  *
  * The SVG is produced and validated in main. A missing sidecar or a refusal is
  * printed as a sentence — never an empty frame that could be read as a drawing.
@@ -3129,7 +3129,7 @@ export function installResultsView({
     mountCompareBar(record);
     mountThermoEnsemble();
     mountSuperposition({ container, currentRecord: record, desktop, doc });
-    // ADR 0003 §3.4: draw the structure beside its numbers. The figure is
+    // ADR 0003 §3.7: draw the structure beside its numbers. The figure is
     // fetched after the panel paints, so a slow sidecar cannot delay the record.
     void mountStructureCard({ container, record, desktop, doc });
     // The wavefunction viewport evaluates the basis this record carries (or a

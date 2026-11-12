@@ -152,7 +152,7 @@ function taskRow(task, record, { includeImported = false } = {}) {
     elapsedSeconds: num(record?.elapsedSeconds ?? parsed.resources?.elapsedSeconds),
     inputSha256: text(record?.inputSha256),
     outputSha256: text(record?.outputSha256),
-    // ADR 0003 §3.7: a similarity matrix, when the record carries one.
+    // ADR 0003 §3.8: a similarity matrix, when the record carries one.
     similarity: record?.similarity && typeof record.similarity === 'object'
       ? {
         molecules: Array.isArray(record.similarity.molecules) ? record.similarity.molecules : [],
@@ -212,7 +212,7 @@ function integritySectionHtml(rows, headingTag = 'h2') {
 }
 
 /**
- * ADR 0003 §3.7 — the similarity matrix and its clusters.
+ * ADR 0003 §3.8 — the similarity matrix and its clusters.
  *
  * A matrix is printed in full; a cluster list alone would hide the numbers the
  * verdict came from.
@@ -250,7 +250,7 @@ function similaritySectionHtml(rows, headingTag = 'h2') {
 }
 
 /**
- * ADR 0003 §3.4 — the 2D structure figures, when the caller supplied them.
+ * ADR 0003 §3.7 — the 2D structure figures, when the caller supplied them.
  *
  * The SVG has already been validated where it was produced. A figure level of
  * `none` drops the section entirely, exactly as it drops every other figure.
@@ -667,7 +667,7 @@ export function buildWorkflowReport(queue, records = {}, {
   surfaces = null,
   figureBudgetBytes = FIGURE_BUDGET_BYTES,
   wavefunction = null,
-  // ADR 0003 §3.4: SVGs already validated by the caller (main or the CLI). The
+  // ADR 0003 §3.7: SVGs already validated by the caller (main or the CLI). The
   // report never draws chemistry; it only embeds what was validated.
   structures = null,
 } = {}) {
@@ -972,7 +972,7 @@ export function buildWorkflowReport(queue, records = {}, {
     verdict,
     tasks: rows,
     figures,
-    // ADR 0003 §3.4: validated 2D depictions, already bound to a block id.
+    // ADR 0003 §3.7: validated 2D depictions, already bound to a block id.
     structures: structureFigures,
     figureLevel,
     // Issue 59: the wavefunction analysis, present only when the caller supplied

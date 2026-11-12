@@ -16,7 +16,7 @@ import {
 import { rmrf } from './helpers/tempCleanup.js';
 
 /**
- * ADR 0003 §3.7 — similarity over a dataset.
+ * ADR 0003 §3.8 — similarity over a dataset.
  *
  * The answer is a real RDKit recording of four molecules; the queue test uses
  * two records so the matrix it verifies is over exactly what was wired.

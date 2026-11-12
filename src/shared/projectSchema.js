@@ -2594,7 +2594,7 @@ function normalizeNode(c, raw, index, legacy, projectEngine = 'gaussian', basePa
       };
     }
     if (mode === 'similarity') {
-      // ADR 0003 §3.7: one block compares every wired record, so it declares no
+      // ADR 0003 §3.8: one block compares every wired record, so it declares no
       // field inputs. The options are validated here, before a queue exists.
       if (source.similarity !== undefined && !isPlainObject(source.similarity)) {
         c.error(`${path}.analyse.similarity`, 'must be an object.');

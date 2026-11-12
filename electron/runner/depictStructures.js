@@ -1,5 +1,5 @@
 /**
- * ADR 0003 §3.4 — collect the 2D figures a report embeds.
+ * ADR 0003 §3.7 — collect the 2D figures a report embeds.
  *
  * One sidecar call per record that still carries a geometry. A refusal drops
  * that figure only: the report keeps its tables and the missing picture is not

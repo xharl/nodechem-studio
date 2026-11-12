@@ -1,5 +1,5 @@
 /**
- * ADR 0003 §3.7 — `similarity`: which of these records are the same kind of
+ * ADR 0003 §3.8 — `similarity`: which of these records are the same kind of
  * molecule.
  *
  * One analyse block reads every wired record, fingerprints the structures,

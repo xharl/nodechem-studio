@@ -993,7 +993,7 @@ async function exportWorkflowReport(queueId, figureLevel = 'basic') {
     figures = await figureInputsFor(queue, level);
   }
 
-  // ADR 0003 §3.4: draw the structures the report covers, bounded and only when
+  // ADR 0003 §3.7: draw the structures the report covers, bounded and only when
   // a chemistry sidecar is configured. A missing sidecar drops the figures; it
   // never stalls the report or fabricates a blank one.
   const current = (await settingsStore.get()).settings;
@@ -1288,7 +1288,7 @@ app.whenReady().then(async () => {
     }
     return probeChem({ executable, script });
   });
-  // ADR 0003 §3.4: draw one structure for the results panel. The renderer never
+  // ADR 0003 §3.7: draw one structure for the results panel. The renderer never
   // computes chemistry; it receives an SVG that main has already validated.
   ipcMain.handle('chem:depict', async (_event, payload = {}) => {
     const current = (await settingsStore.get()).settings;

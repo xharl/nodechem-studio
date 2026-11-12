@@ -13,7 +13,7 @@ import { buildWorkflowReport, workflowReportHtml } from '../src/shared/workflowR
 import { depictStructuresFor } from '../electron/runner/depictStructures.js';
 
 /**
- * ADR 0003 §3.4 — depictions.
+ * ADR 0003 §3.7 — depictions.
  *
  * An SVG is markup crossing into the report and the DOM, so the validator is
  * tested as a rejection list. The accepted answer is a real RDKit drawing.

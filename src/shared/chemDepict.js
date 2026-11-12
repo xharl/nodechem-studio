@@ -1,5 +1,5 @@
 /**
- * ADR 0003 §3.4 — `depict`, a 2D structure for a report or an inspector.
+ * ADR 0003 §3.7 — `depict`, a 2D structure for a report or an inspector.
  *
  * The sidecar draws; the app only validates and embeds. An SVG is markup, so it
  * crosses a trust boundary: one root `<svg>`, no scripts, no event attributes,

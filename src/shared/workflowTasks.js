@@ -1201,7 +1201,7 @@ export function buildWorkflowPlan(project, { flowId = null, results = null } = {
         continue;
       }
       if (context.mode === 'similarity') {
-        // ADR 0003 §3.7: one matrix per block, over every wired record. A
+        // ADR 0003 §3.8: one matrix per block, over every wired record. A
         // per-record task would compare one molecule with itself.
         const taskId = taskIdFor(node.id, null);
         pushTask({

@@ -4261,7 +4261,7 @@ export class QueueManager {
       await this.runChemAnalyse(queue, task);
       return;
     }
-    // ADR 0003 §3.7: one matrix over every wired record.
+    // ADR 0003 §3.8: one matrix over every wired record.
     if (analyse.mode === 'similarity') {
       await this.runSimilarity(queue, task);
       return;
@@ -4558,7 +4558,7 @@ export class QueueManager {
    * the input SHA-256; a refusal is written down too, never left as `unknown`.
    */
   /**
-   * ADR 0003 §3.7 — fingerprint every wired record, then compare.
+   * ADR 0003 §3.8 — fingerprint every wired record, then compare.
    *
    * The block reads whole run records, so a record without a geometry refuses
    * the whole matrix: a similarity table built from the subset that happened to
