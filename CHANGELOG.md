@@ -12,6 +12,17 @@ what the build contains — the GitHub release for each tag carries the long for
 
 ### Added
 
+- **Boltzmann-averaged VCD/IR/Raman assignment and candidate ranking** — a candidate's
+  conformers are now averaged with the populations the ensemble stored (never recomputed), and
+  candidates — tautomer, stereoisomer and conformer sets alike — are ranked against one measured
+  trace instead of being merged. `src/shared/spectrumAssignment.js` returns both broadened curves,
+  band positions, cosine similarity, a band-wise positional score, FWHM, band tolerance and the
+  measured scale factor under the versioned metric `ncs-spectrum-match/1`; a member without
+  strengths is refused by name, and a candidate set is never averaged across molecules. The result
+  is recorded as `spectrumAssignment`, with populations, FWHM, scale factors and the metric
+  definition in `provenance.spectrumAssignment`, and the results card and workflow report render it
+  through one panel function (#348).
+
 - **Harmonic frequency scaling with a sourced table** — a Gaussian frequency block now carries
   `frequencyScale`: `unscaled` (the default, and what an absent key means), `auto`, or an explicit
   factor between 0.5 and 1.5. `auto` looks the block's method and basis up in

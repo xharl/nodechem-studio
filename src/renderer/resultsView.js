@@ -16,6 +16,7 @@
 
 import { methodsParagraphFor } from '../shared/methodsParagraph.js';
 import { dp4PanelHtml } from '../shared/workflowReport.js';
+import { assignmentPanelHtml } from '../shared/spectrumAssignment.js';
 import { explainRunFailure } from '../shared/errorSignatures.js';
 import { compareRuns, comparisonHtml } from '../shared/runCompare.js';
 import { runFlagsFor } from '../shared/runFlags.js';
@@ -2040,6 +2041,31 @@ function dp4Card(record, flags) {
 }
 
 /**
+ * Spectrum assignment (issue 348).
+ *
+ * `record.spectrumAssignment` is the object `rankCandidates()` returned. The
+ * card does not recompute a cosine, a band score or a population: it prints the
+ * same panel the report prints, from the same result object, so the two
+ * surfaces cannot disagree. A record without the block renders nothing.
+ */
+function spectrumAssignmentBody(record, { compact = true } = {}) {
+  const result = isObject(record?.spectrumAssignment) ? record.spectrumAssignment : null;
+  if (!result) return '';
+  return assignmentPanelHtml(result, { tableClass: 'results-table', compact });
+}
+
+export function spectrumAssignmentCardHtml(record, { compact = true } = {}) {
+  const body = spectrumAssignmentBody(record, { compact });
+  return body ? card('Spectrum assignment', body, 'is-wide') : '';
+}
+
+function spectrumAssignmentCard(record, flags) {
+  const body = spectrumAssignmentBody(record);
+  if (!body) return '';
+  return card('Spectrum assignment', body + caveatHtml(flags, 'This assignment'), 'is-wide');
+}
+
+/**
  * Raman (#76). The y axis is the printed activity in Å⁴/amu, not a scattering
  * cross-section: converting to one needs the excitation wavelength and a
  * Boltzmann population factor that the log does not carry.
@@ -2901,6 +2927,7 @@ export function resultsPanelHtml(record, options = {}) {
       ecdCard(parsed, flags),
       chargesCard(parsed, flags),
       dp4Card(record, flags),
+      spectrumAssignmentCard(record, flags),
       eprCard(parsed, flags),
       sensitivityCard(record),
       t1Card(parsed, flags),

@@ -16,6 +16,7 @@ import { cbsExtrapolate } from './cbs.js';
 import { boltzmannWeightedObservables, formatPopulation } from './conformers.js';
 import { tautomerSpread } from './tautomers.js';
 import { dp4Verdict } from './dp4.js';
+import { assignmentPanelHtml } from './spectrumAssignment.js';
 import { IMPORTED_BADGE_TEXT, importedSummary } from './importedRecord.js';
 import { outputWindow, runFlagsFor } from './runFlags.js';
 import { contentHash } from './figures/primitives.js';
@@ -1062,6 +1063,21 @@ export function buildWorkflowReport(queue, records = {}, {
         result: block,
       };
     }).filter(Boolean),
+    // Issue #348: one entry per run that recorded a spectrum assignment. The
+    // Boltzmann average, the comparison and the ranking were computed by
+    // `spectrumAssignment.js`; the report prints that result, it does not
+    // rescore it.
+    assignment: tasks.map((task) => {
+      const record = (task?.runId ? recordMap[task.runId] : null) || (task?.nodeId ? recordMap[task.nodeId] : null);
+      const block = (record && typeof record.spectrumAssignment === 'object' ? record.spectrumAssignment : null)
+        || (task && typeof task.spectrumAssignment === 'object' ? task.spectrumAssignment : null);
+      if (!block) return null;
+      return {
+        nodeId: text(task?.nodeId),
+        title: text(record?.title) || text(task?.title) || text(task?.nodeId),
+        result: block,
+      };
+    }).filter(Boolean),
     // Issue 175: one entry per analyse block, with the expression it evaluated,
     // the upstream values it read and — when a field was missing — the refusal
     // that names the field. A derived value is not a calculation result, so it
@@ -2059,6 +2075,7 @@ function reportContentHtml(model, { methodsFor = null, level = 1, modelDigest = 
     + conformerBlocks
     + spinBlocks
     + dp4SectionHtml(model.dp4, sectionHeading)
+    + spectrumAssignmentSectionHtml(model.assignment, sectionHeading)
     + eprSectionHtml(model.epr, sectionHeading)
     + frequencyScalingSectionHtml(model.frequencyScaling, sectionHeading)
     + nmrSectionHtml(model.nmr, sectionHeading)
@@ -2428,6 +2445,26 @@ export function dp4SectionHtml(entries, headingTag = 'h2') {
     + '<p class="note">Probabilities of candidate structures under DP4+, computed from the error fits the '
     + 'committed parameter bank carries. A candidate at a level the bank does not carry has no probability '
     + 'here: it is refused, never estimated.</p>'
+    + blocks;
+}
+
+/**
+ * The spectrum-assignment section (issue #348): one subsection per run that
+ * carries `record.spectrumAssignment`, rendered by the same
+ * `assignmentPanelHtml()` the results card uses. The report therefore prints
+ * the card's numbers verbatim — cosine, band score, combined score, margin,
+ * scale factor and populations — rather than recomputing them.
+ */
+export function spectrumAssignmentSectionHtml(entries, headingTag = 'h2') {
+  if (!Array.isArray(entries) || entries.length === 0) return '';
+  const blocks = entries.map((entry) => assignmentPanelHtml(entry.result ?? entry.assignment, {
+    heading: entry.title || entry.nodeId || MISSING,
+  })).join('');
+  return `<${headingTag}>Spectrum assignment</${headingTag}>`
+    + '<p class="note">Each candidate is Boltzmann-averaged from its own conformers, using the populations the '
+    + 'ensemble stored. Candidates — tautomers, stereoisomers and conformer sets alike — are ranked against the '
+    + 'measured trace and never merged: a tautomer is a different molecule, so it cannot share a population or a '
+    + 'curve with another candidate.</p>'
     + blocks;
 }
 

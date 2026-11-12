@@ -204,6 +204,103 @@ exception: it is plotted as its reciprocal wavelength (λ = 10⁷/ν̄) and the 
 says so. Requesting that plot is opt-in (`placeMeasuredOverlay(..., { allowReciprocal: true })`);
 the default answer to a unit mismatch is an error naming both units.
 
+## Assigning a measurement to a candidate (issue 348)
+
+A computed VCD, IR or Raman spectrum belongs to one candidate: a molecule
+together with the conformers of that molecule. Comparing a single conformer's
+spectrum with a measurement ignores the ensemble; comparing a tautomer's
+spectrum with a conformer's mixes two molecules. `src/shared/spectrumAssignment.js`
+does the first and refuses the second.
+
+A candidate is `{ id, label, kind, members }`, where `kind` is `conformer-set`,
+`tautomer` or `stereoisomer`, and each member is
+`{ id, population, modes }`. `population` is the number the ensemble stored when
+it ranked the member — the module never recomputes it from an energy. `modes`
+is the shape the parser already produces:
+
+| Quantity | Mode field | Unit |
+| --- | --- | --- |
+| VCD | `rotationalStrength` (signed) | `10⁻⁴⁴ esu² cm²` |
+| IR | `irIntensity` | km/mol |
+| Raman | `ramanActivity` | Å⁴/amu |
+
+The curve is the population-weighted sum of the members' Lorentzian sticks,
+normalised to the strongest population-weighted band. Because broadening is
+linear, the same curve is the stick sum with every stick multiplied by its
+member's population; the result's `peaks` carry `strength` and
+`weightedStrength` so the arithmetic can be checked by hand.
+
+A member with no strengths for the requested quantity is refused **by name**
+(`member c2 carries no VCD rotational strength; refusing to average only the
+members that have VCD strengths`). A multi-member candidate with a missing
+stored population is refused the same way; a one-member candidate may use the
+implicit weight 1, because there is no average to take. A candidate is never
+renormalised over whichever members happen to have values.
+
+### The metric, version 1
+
+A score without its definition is not reproducible, so the result carries
+`metric: { id: "ncs-spectrum-match", version: 1, definition }`:
+
+| Term | Weight | Definition |
+| --- | --- | --- |
+| cosine | 0.5 | cosine similarity of the computed and measured broadened curves on their common cm⁻¹ window, after scaling the measured trace's maximum to the computed maximum |
+| band score | 0.5 | each measured band scores `max(0, 1 − |Δν|/tolerance)`, weighted by its measured height; an unmatched band scores 0; for signed VCD a band of the opposite sign scores 0 |
+
+Bands are local maxima of the broadened curve (maxima and minima for signed VCD) above 5% of its
+tallest absolute intensity. That threshold is part of metric version 1 because it decides which
+bands enter the score.
+
+`combined = 0.5 × cosine + 0.5 × bandScore`. The comparison returns both curves
+on the common window, the measured scale factor, the FWHM, the band tolerance,
+and a band table with computed and measured positions. A measured trace on a
+wavelength axis is refused: a vibrational assignment compares cm⁻¹ traces and
+this build does not convert nm to cm⁻¹.
+
+### Ranking, never merging
+
+`rankCandidates()` averages each candidate from its own members and ranks the
+candidates by `combined`. Tautomers and stereoisomers are separate candidates —
+they are different molecules, so no population or curve is shared. The result
+states the leader, the runner-up and the margin (`leader − runner-up`) for the
+combined, cosine and band scores. The ranking table prints each candidate's
+kind, conformer count, cosine, band score, combined score, margin to the next
+candidate, scale factor and matched/total bands.
+
+### Where the numbers are recorded
+
+The result is the record field `spectrumAssignment` (optional, and absent when
+no assignment was computed); the same provenance block is written to
+`provenance.spectrumAssignment`:
+
+```json
+{
+  "kind": "spectrum-assignment",
+  "metric": { "id": "ncs-spectrum-match", "version": 1, "definition": "…" },
+  "quantity": "vcd",
+  "fwhmCm": 12,
+  "toleranceCm": 30,
+  "temperatureK": 298.15,
+  "populations": [{ "candidateId": "A", "members": [{ "id": "c1", "population": 0.84 }] }],
+  "scaleFactors": [{ "candidateId": "A", "factor": 1.0234 }],
+  "measured": { "source": "measured.csv", "sha256": "…" },
+  "crossCandidateAveraging": "refused"
+}
+```
+
+The results card and the workflow report render the same result through the
+single `assignmentPanelHtml()` function; neither recomputes a score.
+
+The committed IR trace `test/fixtures/measured/ir-two-bands-synthetic.csv` is
+**synthetic**: two Lorentzians at 1580 and 1650 cm⁻¹, sampled on a 5 cm⁻¹ grid,
+written to give the comparison tests a two-column trace with the same shape as
+`absorbance-known-peak.csv`. It is not an instrument measurement.
+
+**Not yet wired:** the block that collects candidates from a conformer search
+and writes `spectrumAssignment` into a run record. This version ships the pure
+engine, the record field and the two rendering surfaces; a workflow that
+assembles candidates is deliberately left to the workstream that owns planning.
+
 ## Computed bands: raw and scaled
 
 A computed harmonic spectrum is drawn from the wavenumbers Gaussian printed, unless the block's
